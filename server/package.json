@@ -1,0 +1,9 @@
+{
+  "name": "wobble-rush-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Authoritative room and race relay for Wobble Rush 3D",
+  "main": "index.js",
+  "scripts": { "start": "node index.js" },
+  "dependencies": { "express": "^4.21.2", "ws": "^8.18.3" }
+}

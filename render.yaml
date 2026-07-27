@@ -3,9 +3,12 @@ services:
     name: wobble-rush-3d
     runtime: node
     plan: free
-    buildCommand: npm install
+    autoDeploy: true
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: "20"

@@ -1,43 +1,633 @@
-import * as THREE from '/vendor/three.module.js';
-import {COLORS,courseName,courseSpec,dailySeed,randomSeed} from './core/Config.js';
-import {InputManager} from './core/InputManager.js';
-import {Effects} from './game/Effects.js';
-import {Course} from './game/Course.js';
-import {Player} from './game/Player.js';
-import {CameraController} from './game/CameraController.js';
-import {NetworkManager} from './net/NetworkManager.js';
-import {UI} from './ui/UI.js';
+import * as THREE from 'three';
+import { COLORS, courseName, courseSpec, dailySeed, randomSeed } from './core/Config.js';
+import { InputManager } from './core/InputManager.js';
+import { AudioEngine } from './audio/AudioEngine.js';
+import { Sfx } from './audio/sfx.js';
+import { Music } from './audio/Music.js';
+import { Effects } from './game/Effects.js';
+import { Course } from './game/Course.js';
+import { Player } from './game/Player.js';
+import { CameraController } from './game/CameraController.js';
+import { PostFX } from './game/PostFX.js';
+import { NetworkManager } from './net/NetworkManager.js';
+import { UI } from './ui/UI.js';
 
-class Game{
-  constructor(){
-    this.ui=new UI();this.canvas=document.querySelector('#game');this.input=new InputManager(this.canvas);this.input.enabled=false;this.clockLast=performance.now();this.running=false;this.mode='preview';this.remotes=new Map();this.startToken=0;this.menuRandomSeed=randomSeed();this.qualityChoice='auto';this.quality=this.detectQuality();this.createRenderer();this.createScene();this.cameraController=new CameraController(this.camera);this.effects=new Effects(this.scene,this.quality);this.bindUI();this.bindNetworkEvents();this.installLifecycle();this.previewSpec=courseSpec(dailySeed(),'normal');this.buildPreview(this.previewSpec);this.resize();requestAnimationFrame(time=>this.loop(time));this.ui.preview(this.previewSpec.seed,this.previewSpec.difficulty);this.ui.setLoading(true);
+// Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
+// достаточно редко, чтобы на слабых устройствах хватало времени на отрисовку.
+const FIXED_DT = 1 / 60;
+
+// Предохранитель от «спирали смерти»: если кадр занял очень много времени (вкладка была свёрнута,
+// система тормозила), нельзя пытаться доработать все пропущенные шаги — это займёт ещё больше
+// времени, и отставание будет только расти. Лишнее время просто отбрасывается.
+const MAX_SUBSTEPS = 5;
+
+class Game {
+  constructor() {
+    this.ui = new UI();
+    this.canvas = document.querySelector('#game');
+    this.input = new InputManager(this.canvas);
+    this.input.enabled = false;
+
+    this.clockLast = performance.now();
+    this.accumulator = 0;
+    this.running = false;
+    this.mode = 'preview';
+    this.remotes = new Map();
+    this.startToken = 0;
+    this.menuRandomSeed = randomSeed();
+    this.qualityChoice = 'auto';
+    this.quality = this.detectQuality();
+
+    this.audio = new AudioEngine();
+    this.sfx = new Sfx(this.audio);
+    this.music = new Music(this.audio);
+
+    this.createRenderer();
+    this.createScene();
+    this.cameraController = new CameraController(this.camera);
+    this.postFX = new PostFX(this.renderer, this.scene, this.camera, this.quality);
+    this.effects = new Effects(this.scene, this.quality);
+
+    this.bindUI();
+    this.installAudioUnlock();
+    this.installLifecycle();
+
+    this.previewSpec = courseSpec(dailySeed(), 'normal');
+    this.buildPreview(this.previewSpec);
+    this.resize();
+    requestAnimationFrame(time => this.loop(time));
+    this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+    this.ui.setLoading(true);
   }
-  detectQuality(){if(this.qualityChoice!=='auto')return this.qualityChoice;const constrained=(navigator.deviceMemory&&navigator.deviceMemory<=4)||(navigator.hardwareConcurrency&&navigator.hardwareConcurrency<=4)||matchMedia('(pointer:coarse)').matches&&devicePixelRatio>2.5;return constrained?'low':'high'}
-  createRenderer(){this.renderer=new THREE.WebGLRenderer({canvas:this.canvas,antialias:this.detectQuality()==='high',powerPreference:'high-performance',alpha:false,stencil:false});this.renderer.outputColorSpace=THREE.SRGBColorSpace;this.renderer.toneMapping=THREE.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.08;this.applyRendererQuality()}
-  applyRendererQuality(){this.quality=this.detectQuality();this.renderer.setPixelRatio(Math.min(devicePixelRatio,this.quality==='low'?1:1.65));this.renderer.shadowMap.enabled=this.quality==='high';this.renderer.shadowMap.type=THREE.PCFSoftShadowMap}
-  createScene(){this.scene=new THREE.Scene();this.scene.background=new THREE.Color(0x83dff0);this.scene.fog=new THREE.Fog(0x93e5ef,42,145);this.camera=new THREE.PerspectiveCamera(58,1,.1,190);const hemi=new THREE.HemisphereLight(0xffffff,0x6a4bb2,2.45);this.scene.add(hemi);this.sun=new THREE.DirectionalLight(0xfff7dc,2.85);this.sun.position.set(18,28,15);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1024,1024);this.sun.shadow.camera.left=-22;this.sun.shadow.camera.right=22;this.sun.shadow.camera.top=30;this.sun.shadow.camera.bottom=-12;this.sun.shadow.camera.far=90;this.scene.add(this.sun);const fill=new THREE.DirectionalLight(0x7feeff,1.1);fill.position.set(-12,8,-18);this.scene.add(fill)}
-  bindUI(){
-    const $=s=>document.querySelector(s);$('#play').addEventListener('click',()=>this.startSingle(false));$('#again').addEventListener('click',()=>this.startRace('single',this.lastSpec));$('#newCourse').addEventListener('click',()=>this.startSingle(true));$('#create').addEventListener('click',()=>{const net=this.ensureNetwork();net.send('create',{name:this.ui.playerName(),difficulty:$('#difficulty').value})});$('#join').addEventListener('click',()=>{const net=this.ensureNetwork();net.send('join',{name:this.ui.playerName(),code:$('#code').value.trim().toUpperCase()})});$('#ready').addEventListener('click',()=>{this.ready=!this.ready;this.net?.send('ready',{ready:this.ready});$('#ready').textContent=this.ready?'CANCEL READY':'READY UP'});$('#start').addEventListener('click',()=>this.net?.send('start'));$('#lobbyDifficulty').addEventListener('change',e=>this.net?.send('configure',{difficulty:e.target.value}));$('#rematch').addEventListener('click',()=>{this.net?.send('rematch');$('#rematch').disabled=true;$('#rematch').textContent='VOTE SENT'});$('#returnLobby').addEventListener('click',()=>{this.net?.send('returnLobby');if(this.room)this.ui.lobby(this.room,this.net.id)});$('#copyCode').addEventListener('click',async()=>{try{await navigator.clipboard.writeText($('#roomCode').textContent);this.ui.toast('Room code copied!')}catch{this.ui.toast('Select the room code and copy it manually.')}});document.querySelectorAll('.back').forEach(button=>button.addEventListener('click',()=>this.goHome()));
-    const refreshPreview=()=>{const settings=this.ui.singleSettings();this.previewSpec=courseSpec(settings.type==='daily'?dailySeed():this.menuRandomSeed,settings.difficulty);this.ui.preview(this.previewSpec.seed,this.previewSpec.difficulty);if(!this.running&&this.mode==='preview')this.buildPreview(this.previewSpec)};$('#runType').addEventListener('change',e=>{if(e.target.value==='random')this.menuRandomSeed=randomSeed();refreshPreview()});$('#difficulty').addEventListener('change',refreshPreview);
-    $('#quality').addEventListener('click',()=>{const values=['auto','low','high'],next=values[(values.indexOf(this.qualityChoice)+1)%values.length];this.qualityChoice=next;this.ui.setQuality(next);this.applyRendererQuality();this.ui.toast(`${next.toUpperCase()} graphics will be used for new courses.`);if(this.mode==='preview')this.buildPreview(this.previewSpec)});
+
+  detectQuality() {
+    if (this.qualityChoice !== 'auto') return this.qualityChoice;
+    const constrained =
+      (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
+      (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) ||
+      (matchMedia('(pointer:coarse)').matches && devicePixelRatio > 2.5);
+    return constrained ? 'low' : 'high';
   }
-  bindNetworkEvents(){this.networkBound=false}
-  ensureNetwork(){if(this.net)return this.net;this.net=new NetworkManager(this.ui);this.net.on('lobby',message=>{this.room=message;this.ready=message.players.find(p=>p.id===this.net.id)?.ready||false;document.querySelector('#ready').textContent=this.ready?'CANCEL READY':'READY UP';document.querySelector('#rematch').disabled=false;document.querySelector('#rematch').textContent='VOTE REMATCH';this.ui.lobby(message,this.net.id)});this.net.on('start',message=>this.startRace('multi',message.spec,message.at));this.net.on('snapshot',message=>this.receiveSnapshot(message));this.net.on('correction',message=>{if(this.player&&message.position){this.player.checkpoint=Math.max(this.player.checkpoint,message.position.checkpoint||0);this.player.respawn(new THREE.Vector3(message.position.x,message.position.y,message.position.z),false);if(message.reason==='movement')this.ui.toast('Server corrected an unstable movement update.')}});this.net.on('finish',message=>this.receiveFinish(message));this.net.on('disconnect',()=>this.fallbackToSolo());this.net.connect();return this.net}
-  startSingle(forceNew){const settings=this.ui.singleSettings();let seed=settings.type==='daily'&&!forceNew?dailySeed():forceNew?randomSeed():this.menuRandomSeed;if(settings.type==='random')this.menuRandomSeed=seed;this.startRace('single',courseSpec(seed,settings.difficulty))}
-  clearActors(){this.player?.dispose();this.player=null;for(const remote of this.remotes.values())remote.dispose();this.remotes.clear()}
-  buildCourse(spec){this.clearActors();this.effects?.clear();this.course?.dispose();this.course=new Course(this.scene,spec,{quality:this.quality});this.lastSpec=this.course.spec}
-  buildPreview(spec){this.mode='preview';this.running=false;this.input.enabled=false;this.buildCourse(spec);this.player=new Player(this.scene,this.course,this.effects,{remote:true,color:COLORS.pink,accent:COLORS.yellow});this.player.position.copy(this.course.spawnFor(0));this.camera.position.set(10,7,17);this.camera.lookAt(0,1,-7)}
-  async startRace(mode,spec,startAt=Date.now()+1900){const token=++this.startToken;this.mode=mode;this.running=false;this.raceComplete=false;this.buildCourse(spec);this.player=new Player(this.scene,this.course,this.effects,{color:COLORS.pink,accent:COLORS.yellow,onCheckpoint:index=>{this.ui.checkpoint(index,this.course.spec.segmentCount);if(mode==='multi')this.net?.send('checkpoint',{checkpoint:index})},onRespawn:checkpoint=>{if(mode==='multi')this.net?.send('respawn',{checkpoint})},onFinish:()=>this.localFinish()});this.cameraController.reset(this.player,true);this.ui.show();this.ui.hud(true,{multiplayer:mode==='multi',touch:this.input.activeMethod==='touch'});this.input.reset();this.input.enabled=false;this.startedAt=startAt;await this.ui.countdown(startAt);if(token!==this.startToken)return;this.running=true;this.input.enabled=true;this.startedAt=startAt;this.ui.toast(`${courseName(this.course.spec.seed)} — GO!`)}
-  localFinish(){const time=Math.max(0,Date.now()-this.startedAt);this.finalTime=time;if(this.mode==='single'){this.running=false;this.input.enabled=false;this.ui.finishSolo({time,respawns:this.player.respawns,seed:this.course.spec.seed,difficulty:this.course.spec.difficulty})}else{this.input.enabled=false;this.net?.send('finish',{clientTime:time});this.ui.toast('Finished! Confirming your placement…')}}
-  receiveSnapshot(message){if(!this.player||this.mode!=='multi')return;const active=new Set();for(const state of message.players||[]){if(state.id===this.net.id)continue;active.add(state.id);let remote=this.remotes.get(state.id);if(!remote){const info=this.room?.players.find(p=>p.id===state.id);remote=new Player(this.scene,this.course,this.effects,{remote:true,color:info?.color||COLORS.cyan,accent:COLORS.yellow,name:info?.name||'Wobbler'});this.remotes.set(state.id,remote)}remote.target=state}for(const [id,remote] of this.remotes)if(!active.has(id)){remote.dispose();this.remotes.delete(id)}this.latestBoard=message.finished||this.latestBoard}
-  receiveFinish(message){this.latestBoard=message.board||[];if(message.id===this.net.id){this.running=false;this.input.enabled=false;this.ui.finishMulti({time:message.time??this.finalTime,board:this.latestBoard,selfId:this.net.id})}else if(!document.querySelector('#finish').classList.contains('hidden'))this.ui.updateBoard(this.latestBoard,this.net.id)}
-  fallbackToSolo(){if(this.mode!=='multi'||!this.player||this.player.finished)return;const elapsed=Math.max(0,Date.now()-this.startedAt);this.mode='single';this.startedAt=Date.now()-elapsed;this.ui.hud(true,{multiplayer:false,touch:this.input.activeMethod==='touch'});this.ui.error('Connection lost — this run is continuing in Single Player.');this.net=null}
-  goHome(){this.startToken++;this.running=false;this.input.enabled=false;this.net?.close();this.net=null;this.room=null;this.ready=false;this.ui.racing=false;this.ui.elements.hud.classList.add('hidden');this.ui.elements.touch.classList.add('hidden');this.ui.show('menu');const settings=this.ui.singleSettings();this.previewSpec=courseSpec(settings.type==='daily'?dailySeed():this.menuRandomSeed,settings.difficulty);this.ui.preview(this.previewSpec.seed,this.previewSpec.difficulty);this.buildPreview(this.previewSpec)}
-  installLifecycle(){addEventListener('resize',()=>this.resize());addEventListener('orientationchange',()=>setTimeout(()=>this.resize(),120));document.addEventListener('visibilitychange',()=>{if(document.hidden){this.hiddenAt=Date.now();this.input.reset()}else if(this.hiddenAt&&this.mode==='single'&&this.running){this.startedAt+=Date.now()-this.hiddenAt;this.hiddenAt=0}})}
-  resize(){const width=Math.max(1,innerWidth),height=Math.max(1,innerHeight);this.camera.aspect=width/height;this.camera.updateProjectionMatrix();this.renderer.setSize(width,height,false);this.applyRendererQuality()}
-  placement(){const racers=[{id:this.net?.id||'self',checkpoint:this.player.checkpoint,z:this.player.position.z}];for(const [id,remote] of this.remotes)racers.push({id,checkpoint:remote.checkpoint,z:remote.position.z});racers.sort((a,b)=>b.checkpoint-a.checkpoint||a.z-b.z);return racers.findIndex(r=>r.id===(this.net?.id||'self'))+1}
-  loop(time){const dt=Math.min(.04,Math.max(.001,(time-this.clockLast)/1000));this.clockLast=time;const courseElapsed=this.mode==='preview'?time/1000:Math.max(0,(Date.now()-this.startedAt)/1000);this.course?.update(dt,courseElapsed);this.effects.update(dt);if(this.mode==='preview'&&this.player){this.player.character.animate(dt,{speed:0,grounded:true});const target=new THREE.Vector3(0,1,-7),angle=time*.00007;this.camera.position.lerp(new THREE.Vector3(Math.sin(angle)*12,7.3,10+Math.cos(angle)*5),1-Math.exp(-2*dt));this.camera.lookAt(target)}else if(this.player){if(this.running){this.input.update();this.player.update(dt,this.input,this.cameraController.yaw,courseElapsed);if(this.mode==='multi'){this.net?.sendState(this.player.snapshot());this.net?.tick()}}for(const remote of this.remotes.values())remote.applyRemote(remote.target,dt);this.cameraController.update(dt,this.player,this.input,this.course);const elapsed=this.finalTime&&this.player.finished?this.finalTime:Math.max(0,Date.now()-this.startedAt);this.ui.updateHud({time:elapsed,checkpoint:this.player.checkpoint,total:this.course.spec.segmentCount,progress:this.course.progress(this.player.position,this.player.checkpoint),stage:this.course.stageAt(this.player.checkpoint),place:this.mode==='multi'?this.placement():null,ping:this.net?.latency})}this.renderer.render(this.scene,this.camera);requestAnimationFrame(next=>this.loop(next))}
+
+  createRenderer() {
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      antialias: this.detectQuality() === 'high',
+      powerPreference: 'high-performance',
+      alpha: false,
+      stencil: false
+    });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
+    this.applyRendererQuality();
+  }
+
+  applyRendererQuality() {
+    this.quality = this.detectQuality();
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.quality === 'low' ? 1 : 1.65));
+    this.renderer.shadowMap.enabled = this.quality === 'high';
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.postFX?.setQuality(this.quality);
+    // Частицы создаются с лимитом под качество и раньше не пересоздавались при его смене:
+    // переключение на высокое качество не давало эффекта до перезагрузки страницы.
+    if (this.effects && this.effects.quality !== this.quality) this.effects.setQuality(this.quality);
+  }
+
+  createScene() {
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x83dff0);
+    this.scene.fog = new THREE.Fog(0x93e5ef, 42, 145);
+    this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 190);
+
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x6a4bb2, 2.45);
+    this.scene.add(hemi);
+
+    this.sun = new THREE.DirectionalLight(0xfff7dc, 2.85);
+    this.sun.position.set(18, 28, 15);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    // Рамка теней теперь узкая и ездит за игроком (см. updateShadow), поэтому на ту же карту теней
+    // приходится в разы меньше площади — тени стали заметно чётче при том же расходе памяти.
+    this.sun.shadow.camera.left = -20;
+    this.sun.shadow.camera.right = 20;
+    this.sun.shadow.camera.top = 20;
+    this.sun.shadow.camera.bottom = -20;
+    this.sun.shadow.camera.near = 1;
+    this.sun.shadow.camera.far = 90;
+    this.sun.shadow.bias = -0.0008;
+    this.sun.shadow.normalBias = 0.02;
+    this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
+
+    const fill = new THREE.DirectionalLight(0x7feeff, 1.1);
+    fill.position.set(-12, 8, -18);
+    this.scene.add(fill);
+
+    this._shadowFocus = new THREE.Vector3();
+    this._previewTarget = new THREE.Vector3();
+  }
+
+  // Рамка теней следует за игроком.
+  //
+  // Раньше ортографическая камера тени была прибита к началу координат с рамкой примерно 44×42, а
+  // трасса уходит по Z до -139. То есть теней не было нигде дальше второго сегмента — персонаж
+  // просто переставал отбрасывать тень, и глубина сцены разваливалась.
+  updateShadow(focus) {
+    // Привязка к сетке размером в один тексель карты теней. Без неё тень мелко «кипит» по краям
+    // при движении камеры: рамка сдвигается на доли текселя, и растеризация каждый кадр иная.
+    const texelSize = 40 / this.sun.shadow.mapSize.width;
+    const snappedX = Math.round(focus.x / texelSize) * texelSize;
+    const snappedZ = Math.round(focus.z / texelSize) * texelSize;
+
+    this._shadowFocus.set(snappedX, 0, snappedZ);
+    this.sun.target.position.copy(this._shadowFocus);
+    this.sun.target.updateMatrixWorld();
+    this.sun.position.set(snappedX + 18, 28, snappedZ + 15);
+  }
+
+  // Браузер не позволяет запустить звук до первого действия пользователя. Слушаем первое
+  // касание, клик или нажатие клавиши и на нём инициализируем аудио.
+  installAudioUnlock() {
+    const unlock = () => {
+      this.audio.unlock();
+      removeEventListener('pointerdown', unlock);
+      removeEventListener('keydown', unlock);
+    };
+    addEventListener('pointerdown', unlock);
+    addEventListener('keydown', unlock);
+  }
+
+  bindUI() {
+    const $ = s => document.querySelector(s);
+    const click = (selector, handler) =>
+      $(selector).addEventListener('click', event => {
+        this.sfx.uiClick();
+        handler(event);
+      });
+
+    click('#play', () => this.startSingle(false));
+    click('#again', () => this.startRace('single', this.lastSpec));
+    click('#newCourse', () => this.startSingle(true));
+    click('#create', () => {
+      const net = this.ensureNetwork();
+      net.send('create', { name: this.ui.playerName(), difficulty: $('#difficulty').value });
+    });
+    click('#join', () => {
+      const net = this.ensureNetwork();
+      net.send('join', { name: this.ui.playerName(), code: $('#code').value.trim().toUpperCase() });
+    });
+    click('#ready', () => {
+      this.ready = !this.ready;
+      this.net?.send('ready', { ready: this.ready });
+      $('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
+    });
+    click('#start', () => this.net?.send('start'));
+    $('#lobbyDifficulty').addEventListener('change', e =>
+      this.net?.send('configure', { difficulty: e.target.value })
+    );
+    click('#rematch', () => {
+      this.net?.send('rematch');
+      $('#rematch').disabled = true;
+      $('#rematch').textContent = 'ГОЛОС ОТПРАВЛЕН';
+    });
+    click('#returnLobby', () => {
+      this.net?.send('returnLobby');
+      if (this.room) this.ui.lobby(this.room, this.net.id);
+    });
+    $('#copyCode').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText($('#roomCode').textContent);
+        this.ui.toast('Код комнаты скопирован!');
+      } catch {
+        this.ui.toast('Выделите код и скопируйте вручную.');
+      }
+    });
+    document.querySelectorAll('.back').forEach(button =>
+      button.addEventListener('click', () => {
+        this.sfx.uiClick();
+        this.goHome();
+      })
+    );
+
+    const refreshPreview = () => {
+      const settings = this.ui.singleSettings();
+      this.previewSpec = courseSpec(
+        settings.type === 'daily' ? dailySeed() : this.menuRandomSeed,
+        settings.difficulty
+      );
+      this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+      if (!this.running && this.mode === 'preview') this.buildPreview(this.previewSpec);
+    };
+    $('#runType').addEventListener('change', e => {
+      if (e.target.value === 'random') this.menuRandomSeed = randomSeed();
+      refreshPreview();
+    });
+    $('#difficulty').addEventListener('change', refreshPreview);
+
+    click('#quality', () => {
+      const values = ['auto', 'low', 'high'];
+      const next = values[(values.indexOf(this.qualityChoice) + 1) % values.length];
+      this.qualityChoice = next;
+      this.ui.setQuality(next);
+      this.applyRendererQuality();
+      this.ui.toast(`Качество графики: ${next.toUpperCase()}.`);
+      if (this.mode === 'preview') this.buildPreview(this.previewSpec);
+    });
+
+    this.ui.bindAudioControls({
+      volumes: this.audio.volumes,
+      onChange: (bus, value) => {
+        this.audio.unlock();
+        this.audio.setVolume(bus, value);
+      }
+    });
+  }
+
+  ensureNetwork() {
+    if (this.net) return this.net;
+    this.net = new NetworkManager(this.ui);
+
+    this.net.on('lobby', message => {
+      this.room = message;
+      this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
+      document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
+      document.querySelector('#rematch').disabled = false;
+      document.querySelector('#rematch').textContent = 'ГОЛОСОВАТЬ ЗА РЕВАНШ';
+      this.ui.lobby(message, this.net.id);
+    });
+
+    this.net.on('start', message => this.startRace('multi', message.spec, message.at));
+    this.net.on('finish', message => this.receiveFinish(message));
+
+    this.net.on('correction', message => {
+      if (this.player && message.position) {
+        this.player.checkpoint = Math.max(this.player.checkpoint, message.position.checkpoint || 0);
+        this.player.respawn(
+          new THREE.Vector3(message.position.x, message.position.y, message.position.z),
+          false
+        );
+        if (message.reason === 'movement') this.ui.toast('Сервер поправил рассинхрон движения.');
+      }
+    });
+
+    // Обрыв связи больше не означает конец сетевой игры: NetworkManager сам пробует переподключиться
+    // и отдаёт 'disconnect' только когда все попытки исчерпаны.
+    this.net.on('connectionLost', () => this.ui.toast('Связь пропала, восстанавливаем…'));
+    this.net.on('disconnect', () => this.fallbackToSolo());
+
+    this.net.connect();
+    return this.net;
+  }
+
+  startSingle(forceNew) {
+    const settings = this.ui.singleSettings();
+    const seed =
+      settings.type === 'daily' && !forceNew ? dailySeed() : forceNew ? randomSeed() : this.menuRandomSeed;
+    if (settings.type === 'random') this.menuRandomSeed = seed;
+    this.startRace('single', courseSpec(seed, settings.difficulty));
+  }
+
+  clearActors() {
+    this.player?.dispose();
+    this.player = null;
+    for (const remote of this.remotes.values()) remote.dispose();
+    this.remotes.clear();
+  }
+
+  buildCourse(spec) {
+    this.clearActors();
+    this.effects?.clear();
+    this.course?.dispose();
+    this.course = new Course(this.scene, spec, { quality: this.quality });
+    this.lastSpec = this.course.spec;
+  }
+
+  buildPreview(spec) {
+    this.mode = 'preview';
+    this.running = false;
+    this.input.enabled = false;
+    this.buildCourse(spec);
+    this.player = new Player(this.scene, this.course, this.effects, {
+      remote: true,
+      color: COLORS.pink,
+      accent: COLORS.yellow
+    });
+    this.player.teleport(this.course.spawnFor(0));
+    this.camera.position.set(10, 7, 17);
+    this.camera.lookAt(0, 1, -7);
+  }
+
+  async startRace(mode, spec, startAt = Date.now() + 1900) {
+    const token = ++this.startToken;
+    this.mode = mode;
+    this.running = false;
+    this.raceComplete = false;
+    this.finalTime = 0;
+    this.accumulator = 0;
+    this.buildCourse(spec);
+
+    this.player = new Player(this.scene, this.course, this.effects, {
+      color: COLORS.pink,
+      accent: COLORS.yellow,
+      sfx: this.sfx,
+      onCheckpoint: index => this.ui.checkpoint(index, this.course.spec.segmentCount),
+      onRespawn: checkpoint => {
+        if (mode === 'multi') this.net?.send('respawn', { checkpoint });
+      },
+      onFinish: () => this.localFinish()
+    });
+
+    this.cameraController.reset(this.player, true);
+    this.ui.show();
+    this.ui.hud(true, { multiplayer: mode === 'multi', touch: this.input.activeMethod === 'touch' });
+    this.input.reset();
+    this.input.enabled = false;
+
+    // Момент старта приходит в СЕРВЕРНОМ времени. Сравнивать его с локальными часами нельзя —
+    // именно из-за этого фаза препятствий раньше расходилась у разных игроков.
+    this.startedAt = startAt;
+
+    this.audio.unlock();
+    this.music.start();
+    this.music.setIntensity(0);
+
+    await this.ui.countdown(startAt, {
+      now: () => this.raceNow(),
+      onTick: value => this.sfx.countdown(value === 'GO!')
+    });
+    if (token !== this.startToken) return;
+
+    this.running = true;
+    this.input.enabled = true;
+    this.ui.toast(`${courseName(this.course.spec.seed)} — ВПЕРЁД!`);
+  }
+
+  // Единое «сейчас» для гонки: в сетевом режиме — оценка серверного времени, в одиночном — локальное.
+  raceNow() {
+    return this.mode === 'multi' && this.net ? this.net.serverNow() : Date.now();
+  }
+
+  localFinish() {
+    const time = Math.max(0, this.raceNow() - this.startedAt);
+    this.finalTime = time;
+    this.postFX.pulse(1);
+    if (this.mode === 'single') {
+      this.running = false;
+      this.input.enabled = false;
+      this.music.setIntensity(0);
+      this.ui.finishSolo({
+        time,
+        respawns: this.player.respawns,
+        seed: this.course.spec.seed,
+        difficulty: this.course.spec.difficulty
+      });
+    } else {
+      this.input.enabled = false;
+      this.net?.send('finish', { clientTime: time });
+      this.ui.toast('Финиш! Подтверждаем результат…');
+    }
+  }
+
+  // Создание и удаление моделей удалённых игроков. Сами позиции берутся не отсюда, а из буфера
+  // снапшотов в момент отрисовки — см. updateRemotes.
+  syncRemoteRoster() {
+    if (!this.net || !this.course) return;
+    const active = new Set(this.net.snapshots.activeIds());
+    for (const id of active) {
+      if (id === this.net.id || this.remotes.has(id)) continue;
+      const info = this.room?.players.find(p => p.id === id);
+      this.remotes.set(
+        id,
+        new Player(this.scene, this.course, this.effects, {
+          remote: true,
+          color: info?.color || COLORS.cyan,
+          accent: COLORS.yellow,
+          name: info?.name || 'Wobbler'
+        })
+      );
+    }
+    for (const [id, remote] of this.remotes) {
+      if (active.has(id)) continue;
+      remote.dispose();
+      this.remotes.delete(id);
+    }
+  }
+
+  updateRemotes(dt) {
+    if (!this.net) return;
+    const renderTime = this.net.renderTime();
+    for (const [id, remote] of this.remotes) {
+      remote.applyRemote(this.net.snapshots.sample(id, renderTime), dt);
+    }
+  }
+
+  receiveFinish(message) {
+    this.latestBoard = message.board || [];
+    if (message.id === this.net.id) {
+      this.running = false;
+      this.input.enabled = false;
+      this.music.setIntensity(0);
+      this.ui.finishMulti({
+        time: message.time ?? this.finalTime,
+        board: this.latestBoard,
+        selfId: this.net.id
+      });
+    } else if (!document.querySelector('#finish').classList.contains('hidden')) {
+      this.ui.updateBoard(this.latestBoard, this.net.id);
+    }
+  }
+
+  fallbackToSolo() {
+    if (this.mode !== 'multi' || !this.player || this.player.finished) return;
+    const elapsed = Math.max(0, this.raceNow() - this.startedAt);
+    this.mode = 'single';
+    this.startedAt = Date.now() - elapsed;
+    for (const remote of this.remotes.values()) remote.dispose();
+    this.remotes.clear();
+    this.ui.hud(true, { multiplayer: false, touch: this.input.activeMethod === 'touch' });
+    this.ui.error('Связь потеряна — забег продолжается в одиночном режиме.');
+    this.net = null;
+  }
+
+  goHome() {
+    this.startToken++;
+    this.running = false;
+    this.input.enabled = false;
+    this.music.stop();
+    this.audio.setMuffle(0);
+    this.net?.close();
+    this.net = null;
+    this.room = null;
+    this.ready = false;
+    this.ui.racing = false;
+    this.ui.elements.hud.classList.add('hidden');
+    this.ui.elements.touch.classList.add('hidden');
+    this.ui.show('menu');
+    const settings = this.ui.singleSettings();
+    this.previewSpec = courseSpec(
+      settings.type === 'daily' ? dailySeed() : this.menuRandomSeed,
+      settings.difficulty
+    );
+    this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+    this.buildPreview(this.previewSpec);
+  }
+
+  installLifecycle() {
+    addEventListener('resize', () => this.resize());
+    addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.hiddenAt = Date.now();
+        this.input.reset();
+        this.audio.setSuspended(true);
+      } else {
+        this.audio.setSuspended(false);
+        // Пока вкладка была скрыта, кадры не шли. В одиночном режиме сдвигаем момент старта, чтобы
+        // таймер не насчитал время простоя. В сетевом этого делать нельзя — там время серверное.
+        if (this.hiddenAt && this.mode === 'single' && this.running) {
+          this.startedAt += Date.now() - this.hiddenAt;
+        }
+        this.hiddenAt = 0;
+        this.accumulator = 0;
+      }
+    });
+  }
+
+  resize() {
+    const width = Math.max(1, innerWidth);
+    const height = Math.max(1, innerHeight);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height, false);
+    this.postFX?.setSize(width, height);
+    this.applyRendererQuality();
+  }
+
+  placement() {
+    const selfId = this.net?.id || 'self';
+    const racers = [{ id: selfId, checkpoint: this.player.checkpoint, z: this.player.position.z }];
+    for (const [id, remote] of this.remotes) {
+      racers.push({ id, checkpoint: remote.checkpoint, z: remote.position.z });
+    }
+    racers.sort((a, b) => b.checkpoint - a.checkpoint || a.z - b.z);
+    return racers.findIndex(r => r.id === selfId) + 1;
+  }
+
+  // Время с начала забега, по которому считается фаза всех препятствий.
+  courseElapsed() {
+    if (this.mode === 'preview') return performance.now() / 1000;
+    return Math.max(0, (this.raceNow() - this.startedAt) / 1000);
+  }
+
+  // Один шаг симуляции. Всегда с постоянным dt.
+  fixedStep(dt) {
+    const elapsed = this.courseElapsed();
+    // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
+    // за этот шаг, и игрок должен увидеть уже новую позицию платформы.
+    this.course?.update(dt, elapsed);
+    if (!this.running || !this.player || this.mode === 'preview') return;
+    this.input.update();
+    this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
+  }
+
+  loop(time) {
+    const frameDt = Math.min(0.25, Math.max(0.0001, (time - this.clockLast) / 1000));
+    this.clockLast = time;
+
+    // Аккумулятор фиксированного шага: физика всегда идёт одинаковыми порциями времени независимо
+    // от частоты кадров. Раньше в неё подавалась дельта кадра, и высота прыжка на 144 Гц отличалась
+    // от высоты на 60 Гц — игра буквально вела себя по-разному на разных мониторах.
+    this.accumulator += frameDt;
+    let steps = 0;
+    while (this.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+      this.fixedStep(FIXED_DT);
+      this.accumulator -= FIXED_DT;
+      steps++;
+    }
+    if (steps === MAX_SUBSTEPS) this.accumulator = 0;
+    const alpha = this.accumulator / FIXED_DT;
+
+    this.effects.update(frameDt);
+    this.postFX.update(frameDt);
+
+    if (this.mode === 'preview' && this.player) {
+      this.player.character.animate(frameDt, { speed: 0, grounded: true });
+      const angle = time * 0.00007;
+      this._previewTarget.set(Math.sin(angle) * 12, 7.3, 10 + Math.cos(angle) * 5);
+      this.camera.position.lerp(this._previewTarget, 1 - Math.exp(-2 * frameDt));
+      this.camera.lookAt(0, 1, -7);
+      this.updateShadow(this.player.visualPosition);
+    } else if (this.player) {
+      this.player.render(alpha);
+
+      if (this.mode === 'multi' && this.net) {
+        this.net.sendState(this.player.snapshot());
+        this.net.tick();
+        this.syncRemoteRoster();
+      }
+      this.updateRemotes(frameDt);
+
+      this.cameraController.update(frameDt, this.player, this.input, this.course, this.partnerPosition());
+      this.updateShadow(this.player.visualPosition);
+      this.updateAudioScene();
+
+      const elapsed =
+        this.finalTime && this.player.finished
+          ? this.finalTime
+          : Math.max(0, this.raceNow() - this.startedAt);
+      this.ui.updateHud({
+        time: elapsed,
+        checkpoint: this.player.checkpoint,
+        total: this.course.spec.segmentCount,
+        progress: this.course.progress(this.player.position, this.player.checkpoint),
+        stage: this.course.stageAt(this.player.checkpoint),
+        place: this.mode === 'multi' ? this.placement() : null,
+        ping: this.net?.latency
+      });
+    }
+
+    this.postFX.render();
+    requestAnimationFrame(next => this.loop(next));
+  }
+
+  // Позиция напарника для кооп-кадрирования камеры. В гонке возвращает null: подстраивать кадр
+  // под произвольного соперника не нужно, это только мешало бы целиться в прыжок.
+  partnerPosition() {
+    if (this.mode !== 'coop') return null;
+    const partner = this.remotes.values().next().value;
+    return partner ? partner.visualPosition : null;
+  }
+
+  updateAudioScene() {
+    if (!this.audio.ready) return;
+    // Слушатель — это камера: панорама звуков напарника считается относительно направления взгляда.
+    this.audio.setListener(this.camera.position, this.cameraController.yaw);
+
+    // Приглушение при падении: чем ниже игрок провалился, тем сильнее срезаются верхние частоты.
+    const depth = Math.max(0, -this.player.position.y) / 8;
+    this.audio.setMuffle(Math.min(1, depth));
+
+    // Музыка нарастает по мере прохождения трассы.
+    if (this.running) {
+      this.music.setIntensity(this.course.progress(this.player.position, this.player.checkpoint));
+    }
+
+    // Сигнал упавшего напарника слышен на любом расстоянии.
+    for (const remote of this.remotes.values()) {
+      if (remote.position.y < -4) this.sfx.bubble(remote.visualPosition);
+    }
+  }
 }
 
 let game;
-try{game=new Game();window.__WOBBLE_GAME__=game}catch(error){const panel=document.querySelector('#error');panel.textContent=`3D graphics could not start: ${error.message}. Try enabling WebGL or switching browser.`;panel.classList.remove('hidden');document.querySelector('#loading')?.classList.add('hidden');console.error(error)}
+try {
+  game = new Game();
+  window.__WOBBLE_GAME__ = game;
+} catch (error) {
+  const panel = document.querySelector('#error');
+  panel.textContent = `Не удалось запустить 3D-графику: ${error.message}. Проверьте, включён ли WebGL.`;
+  panel.classList.remove('hidden');
+  document.querySelector('#loading')?.classList.add('hidden');
+  console.error(error);
+}

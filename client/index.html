@@ -1,105 +1,198 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-  <meta name="theme-color" content="#4b35b7">
-  <meta name="description" content="Wobble Rush 3D — a bright, procedural obstacle racer for desktop and mobile.">
-  <title>Wobble Rush 3D</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <canvas id="game" aria-label="Wobble Rush 3D game view"></canvas>
-  <div id="vignette"></div>
-  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
-  <div id="error" class="toast toast-error hidden" role="alert"></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+    <meta name="theme-color" content="#4b35b7" />
+    <meta
+      name="description"
+      content="Wobble Rush 3D — a bright, procedural obstacle racer for desktop and mobile."
+    />
+    <title>Wobble Rush 3D</title>
+    <!-- Фавикон встроен как data-URI: в проекте принципиально нет файлов-ассетов,
+         и заводить один-единственный ради иконки не хочется. Заодно это убирает 404 на /favicon.ico. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236546d8'/%3E%3Ccircle cx='16' cy='14' r='7' fill='%23ff4f91'/%3E%3Cellipse cx='16' cy='12' rx='4.4' ry='2.6' fill='%23dffcff'/%3E%3Crect x='13' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3Crect x='16.6' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <!--
+      Import map вместо сборщика. Дополнения Three.js (постобработка и её шейдеры) импортируют
+      движок по голому имени 'three'. Без этой карты браузер не смог бы их разрешить, а если бы
+      мы оставили в своих файлах прямые пути на /vendor/three.module.js, движок загрузился бы
+      дважды — двумя независимыми копиями, у которых ломаются проверки instanceof.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three.module.js",
+          "three/addons/": "/vendor/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="game" aria-label="Wobble Rush 3D game view"></canvas>
+    <div id="vignette"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <div id="error" class="toast toast-error hidden" role="alert"></div>
 
-  <main id="menu" class="screen screen-menu">
-    <div class="brand" aria-label="Wobble Rush 3D">
-      <span class="brand-kicker">THE SKY PARK CHALLENGE</span>
-      <h1>WOBBLE <em>RUSH</em></h1>
-      <p>Fresh courses. Chunky chaos. One heroic little runner.</p>
-    </div>
-
-    <section class="menu-card glass">
-      <div class="mode-tabs" role="tablist" aria-label="Game mode">
-        <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">SOLO RUN</button>
-        <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">PARTY ONLINE</button>
+    <main id="menu" class="screen screen-menu">
+      <div class="brand" aria-label="Wobble Rush 3D">
+        <span class="brand-kicker">THE SKY PARK CHALLENGE</span>
+        <h1>WOBBLE <em>RUSH</em></h1>
+        <p>Fresh courses. Chunky chaos. One heroic little runner.</p>
       </div>
 
-      <div id="single" class="mode-panel">
-        <div class="field-grid">
-          <label class="field"><span>Course</span><select id="runType"><option value="daily">Daily challenge</option><option value="random">Fresh remix</option></select></label>
-          <label class="field"><span>Difficulty</span><select id="difficulty"><option value="easy">Breezy</option><option value="normal" selected>Rush</option><option value="chaos">Mayhem</option></select></label>
+      <section class="menu-card glass">
+        <div class="mode-tabs" role="tablist" aria-label="Game mode">
+          <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">SOLO RUN</button>
+          <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">PARTY ONLINE</button>
         </div>
-        <div class="run-summary"><span id="courseName">CLOUD CIRCUIT</span><strong id="bestTime">BEST —:—</strong></div>
-        <button id="play" class="button button-primary" data-testid="play-single"><span>START RUN</span><b>▶</b></button>
-      </div>
 
-      <div id="multi" class="mode-panel hidden">
-        <label class="field field-full"><span>Runner name</span><input id="name" maxlength="16" autocomplete="nickname" placeholder="Wobbler" value="Wobbler"></label>
-        <button id="create" class="button button-primary"><span>CREATE PARTY</span><b>＋</b></button>
-        <div class="join-row"><input id="code" maxlength="4" inputmode="text" autocomplete="off" aria-label="Room code" placeholder="CODE"><button id="join" class="button button-secondary">JOIN</button></div>
-        <p id="connectStatus" class="status-line">Create a room or enter a four-letter code.</p>
-      </div>
+        <div id="single" class="mode-panel">
+          <div class="field-grid">
+            <label class="field"
+              ><span>Course</span
+              ><select id="runType">
+                <option value="daily">Daily challenge</option>
+                <option value="random">Fresh remix</option>
+              </select></label
+            >
+            <label class="field"
+              ><span>Difficulty</span
+              ><select id="difficulty">
+                <option value="easy">Breezy</option>
+                <option value="normal" selected>Rush</option>
+                <option value="chaos">Mayhem</option>
+              </select></label
+            >
+          </div>
+          <div class="run-summary">
+            <span id="courseName">CLOUD CIRCUIT</span><strong id="bestTime">BEST —:—</strong>
+          </div>
+          <button id="play" class="button button-primary" data-testid="play-single">
+            <span>START RUN</span><b>▶</b>
+          </button>
+        </div>
 
-      <div class="menu-footer">
-        <button id="quality" class="icon-button" aria-label="Change graphics quality">AUTO QUALITY</button>
-        <span id="controlHint">WASD · SPACE · SHIFT · DRAG TO LOOK</span>
+        <div id="multi" class="mode-panel hidden">
+          <label class="field field-full"
+            ><span>Runner name</span
+            ><input id="name" maxlength="16" autocomplete="nickname" placeholder="Wobbler" value="Wobbler"
+          /></label>
+          <button id="create" class="button button-primary"><span>CREATE PARTY</span><b>＋</b></button>
+          <div class="join-row">
+            <input
+              id="code"
+              maxlength="4"
+              inputmode="text"
+              autocomplete="off"
+              aria-label="Room code"
+              placeholder="CODE"
+            /><button id="join" class="button button-secondary">JOIN</button>
+          </div>
+          <p id="connectStatus" class="status-line">Create a room or enter a four-letter code.</p>
+        </div>
+
+        <div class="audio-panel" role="group" aria-label="Громкость">
+          <label class="audio-row">
+            <span>ОБЩАЯ</span>
+            <input id="vol-master" type="range" min="0" max="100" value="80" aria-label="Общая громкость" />
+          </label>
+          <label class="audio-row">
+            <span>ЭФФЕКТЫ</span>
+            <input id="vol-sfx" type="range" min="0" max="100" value="90" aria-label="Громкость эффектов" />
+          </label>
+          <label class="audio-row">
+            <span>МУЗЫКА</span>
+            <input id="vol-music" type="range" min="0" max="100" value="50" aria-label="Громкость музыки" />
+          </label>
+        </div>
+
+        <div class="menu-footer">
+          <button id="quality" class="icon-button" aria-label="Change graphics quality">AUTO QUALITY</button>
+          <span id="controlHint">WASD · SPACE · SHIFT · DRAG TO LOOK</span>
+        </div>
+      </section>
+
+      <div class="feature-pills" aria-hidden="true">
+        <span>PROCEDURAL COURSES</span><span>1–16 PLAYERS</span><span>TOUCH READY</span>
+      </div>
+    </main>
+
+    <section id="lobby" class="screen center-screen hidden">
+      <div class="lobby-card glass">
+        <button class="close-button back" aria-label="Leave party">×</button>
+        <span class="eyebrow">PARTY LOBBY</span>
+        <div class="room-heading">
+          <div>
+            <small>ROOM CODE</small>
+            <h2 id="roomCode">----</h2>
+          </div>
+          <button id="copyCode" class="copy-button">COPY</button>
+        </div>
+        <div class="lobby-course">
+          <div><small>COURSE</small><strong id="lobbyCourse">Cloud Circuit</strong></div>
+          <label id="lobbyDifficultyWrap"
+            ><small>DIFFICULTY</small
+            ><select id="lobbyDifficulty">
+              <option value="easy">Breezy</option>
+              <option value="normal">Rush</option>
+              <option value="chaos">Mayhem</option>
+            </select></label
+          >
+        </div>
+        <div id="players" class="player-list"></div>
+        <button id="ready" class="button button-primary">READY UP</button>
+        <button id="start" class="button button-start hidden">START RACE</button>
+        <p id="lobbyHint" class="status-line">Ready up while the host prepares the course.</p>
       </div>
     </section>
 
-    <div class="feature-pills" aria-hidden="true"><span>PROCEDURAL COURSES</span><span>1–16 PLAYERS</span><span>TOUCH READY</span></div>
-  </main>
+    <header id="hud" class="hud hidden">
+      <div class="hud-card"><small>TIME</small><strong id="timer">00:00.00</strong></div>
+      <div class="hud-progress">
+        <div class="hud-progress-label"><span id="stageName">LAUNCH PAD</span><b id="checks">0 / 6</b></div>
+        <div class="progress-track"><i id="progressFill"></i></div>
+      </div>
+      <div id="placeBox" class="hud-card"><small>PLACE</small><strong id="place">1st</strong></div>
+      <div id="pingBox" class="hud-card compact hidden"><small>LINK</small><strong id="ping">—</strong></div>
+    </header>
 
-  <section id="lobby" class="screen center-screen hidden">
-    <div class="lobby-card glass">
-      <button class="close-button back" aria-label="Leave party">×</button>
-      <span class="eyebrow">PARTY LOBBY</span>
-      <div class="room-heading"><div><small>ROOM CODE</small><h2 id="roomCode">----</h2></div><button id="copyCode" class="copy-button">COPY</button></div>
-      <div class="lobby-course"><div><small>COURSE</small><strong id="lobbyCourse">Cloud Circuit</strong></div><label id="lobbyDifficultyWrap"><small>DIFFICULTY</small><select id="lobbyDifficulty"><option value="easy">Breezy</option><option value="normal">Rush</option><option value="chaos">Mayhem</option></select></label></div>
-      <div id="players" class="player-list"></div>
-      <button id="ready" class="button button-primary">READY UP</button>
-      <button id="start" class="button button-start hidden">START RACE</button>
-      <p id="lobbyHint" class="status-line">Ready up while the host prepares the course.</p>
+    <div id="countdown" class="countdown hidden"><span>3</span></div>
+    <div id="checkpointBanner" class="checkpoint-banner hidden">
+      <small>CHECKPOINT</small><strong>1 / 6</strong>
     </div>
-  </section>
 
-  <header id="hud" class="hud hidden">
-    <div class="hud-card"><small>TIME</small><strong id="timer">00:00.00</strong></div>
-    <div class="hud-progress"><div class="hud-progress-label"><span id="stageName">LAUNCH PAD</span><b id="checks">0 / 6</b></div><div class="progress-track"><i id="progressFill"></i></div></div>
-    <div id="placeBox" class="hud-card"><small>PLACE</small><strong id="place">1st</strong></div>
-    <div id="pingBox" class="hud-card compact hidden"><small>LINK</small><strong id="ping">—</strong></div>
-  </header>
-
-  <div id="countdown" class="countdown hidden"><span>3</span></div>
-  <div id="checkpointBanner" class="checkpoint-banner hidden"><small>CHECKPOINT</small><strong>1 / 6</strong></div>
-
-  <div id="touch" class="touch-ui hidden">
-    <div id="stick" class="stick" aria-label="Movement joystick"><i></i><span>MOVE</span></div>
-    <button id="recenter" class="recenter" aria-label="Recenter camera">⌖</button>
-    <button id="dive" class="action-button dive-button"><i>➤</i><span>DIVE</span></button>
-    <button id="jump" class="action-button jump-button"><i>↑</i><span>JUMP</span></button>
-    <div id="lookHint" class="look-hint">SWIPE TO LOOK</div>
-  </div>
-
-  <section id="finish" class="screen center-screen hidden">
-    <div class="finish-card glass">
-      <div id="medal" class="medal">★</div>
-      <span class="eyebrow">COURSE COMPLETE</span>
-      <h2 id="finishTitle">GOLD RUN!</h2>
-      <p id="finishTime">00:00.00</p>
-      <div id="finishStats" class="finish-stats"></div>
-      <div id="board" class="leaderboard"></div>
-      <button id="again" class="button button-primary">RACE THIS COURSE</button>
-      <button id="newCourse" class="button button-secondary">NEW COURSE</button>
-      <button id="rematch" class="button button-primary hidden">VOTE REMATCH</button>
-      <button id="returnLobby" class="button button-secondary hidden">RETURN TO LOBBY</button>
-      <button class="text-button back">RETURN HOME</button>
+    <div id="touch" class="touch-ui hidden">
+      <div id="stick" class="stick" aria-label="Movement joystick"><i></i><span>MOVE</span></div>
+      <button id="recenter" class="recenter" aria-label="Recenter camera">⌖</button>
+      <button id="dive" class="action-button dive-button"><i>➤</i><span>DIVE</span></button>
+      <button id="jump" class="action-button jump-button"><i>↑</i><span>JUMP</span></button>
+      <div id="lookHint" class="look-hint">SWIPE TO LOOK</div>
     </div>
-  </section>
 
-  <div id="loading" class="loading"><div class="loader-orb"></div><strong>BUILDING SKY PARK…</strong><span>Preparing the wobble physics</span></div>
-  <script type="module" src="main.js"></script>
-</body>
+    <section id="finish" class="screen center-screen hidden">
+      <div class="finish-card glass">
+        <div id="medal" class="medal">★</div>
+        <span class="eyebrow">COURSE COMPLETE</span>
+        <h2 id="finishTitle">GOLD RUN!</h2>
+        <p id="finishTime">00:00.00</p>
+        <div id="finishStats" class="finish-stats"></div>
+        <div id="board" class="leaderboard"></div>
+        <button id="again" class="button button-primary">RACE THIS COURSE</button>
+        <button id="newCourse" class="button button-secondary">NEW COURSE</button>
+        <button id="rematch" class="button button-primary hidden">VOTE REMATCH</button>
+        <button id="returnLobby" class="button button-secondary hidden">RETURN TO LOBBY</button>
+        <button class="text-button back">RETURN HOME</button>
+      </div>
+    </section>
+
+    <div id="loading" class="loading">
+      <div class="loader-orb"></div>
+      <strong>BUILDING SKY PARK…</strong><span>Preparing the wobble physics</span>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
 </html>

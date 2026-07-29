@@ -1,4 +1,4 @@
-import * as THREE from '/vendor/three.module.js';
+import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 
 const standard = (color, roughness = 0.28, metalness = 0.02) =>

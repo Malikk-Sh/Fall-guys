@@ -1,4 +1,4 @@
-import * as THREE from '/vendor/three.module.js';
+import * as THREE from 'three';
 import {
   COLORS,
   DIFFICULTIES,
@@ -33,12 +33,39 @@ export class Course {
     this.dynamic = [];
     this.scenery = [];
     this.cameraMeshes = [];
+    // Кэш материалов, ключ — сочетание всех визуальных свойств. См. material().
+    this.materials = new Map();
     this.rng = seededRandom(this.spec.seed);
     this.stageNames = [];
     this.build();
   }
-  material(color, roughness = 0.3) {
-    return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.03 });
+  // Материалы кэшируются по всем своим параметрам.
+  //
+  // До этого каждый вызов box() и cylinder() создавал новый MeshStandardMaterial — на трассу
+  // приходилось несколько сотен материалов, при том что уникальных сочетаний цвета и свойств меньше
+  // двадцати. Каждый материал — это отдельная компиляция состояния шейдера и лишнее переключение
+  // при отрисовке. Кэш убирает это без единого изменения в картинке.
+  //
+  // Важно: раз материал теперь общий, менять его после создания у конкретного меша нельзя — правка
+  // расползётся на все меши с тем же материалом. Поэтому свечение и прозрачность задаются здесь же,
+  // параметрами, и входят в ключ кэша.
+  material({ color, roughness = 0.3, emissive = null, emissiveIntensity = 1, opacity = 1 } = {}) {
+    const key = `${color}|${roughness}|${emissive}|${emissiveIntensity}|${opacity}`;
+    let cached = this.materials.get(key);
+    if (cached) return cached;
+    cached = new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      metalness: 0.03,
+      transparent: opacity < 1,
+      opacity
+    });
+    if (emissive !== null) {
+      cached.emissive = new THREE.Color(emissive);
+      cached.emissiveIntensity = emissiveIntensity;
+    }
+    this.materials.set(key, cached);
+    return cached;
   }
   box({
     x = 0,
@@ -49,10 +76,13 @@ export class Course {
     d = 1,
     color = COLORS.purple,
     bevel = false,
-    collider = true
+    collider = true,
+    emissive = null,
+    emissiveIntensity = 1,
+    opacity = 1
   } = {}) {
     const geometry = bevel ? new THREE.BoxGeometry(w, h, d, 2, 1, 2) : new THREE.BoxGeometry(w, h, d);
-    const mesh = new THREE.Mesh(geometry, this.material(color));
+    const mesh = new THREE.Mesh(geometry, this.material({ color, emissive, emissiveIntensity, opacity }));
     mesh.position.set(x, y, z);
     mesh.castShadow = this.quality !== 'low';
     mesh.receiveShadow = true;
@@ -76,12 +106,14 @@ export class Course {
   cylinder({ x = 0, y = 0, z = 0, r = 1, h = 0.5, color = COLORS.pink, collider = false } = {}) {
     const mesh = new THREE.Mesh(
       new THREE.CylinderGeometry(r, r, h, this.quality === 'low' ? 12 : 20),
-      this.material(color)
+      this.material({ color })
     );
     mesh.position.set(x, y, z);
     mesh.castShadow = this.quality !== 'low';
     mesh.receiveShadow = true;
     this.group.add(mesh);
+    // Цилиндры тоже должны перекрывать камеру: без этого она проходила сквозь бамперы и пружины.
+    this.cameraMeshes.push(mesh);
     if (collider) {
       const platform = {
         mesh,
@@ -99,7 +131,7 @@ export class Course {
     return mesh;
   }
   addRail(x, z, length) {
-    const rail = this.box({
+    this.box({
       x,
       y: 1.25,
       z,
@@ -107,10 +139,9 @@ export class Course {
       h: 1.1,
       d: length,
       color: 0xffffff,
-      collider: false
-    }).mesh;
-    rail.material.transparent = true;
-    rail.material.opacity = 0.48;
+      collider: false,
+      opacity: 0.48
+    });
     const posts = Math.ceil(length / 4);
     for (let i = 0; i <= posts; i++)
       this.box({
@@ -147,7 +178,7 @@ export class Course {
   addStart() {
     this.box({ x: 0, y: 0, z: 5, w: 14, h: 1, d: 14, color: COLORS.purple, bevel: true });
     for (const x of [-6.4, 6.4]) this.addRail(x, 5, 12);
-    const stripe = this.box({
+    this.box({
       x: 0,
       y: 0.515,
       z: -0.8,
@@ -155,10 +186,10 @@ export class Course {
       h: 0.035,
       d: 0.85,
       color: COLORS.yellow,
-      collider: false
-    }).mesh;
-    stripe.material.emissive = new THREE.Color(COLORS.yellow);
-    stripe.material.emissiveIntensity = 0.18;
+      collider: false,
+      emissive: COLORS.yellow,
+      emissiveIntensity: 1.1
+    });
     for (let i = 0; i < 6; i++) {
       const pad = this.cylinder({
         x: -4.5 + i * 1.8,
@@ -328,15 +359,17 @@ export class Course {
       h: 0.055,
       d: 0.48,
       color: COLORS.mint,
-      collider: false
-    }).mesh.material.emissive = new THREE.Color(COLORS.mint);
+      collider: false,
+      emissive: COLORS.mint,
+      emissiveIntensity: 1.4
+    });
   }
   addSpinner(x, y, z, length, width, speed, phase) {
     const pivot = new THREE.Group();
     pivot.position.set(x, y, z);
     const bar = new THREE.Mesh(
       new THREE.BoxGeometry(length, 0.38, width),
-      this.material(COLORS.yellow, 0.24)
+      this.material({ color: COLORS.yellow, roughness: 0.24 })
     );
     bar.castShadow = true;
     pivot.add(bar);
@@ -360,7 +393,7 @@ export class Course {
     const mesh = this.cylinder({ x, y, z, r: radius, h: 1.55, color });
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(radius * 0.82, 0.095, 6, 16),
-      this.material(0xffffff, 0.2)
+      this.material({ color: 0xffffff, roughness: 0.2 })
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.set(x, y + 0.2, z);
@@ -409,7 +442,7 @@ export class Course {
       color: 0xffffff,
       collider: false
     });
-    const ribbon = this.box({
+    this.box({
       x: 0,
       y: 1.42,
       z: this.spec.finishZ,
@@ -417,10 +450,10 @@ export class Course {
       h: 0.08,
       d: 0.7,
       color: COLORS.pink,
-      collider: false
-    }).mesh;
-    ribbon.material.emissive = new THREE.Color(COLORS.pink);
-    ribbon.material.emissiveIntensity = 0.3;
+      collider: false,
+      emissive: COLORS.pink,
+      emissiveIntensity: 2.2
+    });
     this.stageNames.push('VICTORY GATE');
   }
   addCheckpointArches() {
@@ -429,10 +462,30 @@ export class Course {
         color = i === this.spec.checkpoints.length - 1 ? COLORS.yellow : COLORS.mint;
       for (const x of [-5.1, 5.1])
         this.box({ x, y: 1.9, z, w: 0.18, h: 2.8, d: 0.18, color, collider: false });
-      const top = this.box({ x: 0, y: 3.25, z, w: 10.4, h: 0.2, d: 0.2, color, collider: false }).mesh;
-      top.material.emissive = new THREE.Color(color);
-      top.material.emissiveIntensity = 0.25;
+      this.box({
+        x: 0,
+        y: 3.25,
+        z,
+        w: 10.4,
+        h: 0.2,
+        d: 0.2,
+        color,
+        collider: false,
+        emissive: color,
+        emissiveIntensity: 1.8
+      });
     }
+  }
+  // Облака намеренно используют дешёвый Lambert вместо Standard: они далеко, физически корректное
+  // освещение на них не читается, а материал у всех клубов один на всю трассу.
+  cloudMaterial() {
+    const key = 'cloud';
+    let cached = this.materials.get(key);
+    if (!cached) {
+      cached = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.72 });
+      this.materials.set(key, cached);
+    }
+    return cached;
   }
   addScenery() {
     const count = this.quality === 'low' ? 14 : 28;
@@ -446,7 +499,7 @@ export class Course {
         for (let j = 0; j < 3; j++) {
           const puff = new THREE.Mesh(
             new THREE.SphereGeometry(1.2 + this.rng() * 0.9, 8, 6),
-            new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.72 })
+            this.cloudMaterial()
           );
           puff.position.set(j * 1.25, this.rng() * 0.6, this.rng() - 0.5);
           cloud.add(puff);
@@ -518,8 +571,13 @@ export class Course {
     }
     return best;
   }
-  interact(player, now, effects) {
-    const pos = player.character.group.position,
+  // Реакция на препятствия. Вызывается из шага физики.
+  //
+  // `pos` — это позиция ФИЗИКИ, а не отрисовки. Разница принципиальна: выталкивание из препятствия
+  // меняет позицию напрямую, а позиция отрисовки пересчитывается заново каждый кадр интерполяцией,
+  // так что записанное в неё было бы немедленно затёрто.
+  interact(player, now, effects, sfx = null) {
+    const pos = player.position,
       radius = 0.42;
     for (const o of this.obstacles) {
       const key = o.mesh.uuid,
@@ -538,6 +596,7 @@ export class Course {
           player.hitTimes.set(key, now);
           effects.burst(pos, COLORS.yellow, 14, 1.1);
           player.character.landed(0.6);
+          sfx?.spring();
         }
         continue;
       }
@@ -557,6 +616,7 @@ export class Course {
           player.grounded = false;
           player.hitTimes.set(key, now);
           effects.burst(pos, o.mesh.material.color.getHex(), 16, 1.15);
+          sfx?.bumper();
         }
         continue;
       }
@@ -585,6 +645,7 @@ export class Course {
           player.grounded = false;
           player.hitTimes.set(key, now);
           effects.burst(pos, COLORS.yellow, 12, 1);
+          sfx?.spinner();
         }
         continue;
       }
@@ -605,6 +666,7 @@ export class Course {
           player.grounded = false;
           player.hitTimes.set(key, now);
           effects.burst(pos, COLORS.pink, 12, 1);
+          sfx?.puncher();
         }
       }
     }
@@ -635,11 +697,13 @@ export class Course {
   }
   dispose() {
     this.scene.remove(this.group);
-    this.group.traverse(o => {
-      o.geometry?.dispose?.();
-      if (Array.isArray(o.material)) o.material.forEach(m => m.dispose?.());
-      else o.material?.dispose?.();
-    });
+    // Геометрия у каждого меша своя — освобождаем обходом. Материалы общие, поэтому они лежат в
+    // кэше и освобождаются один раз: пройтись по мешам значило бы вызывать dispose на одном и том
+    // же материале десятки раз.
+    this.group.traverse(o => o.geometry?.dispose?.());
+    for (const material of this.materials.values()) material.dispose();
+    this.materials.clear();
     this.platforms.length = this.obstacles.length = this.dynamic.length = this.scenery.length = 0;
+    this.cameraMeshes.length = 0;
   }
 }

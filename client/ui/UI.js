@@ -134,24 +134,40 @@ export class UI {
     void banner.offsetWidth;
     setTimeout(() => banner.classList.add('hidden'), 920);
   }
-  async countdown(startAt) {
+  // Обратный отсчёт. `now` передаётся снаружи, потому что в сетевой игре момент старта задан в
+  // серверном времени: сравнивать его с локальными часами нельзя, иначе у игроков с расходящимися
+  // системными часами отсчёт закончится в разные моменты.
+  async countdown(startAt, { now = () => Date.now(), onTick = null } = {}) {
     const overlay = $('#countdown'),
       label = overlay.querySelector('span');
     overlay.classList.remove('hidden');
     let last = '';
-    while (Date.now() < startAt + 420) {
-      const left = startAt - Date.now(),
+    while (now() < startAt + 420) {
+      const left = startAt - now(),
         value = left > 2000 ? '3' : left > 1000 ? '2' : left > 0 ? '1' : 'GO!';
       if (value !== last) {
         label.textContent = value;
+        // Перезапуск CSS-анимации: без принудительного пересчёта макета браузер не считает
+        // повторное присвоение того же имени анимации изменением и не проигрывает её заново.
         label.style.animation = 'none';
         void label.offsetWidth;
         label.style.animation = '';
         last = value;
+        onTick?.(value);
       }
       await new Promise(resolve => setTimeout(resolve, 40));
     }
     overlay.classList.add('hidden');
+  }
+
+  // Регуляторы громкости. Значения приходят из AudioEngine, который хранит их в localStorage.
+  bindAudioControls({ volumes, onChange }) {
+    for (const bus of ['master', 'sfx', 'music']) {
+      const slider = $(`#vol-${bus}`);
+      if (!slider) continue;
+      slider.value = String(Math.round((volumes[bus] ?? 0.8) * 100));
+      slider.addEventListener('input', () => onChange(bus, Number(slider.value) / 100));
+    }
   }
   finishSolo({ time, respawns, seed, difficulty }) {
     this.hud(false);

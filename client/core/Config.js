@@ -1,3 +1,17 @@
+// Геометрия трассы приходит из общего с сервером модуля — см. shared/courseSpec.js.
+// Здесь остаётся только то, что касается исключительно клиента: палитра, подача сложности,
+// форматирование и генерация названий.
+import {
+  SEGMENT_LENGTH,
+  FIRST_SEGMENT_CENTER,
+  DIFFICULTY_SEGMENTS,
+  createCourseSpec,
+  safeDifficulty,
+  spawnFor
+} from '/shared/courseSpec.js';
+
+export { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, safeDifficulty, spawnFor };
+
 export const COLORS = {
   purple: 0x6546d8,
   purpleDark: 0x34206f,
@@ -11,14 +25,13 @@ export const COLORS = {
   ink: 0x261653
 };
 
+// Число сегментов берётся из общего модуля, чтобы не разойтись с сервером;
+// скорость препятствий и целевое время — чисто клиентская настройка подачи.
 export const DIFFICULTIES = {
-  easy: { label: 'Breezy', segments: 5, speed: 0.82, parPerSegment: 15, fallGrace: 0.18 },
-  normal: { label: 'Rush', segments: 6, speed: 1, parPerSegment: 13, fallGrace: 0.12 },
-  chaos: { label: 'Mayhem', segments: 7, speed: 1.2, parPerSegment: 12, fallGrace: 0.08 }
+  easy: { label: 'Breezy', segments: DIFFICULTY_SEGMENTS.easy, speed: 0.82, parPerSegment: 15 },
+  normal: { label: 'Rush', segments: DIFFICULTY_SEGMENTS.normal, speed: 1, parPerSegment: 13 },
+  chaos: { label: 'Mayhem', segments: DIFFICULTY_SEGMENTS.chaos, speed: 1.2, parPerSegment: 12 }
 };
-
-export const SEGMENT_LENGTH = 18;
-export const FIRST_SEGMENT_CENTER = -11;
 
 export function hashString(value) {
   let h = 2166136261;
@@ -45,19 +58,7 @@ export function seededRandom(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
-export function courseSpec(seed, difficulty = 'normal') {
-  const key = DIFFICULTIES[difficulty] ? difficulty : 'normal',
-    segments = DIFFICULTIES[key].segments;
-  const checkpoints = Array.from({ length: segments }, (_, i) => -18 * (i + 1));
-  return {
-    seed: seed >>> 0,
-    difficulty: key,
-    segmentCount: segments,
-    checkpoints,
-    finishZ: -18 * segments - 13,
-    start: { x: 0, y: 1.2, z: 7 }
-  };
-}
+export const courseSpec = createCourseSpec;
 export function formatTime(ms) {
   if (!Number.isFinite(ms)) return '—';
   const minutes = Math.floor(ms / 60000),

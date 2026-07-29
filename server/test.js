@@ -8,6 +8,7 @@ const {
   validateState,
   canFinish
 } = require('./gameRules');
+const { originAllowed } = require('./index');
 
 test('player names preserve safe international characters and stay bounded', () => {
   assert.equal(safeName('<b>Малик 🚀</b>'), 'bМалик b');
@@ -47,4 +48,24 @@ test('finish requires every server checkpoint and the finish plane', () => {
   assert.equal(canFinish(player, spec), true);
   player.checkpoint--;
   assert.equal(canFinish(player, spec), false);
+});
+
+test('проверка источника при апгрейде сокета', () => {
+  // Запросы без Origin пропускаем: этот заголовок ставят только браузеры, а Node-клиенты,
+  // мобильные обёртки и тесты его не шлют.
+  assert.equal(originAllowed(undefined, 'game.example'), true);
+  assert.equal(originAllowed('', 'game.example'), true);
+
+  // Свой же хост — разрешён.
+  assert.equal(originAllowed('https://game.example', 'game.example'), true);
+
+  // Чужой сайт, встроивший игру к себе, — отклоняется.
+  assert.equal(originAllowed('https://evil.example', 'game.example'), false);
+
+  // Локальная разработка работает всегда, иначе отладку пришлось бы каждый раз настраивать.
+  assert.equal(originAllowed('http://localhost:5173', 'game.example'), true);
+  assert.equal(originAllowed('http://127.0.0.1:8080', 'game.example'), true);
+
+  // Мусор вместо адреса — отклоняется, а не роняет сервер.
+  assert.equal(originAllowed('не-адрес', 'game.example'), false);
 });

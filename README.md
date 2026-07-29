@@ -1,29 +1,71 @@
 # Wobble Rush 3D
 
-Wobble Rush 3D is an original procedural obstacle racer built with Three.js, plain browser modules, Node.js, and WebSockets. The same deterministic course runs in solo mode and in online parties of up to 16 players.
+Процедурный обстакл-рейсер на Three.js, обычных браузерных ES-модулях, Node.js и WebSocket. Одна и та
+же детерминированная трасса собирается из сида и в одиночном забеге, и в онлайн-комнате до 16 игроков.
 
-## What is in version 2
+Проект развивается в сторону **кооперативного режима на двух игроков** в духе _It Takes Two_ — план
+работ и полный чек-лист лежат в [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-- Deterministic procedural courses assembled from sweepers, moving sky steps, bumper alleys, narrow bridges, punchers, spring gardens, windmills, and a final victory climb.
-- Camera-relative arcade movement, coyote time, jump buffering, dive recovery, moving-platform carry, obstacle impulses, checkpoints, and fast respawns.
-- A multipart animated runner with independent limbs, visor, antenna, run/jump/dive poses, landing squash, and network nameplates.
-- Touch-first controls with a floating joystick, large action buttons, swipe-to-orbit camera, auto-follow, and one-tap camera recentering.
-- Daily and remixed solo courses, three difficulty levels, medal targets, respawn stats, and per-course personal bests.
-- Server-owned room seed and difficulty, server-derived checkpoints, movement validation and reconciliation, authoritative respawns and finish order, batched snapshots, ping display, heartbeat cleanup, rematch voting, and host migration.
-- Adaptive render quality, reduced mobile pixel ratio/shadows, capped particles, safe-area-aware responsive UI, and portrait/landscape layouts.
+## Что есть сейчас
 
-## Run locally
+**Геймплей**
 
-Requirements: Node.js 20 or newer.
+- Детерминированные процедурные трассы из семи типов сегментов: вертушки, движущиеся платформы,
+  бамперы, узкие мосты, поршни, пружины, ветряки — и финальные ворота.
+- Движение относительно камеры, буфер прыжка, coyote time, рывок, перенос движущимися платформами,
+  импульсы от препятствий, чекпоинты и быстрое возрождение.
+- Анимированный персонаж с независимыми конечностями, козырьком и антенной; позы бега, прыжка и
+  рывка, приседание при приземлении, таблички с именами в сети.
+- Управление под сенсорный экран: плавающий джойстик, крупные кнопки, свайп для поворота камеры,
+  автослежение и кнопка возврата камеры.
+- Ежедневная и случайная трассы, три сложности, медали, счётчик падений, личные рекорды.
+
+**Физика и графика**
+
+- Фиксированный шаг физики 60 Гц с интерполяцией отрисовки: поведение персонажа одинаково на 60 и
+  144 Гц, движение остаётся плавным при любой частоте кадров.
+- Карта теней следует за игроком — тени есть на всём протяжении трассы.
+- Постобработка со свечением на высоком качестве; кэш материалов; адаптивное качество, пониженные
+  плотность пикселей и лимит частиц на слабых устройствах.
+- Отзывчивый интерфейс с учётом безопасных зон экрана, портретная и альбомная раскладки.
+
+**Звук**
+
+- Полностью процедурный синтез на Web Audio API — **ни одного файла-ассета**: нулевой вес загрузки,
+  мгновенная готовность и естественная вариативность.
+- Около полутора десятков эффектов: прыжок, приземление с громкостью по силе удара, рывок, шаги,
+  свист падения, пружина, бампер, вертушка, поршень, чекпоинт, финиш, интерфейс, обратный отсчёт.
+- Пространственное позиционирование: слышно, с какой стороны напарник.
+- Адаптивная музыка из слоёв — бас, ударные, аккорды, мелодия, — нарастающая по мере прохождения.
+- Три регулятора громкости, сохраняются между сессиями.
+
+**Сеть**
+
+- Сервер владеет сидом и сложностью комнаты, сам выводит чекпоинты, проверяет движение и финиш,
+  выдаёт возрождения и определяет порядок финиша.
+- Синхронизация часов с сервером: фаза препятствий одинакова у всех игроков независимо от того,
+  насколько врут их системные часы.
+- Буфер снапшотов с интерполяцией и отрисовкой на 100 мс в прошлом; экстраполяция по скорости при
+  потере пакетов — напарник движется плавно, без рывков.
+- Переподключение по токену сессии: слот игрока держится 30 секунд, права хоста сохраняются.
+- Проверка источника при подключении сокета, ограничение частоты запросов по адресу, миграция хоста,
+  голосование за реванш, показ задержки.
+
+## Запуск
+
+Требуется Node.js 20.19 или новее (нужна поддержка `require()` для ES-модулей — так общий с клиентом
+модуль правил трассы работает на обеих сторонах без сборщика).
 
 ```bash
 npm install
 npm start
 ```
 
-Open `http://localhost:3000`. To test multiplayer, open a second browser or device on the same address, create a party, join with the four-letter room code, ready both runners, and start from the host.
+Откройте `http://localhost:3000`. Для проверки сетевой игры откройте второе окно или другое
+устройство по тому же адресу, создайте комнату, войдите по четырёхбуквенному коду, отметьте
+готовность у обоих и запустите забег с хоста.
 
-The client uses the current page origin for `/ws`. A separate socket host can be supplied before `main.js` loads:
+Клиент берёт адрес `/ws` от текущей страницы. Отдельный сокет-хост задаётся до загрузки `main.js`:
 
 ```html
 <script>
@@ -31,26 +73,59 @@ The client uses the current page origin for `/ws`. A separate socket host can be
 </script>
 ```
 
-## Controls
+## Управление
 
-- Desktop: WASD or arrow keys to move, Space to jump, Shift to dive, mouse drag (or Q/E) to orbit, R to recenter.
-- Touch: drag the left joystick, use Jump and Dive at lower right, swipe the open right side of the game view to orbit, and tap the crosshair button to recenter.
+- **Клавиатура**: WASD или стрелки — движение, Пробел — прыжок, Shift — рывок, перетаскивание мышью
+  (или Q/E) — поворот камеры, R — вернуть камеру за спину.
+- **Сенсор**: левый джойстик — движение, кнопки справа внизу — прыжок и рывок, свайп по свободной
+  правой части экрана — поворот камеры, кнопка с перекрестием — вернуть камеру.
 
-## Test
+## Разработка
 
 ```bash
-npm test
-npm run check
+npm test          # 27 тестов: правила сервера, сеть, физика, интеграция двух клиентов
+npm run lint      # ESLint по всему проекту
+npm run format    # Prettier
 ```
 
-The suite covers international name sanitization, deterministic course rules, server-side checkpoint/finish validation, teleport rejection, and a real two-client WebSocket lobby/start flow.
+Тесты покрывают: очистку имён с юникодом, детерминизм трасс, серверную проверку чекпоинтов и финиша,
+отклонение телепортов, проверку источника подключения, интерполяцию и экстраполяцию буфера снапшотов,
+оценку расхождения часов, совпадение спеки трассы у клиента и сервера, независимость физики от частоты
+кадров, интерполяцию отрисовки, кэш материалов, кооп-кадрирование камеры, а также реальный сценарий
+двух WebSocket-клиентов с обрывом связи и возвратом в комнату.
 
-## Deploy on Render
+Клиентские модули написаны для браузера, но прогоняются в Node без сборщика: загрузчик
+`server/client-loader.mjs` подменяет браузерные пути импорта на файлы из `node_modules`, повторяя те
+же соответствия, что задаёт import map в `client/index.html`.
 
-1. Push the repository to GitHub and create a Render Blueprint from it.
-2. Render reads `render.yaml`, runs `npm ci --omit=dev`, and starts one Node Web Service. That service serves both the client and `/ws`, so a separate CORS setup is not needed.
-3. `PORT` is assigned by Render. `NODE_ENV=production` and Node 20 are declared in the Blueprint.
-4. Wait for `/health` to report `{"ok":true,...}` and open the HTTPS service URL.
-5. Test one desktop window plus a phone, or two devices, on the live URL. A sleeping free-tier service may take several seconds to wake; the multiplayer panel shows a connecting state and queues the first create/join request.
+## Структура
 
-For mobile QA, test at least one narrow portrait viewport and one short landscape viewport. Verify that the HUD stays above the action area and all controls remain inside device safe-area insets.
+```
+client/
+  audio/      AudioEngine, библиотека эффектов, адаптивная музыка
+  core/       конфигурация, ввод
+  game/       трасса, игрок, персонаж, камера, частицы, постобработка
+  net/        WebSocket-клиент, синхронизация часов, буфер снапшотов
+  ui/         экраны и HUD
+shared/       правила трассы, общие для клиента и сервера
+server/       раздача статики, комнаты, валидация, тесты
+docs/         чек-лист развития проекта
+```
+
+## Развёртывание на Render
+
+1. Загрузите репозиторий на GitHub и создайте Render Blueprint.
+2. Render читает `render.yaml`, выполняет `npm ci --omit=dev` и запускает один Node Web Service.
+   Этот же сервис отдаёт клиента и `/ws`, поэтому отдельная настройка CORS не нужна.
+3. `PORT` назначает Render. `NODE_ENV=production` и версия Node объявлены в Blueprint.
+4. Дождитесь, пока `/health` начнёт отвечать `{"ok":true,...}`, и откройте HTTPS-адрес сервиса.
+5. Проверьте на одном окне рабочего стола плюс телефоне. Сервис на бесплатном тарифе засыпает и
+   просыпается несколько секунд; панель сетевой игры покажет состояние подключения и поставит первый
+   запрос в очередь.
+
+Переменная `ALLOWED_ORIGINS` (через запятую) задаёт список источников, которым разрешено открывать
+сокет. Если не задана, разрешаются свой хост и localhost.
+
+Для проверки на мобильных устройствах пройдите хотя бы один узкий портретный экран и один низкий
+альбомный. Убедитесь, что HUD не перекрывает игровую область и все элементы управления остаются
+внутри безопасных зон экрана.

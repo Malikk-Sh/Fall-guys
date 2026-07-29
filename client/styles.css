@@ -1072,3 +1072,60 @@ canvas {
     scroll-behavior: auto !important;
   }
 }
+
+/* Регуляторы громкости в меню. Компактный блок, который не спорит с основными кнопками:
+   звук настраивают один раз, поэтому он не должен перетягивать внимание с кнопки старта. */
+.audio-panel {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.audio-row {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.audio-row span {
+  font-size: 0.62rem;
+  letter-spacing: 0.09em;
+  opacity: 0.75;
+}
+.audio-row input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  outline: none;
+}
+.audio-row input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffd94b;
+  border: 2px solid rgba(38, 22, 83, 0.65);
+  cursor: pointer;
+}
+.audio-row input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffd94b;
+  border: 2px solid rgba(38, 22, 83, 0.65);
+  cursor: pointer;
+  border-color: rgba(38, 22, 83, 0.65);
+}
+/* На коротких экранах блок громкости прячется: там каждый пиксель нужен игровой области. */
+@media (max-height: 620px) {
+  .audio-panel {
+    display: none;
+  }
+}

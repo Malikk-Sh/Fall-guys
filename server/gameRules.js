@@ -1,6 +1,15 @@
 const crypto = require('crypto');
 
-const DIFFICULTIES = { easy: { segments: 5 }, normal: { segments: 6 }, chaos: { segments: 7 } };
+// Геометрия трассы описана ровно в одном месте — в общем с клиентом модуле. Node подключает
+// ES-модуль через require начиная с версии 20.19, поэтому отдельная сборка не требуется.
+const {
+  DIFFICULTY_SEGMENTS,
+  safeDifficulty,
+  createCourseSpec: buildCourseSpec,
+  spawnFor
+} = require('../shared/courseSpec.js');
+
+const DIFFICULTIES = DIFFICULTY_SEGMENTS;
 const PLAYER_COLORS = [
   0xff4f91, 0x48dcda, 0xffd94b, 0x55a7ff, 0x58ebb8, 0xff914d, 0x9b6cff, 0xf46b5f, 0x43c5ff, 0xc7ef50,
   0xff73c8, 0x7d82ff, 0x54dba2, 0xffbd59, 0x9867dc, 0x58c9d8
@@ -16,28 +25,11 @@ function safeName(value) {
       .slice(0, 16) || 'Wobbler'
   );
 }
-function safeDifficulty(value) {
-  return Object.hasOwn(DIFFICULTIES, value) ? value : 'normal';
-}
 function randomSeed() {
   return crypto.randomBytes(4).readUInt32LE(0);
 }
 function createCourseSpec(seed = randomSeed(), difficulty = 'normal') {
-  const key = safeDifficulty(difficulty),
-    segmentCount = DIFFICULTIES[key].segments;
-  return {
-    seed: seed >>> 0,
-    difficulty: key,
-    segmentCount,
-    checkpoints: Array.from({ length: segmentCount }, (_, i) => -18 * (i + 1)),
-    finishZ: -18 * segmentCount - 13,
-    start: { x: 0, y: 1.2, z: 7 }
-  };
-}
-function spawnFor(spec, checkpoint = 0) {
-  if (checkpoint <= 0) return { ...spec.start };
-  const index = Math.min(checkpoint - 1, spec.checkpoints.length - 1);
-  return { x: 0, y: 1.15, z: spec.checkpoints[index] + 3.1 };
+  return buildCourseSpec(seed, difficulty);
 }
 function normalizeState(value) {
   const n = value || {};

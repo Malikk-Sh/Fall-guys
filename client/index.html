@@ -9,7 +9,27 @@
       content="Wobble Rush 3D — a bright, procedural obstacle racer for desktop and mobile."
     />
     <title>Wobble Rush 3D</title>
+    <!-- Фавикон встроен как data-URI: в проекте принципиально нет файлов-ассетов,
+         и заводить один-единственный ради иконки не хочется. Заодно это убирает 404 на /favicon.ico. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236546d8'/%3E%3Ccircle cx='16' cy='14' r='7' fill='%23ff4f91'/%3E%3Cellipse cx='16' cy='12' rx='4.4' ry='2.6' fill='%23dffcff'/%3E%3Crect x='13' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3Crect x='16.6' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="styles.css" />
+    <!--
+      Import map вместо сборщика. Дополнения Three.js (постобработка и её шейдеры) импортируют
+      движок по голому имени 'three'. Без этой карты браузер не смог бы их разрешить, а если бы
+      мы оставили в своих файлах прямые пути на /vendor/three.module.js, движок загрузился бы
+      дважды — двумя независимыми копиями, у которых ломаются проверки instanceof.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three.module.js",
+          "three/addons/": "/vendor/addons/"
+        }
+      }
+    </script>
   </head>
   <body>
     <canvas id="game" aria-label="Wobble Rush 3D game view"></canvas>
@@ -73,6 +93,21 @@
             /><button id="join" class="button button-secondary">JOIN</button>
           </div>
           <p id="connectStatus" class="status-line">Create a room or enter a four-letter code.</p>
+        </div>
+
+        <div class="audio-panel" role="group" aria-label="Громкость">
+          <label class="audio-row">
+            <span>ОБЩАЯ</span>
+            <input id="vol-master" type="range" min="0" max="100" value="80" aria-label="Общая громкость" />
+          </label>
+          <label class="audio-row">
+            <span>ЭФФЕКТЫ</span>
+            <input id="vol-sfx" type="range" min="0" max="100" value="90" aria-label="Громкость эффектов" />
+          </label>
+          <label class="audio-row">
+            <span>МУЗЫКА</span>
+            <input id="vol-music" type="range" min="0" max="100" value="50" aria-label="Громкость музыки" />
+          </label>
         </div>
 
         <div class="menu-footer">

@@ -52,6 +52,72 @@ class TestClient {
   }
 }
 
+// Сервер — модульный синглтон, поэтому тесты поднимают и гасят его по очереди, а не параллельно.
+const listen = () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const shutdown = () => new Promise(resolve => server.close(resolve));
+
+test('игрок возвращается в свою комнату после обрыва связи', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  let host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const [hostHello] = await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  assert.ok(hostHello.token, 'сервер обязан выдать токен сессии в hello');
+
+  host.send('create', { name: 'Хост' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await guest.wait('lobby', m => m.players.length === 2);
+
+  // Имитируем разрыв: рвём соединение без сообщения leave.
+  host.ws.terminate();
+
+  // Напарник должен увидеть, что игрок не на связи, но слот за ним сохранён.
+  const dropped = await guest.wait(
+    'lobby',
+    m => m.players.length === 2 && m.players.some(p => !p.online),
+    3000
+  );
+  assert.equal(dropped.players.length, 2, 'слот отвалившегося игрока держится, а не освобождается сразу');
+
+  // Возвращаемся по токену прошлой сессии.
+  host = new TestClient(url);
+  await host.wait('hello');
+  host.send('resume', { token: hostHello.token });
+
+  const resumed = await host.wait('resumed', () => true, 3000);
+  assert.equal(resumed.id, hostHello.id, 'после возврата идентификатор игрока должен сохраниться');
+
+  const back = await guest.wait('lobby', m => m.players.length === 2 && m.players.every(p => p.online), 3000);
+  assert.equal(back.code, created.code, 'игрок вернулся именно в свою комнату');
+  assert.equal(back.host, hostHello.id, 'права хоста остались за вернувшимся игроком');
+});
+
+test('возврат по неизвестному токену корректно отклоняется', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const client = new TestClient(url);
+  t.after(async () => {
+    await client.close();
+    await shutdown();
+  });
+
+  await client.wait('hello');
+  client.send('resume', { token: 'нет-такого-токена' });
+  await client.wait('resumeFailed', () => true, 2000);
+
+  // Отказ не должен ломать соединение: обычный сценарий после него обязан работать.
+  client.send('create', { name: 'Новичок' });
+  const lobby = await client.wait('lobby', m => m.players.length === 1);
+  assert.equal(lobby.players[0].name, 'Новичок');
+});
+
 test('two players share lobby configuration and deterministic start spec', async t => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `ws://127.0.0.1:${server.address().port}/ws`,

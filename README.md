@@ -26,7 +26,9 @@ Open `http://localhost:3000`. To test multiplayer, open a second browser or devi
 The client uses the current page origin for `/ws`. A separate socket host can be supplied before `main.js` loads:
 
 ```html
-<script>window.WOBBLE_WS_URL = "wss://your-socket-host.example/ws";</script>
+<script>
+  window.WOBBLE_WS_URL = 'wss://your-socket-host.example/ws';
+</script>
 ```
 
 ## Controls

@@ -13,6 +13,7 @@ import { Player } from './game/Player.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
+import { Perf } from './core/Perf.js';
 import { UI } from './ui/UI.js';
 
 // Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
@@ -43,7 +44,11 @@ class Game {
     this.startToken = 0;
     this.menuRandomSeed = randomSeed();
     this.qualityChoice = 'auto';
-    this.quality = this.detectQuality();
+    // Догадка по железу — только начальное приближение. Дальше качество ведёт измерение кадров.
+    this.autoQuality = this.guessQuality();
+    this.quality = this.autoQuality;
+    this.raisedAt = 0;
+    this.perf = new Perf({ enabled: new URL(location.href).searchParams.has('perf') });
 
     this.audio = new AudioEngine();
     this.sfx = new Sfx(this.audio);
@@ -81,13 +86,50 @@ class Game {
     history.replaceState(null, '', location.pathname);
   }
 
+  // Действующее качество. В режиме «auto» это результат измерения (`autoQuality`), а не догадки:
+  // догадка по числу ядер и памяти работает грубо — слабый телефон с восемью ядрами получал
+  // высокое качество и играл в двадцать кадров.
   detectQuality() {
     if (this.qualityChoice !== 'auto') return this.qualityChoice;
+    return this.autoQuality || this.guessQuality();
+  }
+
+  // Начальное приближение по характеристикам устройства. Нужно только чтобы первые секунды
+  // не оказались заведомо провальными: дальше решение принимает Perf по времени кадров.
+  guessQuality() {
     const constrained =
       (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
       (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) ||
       (matchMedia('(pointer:coarse)').matches && devicePixelRatio > 2.5);
     return constrained ? 'low' : 'high';
+  }
+
+  // Автоподстройка качества по бюджету кадра.
+  //
+  // Работает только в режиме «auto»: если игрок выбрал качество руками, менять его за него нельзя —
+  // это его решение, даже если оно стоит кадров.
+  updateAdaptiveQuality(now) {
+    if (this.qualityChoice !== 'auto' || !this.running) return;
+    const verdict = this.perf.verdict(now);
+    if (!verdict) return;
+
+    if (verdict < 0) {
+      if (this.autoQuality === 'low') return;
+      // Понижение сразу после попытки возврата означает, что возврат был ошибкой.
+      if (this.raisedAt && now - this.raisedAt < 60_000) this.perf.raiseFailed();
+      this.autoQuality = 'low';
+      this.applyRendererQuality();
+      this.perf.reset();
+      this.ui.toast('Качество снижено — держим плавность.');
+      return;
+    }
+
+    if (this.autoQuality === 'high') return;
+    this.autoQuality = 'high';
+    this.raisedAt = now;
+    this.applyRendererQuality();
+    this.perf.reset();
+    this.ui.toast('Качество повышено.');
   }
 
   createRenderer() {
@@ -264,6 +306,11 @@ class Game {
       const values = ['auto', 'low', 'high'];
       const next = values[(values.indexOf(this.qualityChoice) + 1) % values.length];
       this.qualityChoice = next;
+      // Возврат в «auto» начинает подбор заново: прошлые измерения относились к другой картинке.
+      if (next === 'auto') {
+        this.autoQuality = this.guessQuality();
+        this.perf.reset();
+      }
       this.ui.setQuality(next);
       this.applyRendererQuality();
       this.ui.toast(`Качество графики: ${next.toUpperCase()}.`);
@@ -419,6 +466,8 @@ class Game {
     this.myRole = this.roles[this.net?.id] || null;
     this.partnerDown = false;
     this.partnerAway = this.room?.players.some(p => p.id !== this.net?.id && p.away) || false;
+    // Времена кадров меню ничего не говорят о трассе: там пустая сцена и один персонаж.
+    this.perf.reset();
     this.running = false;
     this.raceComplete = false;
     this.finalTime = 0;
@@ -536,11 +585,31 @@ class Game {
     }
   }
 
+  // Уровень детализации удалённых игроков по расстоянию до камеры.
+  //
+  // В кооперативе игроков всего двое и напарник почти всегда рядом — здесь это почти не работает.
+  // Смысл появляется в гонке на шестнадцать человек: на старте все в кадре, и полтора десятка
+  // анимированных персонажей с тенями — самая дорогая часть кадра на телефоне. Дальше половина
+  // из них растягивается по трассе и превращается в силуэты, которым подробности не нужны.
+  //
+  // Пороги умышленно грубые, с большим зазором между ступенями: персонаж, стоящий ровно на
+  // границе, иначе переключался бы туда-сюда каждый кадр, и это было бы заметно как мерцание.
+  remoteDetail(position) {
+    const distance = this.camera.position.distanceTo(position);
+    if (distance < 24) return 'full';
+    if (distance < 52) return 'simple';
+    return 'minimal';
+  }
+
   updateRemotes(dt) {
     if (!this.net) return;
     const renderTime = this.net.renderTime();
     for (const [id, remote] of this.remotes) {
-      remote.applyRemote(this.net.snapshots.sample(id, renderTime), dt);
+      remote.applyRemote(
+        this.net.snapshots.sample(id, renderTime),
+        dt,
+        this.remoteDetail(remote.visualPosition)
+      );
     }
   }
 
@@ -821,8 +890,18 @@ class Game {
       this.resumedFrame = false;
       this.clockLast = time - FIXED_DT * 1000;
     }
-    const frameDt = Math.min(0.25, Math.max(0.0001, (time - this.clockLast) / 1000));
+    const rawFrameMs = time - this.clockLast;
+    const frameDt = Math.min(0.25, Math.max(0.0001, rawFrameMs / 1000));
     this.clockLast = time;
+
+    // Бюджет считается по фактическому промежутку между кадрами, а не по времени нашего кода.
+    // Разница принципиальна: отрисовка возвращает управление раньше, чем видеокарта закончит
+    // работу, поэтому «наше» время может укладываться в бюджет, пока игра идёт в тридцать кадров.
+    // Промежуток между кадрами врать не умеет — он и есть то, что видит игрок.
+    //
+    // Сон вкладки из замеров исключён: первый кадр после возвращения покажет минуты и утащил бы
+    // качество вниз ни за что.
+    if (rawFrameMs > 0 && rawFrameMs < 250) this.perf.sample(rawFrameMs);
 
     // Аккумулятор фиксированного шага: физика всегда идёт одинаковыми порциями времени независимо
     // от частоты кадров. Раньше в неё подавалась дельта кадра, и высота прыжка на 144 Гц отличалась
@@ -887,6 +966,11 @@ class Game {
     }
 
     this.postFX.render();
+    this.updateAdaptiveQuality(time);
+    this.perf.paint(time, this.renderer, {
+      качество: this.qualityChoice === 'auto' ? `авто (${this.autoQuality})` : this.qualityChoice,
+      напарников: this.remotes.size
+    });
     requestAnimationFrame(next => this.loop(next));
   }
 

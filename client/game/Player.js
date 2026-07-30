@@ -342,8 +342,9 @@ export class Player {
   // Состояние удалённого игрока приходит уже проинтерполированным из SnapshotBuffer, поэтому здесь
   // остаётся только применить его. Небольшое сглаживание всё же оставлено: оно скрывает скачок в
   // момент, когда буфер переключается с экстраполяции обратно на интерполяцию.
-  applyRemote(state, dt) {
+  applyRemote(state, dt, detail = 'full') {
     if (!state) return;
+    this.character.setDetail(detail);
     const target = this._scratch.set(state.x, state.y, state.z);
     const group = this.character.group;
     const distance = group.position.distanceTo(target);

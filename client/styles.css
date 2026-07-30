@@ -1289,3 +1289,28 @@ canvas {
     animation: none;
   }
 }
+
+/* Счётчики производительности. Включаются параметром ?perf=1 — это инструмент разработки,
+   а не часть интерфейса, поэтому кнопки для него в меню нет. */
+.perf-overlay {
+  position: fixed;
+  left: max(8px, env(safe-area-inset-left));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  z-index: 50;
+  pointer-events: none;
+  white-space: pre;
+  font:
+    600 11px/1.45 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: #d8ffe8;
+  background: rgba(14, 8, 33, 0.72);
+  border: 1px solid rgba(120, 255, 190, 0.28);
+  border-radius: 8px;
+  padding: 6px 9px;
+}
+.perf-overlay[data-over='1'] {
+  color: #ffd8e6;
+  border-color: rgba(255, 79, 145, 0.45);
+}

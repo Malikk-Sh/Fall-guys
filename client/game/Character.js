@@ -34,11 +34,13 @@ export class Character {
     visor.castShadow = true;
     this.visual.add(visor);
     const eyeMat = standard(COLORS.ink, 0.22);
+    const eyes = [];
     for (const x of [-0.105, 0.105]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeMat);
       eye.position.set(x, 1.2, -0.525);
       eye.scale.z = 0.35;
       this.visual.add(eye);
+      eyes.push(eye);
     }
     const antenna = new THREE.Group(),
       stem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.22, 7), standard(accent));
@@ -61,10 +63,36 @@ export class Character {
       boot.castShadow = true;
       leg.add(boot);
     }
+    // Мелочи, которые с десяти метров уже не различить. Держим их списком, чтобы уровень
+    // детализации мог убрать их одним движением, не разбирая иерархию заново каждый кадр.
+    this.trinkets = [belly, visor, antenna, ...eyes];
+    this.limbs = [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
+    this.shadowCasters = [body, belly, visor];
+    this.detail = 'full';
+
     if (name) this.addNameplate(name);
     this.group.position.set(0, 1.15, 7);
     scene.add(this.group);
     this.scene = scene;
+  }
+
+  // Уровень детализации удалённого игрока.
+  //
+  // Три ступени, и убирают они разное. `full` — всё как есть. `simple` снимает отбрасывание тени:
+  // персонаж остаётся целым, но исчезает из прохода теней, а он тем дороже, чем больше в нём
+  // объектов. `minimal` прячет мелочи, которые с такого расстояния занимают меньше пикселя, и
+  // табличку с именем — спрайт с `depthTest: false` рисуется всегда, даже за геометрией.
+  //
+  // Само по себе это экономит немного. Главное — в `animate`: на «minimal» анимация не считается
+  // вовсе, а это четырнадцать вызовов затухания и тригонометрия на каждого игрока каждый кадр.
+  setDetail(level) {
+    if (this.detail === level) return;
+    this.detail = level;
+    const minimal = level === 'minimal';
+    for (const mesh of this.trinkets) mesh.visible = !minimal;
+    for (const mesh of this.shadowCasters) mesh.castShadow = level === 'full';
+    for (const limb of this.limbs) for (const part of limb.children) part.castShadow = level === 'full';
+    if (this.nameplate) this.nameplate.visible = !minimal;
   }
   limb(x, y, color, arm) {
     const pivot = new THREE.Group();
@@ -107,6 +135,9 @@ export class Character {
     const run = Math.min(1, speed / 7),
       swing = Math.sin(this.phase) * run;
     this.state = diving ? 'dive' : !grounded ? 'air' : run > 0.08 ? 'run' : 'idle';
+    // На дальней дистанции поза не читается: движется силуэт, а не руки и ноги. Считать её —
+    // чистая трата кадра, и тем большая, чем больше игроков в гонке.
+    if (this.detail === 'minimal') return;
     if (this.state === 'run') {
       this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, swing * 0.82, 13, dt);
       this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, -swing * 0.82, 13, dt);

@@ -3,6 +3,7 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
+
 const {
   PLAYER_COLORS,
   safeName,
@@ -15,20 +16,82 @@ const {
   leaderboard
 } = require('./gameRules');
 
+const {
+  PROTOCOL_VERSION,
+  C2S,
+  S2C,
+  ERROR_CODES,
+  ROOM_STATE,
+  GAME_MODE,
+  COOP_ROLE,
+  ALLOWED_IN_STATE,
+  canTransition,
+  MAX_MESSAGE_BYTES,
+  VIOLATION_DISCONNECT_THRESHOLD,
+  VIOLATION_DECAY_PER_MINUTE
+} = require('../shared/protocol.js');
+
+const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/validation.js');
+
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
 const sharedPath = path.join(__dirname, '..', 'shared');
 
 app.disable('x-powered-by');
+
+// Хеш встроенного import map для политики безопасности.
+//
+// Import map обязан быть встроенным в HTML — внешние карты браузеры не поддерживают. При строгой
+// политике script-src 'self' такой скрипт блокируется, и игра просто не загружается: спецификатор
+// 'three' перестаёт разрешаться. Разрешать 'unsafe-inline' ради этого нельзя — это открыло бы
+// исполнение любого встроенного скрипта. Поэтому считаем хеш содержимого при старте: политика
+// остаётся строгой и автоматически подстраивается, если карта изменится.
+function inlineScriptHashes() {
+  try {
+    const html = require('fs').readFileSync(path.join(clientPath, 'index.html'), 'utf8');
+    const hashes = [];
+    for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
+      const body = match[1];
+      if (!body.trim()) continue;
+      hashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`);
+    }
+    return hashes;
+  } catch {
+    return [];
+  }
+}
+const INLINE_SCRIPT_HASHES = inlineScriptHashes();
+
+// Заголовки безопасности (ТЗ 13.6). Игра целиком самодостаточна: внешних скриптов, шрифтов и
+// стилей нет, поэтому политика может быть строгой без риска что-то сломать.
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    [
+      "default-src 'self'",
+      ["script-src 'self'", ...INLINE_SCRIPT_HASHES].join(' '),
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data:",
+      "connect-src 'self' ws: wss:",
+      "frame-ancestors 'none'",
+      "base-uri 'self'",
+      "form-action 'none'"
+    ].join('; ')
+  );
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  next();
+});
+
 app.use(
   express.static(clientPath, {
     setHeaders: (res, file) => {
       if (/\.(js|css)$/.test(file)) res.setHeader('Cache-Control', 'public, max-age=300');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
     }
   })
 );
-// Общие с клиентом правила трассы: один и тот же файл исполняется и на сервере, и в браузере.
+// Общие с клиентом правила: один и тот же файл исполняется и на сервере, и в браузере.
 app.use('/shared', express.static(sharedPath, { maxAge: '5m' }));
 app.use(
   '/vendor',
@@ -37,8 +100,8 @@ app.use(
     immutable: true
   })
 );
-// Дополнения Three.js (постобработка и её шейдеры). Они импортируют 'three' как голое имя,
-// поэтому в client/index.html объявлен import map — иначе браузер загрузил бы вторую копию движка.
+// Дополнения Three.js (постобработка). Они импортируют 'three' как голое имя, поэтому в
+// client/index.html объявлен import map — иначе браузер загрузил бы вторую копию движка.
 app.use(
   '/vendor/addons',
   express.static(path.join(__dirname, '..', 'node_modules', 'three', 'examples', 'jsm'), {
@@ -49,21 +112,38 @@ app.use(
 
 const rooms = new Map();
 
-// Сессии для переподключения: токен → место игрока в комнате. Живут недолго — ровно столько,
-// сколько мы готовы держать слот за отвалившимся игроком.
+// Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
 
-app.get('/health', (_req, res) =>
-  res.json({
-    ok: true,
-    service: 'wobble-rush-3d',
-    version: '2.1.0',
-    rooms: rooms.size,
-    players: [...rooms.values()].reduce((sum, room) => sum + room.players.size, 0),
-    sessions: sessions.size,
-    uptime: Math.round(process.uptime())
-  })
-);
+const metrics = {
+  connections: 0,
+  matchesStarted: 0,
+  matchesFinished: 0,
+  invalidMessages: 0,
+  disconnectsForAbuse: 0,
+  reconnects: 0
+};
+
+const health = () => ({
+  ok: true,
+  service: 'wobble-rush-3d',
+  version: '2.2.0',
+  protocolVersion: PROTOCOL_VERSION,
+  rooms: rooms.size,
+  players: [...rooms.values()].reduce((sum, room) => sum + room.players.size, 0),
+  sessions: sessions.size,
+  uptime: Math.round(process.uptime()),
+  metrics
+});
+
+app.get('/health', (_req, res) => res.json(health()));
+// Разделение live и ready (ТЗ 15.3): live отвечает, пока процесс жив, ready — пока сокет-сервер
+// действительно принимает подключения. Балансировщику нужны разные ответы на эти вопросы.
+app.get('/health/live', (_req, res) => res.json({ ok: true }));
+app.get('/health/ready', (_req, res) => {
+  const ready = !!wss && server.listening;
+  res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
+});
 
 // Отдаём index.html только для навигационных запросов. Раньше сюда попадали и запросы к
 // несуществующим ассетам — браузер получал HTML вместо 404 и молча ломался на разборе.
@@ -74,29 +154,34 @@ app.get('*', (req, res, next) => {
 
 const server = http.createServer(app);
 
-const MAX_PLAYERS = 16;
+// Вместимость зависит от режима: кооп — строго на двоих, гонка — до шестнадцати.
+const MAX_PLAYERS = { [GAME_MODE.RACE]: 16, [GAME_MODE.COOP]: 2 };
 const MAX_ROOMS = 500;
 const ROOM_TTL = 45 * 60 * 1000;
+const COUNTDOWN_MS = 2800;
 
 // Сколько держим слот игрока после обрыва связи, прежде чем выкинуть его из комнаты.
 const RECONNECT_GRACE_MS = 30 * 1000;
 const SESSION_TTL_MS = 60 * 1000;
 
-// Ограничение частоты создания и входа в комнаты с одного адреса.
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 40;
-const rateLimits = new Map();
+// Ограничение операций с комнатами по адресу — поверх ограничения по типам сообщений,
+// которое действует на каждое соединение отдельно.
+const IP_WINDOW_MS = 60 * 1000;
+const IP_MAX_ROOM_OPS = 40;
+const MAX_CONNECTIONS_PER_IP = 24;
+const ipRoomOps = new Map();
+const ipConnections = new Map();
 
-function rateLimited(ip) {
+function ipRateLimited(ip) {
   if (!ip) return false;
   const now = Date.now();
-  const entry = rateLimits.get(ip);
-  if (!entry || now - entry.start > RATE_LIMIT_WINDOW_MS) {
-    rateLimits.set(ip, { start: now, count: 1 });
+  const entry = ipRoomOps.get(ip);
+  if (!entry || now - entry.start > IP_WINDOW_MS) {
+    ipRoomOps.set(ip, { start: now, count: 1 });
     return false;
   }
   entry.count++;
-  return entry.count > RATE_LIMIT_MAX;
+  return entry.count > IP_MAX_ROOM_OPS;
 }
 
 // Проверка источника при апгрейде сокета: без неё игру можно встроить на чужой сайт и гонять
@@ -122,21 +207,36 @@ function originAllowed(origin, host) {
 const wss = new WebSocketServer({
   server,
   path: '/ws',
-  maxPayload: 4096,
+  maxPayload: MAX_MESSAGE_BYTES,
   perMessageDeflate: false,
   verifyClient: ({ origin, req }) => originAllowed(origin, req.headers.host)
 });
 
+// Порог, после которого соединение считается захлебнувшимся. При медленном канале очередь
+// отправки растёт неограниченно и съедает память сервера; лучше отбросить устаревший снапшот.
+const MAX_BUFFERED_BYTES = 512 * 1024;
+
+const canSend = ws => ws && ws.readyState === WebSocket.OPEN;
+
 const send = (ws, data) => {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+  if (!canSend(ws)) return;
+  ws.send(JSON.stringify(data));
 };
+
+const sendError = (ws, code, message, recoverable = true) =>
+  send(ws, { type: S2C.ERROR, code, message, recoverable });
 
 // Сериализуем полезную нагрузку один раз на всю комнату. Раньше JSON.stringify вызывался на каждого
 // получателя: при 16 игроках и 15 рассылках в секунду это 240 сериализаций одного и того же объекта.
-const broadcast = (room, data) => {
+const broadcast = (room, data, { dropIfCongested = false } = {}) => {
   const payload = JSON.stringify(data);
   for (const player of room.players.values()) {
-    if (player.ws && player.ws.readyState === WebSocket.OPEN) player.ws.send(payload);
+    const ws = player.ws;
+    if (!canSend(ws)) continue;
+    // Снапшоты можно пропускать: следующий придёт через 66 мс и полностью заменит этот.
+    // Сообщения о состоянии комнаты пропускать нельзя — они не повторяются.
+    if (dropIfCongested && ws.bufferedAmount > MAX_BUFFERED_BYTES) continue;
+    ws.send(payload);
   }
 };
 
@@ -144,17 +244,37 @@ const roomCode = () => {
   let value;
   do
     value = crypto
-      .randomBytes(3)
+      .randomBytes(4)
       .toString('base64url')
       .replace(/[^A-Z0-9]/gi, '')
-      .slice(0, 4)
+      .slice(0, 5)
       .toUpperCase()
-      .padEnd(4, 'X');
+      .padEnd(5, 'X');
   while (rooms.has(value));
   return value;
 };
 
-const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt }) => ({
+// Переход состояния комнаты. Недопустимые переходы не выполняются молча — это баг, и он должен
+// быть заметен в логах, а не превращаться в тихо разъехавшееся состояние.
+function setRoomState(room, next) {
+  if (room.state === next) return true;
+  if (!canTransition(room.state, next)) {
+    log('warn', 'invalid_room_transition', { roomId: room.code, from: room.state, to: next });
+    return false;
+  }
+  room.state = next;
+  room.updatedAt = Date.now();
+  return true;
+}
+
+// Структурные логи (ТЗ 15.1). Токены и другие чувствительные поля сюда не попадают.
+function log(level, event, fields = {}) {
+  const line = JSON.stringify({ level, event, ts: new Date().toISOString(), ...fields });
+  if (level === 'error') console.error(line);
+  else console.log(line);
+}
+
+const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, role }) => ({
   id,
   name,
   ready: !!ready,
@@ -162,24 +282,44 @@ const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconn
   time: time ?? null,
   rematch: !!rematch,
   color,
+  role: role || null,
   online: !disconnectedAt
 });
 
 const lobbyPayload = room => ({
-  type: 'lobby',
+  type: S2C.ROOM_STATE,
   code: room.code,
   host: room.host,
-  started: room.started,
+  state: room.state,
+  mode: room.mode,
+  matchId: room.matchId,
+  // Оставлено для совместимости с текущим клиентом: булево «идёт ли забег».
+  started: room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING,
   seed: room.spec.seed,
   difficulty: room.spec.difficulty,
+  maxPlayers: MAX_PLAYERS[room.mode],
   players: [...room.players.values()].map(publicPlayer)
 });
 
 const emitLobby = room => broadcast(room, lobbyPayload(room));
 
+// В коопе роли назначает сервер по порядку входа: первый — ИСКРА, второй — ГРУЗ.
+function assignRoles(room) {
+  if (room.mode !== GAME_MODE.COOP) {
+    for (const player of room.players.values()) player.role = null;
+    return;
+  }
+  const ordered = [...room.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
+  ordered.forEach((player, index) => {
+    player.role = index === 0 ? COOP_ROLE.SPARK : COOP_ROLE.ANCHOR;
+  });
+}
+
 function resetLobby(room, { newSeed = false } = {}) {
-  room.started = false;
+  setRoomState(room, ROOM_STATE.LOBBY);
   room.startedAt = null;
+  room.matchId = null;
+  room.firstFinishAt = null;
   room.updatedAt = Date.now();
   if (newSeed) room.spec = createCourseSpec(randomSeed(), room.spec.difficulty);
   for (const player of room.players.values())
@@ -193,6 +333,7 @@ function resetLobby(room, { newSeed = false } = {}) {
       lastAt: 0,
       returned: false
     });
+  assignRoles(room);
   emitLobby(room);
 }
 
@@ -200,14 +341,25 @@ function dropPlayer(room, playerId) {
   room.players.delete(playerId);
   room.updatedAt = Date.now();
   if (!room.players.size) {
+    setRoomState(room, ROOM_STATE.CLOSING);
     rooms.delete(room.code);
+    log('info', 'room_closed', { roomId: room.code });
     return;
   }
-  // Хост ушёл — передаём права первому оставшемуся, предпочитая тех, кто на связи.
+
+  // Миграция хоста детерминирована (ТЗ 3.6): сначала те, кто на связи, среди них — вошедший раньше.
   if (room.host === playerId) {
-    const online = [...room.players.values()].find(item => !item.disconnectedAt);
-    room.host = (online || room.players.values().next().value).id;
+    const previousHostId = room.host;
+    const candidates = [...room.players.values()].sort((a, b) => {
+      if (!!a.disconnectedAt !== !!b.disconnectedAt) return a.disconnectedAt ? 1 : -1;
+      return a.joinOrder - b.joinOrder;
+    });
+    room.host = candidates[0].id;
+    broadcast(room, { type: S2C.HOST_CHANGED, previousHostId, hostId: room.host });
+    log('info', 'host_migrated', { roomId: room.code, hostId: room.host });
   }
+
+  assignRoles(room);
   emitLobby(room);
 }
 
@@ -226,6 +378,13 @@ function leave(ws) {
 // Обрыв связи — не то же самое, что выход. Слот держится RECONNECT_GRACE_MS, чтобы игрок,
 // у которого моргнул wi-fi, вернулся в тот же забег, а не обнаружил пустое меню.
 function handleDisconnect(ws) {
+  const ip = ws.ip;
+  if (ip && ipConnections.has(ip)) {
+    const left = ipConnections.get(ip) - 1;
+    if (left > 0) ipConnections.set(ip, left);
+    else ipConnections.delete(ip);
+  }
+
   if (!ws.room) return;
   const room = rooms.get(ws.room);
   if (!room) return;
@@ -238,6 +397,7 @@ function handleDisconnect(ws) {
     const session = sessions.get(ws.token);
     if (session) session.expiresAt = Date.now() + SESSION_TTL_MS;
   }
+  log('info', 'player_disconnected', { roomId: room.code, playerId: ws.id });
   emitLobby(room);
 }
 
@@ -248,6 +408,8 @@ function addPlayer(room, ws, name) {
     id: ws.id,
     name: safeName(name),
     color,
+    role: null,
+    joinOrder: room.nextJoinOrder++,
     ready: false,
     finished: false,
     time: null,
@@ -264,6 +426,7 @@ function addPlayer(room, ws, name) {
     expiresAt: Date.now() + SESSION_TTL_MS
   });
   room.updatedAt = Date.now();
+  assignRoles(room);
   emitLobby(room);
 }
 
@@ -292,104 +455,239 @@ function resume(ws, token) {
   player.disconnectedAt = null;
   session.expiresAt = Date.now() + SESSION_TTL_MS;
   room.updatedAt = Date.now();
+  metrics.reconnects++;
 
-  send(ws, { type: 'resumed', id: ws.id, serverTime: Date.now() });
-  if (room.started) send(ws, { type: 'start', at: room.startedAt, spec: room.spec });
+  send(ws, { type: S2C.RESUMED, id: ws.id, serverTime: Date.now() });
+  if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
+    send(ws, {
+      type: S2C.MATCH_START,
+      at: room.startedAt,
+      matchId: room.matchId,
+      mode: room.mode,
+      spec: room.spec
+    });
+  }
   emitLobby(room);
+  log('info', 'player_resumed', { roomId: room.code, playerId: ws.id });
   return true;
 }
 
+// Матч завершается, когда дошли все, кто ещё на связи. В коопе это обязательное условие:
+// глава считается пройденной только вдвоём.
+function checkMatchEnd(room) {
+  if (room.state !== ROOM_STATE.PLAYING) return;
+  const active = [...room.players.values()].filter(player => !player.disconnectedAt);
+  if (!active.length || !active.every(player => player.finished)) return;
+  finishMatch(room);
+}
+
+function finishMatch(room) {
+  if (!setRoomState(room, ROOM_STATE.RESULTS)) return;
+  metrics.matchesFinished++;
+  const board = leaderboard(room);
+  const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
+  broadcast(room, {
+    type: S2C.MATCH_RESULTS,
+    matchId: room.matchId,
+    mode: room.mode,
+    board,
+    // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
+    coopTime
+  });
+  log('info', 'match_finished', { roomId: room.code, matchId: room.matchId, players: board.length });
+}
+
 wss.on('connection', (ws, req) => {
+  const ip = req.socket.remoteAddress;
+  const openFromIp = (ipConnections.get(ip) || 0) + 1;
+  if (openFromIp > MAX_CONNECTIONS_PER_IP) {
+    sendError(ws, ERROR_CODES.RATE_LIMITED, 'Слишком много подключений с одного адреса.', false);
+    ws.close();
+    return;
+  }
+  ipConnections.set(ip, openFromIp);
+
   ws.id = crypto.randomBytes(8).toString('hex');
   ws.token = crypto.randomBytes(16).toString('hex');
-  ws.ip = req.socket.remoteAddress;
+  ws.ip = ip;
   ws.isAlive = true;
+  ws.limiter = new RateLimiter();
+  ws.violations = new ViolationTracker({
+    threshold: VIOLATION_DISCONNECT_THRESHOLD,
+    decayPerMinute: VIOLATION_DECAY_PER_MINUTE
+  });
+  metrics.connections++;
 
-  send(ws, { type: 'hello', id: ws.id, token: ws.token, serverTime: Date.now() });
+  send(ws, {
+    type: S2C.WELCOME,
+    id: ws.id,
+    token: ws.token,
+    serverTime: Date.now(),
+    protocolVersion: PROTOCOL_VERSION
+  });
+
   ws.on('pong', () => {
     ws.isAlive = true;
   });
+
+  // Единая точка отказа: начисляет штраф, отвечает структурированной ошибкой и при необходимости
+  // закрывает соединение.
+  const reject = (reason, code, message) => {
+    metrics.invalidMessages++;
+    sendError(ws, code, message);
+    if (ws.violations.add(reason)) {
+      metrics.disconnectsForAbuse++;
+      log('warn', 'connection_closed_for_abuse', { playerId: ws.id, score: ws.violations.current() });
+      sendError(ws, ERROR_CODES.PROTOCOL_ERROR, 'Соединение закрыто из-за некорректных запросов.', false);
+      ws.close();
+    }
+  };
 
   ws.on('message', raw => {
     let message;
     try {
       message = JSON.parse(raw.toString());
     } catch {
-      return send(ws, { type: 'error', message: 'Некорректное сетевое сообщение.' });
+      return reject('INVALID_SCHEMA', ERROR_CODES.INVALID_MESSAGE, 'Некорректное сетевое сообщение.');
     }
-    if (!message || typeof message.type !== 'string') return;
+
+    const validation = validateMessage(message);
+    if (!validation.ok) {
+      return reject(
+        validation.reason,
+        ERROR_CODES.INVALID_MESSAGE,
+        `Некорректное сообщение: ${validation.detail}`
+      );
+    }
+
+    if (!ws.limiter.allow(message.type)) {
+      return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком часто. Немного подождите.');
+    }
 
     // Отметка времени сервера в каждом pong — по ней клиент оценивает расхождение часов.
-    if (message.type === 'ping') return send(ws, { type: 'pong', at: message.at, serverTime: Date.now() });
-    if (message.type === 'leave') return leave(ws);
+    if (message.type === C2S.PING) {
+      return send(ws, { type: S2C.PONG, at: message.at, serverTime: Date.now() });
+    }
+    if (message.type === C2S.LEAVE_ROOM) return leave(ws);
 
-    if (message.type === 'resume') {
-      if (typeof message.token === 'string' && resume(ws, message.token)) return;
-      return send(ws, { type: 'resumeFailed' });
+    if (message.type === C2S.RESUME) {
+      if (resume(ws, message.token)) return;
+      return send(ws, { type: S2C.RESUME_FAILED, code: ERROR_CODES.RECONNECT_EXPIRED });
     }
 
-    if (message.type === 'create') {
-      if (rateLimited(ws.ip))
-        return send(ws, { type: 'error', message: 'Слишком много запросов. Подождите минуту.' });
+    if (message.type === C2S.CREATE_ROOM || message.type === C2S.JOIN_ROOM) {
+      if (message.protocolVersion !== undefined && message.protocolVersion !== PROTOCOL_VERSION) {
+        return sendError(ws, ERROR_CODES.VERSION_MISMATCH, 'Версия игры устарела. Обновите страницу.', false);
+      }
+      if (ipRateLimited(ws.ip)) {
+        return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком много запросов. Подождите минуту.');
+      }
+    }
+
+    if (message.type === C2S.CREATE_ROOM) {
       leave(ws);
-      if (rooms.size >= MAX_ROOMS)
-        return send(ws, { type: 'error', message: 'Сервис перегружен. Попробуйте позже.' });
+      if (rooms.size >= MAX_ROOMS) {
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      }
+      const mode = message.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
       const code = roomCode();
-      const spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
       const room = {
         code,
         host: ws.id,
-        started: false,
+        state: ROOM_STATE.LOBBY,
+        mode,
+        matchId: null,
         startedAt: null,
-        spec,
+        firstFinishAt: null,
+        spec: createCourseSpec(randomSeed(), safeDifficulty(message.difficulty)),
         players: new Map(),
+        nextJoinOrder: 0,
         createdAt: Date.now(),
         updatedAt: Date.now()
       };
       rooms.set(code, room);
+      log('info', 'room_created', { roomId: code, mode });
       return addPlayer(room, ws, message.name);
     }
 
-    if (message.type === 'join') {
-      if (rateLimited(ws.ip))
-        return send(ws, { type: 'error', message: 'Слишком много запросов. Подождите минуту.' });
+    if (message.type === C2S.JOIN_ROOM) {
       leave(ws);
-      const room = rooms.get(
-        String(message.code || '')
-          .trim()
-          .toUpperCase()
-      );
-      if (!room) return send(ws, { type: 'error', message: 'Комната не найдена. Проверьте код.' });
-      if (room.started) return send(ws, { type: 'error', message: 'Этот забег уже начался.' });
-      if (room.players.size >= MAX_PLAYERS)
-        return send(ws, { type: 'error', message: 'В комнате уже 16 игроков.' });
+      const room = rooms.get(message.code.trim().toUpperCase());
+      if (!room) return sendError(ws, ERROR_CODES.ROOM_NOT_FOUND, 'Комната не найдена. Проверьте код.');
+      if (room.state !== ROOM_STATE.LOBBY) {
+        return sendError(ws, ERROR_CODES.MATCH_ALREADY_STARTED, 'Игра в этой комнате уже началась.');
+      }
+      if (room.players.size >= MAX_PLAYERS[room.mode]) {
+        return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
+      }
       return addPlayer(room, ws, message.name);
     }
 
     const room = rooms.get(ws.room);
     const player = room?.players.get(ws.id);
-    if (!room || !player)
-      return send(ws, { type: 'error', message: 'Сначала создайте комнату или войдите в неё.' });
+    if (!room || !player) {
+      return sendError(ws, ERROR_CODES.NOT_IN_ROOM, 'Сначала создайте комнату или войдите в неё.');
+    }
+
+    // Проверка допустимости действия в текущем состоянии комнаты. Закрывает целый класс ошибок:
+    // смена сложности во время забега, повторный старт, финиш в лобби.
+    const allowedStates = ALLOWED_IN_STATE[message.type];
+    if (allowedStates && !allowedStates.includes(room.state)) {
+      return reject('WRONG_STATE', ERROR_CODES.WRONG_STATE, 'Это действие сейчас недоступно.');
+    }
+
     room.updatedAt = Date.now();
 
-    if (message.type === 'ready' && !room.started) {
-      player.ready = !!message.ready;
+    if (message.type === C2S.PLAYER_READY) {
+      player.ready = message.ready;
       return emitLobby(room);
     }
 
-    if (message.type === 'configure' && !room.started && room.host === ws.id) {
-      room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+    if (message.type === C2S.HOST_CONFIGURE) {
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Настройки меняет только хост.');
+      }
+      if (message.difficulty !== undefined) {
+        room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+      }
+      if (message.mode !== undefined && message.mode !== room.mode) {
+        // Смена режима меняет вместимость: лишних игроков в коопе быть не должно.
+        if (message.mode === GAME_MODE.COOP && room.players.size > MAX_PLAYERS[GAME_MODE.COOP]) {
+          return sendError(
+            ws,
+            ERROR_CODES.ROOM_FULL,
+            'Для кооператива в комнате должно быть не больше двух игроков.'
+          );
+        }
+        room.mode = message.mode;
+        assignRoles(room);
+      }
+      // Любое изменение настроек сбрасывает готовность: игроки согласились на другие условия.
       for (const item of room.players.values()) item.ready = false;
       return emitLobby(room);
     }
 
-    if (message.type === 'start') {
-      if (room.host !== ws.id) return send(ws, { type: 'error', message: 'Забег может начать только хост.' });
-      if (room.started) return;
-      if (!room.players.size || ![...room.players.values()].every(item => item.ready))
-        return send(ws, { type: 'error', message: 'Все игроки должны быть готовы.' });
-      room.started = true;
-      room.startedAt = Date.now() + 2800;
+    if (message.type === C2S.START_MATCH) {
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
+      }
+      const active = [...room.players.values()].filter(item => !item.disconnectedAt);
+      if (room.mode === GAME_MODE.COOP && active.length !== 2) {
+        return sendError(ws, ERROR_CODES.NOT_READY, 'Для кооператива нужны ровно два игрока на связи.');
+      }
+      if (!active.length || !active.every(item => item.ready)) {
+        return sendError(ws, ERROR_CODES.NOT_READY, 'Все игроки должны быть готовы.');
+      }
+
+      if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return;
+      // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
+      // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
+      room.matchId = crypto.randomBytes(8).toString('hex');
+      room.startedAt = Date.now() + COUNTDOWN_MS;
+      room.firstFinishAt = null;
+      metrics.matchesStarted++;
+      assignRoles(room);
+
       for (const item of room.players.values())
         Object.assign(item, {
           finished: false,
@@ -400,17 +698,30 @@ wss.on('connection', (ws, req) => {
           rematch: false,
           returned: false
         });
-      return broadcast(room, { type: 'start', at: room.startedAt, spec: room.spec });
+
+      log('info', 'match_started', { roomId: room.code, matchId: room.matchId, mode: room.mode });
+      return broadcast(room, {
+        type: S2C.MATCH_START,
+        at: room.startedAt,
+        matchId: room.matchId,
+        mode: room.mode,
+        spec: room.spec,
+        roles: Object.fromEntries([...room.players.values()].map(item => [item.id, item.role]))
+      });
     }
 
-    if (message.type === 'state' && room.started && Date.now() >= room.startedAt - 300) {
+    if (message.type === C2S.PLAYER_STATE) {
+      // Сообщения прошлого забега приходят после рестарта и не должны применяться.
+      if (message.matchId && message.matchId !== room.matchId) return;
+      if (Date.now() < room.startedAt - 300) return;
       const now = Date.now();
       if (now - (player.receivedAt || 0) < 32) return;
       player.receivedAt = now;
       const result = validateState(player, message.state, room.spec, now);
       if (!result.ok) {
-        if (result.reason === 'speed')
-          send(ws, { type: 'correction', position: result.position, reason: 'movement' });
+        if (result.reason === 'speed') {
+          send(ws, { type: S2C.CORRECTION, position: result.position, reason: 'movement' });
+        }
         return;
       }
       player.last = { ...result.state, id: player.id };
@@ -419,7 +730,7 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
-    if (message.type === 'respawn' && room.started) {
+    if (message.type === C2S.RESPAWN) {
       const now = Date.now();
       if (now - (player.lastRespawn || 0) < 450) return;
       player.lastRespawn = now;
@@ -434,33 +745,47 @@ wss.on('connection', (ws, req) => {
         id: player.id
       };
       player.lastAt = now;
-      return send(ws, { type: 'correction', position, reason: 'respawn' });
+      return send(ws, { type: S2C.CORRECTION, position, reason: 'respawn' });
     }
 
-    if (message.type === 'finish' && room.started) {
-      if (!canFinish(player, room.spec))
+    if (message.type === C2S.FINISH) {
+      if (!canFinish(player, room.spec)) {
         return send(ws, {
-          type: 'correction',
+          type: S2C.CORRECTION,
           position: player.last || spawnFor(room.spec, player.checkpoint),
           reason: 'finish-validation'
         });
+      }
       player.finished = true;
       player.time = Math.max(0, Date.now() - room.startedAt);
-      const board = leaderboard(room);
-      return broadcast(room, { type: 'finish', id: player.id, time: player.time, board });
+      if (!room.firstFinishAt) room.firstFinishAt = Date.now();
+      broadcast(room, {
+        type: S2C.PLAYER_FINISHED,
+        matchId: room.matchId,
+        id: player.id,
+        time: player.time,
+        board: leaderboard(room)
+      });
+      return checkMatchEnd(room);
     }
 
-    if (message.type === 'rematch' && room.started) {
+    if (message.type === C2S.REMATCH_VOTE) {
       player.rematch = true;
-      if (room.host === player.id || [...room.players.values()].every(item => item.rematch))
+      const voters = [...room.players.values()].filter(item => !item.disconnectedAt);
+      if (room.host === player.id || voters.every(item => item.rematch)) {
+        if (room.state === ROOM_STATE.PLAYING) finishMatch(room);
         return resetLobby(room);
+      }
       return emitLobby(room);
     }
 
-    if (message.type === 'returnLobby' && room.started) {
+    if (message.type === C2S.RETURN_TO_LOBBY) {
       player.returned = true;
-      if (room.host === player.id || [...room.players.values()].every(item => item.finished || item.returned))
+      const active = [...room.players.values()].filter(item => !item.disconnectedAt);
+      if (room.host === player.id || active.every(item => item.finished || item.returned)) {
+        if (room.state === ROOM_STATE.PLAYING) finishMatch(room);
         return resetLobby(room);
+      }
       return send(ws, lobbyPayload(room));
     }
   });
@@ -470,8 +795,16 @@ wss.on('connection', (ws, req) => {
 });
 
 const snapshotTimer = setInterval(() => {
+  const now = Date.now();
   for (const room of rooms.values()) {
-    if (!room.started) continue;
+    // Комната без активного матча не участвует в рассылке вообще (ТЗ 12.5).
+    if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
+
+    // Отсчёт закончился — переводим комнату в игру.
+    if (room.state === ROOM_STATE.COUNTDOWN && now >= room.startedAt) {
+      setRoomState(room, ROOM_STATE.PLAYING);
+    }
+
     const players = [...room.players.values()]
       .filter(player => player.last)
       .map(player => ({
@@ -480,7 +813,12 @@ const snapshotTimer = setInterval(() => {
         checkpoint: player.checkpoint,
         finished: player.finished
       }));
-    broadcast(room, { type: 'snapshot', serverTime: Date.now(), players, finished: leaderboard(room) });
+
+    broadcast(
+      room,
+      { type: S2C.SNAPSHOT, matchId: room.matchId, serverTime: now, players },
+      { dropIfCongested: true }
+    );
   }
 }, 66);
 snapshotTimer.unref();
@@ -504,16 +842,19 @@ const heartbeatTimer = setInterval(() => {
         dropPlayer(room, player.id);
       }
     }
+    // Если все ушли из матча, он не должен висеть в PLAYING до истечения TTL.
+    if (room.state === ROOM_STATE.PLAYING) checkMatchEnd(room);
   }
 
   for (const [token, session] of sessions) if (now > session.expiresAt) sessions.delete(token);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
-  for (const [ip, entry] of rateLimits) if (now - entry.start > RATE_LIMIT_WINDOW_MS) rateLimits.delete(ip);
+  for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
 }, 15000);
 heartbeatTimer.unref();
 
 const port = process.env.PORT || 3000;
-if (require.main === module)
-  server.listen(port, () => console.log(`Wobble Rush 3D на http://localhost:${port}`));
+if (require.main === module) {
+  server.listen(port, () => log('info', 'server_started', { port }));
+}
 
-module.exports = { app, server, rooms, sessions, leave, resetLobby, originAllowed };
+module.exports = { app, server, rooms, sessions, metrics, leave, resetLobby, originAllowed };

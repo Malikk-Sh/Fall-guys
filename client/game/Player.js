@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
+import { COOP_ROLE } from '/shared/protocol.js';
 import { Character } from './Character.js';
 
 const FOOT = 0.48;
@@ -18,6 +19,30 @@ const JUMP_BUFFER = 0.14;
 // Окно, в течение которого прыжок ещё возможен уже после схода с края. Без него точные прыжки
 // ощущаются несправедливыми: игрок нажимает вовремя, но персонаж уже формально в воздухе.
 const COYOTE_TIME = 0.11;
+
+// Асимметрия ролей в кооперативе.
+//
+// Множители намеренно скромные. Разница должна быть достаточной, чтобы роли ощущались разными и
+// чтобы участок под одну роль не проходился другой, но не настолько большой, чтобы одна роль
+// казалась откровенно лучше. Настоящая асимметрия здесь не в цифрах, а в способностях: ИСКРА умеет
+// планировать и наводить луч, ГРУЗ — бить сверху и продавливать тяжёлые плиты.
+const ROLE_TRAITS = {
+  [COOP_ROLE.SPARK]: {
+    jump: 1.14,
+    // Планирование: пока в воздухе держат прыжок, гравитация ослаблена. Даёт ИСКРЕ дальность,
+    // недоступную ГРУЗУ, и делает подброс катапультой осмысленным.
+    glideGravity: 0.42,
+    heavy: false
+  },
+  [COOP_ROLE.ANCHOR]: {
+    jump: 0.92,
+    glideGravity: 1,
+    heavy: true
+  }
+};
+
+// Удар сверху: резкий разгон вниз. Им ГРУЗ приводит в действие катапульту.
+const SLAM_SPEED = 26;
 
 export class Player {
   constructor(scene, course, effects, options = {}) {
@@ -56,6 +81,16 @@ export class Player {
 
     this.remote = !!options.remote;
     this.target = null;
+
+    // Роль в кооперативе. В гонке остаётся null, и все связанные ветки просто не выполняются.
+    this.role = options.role || null;
+    this.traits = ROLE_TRAITS[this.role] || null;
+    this.slamming = false;
+    this.gliding = false;
+    // Наведённый излучатель — используется только ИСКРОЙ.
+    this.beamTarget = null;
+    // Упавший игрок становится «пузырём» и ждёт напарника.
+    this.downed = false;
 
     // Переиспользуемые векторы: раньше в каждом кадре создавалось по несколько новых THREE.Vector3,
     // и сборщик мусора регулярно давал заметные подтормаживания.
@@ -98,7 +133,7 @@ export class Player {
     this.diveTimer = Math.max(0, this.diveTimer - dt);
 
     if (this.jumpBuffer > 0 && this.coyote > 0 && this.diveTimer <= 0) {
-      this.velocity.y = JUMP_SPEED;
+      this.velocity.y = JUMP_SPEED * (this.traits?.jump ?? 1);
       this.grounded = false;
       this.coyote = 0;
       this.jumpBuffer = 0;
@@ -137,7 +172,15 @@ export class Player {
       this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, 12, dt);
     }
 
-    this.velocity.y -= GRAVITY * dt;
+    // Планирование ИСКРЫ: удержание прыжка в воздухе на пути вниз ослабляет гравитацию.
+    this.gliding =
+      !!this.traits &&
+      this.traits.glideGravity < 1 &&
+      !this.grounded &&
+      this.velocity.y < 0 &&
+      input.isHeld?.('jump') === true;
+    const gravityScale = this.slamming ? 1.8 : this.gliding ? this.traits.glideGravity : 1;
+    this.velocity.y -= GRAVITY * gravityScale * dt;
     const previousY = this.physics.y;
     this.physics.addScaledVector(this.velocity, dt);
 
@@ -152,6 +195,7 @@ export class Player {
       this.physics.add(surface.delta);
       this.velocity.y = 0;
       this.grounded = true;
+      this.slamming = false;
       if (!wasGrounded && landingVelocity < -3.2) {
         const strength = Math.min(1, Math.abs(landingVelocity) / 12);
         this.character.landed(strength);
@@ -217,6 +261,37 @@ export class Player {
   render(alpha) {
     if (this.remote) return;
     this.character.group.position.lerpVectors(this.previous, this.physics, alpha);
+  }
+
+  // Удар сверху: доступен ГРУЗУ в воздухе. Приводит в действие катапульту и тяжёлые механизмы.
+  startSlam() {
+    if (!this.traits?.heavy || this.grounded || this.slamming) return false;
+    this.slamming = true;
+    this.velocity.y = -SLAM_SPEED;
+    this.velocity.x *= 0.3;
+    this.velocity.z *= 0.3;
+    return true;
+  }
+
+  // Подброс катапультой: импульс приходит извне, поэтому применяется напрямую.
+  applyLaunch(vector) {
+    this.velocity.set(vector.x, vector.y, vector.z);
+    this.grounded = false;
+    this.slamming = false;
+  }
+
+  // Падение в кооперативе не откатывает обоих к чекпоинту: упавший ждёт напарника «пузырём».
+  goDown(position) {
+    this.downed = true;
+    this.teleport(position);
+    this.character.visual.scale.set(0.85, 0.85, 0.85);
+  }
+
+  revive() {
+    if (!this.downed) return false;
+    this.downed = false;
+    this.character.visual.scale.set(1, 1, 1);
+    return true;
   }
 
   // Мгновенное перемещение без эффектов и звука: расстановка на старте, предпросмотр в меню.

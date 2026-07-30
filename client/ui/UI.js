@@ -119,14 +119,32 @@ export class UI {
     $('#placeBox').classList.toggle('hidden', !multiplayer);
     $('#pingBox').classList.toggle('hidden', !multiplayer);
   }
-  updateHud({ time, checkpoint, total, progress, stage, place, ping }) {
+  updateHud({ time, checkpoint, total, progress, stage, place, link }) {
     $('#timer').textContent = formatTime(time);
     $('#checks').textContent = `${checkpoint} / ${total}`;
     $('#progressFill').style.width = `${Math.round(progress * 100)}%`;
     $('#stageName').textContent = stage;
     if (place) $('#place').textContent = ordinal(place);
-    if (Number.isFinite(ping)) $('#ping').textContent = `${Math.round(ping)}ms`;
+    if (link) this.setLinkQuality(link);
   }
+  // Качество связи словами. Игроку «Плохая» объясняет рывки, а «120 мс» — нет.
+  // Числовая задержка остаётся в подсказке для тех, кому она нужна.
+  setLinkQuality({ quality, latency }) {
+    const labels = {
+      good: 'ХОРОШАЯ',
+      unstable: 'НЕСТАБИЛЬНАЯ',
+      poor: 'ПЛОХАЯ',
+      reconnecting: 'ВОССТАНОВЛЕНИЕ',
+      offline: 'НЕТ СВЯЗИ',
+      unknown: '…'
+    };
+    const box = $('#pingBox');
+    const value = $('#ping');
+    if (value.textContent !== labels[quality]) value.textContent = labels[quality] || '…';
+    box.dataset.quality = quality;
+    box.title = Number.isFinite(latency) ? `Задержка ${Math.round(latency)} мс` : '';
+  }
+
   checkpoint(index, total) {
     const banner = $('#checkpointBanner');
     banner.querySelector('strong').textContent = `${index} / ${total}`;

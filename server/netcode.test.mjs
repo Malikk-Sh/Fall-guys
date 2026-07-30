@@ -139,3 +139,32 @@ test('некорректная сложность приводится к normal
   assert.deepEqual(createCourseSpec(1, 'нет-такой'), serverCourseSpec(1, 'нет-такой'));
   assert.equal(createCourseSpec(1, 'нет-такой').difficulty, 'normal');
 });
+
+test('приветственное сообщение не портит оценку часов нулевым RTT', () => {
+  // Регрессия на реальный баг. У hello нет парного запроса, поэтому честного RTT из него не
+  // получить. Когда оно клалось в общий набор как замер с RTT = 0, такой замер навсегда выигрывал
+  // выбор минимума, и настоящие ping уже не могли уточнить смещение.
+  const clock = new ClockSync();
+  const OFFSET = 5000;
+
+  // Приветствие: клиент видит серверное время, уже отставшее на время пути (50 мс).
+  clock.seed(10_000 + OFFSET - 50, 10_000);
+  assert.ok(clock.synced, 'начальная оценка должна работать сразу');
+  assert.ok(Math.abs(clock.offset - (OFFSET - 50)) < 1, 'грубая оценка близка, но смещена на путь');
+
+  // Настоящий замер обязан её заменить, а не проиграть нулевому RTT.
+  clock.record(20_000, 20_000 + OFFSET + 10, 20_020);
+  assert.ok(
+    Math.abs(clock.offset - OFFSET) < 1,
+    `после реального замера смещение должно уточниться, получено ${clock.offset}`
+  );
+  assert.ok(Math.abs(clock.rtt - 20) < 1, 'RTT берётся из настоящего замера, а не нулевой');
+});
+
+test('начальная оценка не перетирает уже собранные замеры', () => {
+  const clock = new ClockSync();
+  clock.record(1000, 1000 + 3000 + 5, 1010);
+  const before = clock.offset;
+  clock.seed(999_999_999);
+  assert.equal(clock.offset, before, 'seed применяется только при пустом наборе замеров');
+});

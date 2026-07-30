@@ -1,6 +1,6 @@
 {
   "name": "wobble-rush-3d",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Procedural browser obstacle racer with a two-player co-op mode, for desktop, mobile, and online parties",
   "private": true,
   "engines": {
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node --test server/test.js server/integration.test.js && node --experimental-loader ./server/client-loader.mjs --test server/clientPhysics.test.mjs server/netcode.test.mjs",
+    "test": "node --test server/test.js server/integration.test.js && node --experimental-loader ./server/client-loader.mjs --test server/clientPhysics.test.mjs server/netcode.test.mjs server/protocol.test.mjs server/coop.test.mjs",
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",

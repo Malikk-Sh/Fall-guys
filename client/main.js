@@ -171,11 +171,11 @@ class Game {
     click('#newCourse', () => this.startSingle(true));
     click('#create', () => {
       const net = this.ensureNetwork();
-      net.send('create', { name: this.ui.playerName(), difficulty: $('#difficulty').value });
+      net.createRoom({ name: this.ui.playerName(), difficulty: $('#difficulty').value });
     });
     click('#join', () => {
       const net = this.ensureNetwork();
-      net.send('join', { name: this.ui.playerName(), code: $('#code').value.trim().toUpperCase() });
+      net.joinRoom({ name: this.ui.playerName(), code: $('#code').value.trim().toUpperCase() });
     });
     click('#ready', () => {
       this.ready = !this.ready;
@@ -583,7 +583,7 @@ class Game {
         progress: this.course.progress(this.player.position, this.player.checkpoint),
         stage: this.course.stageAt(this.player.checkpoint),
         place: this.mode === 'multi' ? this.placement() : null,
-        ping: this.net?.latency
+        link: this.net ? { quality: this.net.quality, latency: this.net.latency } : null
       });
     }
 

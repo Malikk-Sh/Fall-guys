@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node server/index.js",
-    "test": "node --test server/test.js server/integration.test.js && node --experimental-loader ./server/client-loader.mjs --test server/clientPhysics.test.mjs server/netcode.test.mjs server/protocol.test.mjs server/coop.test.mjs server/perf.test.mjs",
+    "test": "node --test server/test.js server/integration.test.js && node --experimental-loader ./server/client-loader.mjs --test server/clientPhysics.test.mjs server/netcode.test.mjs server/protocol.test.mjs server/coop.test.mjs server/perf.test.mjs server/traverse.test.mjs",
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",

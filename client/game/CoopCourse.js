@@ -30,6 +30,10 @@ const PLATE_RADIUS = 1.5;
 export const BEAM_RANGE = 26;
 export const BEAM_CONE = Math.cos(0.55);
 
+// Ближе этого по горизонтали направление на излучатель теряет смысл: игрок стоит практически
+// под ним, и любой поворот камеры менял бы наводку рывками.
+const BEAM_NEAR = 2.5;
+
 // На каком расстоянии удар ГРУЗА приводит в действие катапульту.
 const SLAM_RADIUS = 3.2;
 
@@ -169,6 +173,7 @@ export class CoopCourse extends CourseBuilder {
       x: prop.x,
       z: piece.z,
       power: prop.power,
+      forward: prop.forward,
       pivot,
       seat,
       // Точка, где стоит ИСКРА, и точка, куда бьёт ГРУЗ.
@@ -406,7 +411,18 @@ export class CoopCourse extends CourseBuilder {
     for (const span of this.spans.values()) {
       let active = false;
       if (span.control === 'gate') {
-        active = span.requires.every(id => this.plates.get(id)?.pressed);
+        // Фиксатор на дальней стороне — обязательная часть конструкции, а не украшение.
+        //
+        // Без него ворота были головоломкой без решения: пролёт держится, пока плиты нажаты,
+        // а нажать их можно только стоя на них. Сойти, чтобы перейти, значит убрать пролёт —
+        // из-под себя или из-под напарника. Все проверки при этом были зелёными: пролёт ведь
+        // честно выдвигался. Он просто ни для кого не был проходим.
+        //
+        // Схема поэтому трёхтактная, как и у светового моста: один держит плиту → второй
+        // переходит → второй встаёт на фиксатор за пролётом и закрепляет его насовсем → первый
+        // сходит с плиты и переходит следом.
+        if (span.latch && this.plates.get(span.latch)?.pressed) span.latched = true;
+        active = span.latched || span.requires.every(id => this.plates.get(id)?.pressed);
       } else if (span.control === 'beam') {
         // Фиксатор срабатывает один раз и больше не отпускает: он именно «закрепляет» мост.
         if (span.latch && this.plates.get(span.latch)?.pressed) span.latched = true;
@@ -511,6 +527,16 @@ export class CoopCourse extends CourseBuilder {
   }
 
   // Ближайший излучатель, на который смотрит ИСКРА. Возвращает id либо null.
+  // Наводка луча.
+  //
+  // Сравнение ведётся В ГОРИЗОНТАЛЬНОЙ ПЛОСКОСТИ, и это не мелочь. Раньше направление на излучатель
+  // бралось в трёх измерениях, а направление взгляда было горизонтальным по построению (камера
+  // даёт только рыскание). Излучатель стоит на столбе выше игрока, поэтому чем ближе к нему
+  // подходишь, тем круче вверх смотрит вектор «на цель» — и тем меньше его скалярное произведение
+  // с горизонтальным взглядом. В итоге навести можно было только издалека: с шести единиц и ближе
+  // луч не включался вовсе, а обучение как раз велит подняться на площадку и встать рядом.
+  //
+  // Игрок при этом делал всё правильно, кнопку держал, и ничего не происходило.
   aimedEmitter(position, forward) {
     let best = null;
     let bestDistance = BEAM_RANGE;
@@ -518,10 +544,12 @@ export class CoopCourse extends CourseBuilder {
       const to = this._tmp.copy(emitter.position).sub(position);
       const distance = to.length();
       if (distance > bestDistance) continue;
-      to.divideScalar(distance || 1);
-      // Скалярное произведение с направлением взгляда: конус вместо точного попадания, иначе
-      // на телефоне в излучатель было бы не прицелиться.
-      if (to.dot(forward) < BEAM_CONE) continue;
+
+      const horizontal = Math.hypot(to.x, to.z);
+      // Стоя вплотную, целиться не во что: игрок и так у самого излучателя.
+      if (horizontal > BEAM_NEAR) {
+        if ((to.x / horizontal) * forward.x + (to.z / horizontal) * forward.z < BEAM_CONE) continue;
+      }
       best = emitter.id;
       bestDistance = distance;
     }

@@ -50,7 +50,18 @@ const gap = (length, id = null) => ({ kind: 'gap', length, id });
 
 // Выдвижной пролёт над пропастью, управляемый плитами. Пока нажаты все плиты из requires —
 // пол есть; отпустил — исчез.
-const gateSpan = (id, length, requires) => ({ kind: 'gateSpan', id, length, requires });
+//
+// `latch` — плита за пролётом, закрепляющая его насовсем, и она здесь ОБЯЗАТЕЛЬНА. Без неё
+// головоломка не имеет решения: чтобы перейти, надо сойти с плиты, а сойти значит убрать пролёт.
+// Порядок такой же, как у светового моста: один держит → второй переходит → второй давит фиксатор
+// → первый переходит следом. Тест `у каждых ворот есть фиксатор` следит, чтобы про него не забыли.
+const gateSpan = (id, length, requires, latch) => ({
+  kind: 'gateSpan',
+  id,
+  length,
+  requires,
+  latch
+});
 
 // Световой мост: существует, пока ИСКРА держит луч на связанном излучателе.
 //
@@ -64,7 +75,7 @@ const beamSpan = (id, length, emitter, latch) => ({ kind: 'beamSpan', id, length
 // Ворота синхронности: пролёт появляется, только если оба пересекли черту почти одновременно.
 const syncSpan = (id, length, windowMs = 800) => ({ kind: 'syncSpan', id, length, windowMs });
 
-// Качающаяся платформа над пропастью — цель для подброса.
+// Качающаяся платформа над пропастью: проходится обычным прыжком, но требует расчёта.
 const movingSpan = (length, { range = 4, speed = 0.7 } = {}) => ({
   kind: 'movingSpan',
   length,
@@ -80,7 +91,18 @@ const checkpoint = () => ({ kind: 'checkpoint' });
 const plate = (id, x, role = 'any') => ({ type: 'plate', id, x, role });
 
 // Катапульта: ГРУЗ бьёт ударом сверху, стоящего на длинном плече подбрасывает.
-const catapult = (id, x, power = 18) => ({ type: 'catapult', id, x, power });
+//
+// `forward` — какая доля силы уходит вперёд, а не вверх. Раньше это была константа 0.32, зашитая
+// в код запуска, и подобрать дальность под конкретную пропасть было невозможно: менялась только
+// высота подброса. Теперь наклон броска — свойство катапульты, и тест проверяет, что каждая
+// действительно перебрасывает через свою пропасть.
+const catapult = (id, x, power = 26, forward = 0.7) => ({
+  type: 'catapult',
+  id,
+  x,
+  power,
+  forward
+});
 
 // Возвышенная площадка сбоку: с неё ИСКРА наводит луч, но на сам мост с неё не попасть.
 const perch = (id, x, height = 2.6) => ({ type: 'perch', id, x, height });
@@ -131,14 +153,18 @@ const CHAPTERS = [
     // становится тяжёлой — и роли перестают быть взаимозаменяемыми.
     segments: [
       floor(22),
-      floor(20, [plate('p1', -4.2), plate('p2', 4.2)]),
-      gateSpan('g1', UNJUMPABLE_GAP + 2, ['p1', 'p2']),
-      floor(12),
+      // Плита держащего — на этой стороне, фиксатор — на той. Один держит, второй переходит и
+      // закрепляет пролёт, после чего переходит первый. Двое всё так же обязательны: в одиночку
+      // с плиты не сойти.
+      floor(20, [plate('p1', 0)]),
+      gateSpan('g1', UNJUMPABLE_GAP + 2, ['p1'], 'p2'),
+      floor(14, [plate('p2', 0)]),
       checkpoint(),
 
-      floor(20, [plate('p3', -4.2, COOP_ROLE.ANCHOR), plate('p4', 4.2)]),
-      gateSpan('g2', UNJUMPABLE_GAP + 4, ['p3', 'p4']),
-      floor(14),
+      // То же самое, но держать теперь может только ГРУЗ: роли перестают быть взаимозаменяемыми.
+      floor(20, [plate('p3', 0, COOP_ROLE.ANCHOR)]),
+      gateSpan('g2', UNJUMPABLE_GAP + 4, ['p3'], 'p4'),
+      floor(16, [plate('p4', 0)]),
       checkpoint(),
 
       floor(16),
@@ -160,14 +186,20 @@ const CHAPTERS = [
       }),
       lesson('together', {
         near: 'g1',
-        spark: 'Впереди провал. Встаньте на плиты — по одной на каждого, иначе пролёта не будет.',
-        anchor: 'Впереди провал. Встаньте на плиты — по одной на каждого, иначе пролёта не будет.',
+        spark: 'Один встаёт на плиту и держит пролёт, второй переходит. Порознь не выйдет.',
+        anchor: 'Один встаёт на плиту и держит пролёт, второй переходит. Порознь не выйдет.',
         done: { span: 'g1' }
+      }),
+      lesson('gateLatch', {
+        near: 'p2',
+        spark: 'Перешли — встаньте на плиту за пролётом. Она закрепит его, и напарник пройдёт.',
+        anchor: 'Перешли — встаньте на плиту за пролётом. Она закрепит его, и напарник пройдёт.',
+        done: { plates: ['p2'] }
       }),
       lesson('heavy', {
         near: 'g2',
-        spark: 'Левая плита тяжёлая — вам её не продавить. Займите правую.',
-        anchor: 'Левая плита тяжёлая: только вы её продавите. Правую оставьте напарнику.',
+        spark: 'Эта плита тяжёлая — вам её не продавить. Здесь держит ГРУЗ, а переходите вы.',
+        anchor: 'Плита тяжёлая: только вы её продавите. Держите — и пропустите напарника вперёд.',
         done: { span: 'g2' }
       }),
       lesson('solo', {
@@ -199,11 +231,14 @@ const CHAPTERS = [
       floor(14, [plate('p1', 0)]),
       checkpoint(),
 
-      floor(18, [catapult('c2', -3.5, 20)]),
-      // Вторая катапульта сложнее: приземляться нужно на качающуюся площадку.
-      gap(6),
-      movingSpan(7, { range: 4.5, speed: 0.75 }),
-      gap(6),
+      floor(18, [catapult('c2', 0)]),
+      // Вторая катапульта: ИСКРА перелетает и встаёт на плиту, после чего ГРУЗ переходит следом.
+      gateSpan('g2', UNJUMPABLE_GAP + 4, ['p2']),
+      floor(14, [plate('p2', 0)]),
+      // А качели после неё проходятся уже обычным прыжком — точность нужна, но без лотереи.
+      gap(4),
+      movingSpan(10, { range: 3, speed: 0.6 }),
+      gap(4),
       floor(16),
       checkpoint(),
       floor(18)
@@ -271,10 +306,11 @@ const CHAPTERS = [
       floor(18),
       checkpoint(),
 
-      // Ветер плюс парные плиты: ИСКРЕ надо удержаться на плите, пока её сносит вбок.
-      floor(20, [wind(7), plate('p1', -4.2), plate('p2', 4.2, COOP_ROLE.ANCHOR)]),
-      gateSpan('g1', UNJUMPABLE_GAP + 2, ['p1', 'p2']),
-      floor(14),
+      // Ветер над плитой: ИСКРЕ надо удержаться на ней, пока её сносит вбок, — а держать
+      // приходится именно ей, потому что переходить и закреплять будет ГРУЗ.
+      floor(20, [wind(7), plate('p1', 0)]),
+      gateSpan('g1', UNJUMPABLE_GAP + 2, ['p1'], 'p2'),
+      floor(16, [plate('p2', 0, COOP_ROLE.ANCHOR)]),
       checkpoint(),
 
       // Ветер над лучом: ИСКРА держит наводку, стоя под порывами.
@@ -283,9 +319,9 @@ const CHAPTERS = [
       floor(14, [plate('p3', 0, COOP_ROLE.ANCHOR)]),
       checkpoint(),
 
-      floor(16, [catapult('c1', 0, 19)]),
-      gap(UNJUMPABLE_GAP + 2),
-      floor(16),
+      floor(16, [catapult('c1', 0)]),
+      gateSpan('g2', UNJUMPABLE_GAP + 2, ['p4']),
+      floor(16, [plate('p4', 0)]),
       checkpoint(),
       floor(18)
     ],
@@ -309,18 +345,20 @@ const CHAPTERS = [
       floor(18),
       checkpoint(),
 
-      floor(18, [plate('p1', -4.2, COOP_ROLE.ANCHOR), plate('p2', 4.2)]),
-      gateSpan('g1', UNJUMPABLE_GAP, ['p1', 'p2']),
-      floor(14, [catapult('c1', 0, 19)]),
-      gap(UNJUMPABLE_GAP + 2),
-      floor(14),
+      floor(18, [plate('p1', 0, COOP_ROLE.ANCHOR)]),
+      gateSpan('g1', UNJUMPABLE_GAP, ['p1'], 'p2'),
+      floor(16, [plate('p2', 0)]),
+      floor(14, [catapult('c1', 0)]),
+      gateSpan('gc', UNJUMPABLE_GAP + 2, ['pc']),
+      floor(14, [plate('pc', 0)]),
       checkpoint(),
 
       floor(16, [perch('perch1', 9), emitter('e1', 9), wind(6.5)]),
       beamSpan('b1', UNJUMPABLE_GAP + 8, 'e1', 'p3'),
-      floor(14, [plate('p3', 0, COOP_ROLE.ANCHOR), plate('p4', 4.2)]),
-      gateSpan('g2', UNJUMPABLE_GAP, ['p3', 'p4']),
-      floor(14),
+      // p3 работает сразу на две задачи: закрепляет световой мост и держит следующие ворота.
+      floor(14, [plate('p3', 0, COOP_ROLE.ANCHOR)]),
+      gateSpan('g2', UNJUMPABLE_GAP, ['p3'], 'p4'),
+      floor(16, [plate('p4', 0)]),
       checkpoint(),
 
       // Финальные ворота: их не обмануть, проходя по очереди.

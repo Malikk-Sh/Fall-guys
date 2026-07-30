@@ -220,7 +220,8 @@
 
     <div id="touch" class="touch-ui hidden">
       <div id="stick" class="stick" aria-label="Movement joystick"><i></i><span>MOVE</span></div>
-      <button id="recenter" class="recenter" aria-label="Recenter camera">⌖</button>
+      <button id="recenter" class="recenter" aria-label="Посмотреть за спину">⌖</button>
+      <button id="cameraMode" class="recenter camera-mode" aria-label="Режим камеры">◲</button>
       <button id="dive" class="action-button dive-button"><i>➤</i><span>DIVE</span></button>
       <button id="jump" class="action-button jump-button"><i>↑</i><span>JUMP</span></button>
       <div id="lookHint" class="look-hint">SWIPE TO LOOK</div>
@@ -229,9 +230,10 @@
     <section id="finish" class="screen center-screen hidden">
       <div class="finish-card glass">
         <div id="medal" class="medal">★</div>
-        <span class="eyebrow">COURSE COMPLETE</span>
+        <span id="finishEyebrow" class="eyebrow">COURSE COMPLETE</span>
         <h2 id="finishTitle">GOLD RUN!</h2>
         <p id="finishTime">00:00.00</p>
+        <div id="unrankedNote" class="unranked-note hidden" role="status"></div>
         <div id="finishStats" class="finish-stats"></div>
         <div id="board" class="leaderboard"></div>
         <button id="again" class="button button-primary">RACE THIS COURSE</button>

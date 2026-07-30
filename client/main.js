@@ -318,6 +318,19 @@ class Game {
       if (this.mode === 'preview') this.buildPreview(this.previewSpec);
     });
 
+    // Режим камеры переключается внутри контроллера (клавиша C или кнопка на экране), а показать
+    // это должен интерфейс. Событие вместо прямого вызова — чтобы контроллер камеры не знал про UI.
+    addEventListener('camera-mode-change', event => {
+      const free = event.detail === 'free';
+      this.ui.toast(
+        free
+          ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.'
+          : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
+      );
+      $('#cameraMode').classList.toggle('camera-free', free);
+    });
+    $('#cameraMode').classList.toggle('camera-free', this.cameraController.mode === 'free');
+
     // Кооператив: выбор главы и вход в комнату.
     this.ui.fillChapters(COOP_CHAPTERS, chapter => {
       this.coopChapterId = chapter.id;
@@ -377,6 +390,14 @@ class Game {
     });
     this.net.on('coopEvent', message => this.receiveCoopEvent(message));
     this.net.on('finish', message => this.receiveFinish(message));
+    this.net.on('results', message => this.receiveResults(message));
+
+    // Сервер снял зачёт: кто-то оборвался или вышел. Говорим об этом сразу, а не на финише —
+    // игрок вправе знать, что бежит уже не за рекорд, до того как добежит.
+    this.net.on('unranked', message => {
+      if (message.matchId && this.net.matchId && message.matchId !== this.net.matchId) return;
+      this.markUnranked(message.reason || 'disconnect');
+    });
 
     this.net.on('correction', message => {
       if (this.player && message.position) {
@@ -473,6 +494,8 @@ class Game {
     this.running = false;
     this.raceComplete = false;
     this.finalTime = 0;
+    // Пока связь цела, забег идёт в зачёт. Сюда попадает причина, по которой он перестал.
+    this.unranked = null;
     this.accumulator = 0;
     this.buildCourse(spec);
 
@@ -546,7 +569,8 @@ class Game {
         time,
         respawns: this.player.respawns,
         seed: this.course.spec.seed,
-        difficulty: this.course.spec.difficulty
+        difficulty: this.course.spec.difficulty,
+        unranked: this.unranked
       });
     } else {
       this.input.enabled = false;
@@ -613,20 +637,63 @@ class Game {
     }
   }
 
+  // Забег перестал идти в зачёт. Причина запоминается до конца матча: восстановленная связь
+  // рекорд не возвращает — половину главы всё равно прошли не вдвоём.
+  markUnranked(reason) {
+    if (this.unranked) return;
+    this.unranked = reason;
+    this.ui.toast(
+      reason === 'left'
+        ? 'Напарник вышел — забег больше не идёт в зачёт.'
+        : 'Соединение потеряно — результат не попадёт в таблицу.'
+    );
+  }
+
   receiveFinish(message) {
     this.latestBoard = message.board || [];
-    if (message.id === this.net.id) {
-      this.running = false;
-      this.input.enabled = false;
-      this.music.setIntensity(0);
-      this.ui.finishMulti({
-        time: message.time ?? this.finalTime,
-        board: this.latestBoard,
-        selfId: this.net.id
-      });
-    } else if (!document.querySelector('#finish').classList.contains('hidden')) {
-      this.ui.updateBoard(this.latestBoard, this.net.id);
+    if (message.unranked) this.markUnranked(message.unranked);
+    if (message.id !== this.net.id) {
+      if (!document.querySelector('#finish').classList.contains('hidden'))
+        this.ui.updateBoard(this.latestBoard, this.net.id);
+      return;
     }
+    this.running = false;
+    this.input.enabled = false;
+    this.music.setIntensity(0);
+    // В коопе свой финиш — ещё не конец главы: она засчитывается, только когда дошли оба.
+    // Карточку показывает `results`, а до тех пор игрок ждёт напарника, а не смотрит на итоги.
+    if (this.mode === 'coop') {
+      this.ui.awaitPartnerFinish();
+      return;
+    }
+    this.ui.finishMulti({
+      time: message.time ?? this.finalTime,
+      board: this.latestBoard,
+      selfId: this.net.id,
+      unranked: this.unranked
+    });
+  }
+
+  // Итоги матча. В гонке карточка уже показана по своему финишу, здесь только доска обновляется;
+  // в коопе это и есть момент, когда глава считается пройденной.
+  receiveResults(message) {
+    if (message.unranked) this.markUnranked(message.unranked);
+    this.latestBoard = message.board || this.latestBoard || [];
+    if (this.mode !== 'coop') {
+      if (!document.querySelector('#finish').classList.contains('hidden'))
+        this.ui.updateBoard(this.latestBoard, this.net.id);
+      return;
+    }
+    this.running = false;
+    this.input.enabled = false;
+    this.music.setIntensity(0);
+    this.ui.finishCoop({
+      time: message.coopTime ?? this.finalTime,
+      chapter: this.course?.spec || null,
+      board: this.latestBoard,
+      selfId: this.net?.id,
+      unranked: this.unranked
+    });
   }
 
   fallbackToSolo() {
@@ -638,6 +705,9 @@ class Game {
       return;
     }
     if (this.mode !== 'multi' || !this.player || this.player.finished) return;
+    // Гонка доигрывается в одиночку — но именно доигрывается, а не превращается в честный
+    // одиночный забег: время без соперников в личные рекорды не идёт.
+    this.markUnranked('connection');
     const elapsed = Math.max(0, this.raceNow() - this.startedAt);
     this.mode = 'single';
     this.startedAt = Date.now() - elapsed;
@@ -834,7 +904,7 @@ class Game {
     const elapsed = this.courseElapsed();
     // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
     // за этот шаг, и игрок должен увидеть уже новую позицию платформы.
-    this.course?.update(dt, elapsed);
+    this.course?.update(dt, elapsed, this.mode === 'preview' ? null : this.sfx);
     if (!this.running || !this.player || this.mode === 'preview') return;
     this.input.update();
     if (this.mode === 'coop') {
@@ -850,6 +920,14 @@ class Game {
     }
     // Упавший ждёт напарника и не управляется.
     if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
+
+    // Удары, накопленные препятствиями за шаг, уходят в тряску камеры. Препятствия про камеру
+    // не знают — они только помечают силу удара на игроке, и это единственная причина, по которой
+    // их можно гонять ботами без сцены.
+    if (this.player.impact > 0) {
+      this.cameraController.addShake(this.player.impact);
+      this.player.impact = 0;
+    }
   }
 
   loop(time) {

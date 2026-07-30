@@ -471,6 +471,7 @@ export class Course extends CourseBuilder {
           effects.burst(pos, COLORS.yellow, 14, 1.1);
           player.character.landed(0.6);
           sfx?.spring();
+          player.impact = Math.max(player.impact, 0.25);
         }
         continue;
       }
@@ -491,6 +492,7 @@ export class Course extends CourseBuilder {
           player.hitTimes.set(key, now);
           effects.burst(pos, o.mesh.material.color.getHex(), 16, 1.15);
           sfx?.bumper();
+          player.impact = Math.max(player.impact, 0.4);
         }
         continue;
       }
@@ -520,6 +522,7 @@ export class Course extends CourseBuilder {
           player.hitTimes.set(key, now);
           effects.burst(pos, COLORS.yellow, 12, 1);
           sfx?.spinner();
+          player.impact = Math.max(player.impact, 0.5);
         }
         continue;
       }
@@ -541,6 +544,7 @@ export class Course extends CourseBuilder {
           player.hitTimes.set(key, now);
           effects.burst(pos, COLORS.pink, 12, 1);
           sfx?.puncher();
+          player.impact = Math.max(player.impact, 0.55);
         }
       }
     }

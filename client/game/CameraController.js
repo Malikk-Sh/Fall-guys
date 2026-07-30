@@ -10,9 +10,25 @@ import * as THREE from 'three';
 // Расстояние, ближе которого напарник начинает влиять на кадр.
 const COOP_FRAME_DISTANCE = 18;
 
+// Два режима камеры.
+//
+// `follow` — прежнее поведение: через пару секунд после ручного поворота камера сама
+// возвращается за спину персонажа, а точка взгляда смещается вперёд по направлению ПЕРСОНАЖА.
+// Удобно, пока бежишь по прямой, и мешает, как только надо осмотреться: камера вырывается из рук.
+//
+// `free` — камера следует за позицией персонажа, но не за его поворотом. Куда повернули — туда и
+// смотрит, пока не повернут снова. Персонаж при этом остаётся в кадре: полностью «отвязывать»
+// камеру в мировую точку нельзя, иначе через секунду бега смотреть будет не на что.
+//
+// В кооперативе разница особенно заметна: половину времени нужно смотреть на напарника, а не
+// туда, куда бежишь сам, — и в `follow` камера отбирала взгляд обратно каждые две секунды.
+export const CAMERA_MODES = ['follow', 'free'];
+const STORAGE_KEY = 'wobble-camera-mode';
+
 export class CameraController {
   constructor(camera) {
     this.camera = camera;
+    this.mode = CameraController.storedMode();
     this.yaw = 0;
     this.pitch = 0.08;
     this.distance = 8.2;
@@ -32,6 +48,27 @@ export class CameraController {
     this._forward = new THREE.Vector3();
     this._direction = new THREE.Vector3();
     this._focus = new THREE.Vector3();
+  }
+
+  // Выбор игрока переживает перезагрузку: менять его каждый запуск заново — та ещё мелочь,
+  // но именно из таких мелочей складывается ощущение, что игра тебя не слушает.
+  static storedMode() {
+    try {
+      const saved = globalThis.localStorage?.getItem(STORAGE_KEY);
+      return CAMERA_MODES.includes(saved) ? saved : 'follow';
+    } catch {
+      return 'follow';
+    }
+  }
+
+  toggleMode() {
+    this.mode = this.mode === 'follow' ? 'free' : 'follow';
+    try {
+      globalThis.localStorage?.setItem(STORAGE_KEY, this.mode);
+    } catch {
+      // Приватный режим браузера — не повод падать.
+    }
+    return this.mode;
   }
 
   reset(player, instant = false) {
@@ -63,6 +100,13 @@ export class CameraController {
       this.manualTimer = 2.25;
     } else this.manualTimer = Math.max(0, this.manualTimer - dt);
 
+    // Смена режима. Возвращает новое значение, чтобы игра могла показать уведомление.
+    if (input.consume('cameraMode')) {
+      const mode = this.toggleMode();
+      globalThis.dispatchEvent?.(new CustomEvent('camera-mode-change', { detail: mode }));
+    }
+
+    // Быстро посмотреть за спину: работает в обоих режимах и не меняет выбранный.
     if (input.consume('recenter')) {
       this.yaw = player.character.group.rotation.y;
       this.pitch = 0.08;
@@ -70,7 +114,9 @@ export class CameraController {
     }
 
     const speed = Math.hypot(player.velocity.x, player.velocity.z);
-    if (this.manualTimer <= 0 && speed > 1.2) {
+    // Автодоворот — только в режиме слежения. В свободном камера держит направление, пока её
+    // не повернут: в этом весь смысл режима.
+    if (this.mode === 'follow' && this.manualTimer <= 0 && speed > 1.2) {
       let delta = ((player.character.group.rotation.y - this.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
       if (delta < -Math.PI) delta += Math.PI * 2;
       this.yaw += delta * (1 - Math.exp(-1.8 * dt));
@@ -101,7 +147,10 @@ export class CameraController {
     // Упреждение: чем быстрее бежит игрок, тем дальше вперёд смотрит камера — иначе на скорости
     // препятствия появляются в кадре слишком поздно, чтобы среагировать.
     const lead = Math.min(2.8, speed * 0.24);
-    const rotation = player.character.group.rotation.y;
+    // Куда смещать точку взгляда. В режиме слежения — вперёд по направлению ПЕРСОНАЖА (кадр
+    // «ведёт» бегущего). В свободном — вперёд по направлению КАМЕРЫ: иначе поворот персонажа
+    // утаскивал бы точку взгляда вбок, и камера, формально свободная, всё равно ходила бы за ним.
+    const rotation = this.mode === 'follow' ? player.character.group.rotation.y : this.yaw;
     this._forward.set(-Math.sin(rotation), 0, -Math.cos(rotation));
     this.target
       .set(this._focus.x, this._focus.y + 1.05, this._focus.z)

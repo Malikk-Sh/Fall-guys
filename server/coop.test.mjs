@@ -18,6 +18,7 @@ import {
   getChapter
 } from '../shared/coopChapters.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
+import { PLAYER_FOOT } from '../client/game/CourseBuilder.js';
 
 const build = id => new CoopCourse(new THREE.Scene(), coopSpec(id), { quality: 'low' });
 
@@ -566,4 +567,118 @@ test('идентификаторы объектов внутри главы ун
       }
     }
   }
+});
+
+// Смертельная опасность обязана телеграфировать себя тремя тактами: предупреждение, окно удара,
+// восстановление. Проверяем это по самому прессу, а не по картинке: такты должны идти в этом
+// порядке, звук — приходиться на смену такта, а не на каждый кадр, и первый кадр главы не должен
+// начинаться с удара из ниоткуда.
+test('пресс проходит три такта и озвучивает каждую смену ровно один раз', () => {
+  const course = build('ch5');
+  assert.ok(course.crushers.length > 0, 'в этой главе прессы должны быть');
+  const crusher = course.crushers[0];
+
+  const heard = [];
+  const sfx = {
+    warn: () => heard.push('warn'),
+    crush: () => heard.push('crush'),
+    crack: () => heard.push('crack'),
+    collapse: () => heard.push('collapse')
+  };
+
+  // Первый кадр только запоминает такт: звука быть не должно.
+  course.update(1 / 60, 0, sfx);
+  assert.deepEqual(heard, [], 'глава не начинается с удара пресса');
+  assert.notEqual(crusher.beat, null, 'такт всё же должен запомниться');
+
+  // Полный цикл с запасом. Прогоняем шагами по 1/60, как это делает игра. Считаем такты у ВСЕХ
+  // прессов главы: звук слышен от каждого, и сверять его с одним прессом было бы враньём.
+  const beatsBy = new Map(course.crushers.map(item => [item.id, []]));
+  const dangerous = [];
+  const longest = Math.max(...course.crushers.map(item => item.period));
+  for (let i = 1; i <= Math.ceil(longest * 2 * 60); i++) {
+    course.update(1 / 60, i / 60, sfx);
+    for (const item of course.crushers) {
+      const seen = beatsBy.get(item.id);
+      if (seen[seen.length - 1] !== item.beat) seen.push(item.beat);
+    }
+    dangerous.push(crusher.danger);
+  }
+
+  // Такты идут по кругу в одном и том же порядке.
+  const order = ['warn', 'strike', 'rise'];
+  for (const [id, beats] of beatsBy) {
+    for (let i = 1; i < beats.length; i++) {
+      const expected = order[(order.indexOf(beats[i - 1]) + 1) % order.length];
+      assert.equal(beats[i], expected, `${id}: после такта «${beats[i - 1]}» должен идти «${expected}»`);
+    }
+    assert.ok(beats.length >= 4, `${id}: за два периода такт должен смениться минимум четырежды`);
+  }
+
+  // Убивает только в такте удара.
+  assert.equal(
+    dangerous.some(Boolean),
+    true,
+    'окно опасности должно существовать, иначе пресс безобиден'
+  );
+  assert.ok(
+    dangerous.filter(Boolean).length < dangerous.length * 0.6,
+    'опасное окно не должно занимать большую часть цикла — это уже не препятствие, а стена'
+  );
+
+  // Звуков ровно столько, сколько смен такта: предупреждение и удар, восстановление молчит.
+  const expectedSounds = [...beatsBy.values()]
+    .map(beats => beats.slice(1).filter(beat => beat !== 'rise').length)
+    .reduce((sum, count) => sum + count, 0);
+  assert.equal(
+    heard.length,
+    expectedSounds,
+    `звук привязан к смене такта: ожидалось ${expectedSounds}, услышано ${heard.length}`
+  );
+  assert.equal(
+    heard.every(name => name === 'warn' || name === 'crush'),
+    true,
+    'у пресса только два звука — предупреждение и удар'
+  );
+});
+
+// Осыпающаяся плитка — тоже опасность с предупреждением: наступил, треснуло, через задержку
+// провалилось, потом вернулось. Если бы плитка не возвращалась, идущий вторым остался бы без пола.
+test('осыпающаяся плитка трещит, проваливается и возвращается', () => {
+  // Глава без прессов: иначе их такты подмешивали бы посторонние звуки в тот же счётчик.
+  const course = build('ch4');
+  assert.ok(course.tiles.length > 0, 'в этой главе должны быть осыпающиеся плитки');
+  const tile = course.tiles[0];
+  const mesh = tile.platform.mesh;
+
+  const heard = [];
+  const sfx = { crack: () => heard.push('crack'), collapse: () => heard.push('collapse') };
+
+  // Игрок наступает на плитку. Полноценный Player здесь не нужен: interact читает позицию,
+  // grounded и checkpoint.
+  const player = {
+    position: new THREE.Vector3(mesh.position.x, PLAYER_FOOT + 0.5, mesh.position.z),
+    velocity: new THREE.Vector3(),
+    grounded: true,
+    checkpoint: 0,
+    impact: 0,
+    respawn: () => {}
+  };
+
+  course.interact(player, 0, null, sfx);
+  assert.deepEqual(heard, ['crack'], 'наступили — плитка должна треснуть, но ещё не провалиться');
+  assert.equal(tile.fallen, false);
+  assert.notEqual(tile.platform.disabled, true, 'пол под ногами обязан продержаться всю задержку');
+
+  // Ждём обрушения.
+  for (let i = 0; i < Math.ceil(tile.delay * 60) + 2; i++) course.update(1 / 60, i / 60, sfx);
+  assert.equal(tile.fallen, true, 'после задержки плитка проваливается');
+  assert.equal(tile.platform.disabled, true, 'провалившаяся плитка перестаёт быть полом');
+  assert.deepEqual(heard, ['crack', 'collapse']);
+
+  // И возвращается — иначе второй игрок остался бы без пола навсегда.
+  for (let i = 0; i < Math.ceil(tile.respawn * 60) + 2; i++) course.update(1 / 60, i / 60, sfx);
+  assert.equal(tile.fallen, false, 'плитка обязана вернуться');
+  assert.equal(tile.platform.disabled, false, 'вернувшаяся плитка снова пол');
+  assert.deepEqual(heard, ['crack', 'collapse'], 'возвращение не должно ничего озвучивать');
 });

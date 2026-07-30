@@ -57,6 +57,9 @@ export class Player {
     this.respawns = 0;
     this.hitTimes = new Map();
     this.lastLandVelocity = 0;
+    // Сила удара, полученного за шаг. Препятствия пишут сюда, игра читает и превращает в тряску
+    // камеры. Так препятствия не зависят ни от камеры, ни от сцены — их можно гонять ботами.
+    this.impact = 0;
 
     this.onCheckpoint = options.onCheckpoint || (() => {});
     this.onRespawn = options.onRespawn || (() => {});
@@ -179,6 +182,8 @@ export class Player {
           0.55
         );
         this.sfx?.land(strength);
+        // Жёсткое приземление ощущается ударом — мягкое не должно трясти экран вовсе.
+        if (strength > 0.45) this.impact = Math.max(this.impact, (strength - 0.45) * 0.6);
       }
     }
 

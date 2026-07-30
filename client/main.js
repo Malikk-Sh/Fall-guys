@@ -57,10 +57,24 @@ class Game {
 
     this.previewSpec = courseSpec(dailySeed(), 'normal');
     this.buildPreview(this.previewSpec);
+    this.handleInvite();
     this.resize();
     requestAnimationFrame(time => this.loop(time));
     this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
     this.ui.setLoading(true);
+  }
+
+  // Игрок пришёл по ссылке вида ?room=ABCDE — сразу открываем кооп и подставляем код,
+  // чтобы от нажатия на ссылку до игры оставалось одно действие.
+  handleInvite() {
+    const code = UI.invitedCode();
+    if (!code) return;
+    this.ui.selectMode('coop');
+    document.querySelector('#coopCode').value = code;
+    document.querySelector('#code').value = code;
+    this.ui.toast(`Приглашение в комнату ${code} — введите имя и войдите.`);
+    // Убираем параметр из адреса: перезагрузка страницы не должна пытаться войти повторно.
+    history.replaceState(null, '', location.pathname);
   }
 
   detectQuality() {
@@ -200,6 +214,18 @@ class Game {
       this.net?.send('returnLobby');
       if (this.room) this.ui.lobby(this.room, this.net.id);
     });
+    $('#copyInvite').addEventListener('click', async () => {
+      const link = this.ui.inviteLink($('#roomCode').textContent.trim());
+      try {
+        // На телефоне системное «Поделиться» удобнее буфера обмена: ссылка сразу уходит в
+        // мессенджер, а не требует переключения приложений вручную.
+        if (navigator.share) await navigator.share({ title: 'Wobble Rush — кооп', url: link });
+        else await navigator.clipboard.writeText(link);
+        this.ui.toast('Ссылка-приглашение готова!');
+      } catch {
+        this.ui.toast(link);
+      }
+    });
     $('#copyCode').addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText($('#roomCode').textContent);
@@ -303,11 +329,31 @@ class Game {
 
     // Обрыв связи больше не означает конец сетевой игры: NetworkManager сам пробует переподключиться
     // и отдаёт 'disconnect' только когда все попытки исчерпаны.
-    this.net.on('connectionLost', () => this.ui.toast('Связь пропала, восстанавливаем…'));
-    this.net.on('disconnect', () => this.fallbackToSolo());
+    this.net.on('linkState', ({ state }) => this.showLinkState(state));
+    this.net.on('connectionLost', () => this.showLinkState('reconnecting'));
+    this.net.on('disconnect', () => {
+      this.showLinkState('failed');
+      this.fallbackToSolo();
+    });
+    this.net.on('resumed', () => this.showLinkState('online'));
 
     this.net.connect();
     return this.net;
+  }
+
+  showLinkState(state) {
+    if (state === 'online' || state === 'offline') return this.ui.linkOverlay(null);
+    const texts = {
+      connecting: ['Подключение…', 'Устанавливаем связь с сервером.'],
+      reconnecting: ['Связь потеряна', 'Восстанавливаем соединение. Игра продолжится сама.'],
+      failed: ['Не удалось подключиться', 'Проверьте интернет и попробуйте снова.']
+    };
+    const [title, detail] = texts[state] || texts.connecting;
+    this.ui.linkOverlay(state, {
+      title,
+      detail,
+      action: state === 'failed' ? { label: 'В МЕНЮ', onClick: () => this.goHome() } : null
+    });
   }
 
   startSingle(forceNew) {
@@ -531,6 +577,7 @@ class Game {
     this.ui.racing = false;
     this.ui.elements.hud.classList.add('hidden');
     this.ui.elements.touch.classList.add('hidden');
+    this.ui.linkOverlay(null);
     this.ui.show('menu');
     const settings = this.ui.singleSettings();
     this.previewSpec = courseSpec(
@@ -630,11 +677,13 @@ class Game {
         -Math.cos(this.cameraController.yaw)
       );
       const aimed = holding ? this.course.aimedEmitter(this.player.position, forward) : null;
+      if (aimed && aimed === this.player.beamTarget) this.sfx.beamHold();
       if (aimed !== this.player.beamTarget) {
         this.player.beamTarget = aimed;
         this.course.setBeam(this.net.id, aimed);
         this.net?.sendCoopEvent('beam', { objectId: aimed || undefined });
-        if (aimed) this.sfx.checkpoint();
+        if (aimed) this.sfx.beamStart();
+        else this.sfx.beamStop();
       }
       return;
     }
@@ -643,7 +692,7 @@ class Game {
       // Удар сверху доступен только в воздухе: так он остаётся осознанным действием,
       // а не второй кнопкой прыжка.
       if (input.consume('dive') && this.player.startSlam()) {
-        this.sfx.dive();
+        this.sfx.slam();
         this.cameraController.addShake(0.3);
       }
       // Приземление рядом с катапультой подбрасывает того, кто стоит на плече.
@@ -659,7 +708,7 @@ class Game {
     const { actor, catapult } = this.course.launchCandidate(catapultId, this.coopActors());
     this.course.triggerCatapultVisual(catapultId);
     this.cameraController.addShake(0.6);
-    this.sfx.spring();
+    this.sfx.catapult(this.player.visualPosition);
     this.effects.burst(this.player.position, COLORS.yellow, 20, 1.3);
     if (!actor || actor.id === this.net.id) return;
     // Импульс считает инициатор, применяет — цель. Сервер ограничивает модуль и ретранслирует:
@@ -678,7 +727,7 @@ class Game {
     }
     if (message.action === 'launch' && message.target === this.net?.id) {
       this.player?.applyLaunch(message.vector);
-      this.sfx.spring();
+      this.sfx.catapult();
       this.cameraController.addShake(0.5);
       return;
     }
@@ -717,7 +766,7 @@ class Game {
     if (this.mode === 'coop') {
       const actors = this.coopActors();
       // Пересчёт до шага игрока: пролёт должен появиться раньше, чем по нему пойдут.
-      this.course.updateCoop(actors, this.raceNow());
+      this.course.updateCoop(actors, this.raceNow(), this.sfx);
       this.updateRoleActions();
       this.tryRevivePartner();
     }

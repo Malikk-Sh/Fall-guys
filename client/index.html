@@ -165,7 +165,8 @@
             <small>ROOM CODE</small>
             <h2 id="roomCode">----</h2>
           </div>
-          <button id="copyCode" class="copy-button">COPY</button>
+          <button id="copyCode" class="copy-button">КОД</button>
+          <button id="copyInvite" class="copy-button">ССЫЛКА</button>
         </div>
         <div class="lobby-course">
           <div><small>COURSE</small><strong id="lobbyCourse">Cloud Circuit</strong></div>
@@ -239,6 +240,15 @@
         <button class="text-button back">RETURN HOME</button>
       </div>
     </section>
+
+    <div id="linkOverlay" class="link-overlay hidden" role="status" aria-live="polite">
+      <div class="link-card glass">
+        <div class="link-spinner"></div>
+        <strong id="linkTitle">Подключение…</strong>
+        <p id="linkDetail">Устанавливаем связь с сервером.</p>
+        <button id="linkAction" class="button button-secondary hidden">В МЕНЮ</button>
+      </div>
+    </div>
 
     <div id="loading" class="loading">
       <div class="loader-orb"></div>

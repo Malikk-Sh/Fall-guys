@@ -388,13 +388,16 @@ export class CoopCourse extends CourseBuilder {
   //
   // `actors` — массив вида { id, role, position, grounded }. Здесь и свой игрок, и напарник:
   // именно поэтому состояние получается одинаковым у обоих клиентов без обмена сообщениями.
-  updateCoop(actors, nowMs) {
+  updateCoop(actors, nowMs, sfx = null) {
     for (const plate of this.plates.values()) {
       const pressed = actors.some(actor => this.standsOnPlate(actor, plate));
       if (pressed !== plate.pressed) {
         plate.pressed = pressed;
         plate.mesh.position.y = plate.baseY - (pressed ? PLATE_PRESS_DEPTH : 0);
         plate.ring.position.y = plate.baseY + 0.12 - (pressed ? PLATE_PRESS_DEPTH : 0);
+        this._tmp.set(plate.x, plate.baseY, plate.z);
+        if (pressed) sfx?.platePress(this._tmp);
+        else sfx?.plateRelease(this._tmp);
       }
     }
 
@@ -409,7 +412,7 @@ export class CoopCourse extends CourseBuilder {
       } else if (span.control === 'sync') {
         active = this.syncSatisfied(span, actors, nowMs);
       }
-      this.setSpanActive(span, active);
+      this.setSpanActive(span, active, sfx);
     }
   }
 
@@ -444,9 +447,12 @@ export class CoopCourse extends CourseBuilder {
     return fresh && spread < span.windowMs;
   }
 
-  setSpanActive(span, active) {
+  setSpanActive(span, active, sfx = null) {
     if (span.active === active) return;
     span.active = active;
+    this._tmp.set(0, 1, span.z);
+    if (active) sfx?.spanExtend(this._tmp);
+    else sfx?.spanRetract(this._tmp);
     span.platform.disabled = !active;
     span.platform.mesh.visible = active;
     span.platform.mesh.material = this.material({

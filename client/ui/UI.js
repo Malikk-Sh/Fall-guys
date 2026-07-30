@@ -60,6 +60,25 @@ export class UI {
     apply();
   }
 
+  // Ссылка-приглашение. На телефоне диктовать пятисимвольный код неудобно и легко ошибиться,
+  // а ссылку можно отправить в любой мессенджер одним касанием.
+  inviteLink(code) {
+    const url = new URL(location.href);
+    url.hash = '';
+    url.search = `?room=${encodeURIComponent(code)}`;
+    return url.toString();
+  }
+
+  // Код комнаты из адреса, если игрок пришёл по приглашению.
+  static invitedCode() {
+    try {
+      const code = new URL(location.href).searchParams.get('room');
+      return code ? code.trim().toUpperCase().slice(0, 5) : null;
+    } catch {
+      return null;
+    }
+  }
+
   coopName() {
     return ($('#coopName').value.trim() || 'Wobbler').slice(0, 16);
   }
@@ -112,6 +131,29 @@ export class UI {
       if (['menu', 'lobby', 'finish'].includes(name)) element.classList.toggle('hidden', name !== id);
     if (!id) for (const name of ['menu', 'lobby', 'finish']) this.elements[name].classList.add('hidden');
   }
+  // Единый оверлей состояния соединения.
+  //
+  // Раньше о проблемах с сетью сообщали всплывающие подсказки: они исчезают через пару секунд,
+  // и игрок, отошедший от экрана, возвращался к молчаливо сломанной игре, не понимая причины.
+  // Оверлей висит, пока состояние не изменится, и всегда объясняет, что делать.
+  linkOverlay(state, { title, detail, action } = {}) {
+    const overlay = $('#linkOverlay');
+    if (!state) {
+      overlay.classList.add('hidden');
+      return;
+    }
+    overlay.classList.remove('hidden');
+    overlay.dataset.state = state;
+    $('#linkTitle').textContent = title || '';
+    $('#linkDetail').textContent = detail || '';
+    const button = $('#linkAction');
+    button.classList.toggle('hidden', !action);
+    if (action) {
+      button.textContent = action.label;
+      button.onclick = action.onClick;
+    }
+  }
+
   setLoading(done) {
     $('#loading').classList.toggle('done', done);
     if (done) setTimeout(() => $('#loading').classList.add('hidden'), 450);

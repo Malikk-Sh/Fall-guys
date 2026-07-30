@@ -186,6 +186,77 @@ export class Sfx {
     });
   }
 
+  // Предупреждение перед смертельным ударом: два коротких высоких сигнала.
+  //
+  // Смертельная опасность обязана телеграфировать себя тремя фазами — предупреждение, окно удара,
+  // короткое восстановление. Мигающая метка на полу работает, только если на неё смотрят; звук
+  // работает и когда игрок смотрит на напарника, а это в коопе половина времени.
+  warn(position = null) {
+    for (const delay of [0, 150])
+      setTimeout(() => {
+        this.engine.playTone({
+          freq: 1180,
+          type: 'square',
+          duration: 0.07,
+          volume: 0.11,
+          position: snapshot(position)
+        });
+      }, delay);
+  }
+
+  // Удар пресса. Звучит всегда, а не только при попадании: промах на волосок должен ощущаться
+  // как промах на волосок, иначе игрок не понимает, насколько близко было.
+  crush(position = null) {
+    this.engine.playTone({
+      freq: [vary(110, 30), 38],
+      type: 'sine',
+      duration: 0.3,
+      volume: 0.3,
+      position
+    });
+    this.engine.playNoise({
+      duration: 0.16,
+      filter: 'lowpass',
+      freq: 900,
+      sweepTo: 120,
+      volume: 0.24,
+      attack: 0.001,
+      position
+    });
+  }
+
+  // Плитка начала осыпаться: сухой треск, ещё не падение. Это последняя секунда, чтобы уйти.
+  crack(position = null) {
+    this.engine.playNoise({
+      duration: 0.22,
+      filter: 'bandpass',
+      freq: vary(2600, 200),
+      q: 1.6,
+      volume: 0.15,
+      attack: 0.002,
+      position
+    });
+  }
+
+  // Плитка ушла вниз: уходящий вниз шорох.
+  collapse(position = null) {
+    this.engine.playNoise({
+      duration: 0.42,
+      filter: 'lowpass',
+      freq: 1500,
+      sweepTo: 180,
+      volume: 0.18,
+      position
+    });
+    this.engine.playTone({
+      freq: [vary(240), 70],
+      type: 'triangle',
+      duration: 0.38,
+      volume: 0.12,
+      position
+    });
+  }
+
   // Чекпоинт: восходящая терция. Всегда одинаковая — это опорный, узнаваемый сигнал прогресса.
   checkpoint() {
     const base = 660;

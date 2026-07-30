@@ -334,7 +334,10 @@ export class CoopCourse extends CourseBuilder {
       phase: (Math.abs(prop.x) * 0.37 + Math.abs(piece.z) * 0.11) % prop.period,
       head,
       mark,
-      danger: false
+      danger: false,
+      // Такт, в котором пресс был на прошлом кадре. null — «ещё не знаем»: на первом кадре
+      // звук такта играть нельзя, иначе глава начиналась бы с удара из ниоткуда.
+      beat: null
     });
   }
 
@@ -659,7 +662,8 @@ export class CoopCourse extends CourseBuilder {
 
   // --- Интерфейс, ожидаемый игроком --------------------------------------------------------------
 
-  update(dt, elapsed) {
+  // `sfx` не обязателен: боты и тесты гоняют ту же логику без звука.
+  update(dt, elapsed, sfx = null) {
     this.updateDynamic(elapsed);
 
     for (const catapult of this.catapults) {
@@ -688,8 +692,10 @@ export class CoopCourse extends CourseBuilder {
     for (const crusher of this.crushers) {
       const t = (elapsed + crusher.phase) % crusher.period;
       const strikeUntil = crusher.warn + crusher.strike;
+      let beat;
       if (t < crusher.warn) {
         // Такт 1: висит наверху и мигает. Предупреждение обязательно.
+        beat = 'warn';
         crusher.head.position.y = 6;
         crusher.danger = false;
         const blink = Math.sin(t * 26) * 0.5 + 0.5;
@@ -701,13 +707,25 @@ export class CoopCourse extends CourseBuilder {
         });
       } else if (t < strikeUntil) {
         // Такт 2: внизу. Здесь и убивает.
+        beat = 'strike';
         crusher.head.position.y = 1.4;
         crusher.danger = true;
       } else {
         // Такт 3: поднимается. Окно, в которое надо проскочить.
+        beat = 'rise';
         const rise = (t - strikeUntil) / (crusher.period - strikeUntil);
         crusher.head.position.y = 1.4 + rise * 4.6;
         crusher.danger = false;
+      }
+      // Звук привязан к смене такта, а не к самому такту: иначе он играл бы каждый кадр.
+      if (beat !== crusher.beat) {
+        if (crusher.beat !== null) {
+          this._tmp.set(crusher.x, 1.6, crusher.z);
+          if (beat === 'warn') sfx?.warn(this._tmp);
+          // Удар звучит и мимо: промах на волосок должен ощущаться промахом на волосок.
+          else if (beat === 'strike') sfx?.crush(this._tmp);
+        }
+        crusher.beat = beat;
       }
     }
 
@@ -722,6 +740,7 @@ export class CoopCourse extends CourseBuilder {
           tile.platform.disabled = true;
           tile.platform.mesh.visible = false;
           tile.platform.mesh.position.y = tile.baseY;
+          sfx?.collapse(tile.platform.mesh.position);
         } else {
           // Возвращается: иначе идущий вторым остался бы без пола навсегда.
           tile.fallen = false;
@@ -779,6 +798,7 @@ export class CoopCourse extends CourseBuilder {
       player.velocity.y = Math.max(player.velocity.y, 4.5);
       effects?.burst(position, COLORS.pink, 14, 1.1);
       sfx?.bumper(position);
+      player.impact = Math.max(player.impact, 0.45);
     }
 
     for (const crusher of this.crushers) {
@@ -789,6 +809,7 @@ export class CoopCourse extends CourseBuilder {
       // Смертельно: отправляет на чекпоинт. Предупреждение было — это уже ошибка игрока.
       effects?.burst(position, COLORS.orange, 24, 1.5);
       sfx?.puncher(position);
+      player.impact = Math.max(player.impact, 0.85);
       player.respawn(this.spawnFor(player.checkpoint), true);
       return;
     }
@@ -800,6 +821,9 @@ export class CoopCourse extends CourseBuilder {
       if (Math.abs(position.z - mesh.position.z) > tile.platform.d / 2) continue;
       if (Math.abs(position.y - PLAYER_FOOT - 0.5) > 0.6) continue;
       tile.timer = tile.delay;
+      // Треск — то же предупреждение, что и мигание пресса, только его слышно, даже когда
+      // смотришь на напарника.
+      sfx?.crack(mesh.position);
     }
   }
 

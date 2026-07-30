@@ -904,7 +904,7 @@ class Game {
     const elapsed = this.courseElapsed();
     // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
     // за этот шаг, и игрок должен увидеть уже новую позицию платформы.
-    this.course?.update(dt, elapsed);
+    this.course?.update(dt, elapsed, this.mode === 'preview' ? null : this.sfx);
     if (!this.running || !this.player || this.mode === 'preview') return;
     this.input.update();
     if (this.mode === 'coop') {
@@ -920,6 +920,14 @@ class Game {
     }
     // Упавший ждёт напарника и не управляется.
     if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
+
+    // Удары, накопленные препятствиями за шаг, уходят в тряску камеры. Препятствия про камеру
+    // не знают — они только помечают силу удара на игроке, и это единственная причина, по которой
+    // их можно гонять ботами без сцены.
+    if (this.player.impact > 0) {
+      this.cameraController.addShake(this.player.impact);
+      this.player.impact = 0;
+    }
   }
 
   loop(time) {

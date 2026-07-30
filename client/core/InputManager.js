@@ -8,6 +8,8 @@ export class InputManager {
     this.jumpQueued = false;
     this.diveQueued = false;
     this.recenterQueued = false;
+    // Какие экранные кнопки удерживаются прямо сейчас.
+    this.holding = { jump: false, dive: false };
     this.cameraX = 0;
     this.cameraY = 0;
     this.touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
@@ -74,20 +76,29 @@ export class InputManager {
     stick.addEventListener('pointermove', moveStick);
     stick.addEventListener('pointerup', endStick);
     stick.addEventListener('pointercancel', endStick);
-    const action = (element, key) => {
+    // hold — имя удерживаемого действия, если у кнопки есть длительный режим. Планирование ИСКРЫ
+    // и удержание луча требуют знать не только момент нажатия, но и что кнопку всё ещё держат.
+    const action = (element, key, hold = null) => {
       element.addEventListener('pointerdown', e => {
         if (!this.enabled) return;
         e.preventDefault();
         this.setMethod(e.pointerType === 'touch' ? 'touch' : 'keyboard');
         this[key] = true;
+        if (hold) this.holding[hold] = true;
         element.classList.add('pressed');
       });
-      const release = () => element.classList.remove('pressed');
+      const release = () => {
+        element.classList.remove('pressed');
+        if (hold) this.holding[hold] = false;
+      };
       element.addEventListener('pointerup', release);
       element.addEventListener('pointercancel', release);
+      // Палец, уехавший с кнопки, тоже должен считаться отпусканием: иначе на телефоне действие
+      // залипало бы до следующего касания.
+      element.addEventListener('pointerleave', release);
     };
-    action(jump, 'jumpQueued');
-    action(dive, 'diveQueued');
+    action(jump, 'jumpQueued', 'jump');
+    action(dive, 'diveQueued', 'dive');
     action(recenter, 'recenterQueued');
     this.canvas.addEventListener('contextmenu', e => e.preventDefault());
     this.canvas.addEventListener('pointerdown', e => {
@@ -134,6 +145,14 @@ export class InputManager {
       magnitude: Math.min(1, length)
     };
   }
+  // Удерживается ли действие прямо сейчас, в отличие от consume(), который срабатывает один раз.
+  // Нужен для длительных действий: планирование ИСКРЫ и удержание луча.
+  isHeld(action) {
+    if (action === 'jump') return this.keys.has('Space') || this.holding.jump === true;
+    if (action === 'dive')
+      return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.holding.dive === true;
+    return false;
+  }
   consume(action) {
     const key = `${action}Queued`,
       value = !!this[key];
@@ -148,6 +167,8 @@ export class InputManager {
   reset() {
     this.moveX = this.moveForward = this.cameraX = this.cameraY = 0;
     this.jumpQueued = this.diveQueued = this.recenterQueued = false;
+    this.holding.jump = false;
+    this.holding.dive = false;
     this.keys.clear();
   }
 }

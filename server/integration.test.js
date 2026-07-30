@@ -154,3 +154,39 @@ test('two players share lobby configuration and deterministic start spec', async
   assert.equal(hostStart.spec.segmentCount, 7);
   assert.ok(hostStart.at > Date.now());
 });
+
+// Свёрнутая игра и неподвижный персонаж выглядят одинаково, а значат разное: в первом случае
+// напарника есть смысл подождать, во втором — нет. Проверяем, что разница доезжает до напарника.
+test('свёрнутая игра доходит до напарника и снимается при возвращении', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Хост', mode: 'coop' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await guest.wait('lobby', m => m.players.length === 2);
+
+  host.send('presence', { away: true });
+
+  const event = await guest.wait('presence', () => true, 2000);
+  assert.equal(event.away, true, 'напарник должен получить событие «отошёл»');
+  assert.notEqual(event.id, undefined, 'событие обязано называть, кто именно отошёл');
+
+  const awayLobby = await guest.wait('lobby', m => m.players.some(p => p.id === event.id && p.away), 2000);
+  const awayPlayer = awayLobby.players.find(p => p.id === event.id);
+  assert.equal(awayPlayer.away, true, 'состав комнаты тоже помечает отошедшего');
+  assert.equal(awayPlayer.online, true, 'отошёл — это не то же самое, что потерял связь');
+
+  host.send('presence', { away: false });
+  const back = await guest.wait('presence', m => m.away === false, 2000);
+  assert.equal(back.id, event.id, 'вернулся тот же игрок');
+  await guest.wait('lobby', m => m.players.every(p => !p.away), 2000);
+});

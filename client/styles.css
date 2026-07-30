@@ -1181,6 +1181,13 @@ canvas {
 .partner-hud[data-state='down'] .partner-arrow {
   border-bottom-color: #ff4f91;
 }
+/* «Отошёл» — не тревога, а объяснение: приглушённый цвет, чтобы не путать с зовом о помощи. */
+.partner-hud[data-state='away'] .partner-arrow {
+  border-bottom-color: #9a8fc4;
+}
+.partner-hud[data-state='away'] span {
+  opacity: 0.8;
+}
 .partner-hud span {
   font-size: 0.6rem;
   letter-spacing: 0.09em;
@@ -1224,6 +1231,61 @@ canvas {
 }
 @media (prefers-reduced-motion: reduce) {
   .coop-intro {
+    animation: none;
+  }
+}
+
+/* Оверлей соединения. Одно место, где игрок видит состояние сети, вместо всплывающих
+   сообщений, которые исчезают раньше, чем их успевают прочитать. */
+.link-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 10, 46, 0.72);
+  backdrop-filter: blur(6px);
+  z-index: 40;
+  padding: max(16px, env(safe-area-inset-top)) 16px;
+}
+.link-card {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 24px 26px;
+  border-radius: 20px;
+  text-align: center;
+  max-width: min(92vw, 380px);
+}
+.link-card strong {
+  font-size: 1.05rem;
+}
+.link-card p {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.82;
+}
+.link-spinner {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #48dcda;
+  animation: link-spin 0.9s linear infinite;
+}
+/* В состоянии отказа кольцо перестаёт быть спиннером: остановленный спиннер читается как
+   «всё ещё грузится», а нам нужно сообщить, что попытки закончились. */
+.link-overlay[data-state='failed'] .link-spinner {
+  border-color: #ff4f91;
+  background: rgba(255, 79, 145, 0.16);
+  animation: none;
+}
+@keyframes link-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .link-spinner {
     animation: none;
   }
 }

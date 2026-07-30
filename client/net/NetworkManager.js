@@ -67,6 +67,7 @@ export class NetworkManager {
     this.lastState = 0;
     this.intentionalClose = false;
     this.linkState = LINK_STATE.OFFLINE;
+    this.away = false;
 
     this.clock = new ClockSync();
     this.snapshots = new SnapshotBuffer();
@@ -246,6 +247,10 @@ export class NetworkManager {
       case S2C.RESUMED:
         this.setLinkState(LINK_STATE.ONLINE);
         this.ui.toast('Соединение восстановлено.');
+        // Сервер снимает признак «отошёл» при возврате в комнату. Если игра всё ещё свёрнута
+        // (на компьютере фоновая вкладка успевает переподключиться), сообщаем об этом заново —
+        // иначе напарник увидит вернувшегося, которого на самом деле нет.
+        if (this.away) this.send(C2S.PRESENCE, { away: true });
         break;
 
       case S2C.ERROR:
@@ -312,6 +317,21 @@ export class NetworkManager {
   // Сервер проверяет допустимость и ретранслирует напарнику.
   sendCoopEvent(action, data = {}) {
     this.send(C2S.COOP_EVENT, { action, matchId: this.matchId ?? undefined, ...data });
+  }
+
+  // Игра свёрнута или снова на экране. Флаг хранится здесь, а не в игре, потому что его надо
+  // повторить после переподключения: сервер о нём не знает, пока ему не скажут.
+  sendPresence(away) {
+    if (this.away === away) return;
+    this.away = away;
+    this.send(C2S.PRESENCE, { away });
+  }
+
+  // Ускоренная переоценка часов. Пока вкладка была свёрнута, таймеры браузера тормозились,
+  // и накопленные замеры описывают уже не ту задержку — надёжнее собрать их заново.
+  resyncClock() {
+    this.pingCount = 0;
+    this.lastPing = 0;
   }
 
   tick() {

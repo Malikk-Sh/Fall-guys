@@ -276,7 +276,7 @@ function log(level, event, fields = {}) {
   else console.log(line);
 }
 
-const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, role }) => ({
+const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, role, away }) => ({
   id,
   name,
   ready: !!ready,
@@ -285,7 +285,10 @@ const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconn
   rematch: !!rematch,
   color,
   role: role || null,
-  online: !disconnectedAt
+  online: !disconnectedAt,
+  // `online` и `away` — разные вещи. Первое означает «связь оборвалась», второе — «игра свёрнута,
+  // человек рядом». Напарнику важно различать их: в первом случае ждать бессмысленно.
+  away: !!away
 });
 
 const lobbyPayload = room => ({
@@ -421,6 +424,7 @@ function addPlayer(room, ws, name) {
     last: null,
     lastAt: 0,
     disconnectedAt: null,
+    away: false,
     ws
   });
   sessions.set(ws.token, {
@@ -456,6 +460,9 @@ function resume(ws, token) {
   ws.room = room.code;
   player.ws = ws;
   player.disconnectedAt = null;
+  // Раз соединение восстанавливается, вкладка снова на экране: иначе флаг «отошёл» пережил бы
+  // возвращение и напарник продолжал бы ждать уже вернувшегося игрока.
+  player.away = false;
   session.expiresAt = Date.now() + SESSION_TTL_MS;
   room.updatedAt = Date.now();
   metrics.reconnects++;
@@ -764,6 +771,16 @@ wss.on('connection', (ws, req) => {
       player.last = { ...result.state, id: player.id };
       player.lastAt = now;
       player.checkpoint = result.checkpoint;
+      return;
+    }
+
+    // Игрок свернул игру или вернулся. Сервер здесь ничего не решает — только запоминает и
+    // пересказывает: решение принимает человек, а знать об этом должен напарник.
+    if (message.type === C2S.PRESENCE) {
+      if (player.away === message.away) return;
+      player.away = message.away;
+      broadcast(room, { type: S2C.PLAYER_PRESENCE, id: player.id, away: player.away });
+      emitLobby(room);
       return;
     }
 

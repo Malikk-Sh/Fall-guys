@@ -60,6 +60,25 @@ export class UI {
     apply();
   }
 
+  // Ссылка-приглашение. На телефоне диктовать пятисимвольный код неудобно и легко ошибиться,
+  // а ссылку можно отправить в любой мессенджер одним касанием.
+  inviteLink(code) {
+    const url = new URL(location.href);
+    url.hash = '';
+    url.search = `?room=${encodeURIComponent(code)}`;
+    return url.toString();
+  }
+
+  // Код комнаты из адреса, если игрок пришёл по приглашению.
+  static invitedCode() {
+    try {
+      const code = new URL(location.href).searchParams.get('room');
+      return code ? code.trim().toUpperCase().slice(0, 5) : null;
+    } catch {
+      return null;
+    }
+  }
+
   coopName() {
     return ($('#coopName').value.trim() || 'Wobbler').slice(0, 16);
   }
@@ -82,23 +101,26 @@ export class UI {
 
   // Указатель на напарника. Пока он в кадре — стрелка не нужна и только мешала бы;
   // как только уходит за край, она появляется у ближайшей границы экрана.
-  updatePartnerMarker({ screen, visible, distance, down }) {
+  updatePartnerMarker({ screen, visible, distance, down, away }) {
     const hud = $('#partnerHud');
     if (!screen) {
       hud.classList.add('hidden');
       return;
     }
-    hud.classList.toggle('hidden', visible && !down);
-    if (visible && !down) return;
+    // Указатель прячется, только когда напарник виден и с ним всё в порядке. Упавший и отошедший
+    // остаются отмеченными даже в кадре: неподвижный персонаж сам по себе ничего не объясняет.
+    const quiet = visible && !down && !away;
+    hud.classList.toggle('hidden', quiet);
+    if (quiet) return;
 
     const margin = 46;
     const x = Math.max(margin, Math.min(innerWidth - margin, screen.x));
     const y = Math.max(margin, Math.min(innerHeight - margin, screen.y));
     hud.style.left = `${x}px`;
     hud.style.top = `${y}px`;
-    hud.dataset.state = down ? 'down' : 'ok';
+    hud.dataset.state = down ? 'down' : away ? 'away' : 'ok';
     $('#partnerArrow').style.transform = `rotate(${Math.atan2(screen.y - y, screen.x - x) + Math.PI / 2}rad)`;
-    $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : `${Math.round(distance)} м`;
+    $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : away ? 'ОТОШЁЛ' : `${Math.round(distance)} м`;
   }
   setInputMethod(method) {
     const touch = method === 'touch';
@@ -112,6 +134,29 @@ export class UI {
       if (['menu', 'lobby', 'finish'].includes(name)) element.classList.toggle('hidden', name !== id);
     if (!id) for (const name of ['menu', 'lobby', 'finish']) this.elements[name].classList.add('hidden');
   }
+  // Единый оверлей состояния соединения.
+  //
+  // Раньше о проблемах с сетью сообщали всплывающие подсказки: они исчезают через пару секунд,
+  // и игрок, отошедший от экрана, возвращался к молчаливо сломанной игре, не понимая причины.
+  // Оверлей висит, пока состояние не изменится, и всегда объясняет, что делать.
+  linkOverlay(state, { title, detail, action } = {}) {
+    const overlay = $('#linkOverlay');
+    if (!state) {
+      overlay.classList.add('hidden');
+      return;
+    }
+    overlay.classList.remove('hidden');
+    overlay.dataset.state = state;
+    $('#linkTitle').textContent = title || '';
+    $('#linkDetail').textContent = detail || '';
+    const button = $('#linkAction');
+    button.classList.toggle('hidden', !action);
+    if (action) {
+      button.textContent = action.label;
+      button.onclick = action.onClick;
+    }
+  }
+
   setLoading(done) {
     $('#loading').classList.toggle('done', done);
     if (done) setTimeout(() => $('#loading').classList.add('hidden'), 450);

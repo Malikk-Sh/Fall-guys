@@ -386,41 +386,42 @@ test('фиксатор закрепляет мост навсегда, а луч
 // Обучение — тоже данные, и портится оно так же тихо, как геометрия: достаточно переименовать
 // пролёт или удлинить отрезок, и подсказка либо начнёт ссылаться в пустоту, либо появится не там.
 // Ни то, ни другое не уронит игру — она просто перестанет учить.
-test('уроки первой главы ссылаются на существующие объекты и стоят в правильном порядке', () => {
-  const spec = coopSpec('ch1');
-  const { pieces } = chapterLayout('ch1');
+test('уроки ссылаются на существующие объекты своей главы и стоят в правильном порядке', () => {
+  for (const chapter of COOP_CHAPTERS) {
+    const spec = coopSpec(chapter.id);
+    const { pieces } = chapterLayout(chapter.id);
 
-  assert.ok(spec.lessons.length >= 3, 'обучающая глава без уроков не обучает');
-
-  const plateIds = new Set();
-  const spanIds = new Set();
-  for (const piece of pieces) {
-    if (piece.id) spanIds.add(piece.id);
-    for (const prop of piece.props || []) if (prop.type === 'plate') plateIds.add(prop.id);
-  }
-
-  let previousZ = Infinity;
-  for (const item of spec.lessons) {
-    assert.ok(item.spark && item.anchor, `${item.id}: у обеих ролей должен быть свой текст`);
-    assert.ok(
-      item.z <= previousZ,
-      `${item.id}: уроки должны идти вдоль трассы по порядку, иначе поздний перекроет ранний`
-    );
-    previousZ = item.z;
-
-    assert.ok(item.z <= 14, `${item.id}: урок не может появляться до начала главы`);
-    assert.ok(item.z > spec.finishZ, `${item.id}: урок не может появляться после финиша`);
-
-    if (item.done.span) {
-      assert.ok(spanIds.has(item.done.span), `${item.id}: ссылка на несуществующий пролёт`);
+    const plateIds = new Set();
+    const spanIds = new Set();
+    for (const piece of pieces) {
+      if (piece.id) spanIds.add(piece.id);
+      for (const prop of piece.props || []) if (prop.type === 'plate') plateIds.add(prop.id);
     }
-    if (item.done.plates) {
-      for (const id of item.done.plates) {
-        assert.ok(plateIds.has(id), `${item.id}: ссылка на несуществующую плиту ${id}`);
+
+    let previousZ = Infinity;
+    for (const item of spec.lessons) {
+      const where = `${chapter.id}/${item.id}`;
+      assert.ok(item.spark && item.anchor, `${where}: у обеих ролей должен быть свой текст`);
+      assert.ok(
+        item.z <= previousZ,
+        `${where}: уроки должны идти вдоль трассы по порядку, иначе поздний перекроет ранний`
+      );
+      previousZ = item.z;
+
+      assert.ok(item.z <= 14, `${where}: урок не может появляться до начала главы`);
+      assert.ok(item.z > spec.finishZ, `${where}: урок не может появляться после финиша`);
+
+      if (item.done.span) {
+        assert.ok(spanIds.has(item.done.span), `${where}: ссылка на несуществующий пролёт`);
       }
-    }
-    if (item.done.past !== undefined) {
-      assert.equal(typeof item.done.past, 'number', `${item.id}: отметка должна разрешиться в число`);
+      if (item.done.plates) {
+        for (const id of item.done.plates) {
+          assert.ok(plateIds.has(id), `${where}: ссылка на несуществующую плиту ${id}`);
+        }
+      }
+      if (item.done.past !== undefined) {
+        assert.equal(typeof item.done.past, 'number', `${where}: отметка должна разрешиться в число`);
+      }
     }
   }
 });
@@ -452,12 +453,60 @@ test('урок уходит с экрана, как только задача р
   course.dispose();
 });
 
-test('в остальных главах обучения нет', () => {
-  for (const chapter of COOP_CHAPTERS.slice(1)) {
+// Правило обучения: каждая механика объясняется ровно один раз, в той главе, где впервые
+// появляется. Нарушения этого правила бывают в обе стороны и обе плохи: повтор мешает тому, кто
+// уже понял, а пропуск оставляет пару перед задачей, решение которой ниоткуда не следует.
+test('каждая механика объясняется ровно один раз', () => {
+  const taught = new Map();
+  for (const chapter of COOP_CHAPTERS) {
+    for (const item of coopSpec(chapter.id).lessons) {
+      assert.equal(
+        taught.has(item.id),
+        false,
+        `урок «${item.id}» повторяется в ${chapter.id}, хотя уже был в ${taught.get(item.id)}`
+      );
+      taught.set(item.id, chapter.id);
+    }
+  }
+
+  // Механики, которые невозможно вывести из вида уровня, обязаны быть объяснены. Список ведётся
+  // руками намеренно: добавили новую механику — придётся сюда заглянуть и решить, учить ли её.
+  for (const id of ['roles', 'together', 'heavy', 'catapult', 'beam', 'latch', 'wind', 'sync']) {
+    assert.ok(taught.has(id), `механика «${id}» нигде не объясняется`);
+  }
+});
+
+// Урок должен стоять в той же главе, где механика впервые встречается, — иначе он либо опоздает,
+// либо расскажет о том, чего в этой главе ещё нет.
+test('урок стоит в главе, где его механика впервые появляется', () => {
+  const firstSeen = kind => {
+    for (const chapter of COOP_CHAPTERS) {
+      const { pieces } = chapterLayout(chapter.id);
+      const found = pieces.some(
+        piece => piece.kind === kind || (piece.props || []).some(prop => prop.type === kind)
+      );
+      if (found) return chapter.id;
+    }
+    return null;
+  };
+
+  const owner = id => {
+    for (const chapter of COOP_CHAPTERS) {
+      if (coopSpec(chapter.id).lessons.some(item => item.id === id)) return chapter.id;
+    }
+    return null;
+  };
+
+  for (const [lessonId, kind] of [
+    ['catapult', 'catapult'],
+    ['beam', 'beamSpan'],
+    ['wind', 'wind'],
+    ['sync', 'syncSpan']
+  ]) {
     assert.equal(
-      coopSpec(chapter.id).lessons.length,
-      0,
-      `${chapter.id}: подсказки нужны только в первой главе, дальше они мешают`
+      owner(lessonId),
+      firstSeen(kind),
+      `урок «${lessonId}» должен быть в главе, где «${kind}» появляется впервые`
     );
   }
 });

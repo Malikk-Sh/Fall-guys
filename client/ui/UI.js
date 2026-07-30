@@ -146,7 +146,7 @@ export class UI {
     const touch = method === 'touch';
     $('#controlHint').textContent = touch
       ? 'JOYSTICK · JUMP · DIVE · SWIPE TO LOOK'
-      : 'WASD · SPACE · SHIFT · DRAG TO LOOK';
+      : 'WASD · SPACE · SHIFT · DRAG TO LOOK · C КАМЕРА';
     if (this.racing) this.elements.touch.classList.toggle('hidden', !touch);
   }
   show(id) {

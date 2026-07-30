@@ -666,6 +666,18 @@ canvas {
   font-size: 23px;
   backdrop-filter: blur(5px);
 }
+/* Переключатель режима камеры стоит над кнопкой «за спину»: обе про обзор, держим их рядом. */
+.camera-mode {
+  bottom: calc(178px + var(--safe-bottom));
+  font-size: 19px;
+}
+/* Свободный режим подсвечен — иначе непонятно, в каком ты сейчас, а от этого зависит,
+   вернётся камера за спину сама или нет. */
+.camera-mode.camera-free {
+  border-color: #ffd76a;
+  background: #6b4d0f9c;
+  color: #ffe6a3;
+}
 .look-hint {
   position: absolute;
   right: calc(76px + var(--safe-right));
@@ -1047,6 +1059,9 @@ canvas {
   }
   .recenter {
     bottom: calc(93px + var(--safe-bottom));
+  }
+  .camera-mode {
+    bottom: calc(139px + var(--safe-bottom));
   }
   .look-hint {
     display: none;

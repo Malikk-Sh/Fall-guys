@@ -8,6 +8,7 @@ export class InputManager {
     this.jumpQueued = false;
     this.diveQueued = false;
     this.recenterQueued = false;
+    this.cameraModeQueued = false;
     // Какие экранные кнопки удерживаются прямо сейчас.
     this.holding = { jump: false, dive: false };
     this.cameraX = 0;
@@ -22,6 +23,7 @@ export class InputManager {
       if (!e.repeat && e.code === 'Space') this.jumpQueued = true;
       if (!e.repeat && (e.code === 'ShiftLeft' || e.code === 'ShiftRight')) this.diveQueued = true;
       if (e.code === 'KeyR') this.recenterQueued = true;
+      if (!e.repeat && e.code === 'KeyC') this.cameraModeQueued = true;
       this.setMethod('keyboard');
     };
     this.onKeyUp = e => this.keys.delete(e.code);
@@ -40,7 +42,8 @@ export class InputManager {
       nub = stick.querySelector('i'),
       jump = this.root.querySelector('#jump'),
       dive = this.root.querySelector('#dive'),
-      recenter = this.root.querySelector('#recenter');
+      recenter = this.root.querySelector('#recenter'),
+      cameraMode = this.root.querySelector('#cameraMode');
     let stickId = null,
       lookId = null,
       lastX = 0,
@@ -100,6 +103,7 @@ export class InputManager {
     action(jump, 'jumpQueued', 'jump');
     action(dive, 'diveQueued', 'dive');
     action(recenter, 'recenterQueued');
+    action(cameraMode, 'cameraModeQueued');
     this.canvas.addEventListener('contextmenu', e => e.preventDefault());
     this.canvas.addEventListener('pointerdown', e => {
       if (!this.enabled) return;
@@ -146,7 +150,7 @@ export class InputManager {
     };
   }
   // Удерживается ли действие прямо сейчас, в отличие от consume(), который срабатывает один раз.
-  // Нужен для длительных действий: планирование ИСКРЫ и удержание луча.
+  // Нужен для длительных действий — сейчас это планирование в падении (удержанный прыжок).
   isHeld(action) {
     if (action === 'jump') return this.keys.has('Space') || this.holding.jump === true;
     if (action === 'dive')
@@ -166,7 +170,7 @@ export class InputManager {
   }
   reset() {
     this.moveX = this.moveForward = this.cameraX = this.cameraY = 0;
-    this.jumpQueued = this.diveQueued = this.recenterQueued = false;
+    this.jumpQueued = this.diveQueued = this.recenterQueued = this.cameraModeQueued = false;
     this.holding.jump = false;
     this.holding.dive = false;
     this.keys.clear();

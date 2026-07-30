@@ -143,30 +143,41 @@ test('роли стартуют в разных точках, но на одно
   assert.equal(spark.z, anchor.z);
 });
 
-test('пролёт с плитами держит, только пока нажаты все требуемые плиты', () => {
+// Ворота работают в три такта, как и световой мост: держащий стоит на плите, переходящий идёт,
+// потом закрепляет пролёт фиксатором за ним — и только тогда держащий может сойти.
+test('ворота проходятся в три такта и закрепляются фиксатором', () => {
   const course = build('ch1');
   const span = course.spans.get('g1');
   assert.ok(span, 'в первой главе должен быть пролёт g1');
   assert.equal(span.active, false, 'изначально пролёт убран');
   assert.equal(span.platform.disabled, true, 'убранный пролёт не должен держать');
 
-  const onPlate = id => {
+  const onPlate = (id, role = COOP_ROLE.SPARK) => {
     const plate = course.plates.get(id);
-    return { id, role: COOP_ROLE.SPARK, position: new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z) };
+    return { id: role, role, position: new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z) };
   };
 
-  // Один игрок на одной плите — недостаточно.
-  course.updateCoop([onPlate('p1')], 0);
-  assert.equal(course.spans.get('g1').active, false, 'одной плиты мало');
-
-  // Двое на обеих — пролёт выдвигается.
-  course.updateCoop([onPlate('p1'), onPlate('p2')], 0);
-  assert.equal(course.spans.get('g1').active, true, 'обе плиты нажаты — пролёт должен появиться');
+  // Такт первый: держащий встал — пролёт появился.
+  const holder = onPlate('p1');
+  course.updateCoop([holder], 0);
+  assert.equal(course.spans.get('g1').active, true, 'плита держащего выдвигает пролёт');
   assert.equal(course.spans.get('g1').platform.disabled, false);
 
-  // Сошли — пролёт убирается обратно.
+  // Пока фиксатор не нажат, уход с плиты убирает пролёт — иначе преграда ничего не значила бы.
   course.updateCoop([], 0);
-  assert.equal(course.spans.get('g1').active, false, 'пролёт должен убираться');
+  assert.equal(course.spans.get('g1').active, false, 'без фиксатора пролёт держится только плитой');
+
+  // Такт второй и третий: держащий снова на плите, второй перешёл и встал на фиксатор.
+  course.updateCoop([holder, onPlate('p2', COOP_ROLE.ANCHOR)], 0);
+  assert.equal(course.spans.get('g1').latched, true, 'фиксатор должен закрепить пролёт');
+
+  // И теперь держащий может сойти: пролёт остаётся, и он проходит следом.
+  course.updateCoop([], 0);
+  assert.equal(
+    course.spans.get('g1').active,
+    true,
+    'закреплённый пролёт обязан остаться — иначе перейти не может никто'
+  );
   course.dispose();
 });
 
@@ -432,24 +443,26 @@ test('урок уходит с экрана, как только задача р
   const together = spec.lessons.find(item => item.done.span === 'g1');
   assert.ok(together, 'урок про совместные плиты должен существовать');
 
-  // Пара дошла до плит: урок виден.
+  // Пара дошла до плиты: урок виден.
   const at = id => {
     const plate = course.plates.get(id);
     return new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z);
   };
-  const spark = { id: 'a', role: COOP_ROLE.SPARK, position: at('p1') };
-  const anchor = { id: 'b', role: COOP_ROLE.ANCHOR, position: at('p2') };
+  const holdZ = course.plates.get('p1').z;
 
-  // Сначала только один на плите — пролёта нет, урок висит.
-  const alone = [spark, { ...anchor, position: new THREE.Vector3(0, 1, spark.position.z) }];
-  course.updateCoop(alone, 0);
-  assert.equal(course.activeLesson(alone)?.id, together.id, 'пока задача не решена, урок держится');
+  // Никто ещё не встал на плиту — пролёта нет, урок висит.
+  const waiting = [
+    { id: 'a', role: COOP_ROLE.SPARK, position: new THREE.Vector3(3, 1, holdZ) },
+    { id: 'b', role: COOP_ROLE.ANCHOR, position: new THREE.Vector3(-3, 1, holdZ) }
+  ];
+  course.updateCoop(waiting, 0);
+  assert.equal(course.activeLesson(waiting)?.id, together.id, 'пока задача не решена, урок держится');
 
-  // Встали вдвоём — пролёт выдвинулся, урок больше не нужен.
-  const both = [spark, anchor];
-  course.updateCoop(both, 0);
+  // Один встал на плиту — пролёт выдвинулся, урок больше не нужен.
+  const holding = [{ ...waiting[0], position: at('p1') }, waiting[1]];
+  course.updateCoop(holding, 0);
   assert.equal(course.spans.get('g1').active, true);
-  assert.notEqual(course.activeLesson(both)?.id, together.id, 'решённая задача убирает подсказку');
+  assert.notEqual(course.activeLesson(holding)?.id, together.id, 'решённая задача убирает подсказку');
   course.dispose();
 });
 
@@ -521,25 +534,139 @@ test('усвоенный урок не возвращается, когда ус
     return new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z);
   };
 
-  const both = [
+  const holding = [
     { id: 'a', role: COOP_ROLE.SPARK, position: at('p1') },
-    { id: 'b', role: COOP_ROLE.ANCHOR, position: at('p2') }
+    { id: 'b', role: COOP_ROLE.ANCHOR, position: new THREE.Vector3(3, 1, course.plates.get('p1').z) }
   ];
-  course.updateCoop(both, 0);
-  course.activeLesson(both);
+  course.updateCoop(holding, 0);
+  course.activeLesson(holding);
   assert.ok(course.learned.has('together'), 'решённая задача должна запомниться');
 
-  // Пара перешла по пролёту и сошла с плит: пролёт убрался, состояние вернулось в исходное.
-  const crossed = both.map(actor => ({
+  // Держащий сошёл с плиты, фиксатор ещё не нажат: пролёт убрался, состояние вернулось в исходное.
+  const crossed = holding.map(actor => ({
     ...actor,
-    position: new THREE.Vector3(actor.position.x, actor.position.y, course.spans.get('g1').z - 10)
+    position: new THREE.Vector3(actor.position.x, actor.position.y, course.spans.get('g1').z + 4)
   }));
   course.updateCoop(crossed, 0);
-  assert.equal(course.spans.get('g1').active, false, 'без плит пролёт действительно убирается');
+  assert.equal(course.spans.get('g1').active, false, 'без плиты и фиксатора пролёт убирается');
   assert.notEqual(
     course.activeLesson(crossed)?.id,
     'together',
     'подсказка про плиты не должна возвращаться тем, кто уже на той стороне'
   );
   course.dispose();
+});
+
+// Инвариант, которого не хватало и из-за которого главы оказались непроходимыми.
+//
+// Ворота держатся, пока нажаты их плиты. Значит, если ВСЕ такие плиты стоят перед пролётом, то
+// перейти не может никто: чтобы шагнуть на пролёт, надо сойти с плиты, а сойти — значит убрать
+// пролёт. Прежние проверки этого не видели: они спрашивали «выдвинулся ли пролёт», и ответ был
+// «да». Он выдвигался. Просто ни для кого не был проходим.
+//
+// Требование: у ворот либо есть фиксатор ЗА пролётом, либо все управляющие плиты уже за ним.
+test('через каждые ворота может перейти каждый', () => {
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+
+    const plateZ = new Map();
+    for (const piece of pieces) {
+      for (const prop of piece.props || []) {
+        if (prop.type === 'plate') plateZ.set(prop.id, piece.z);
+      }
+    }
+
+    for (const piece of pieces) {
+      if (piece.kind !== 'gateSpan') continue;
+      const where = `${chapter.id}/${piece.id}`;
+      // Уровень идёт в минус по Z, поэтому «за пролётом» — это Z меньше дальнего края.
+      const farEdge = piece.z - piece.length / 2;
+      const allRequiredBeyond = piece.requires.every(id => plateZ.get(id) < farEdge);
+
+      if (allRequiredBeyond) continue;
+
+      assert.ok(piece.latch, `${where}: ворота без фиксатора — с плиты не сойти, перейти некому`);
+      assert.ok(plateZ.has(piece.latch), `${where}: фиксатор «${piece.latch}» не существует`);
+      assert.ok(
+        plateZ.get(piece.latch) < farEdge,
+        `${where}: фиксатор стоит перед пролётом — до него не добраться, не перейдя`
+      );
+    }
+  }
+});
+
+// Обратная сторона того же: держащая плита должна быть ДОСТИЖИМА, то есть перед пролётом.
+test('держащая плита стоит перед своим пролётом', () => {
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+    const plateZ = new Map();
+    for (const piece of pieces) {
+      for (const prop of piece.props || []) {
+        if (prop.type === 'plate') plateZ.set(prop.id, piece.z);
+      }
+    }
+    for (const piece of pieces) {
+      if (piece.kind !== 'gateSpan') continue;
+      const nearEdge = piece.z + piece.length / 2;
+      for (const id of piece.requires) {
+        assert.ok(
+          plateZ.get(id) > nearEdge || plateZ.get(id) < piece.z - piece.length / 2,
+          `${chapter.id}/${piece.id}: плита «${id}» стоит внутри самого пролёта`
+        );
+      }
+    }
+  }
+});
+
+// Тупик того же класса, что и ворота без фиксатора, только с другой стороны: голая пропасть шире
+// прыжка. ИСКРУ через такую перебрасывает катапульта, а ГРУЗУ перебраться нечем — и глава молча
+// кончается. Найдено ботами: они дошли до места и не смогли идти дальше ни одним способом.
+//
+// Требование: любая пропасть шире прыжка обязана быть перекрыта управляемым пролётом.
+test('нет пропастей, которые нечем перейти', () => {
+  // Обычный прыжок берёт около шести единиц, рывок в прыжке — примерно девять. Всё шире
+  // требует механизма.
+  const JUMPABLE = 9;
+
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+    const solid = pieces.filter(p => p.kind === 'floor' || p.kind === 'movingSpan').sort((a, b) => b.z - a.z);
+    const spans = pieces.filter(p => p.kind.endsWith('Span') && p.kind !== 'movingSpan');
+
+    for (let i = 1; i < solid.length; i++) {
+      const back = solid[i - 1].z - solid[i - 1].length / 2;
+      const front = solid[i].z + solid[i].length / 2;
+      const width = back - front;
+      if (width < 0.5) continue;
+
+      const covered = spans.some(span => Math.abs(span.z + span.length / 2 - back) < 0.01);
+      if (covered) continue;
+
+      assert.ok(
+        width <= JUMPABLE,
+        `${chapter.id}: пропасть шириной ${width.toFixed(0)} около z=${back.toFixed(0)} ` +
+          `не перекрыта пролётом — перепрыгнуть её нельзя, значит пройти её нечем`
+      );
+    }
+  }
+});
+
+// Дубль идентификатора плиты — ошибка, которую видно только в бою: вторая плита затирает первую
+// в карте объектов, и механика, ссылавшаяся на первую, тихо начинает управляться другой плитой
+// в другом конце главы. Допущена при правке глав и найдена ботами.
+test('идентификаторы объектов внутри главы уникальны', () => {
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+    const seen = new Set();
+    const add = (id, what) => {
+      assert.equal(seen.has(id), false, `${chapter.id}: ${what} «${id}» объявлен дважды`);
+      seen.add(id);
+    };
+    for (const piece of pieces) {
+      if (piece.id) add(piece.id, 'пролёт');
+      for (const prop of piece.props || []) {
+        if (prop.id) add(prop.id, prop.type);
+      }
+    }
+  }
 });

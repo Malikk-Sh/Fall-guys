@@ -7,6 +7,7 @@ import { Music } from './audio/Music.js';
 import { Effects } from './game/Effects.js';
 import { Course } from './game/Course.js';
 import { CoopCourse } from './game/CoopCourse.js';
+import { updateRoleActions } from './game/CoopActions.js';
 import { COOP_CHAPTERS, coopSpawnFor } from '/shared/coopChapters.js';
 import { COOP_ROLE, GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
@@ -774,43 +775,23 @@ class Game {
   // Действия, зависящие от роли. Обе повешены на ту же кнопку, что и рывок: на телефоне нельзя
   // множить кнопки, а смысл действия и так однозначен из роли.
   updateRoleActions() {
-    if (this.mode !== 'coop' || !this.player || this.player.downed) return;
-    const input = this.input;
-
-    if (this.myRole === COOP_ROLE.SPARK) {
-      // Луч держится, пока держат кнопку. Наводка ищется по направлению взгляда камеры.
-      const holding = input.isHeld('dive');
-      const forward = this._forward.set(
-        -Math.sin(this.cameraController.yaw),
-        0,
-        -Math.cos(this.cameraController.yaw)
-      );
-      const aimed = holding ? this.course.aimedEmitter(this.player.position, forward) : null;
-      if (aimed && aimed === this.player.beamTarget) this.sfx.beamHold();
-      if (aimed !== this.player.beamTarget) {
-        this.player.beamTarget = aimed;
+    if (this.mode !== 'coop' || !this.player) return;
+    updateRoleActions(this.player, this.course, this.input, this.cameraController.yaw, {
+      role: this.myRole,
+      forward: this._forward,
+      onBeamChange: aimed => {
         this.course.setBeam(this.net.id, aimed);
         this.net?.sendCoopEvent('beam', { objectId: aimed || undefined });
         if (aimed) this.sfx.beamStart();
         else this.sfx.beamStop();
-      }
-      return;
-    }
-
-    if (this.myRole === COOP_ROLE.ANCHOR) {
-      // Удар сверху доступен только в воздухе: так он остаётся осознанным действием,
-      // а не второй кнопкой прыжка.
-      if (input.consume('dive') && this.player.startSlam()) {
+      },
+      onBeamHold: () => this.sfx.beamHold(),
+      onSlam: () => {
         this.sfx.slam();
         this.cameraController.addShake(0.3);
-      }
-      // Приземление рядом с катапультой подбрасывает того, кто стоит на плече.
-      if (this.player.grounded && this.wasSlamming) {
-        const hit = this.course.slamTarget(this.player.position);
-        if (hit) this.triggerCatapult(hit);
-      }
-      this.wasSlamming = this.player.slamming;
-    }
+      },
+      onCatapult: id => this.triggerCatapult(id)
+    });
   }
 
   triggerCatapult(catapultId) {
@@ -824,7 +805,7 @@ class Game {
     // это единственное место, где один игрок меняет состояние другого.
     this.net?.sendCoopEvent('launch', {
       objectId: catapultId,
-      vector: { x: 0, y: catapult.power, z: -catapult.power * 0.32 }
+      vector: { x: 0, y: catapult.power, z: -catapult.power * catapult.forward }
     });
   }
 

@@ -9,7 +9,7 @@ import { Course } from './game/Course.js';
 import { CoopCourse } from './game/CoopCourse.js';
 import { updateRoleActions } from './game/CoopActions.js';
 import { COOP_CHAPTERS, coopSpawnFor } from '/shared/coopChapters.js';
-import { COOP_ROLE, GAME_MODE } from '/shared/protocol.js';
+import { GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
@@ -365,7 +365,7 @@ class Game {
         message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
         message.spec,
         message.at,
-        message.roles
+        message.slots
       )
     );
     this.net.on('presence', message => {
@@ -460,11 +460,12 @@ class Game {
     this.camera.lookAt(0, 1, -7);
   }
 
-  async startRace(mode, spec, startAt = Date.now() + 1900, roles = null) {
+  async startRace(mode, spec, startAt = Date.now() + 1900, slots = null) {
     const token = ++this.startToken;
     this.mode = mode;
-    this.roles = roles || {};
-    this.myRole = this.roles[this.net?.id] || null;
+    // Ролей нет; «место» определяет только точку появления, чтобы игроки не стояли в одной точке.
+    this.slots = slots || {};
+    this.mySlot = this.slots[this.net?.id] ?? 0;
     this.partnerDown = false;
     this.partnerAway = this.room?.players.some(p => p.id !== this.net?.id && p.away) || false;
     // Времена кадров меню ничего не говорят о трассе: там пустая сцена и один персонаж.
@@ -476,11 +477,10 @@ class Game {
     this.buildCourse(spec);
 
     // Цвет персонажа зависит от роли: игрок должен узнавать себя и напарника мгновенно.
-    const roleColor = this.myRole === COOP_ROLE.ANCHOR ? COLORS.orange : COLORS.cyan;
+    const myColor = mode === 'coop' ? (this.mySlot === 1 ? COLORS.orange : COLORS.cyan) : COLORS.pink;
     this.player = new Player(this.scene, this.course, this.effects, {
-      color: this.myRole ? roleColor : COLORS.pink,
+      color: myColor,
       accent: COLORS.yellow,
-      role: this.myRole,
       sfx: this.sfx,
       onCheckpoint: index => this.ui.checkpoint(index, this.course.spec.segmentCount),
       onRespawn: checkpoint => {
@@ -489,10 +489,10 @@ class Game {
       onFinish: () => this.localFinish()
     });
 
-    if (this.myRole) {
-      const start = coopSpawnFor(this.course.spec, 0, this.myRole);
+    if (mode === 'coop') {
+      const start = coopSpawnFor(this.course.spec, 0, this.mySlot);
       this.player.teleport(new THREE.Vector3(start.x, start.y, start.z));
-      this.ui.coopIntro(this.course.spec, this.myRole);
+      this.ui.coopIntro(this.course.spec);
     }
     this.cameraController.reset(this.player, true);
     this.ui.show();
@@ -567,13 +567,12 @@ class Game {
         id,
         new Player(this.scene, this.course, this.effects, {
           remote: true,
-          role: this.roles?.[id] || null,
           color:
-            this.roles?.[id] === COOP_ROLE.ANCHOR
-              ? COLORS.orange
-              : this.roles?.[id] === COOP_ROLE.SPARK
-                ? COLORS.cyan
-                : info?.color || COLORS.cyan,
+            this.mode === 'coop'
+              ? this.slots?.[id] === 1
+                ? COLORS.orange
+                : COLORS.cyan
+              : info?.color || COLORS.cyan,
           accent: COLORS.yellow,
           name: info?.name || 'Wobbler'
         })
@@ -752,7 +751,6 @@ class Game {
     if (this.player && this.net) {
       actors.push({
         id: this.net.id,
-        role: this.myRole,
         position: this.player.position,
         velocity: this.player.velocity,
         grounded: this.player.grounded,
@@ -762,7 +760,6 @@ class Game {
     for (const [id, remote] of this.remotes) {
       actors.push({
         id,
-        role: this.roles?.[id] || null,
         position: remote.position,
         velocity: remote.velocity,
         grounded: false,
@@ -772,20 +769,11 @@ class Game {
     return actors;
   }
 
-  // Действия, зависящие от роли. Обе повешены на ту же кнопку, что и рывок: на телефоне нельзя
-  // множить кнопки, а смысл действия и так однозначен из роли.
+  // Кооперативные действия. Удар сверху повешен на ту же кнопку, что и рывок: на телефоне нельзя
+  // множить кнопки, а на земле и в воздухе смысл нажатия и так разный.
   updateRoleActions() {
     if (this.mode !== 'coop' || !this.player) return;
     updateRoleActions(this.player, this.course, this.input, this.cameraController.yaw, {
-      role: this.myRole,
-      forward: this._forward,
-      onBeamChange: aimed => {
-        this.course.setBeam(this.net.id, aimed);
-        this.net?.sendCoopEvent('beam', { objectId: aimed || undefined });
-        if (aimed) this.sfx.beamStart();
-        else this.sfx.beamStop();
-      },
-      onBeamHold: () => this.sfx.beamHold(),
       onSlam: () => {
         this.sfx.slam();
         this.cameraController.addShake(0.3);
@@ -811,10 +799,6 @@ class Game {
 
   receiveCoopEvent(message) {
     if (!this.course || this.mode !== 'coop') return;
-    if (message.action === 'beam') {
-      this.course.setBeam(message.from, message.objectId || null);
-      return;
-    }
     if (message.action === 'launch' && message.target === this.net?.id) {
       this.player?.applyLaunch(message.vector);
       this.sfx.catapult();
@@ -862,7 +846,7 @@ class Game {
       // Подсказка обучения — после пересчёта состояния: решённая задача должна убрать её
       // в том же кадре, а не в следующем.
       const lesson = this.course.activeLesson(actors);
-      this.ui.coopLesson(lesson ? lesson[this.myRole] || lesson.spark : null, this.myRole);
+      this.ui.coopLesson(lesson ? lesson.text : null);
     }
     // Упавший ждёт напарника и не управляется.
     if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
@@ -921,15 +905,6 @@ class Game {
       }
       this.updateRemotes(frameDt);
 
-      if (this.mode === 'coop' && this.course.renderBeams) {
-        const sources = new Map();
-        for (const [id, emitterId] of this.course.activeBeams) {
-          const holder =
-            id === this.net?.id ? this.player.visualPosition : this.remotes.get(id)?.visualPosition;
-          if (holder) sources.set(emitterId, holder);
-        }
-        this.course.renderBeams(sources);
-      }
       this.cameraController.update(frameDt, this.player, this.input, this.course, this.partnerPosition());
       this.updateShadow(this.player.visualPosition);
       this.updateAudioScene();

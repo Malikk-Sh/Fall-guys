@@ -17,7 +17,6 @@ import {
   coopSpawnFor,
   getChapter
 } from '../shared/coopChapters.js';
-import { COOP_ROLE } from '../shared/protocol.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
 
 const build = id => new CoopCourse(new THREE.Scene(), coopSpec(id), { quality: 'low' });
@@ -63,10 +62,10 @@ test('отрезки не накладываются друг на друга', 
 });
 
 test('в каждой главе есть участок, непроходимый в одиночку', () => {
-  // Управляемые пролёты (плиты, луч, синхронность) — это и есть преграды, требующие напарника.
+  // Управляемые пролёты (плиты, синхронность) — это и есть преграды, требующие напарника.
   for (const chapter of COOP_CHAPTERS) {
     const { pieces } = chapterLayout(chapter.id);
-    const coopSpans = pieces.filter(p => ['gateSpan', 'beamSpan', 'syncSpan'].includes(p.kind));
+    const coopSpans = pieces.filter(p => ['gateSpan', 'syncSpan'].includes(p.kind));
     assert.ok(coopSpans.length > 0, `${chapter.id}: нет ни одной кооперативной преграды`);
 
     // И каждая такая преграда должна быть шире любого одиночного прыжка.
@@ -79,7 +78,7 @@ test('в каждой главе есть участок, непроходимы
   }
 });
 
-test('каждая объявленная плита кем-то используется, каждый мост к чему-то привязан', () => {
+test('каждая объявленная плита кем-то используется', () => {
   // Проверка в обе стороны: нет ссылок на несуществующие объекты и нет объектов, ни на что не
   // влияющих. Второе особенно коварно — забытая плита выглядит рабочей, игрок на неё встаёт,
   // и ничего не происходит.
@@ -90,33 +89,23 @@ test('каждая объявленная плита кем-то использ�
   for (const chapter of COOP_CHAPTERS) {
     const { pieces } = chapterLayout(chapter.id);
     const declaredPlates = new Set();
-    const declaredEmitters = new Set();
     for (const piece of pieces) {
       for (const prop of piece.props || []) {
         if (prop.type === 'plate') declaredPlates.add(prop.id);
-        if (prop.type === 'emitter') declaredEmitters.add(prop.id);
       }
     }
 
     const usedPlates = new Set();
-    const usedEmitters = new Set();
     for (const piece of pieces) {
       for (const id of piece.requires || []) usedPlates.add(id);
       if (piece.latch) usedPlates.add(piece.latch);
-      if (piece.emitter) usedEmitters.add(piece.emitter);
     }
 
     for (const id of usedPlates) {
       assert.ok(declaredPlates.has(id), `${chapter.id}: ссылка на несуществующую плиту ${id}`);
     }
-    for (const id of usedEmitters) {
-      assert.ok(declaredEmitters.has(id), `${chapter.id}: ссылка на несуществующий излучатель ${id}`);
-    }
     for (const id of declaredPlates) {
       assert.ok(usedPlates.has(id), `${chapter.id}: плита ${id} ни на что не влияет`);
-    }
-    for (const id of declaredEmitters) {
-      assert.ok(usedEmitters.has(id), `${chapter.id}: излучатель ${id} ни к чему не ведёт`);
     }
   }
 });
@@ -127,20 +116,20 @@ test('все пять глав строятся без ошибок и дают 
     assert.ok(course.platforms.length > 5, `${chapter.id}: слишком мало опор`);
     assert.ok(course.materials.size < 40, `${chapter.id}: кэш материалов не работает`);
     // Старт должен стоять на твёрдом полу, иначе игра начинается с падения.
-    const start = coopSpawnFor(coopSpec(chapter.id), 0, COOP_ROLE.SPARK);
+    const start = coopSpawnFor(coopSpec(chapter.id), 0, 0);
     const ground = course.surfaceAt(new THREE.Vector3(start.x, start.y, start.z), start.y + 1, -1);
     assert.ok(ground, `${chapter.id}: под точкой старта нет пола`);
     course.dispose();
   }
 });
 
-test('роли стартуют в разных точках, но на одном полу', () => {
+test('игроки стартуют в разных точках, но на одном полу', () => {
   const spec = coopSpec('ch1');
-  const spark = coopSpawnFor(spec, 0, COOP_ROLE.SPARK);
-  const anchor = coopSpawnFor(spec, 0, COOP_ROLE.ANCHOR);
+  const first = coopSpawnFor(spec, 0, 0);
+  const second = coopSpawnFor(spec, 0, 1);
   // Совпадающие точки старта означали бы, что персонажи выталкивают друг друга на первом же кадре.
-  assert.notEqual(spark.x, anchor.x);
-  assert.equal(spark.z, anchor.z);
+  assert.notEqual(first.x, second.x);
+  assert.equal(first.z, second.z);
 });
 
 // Ворота работают в три такта, как и световой мост: держащий стоит на плите, переходящий идёт,
@@ -152,9 +141,9 @@ test('ворота проходятся в три такта и закрепля
   assert.equal(span.active, false, 'изначально пролёт убран');
   assert.equal(span.platform.disabled, true, 'убранный пролёт не должен держать');
 
-  const onPlate = (id, role = COOP_ROLE.SPARK) => {
+  const onPlate = (id, role = 0) => {
     const plate = course.plates.get(id);
-    return { id: role, role, position: new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z) };
+    return { id: role, position: new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z) };
   };
 
   // Такт первый: держащий встал — пролёт появился.
@@ -168,7 +157,7 @@ test('ворота проходятся в три такта и закрепля
   assert.equal(course.spans.get('g1').active, false, 'без фиксатора пролёт держится только плитой');
 
   // Такт второй и третий: держащий снова на плите, второй перешёл и встал на фиксатор.
-  course.updateCoop([holder, onPlate('p2', COOP_ROLE.ANCHOR)], 0);
+  course.updateCoop([holder, onPlate('p2', 'b')], 0);
   assert.equal(course.spans.get('g1').latched, true, 'фиксатор должен закрепить пролёт');
 
   // И теперь держащий может сойти: пролёт остаётся, и он проходит следом.
@@ -181,67 +170,11 @@ test('ворота проходятся в три такта и закрепля
   course.dispose();
 });
 
-test('тяжёлую плиту продавливает только ГРУЗ', () => {
-  const course = build('ch1');
-  const heavy = course.plates.get('p3');
-  assert.equal(heavy.role, COOP_ROLE.ANCHOR, 'p3 задумана как тяжёлая');
-  const at = role => [{ id: role, role, position: new THREE.Vector3(heavy.x, heavy.baseY + 0.48, heavy.z) }];
-
-  course.updateCoop(at(COOP_ROLE.SPARK), 0);
-  assert.equal(course.plates.get('p3').pressed, false, 'лёгкая ИСКРА не должна продавливать');
-
-  course.updateCoop(at(COOP_ROLE.ANCHOR), 0);
-  assert.equal(course.plates.get('p3').pressed, true, 'ГРУЗ должен продавливать');
-  course.dispose();
-});
-
 test('плита не срабатывает от пролетающего сверху игрока', () => {
   const course = build('ch1');
   const plate = course.plates.get('p1');
-  course.updateCoop(
-    [{ id: 'a', role: COOP_ROLE.SPARK, position: new THREE.Vector3(plate.x, plate.baseY + 5, plate.z) }],
-    0
-  );
+  course.updateCoop([{ id: 'a', position: new THREE.Vector3(plate.x, plate.baseY + 5, plate.z) }], 0);
   assert.equal(course.plates.get('p1').pressed, false, 'над плитой — не значит на плите');
-  course.dispose();
-});
-
-test('световой мост существует ровно пока держат луч', () => {
-  const course = build('ch3');
-  const span = course.spans.get('b1');
-  assert.equal(span.active, false);
-
-  course.setBeam('игрок-искра', 'e1');
-  course.updateCoop([], 0);
-  assert.equal(course.spans.get('b1').active, true, 'луч наведён — мост есть');
-
-  course.setBeam('игрок-искра', null);
-  course.updateCoop([], 0);
-  assert.equal(course.spans.get('b1').active, false, 'луч убран — мост исчез');
-  course.dispose();
-});
-
-test('луч наводится по конусу взгляда, а не по точному попаданию', () => {
-  const course = build('ch3');
-  const emitter = course.emitters.get('e1');
-  const from = emitter.position.clone().add(new THREE.Vector3(0, -2, 10));
-
-  const towards = emitter.position.clone().sub(from).normalize();
-  assert.equal(course.aimedEmitter(from, towards), 'e1', 'взгляд прямо на излучатель');
-
-  // Небольшое отклонение прощается — целиться в пиксель на телефоне невозможно.
-  const slightlyOff = towards
-    .clone()
-    .applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.25)
-    .normalize();
-  assert.equal(course.aimedEmitter(from, slightlyOff), 'e1', 'небольшое отклонение должно прощаться');
-
-  // Отвернулся — наводки нет.
-  assert.equal(course.aimedEmitter(from, towards.clone().negate()), null, 'спиной наводить нельзя');
-
-  // Слишком далеко — тоже нет.
-  const faraway = emitter.position.clone().add(new THREE.Vector3(0, 0, 200));
-  assert.equal(course.aimedEmitter(faraway, towards), null, 'вне дальности луча');
   course.dispose();
 });
 
@@ -249,7 +182,7 @@ test('ворота синхронности не обмануть проходо
   const course = build('ch5');
   const span = course.spans.get('s1');
   const line = span.z + span.length / 2;
-  const at = id => ({ id, role: COOP_ROLE.SPARK, position: new THREE.Vector3(0, 1.5, line) });
+  const at = id => ({ id, position: new THREE.Vector3(0, 1.5, line) });
 
   // Один у черты — ворота закрыты.
   course.updateCoop([at('a')], 1000);
@@ -263,28 +196,6 @@ test('ворота синхронности не обмануть проходо
   const now = 50_000;
   course.updateCoop([at('a'), at('b')], now);
   assert.equal(course.spans.get('s1').active, true, 'одновременный проход должен открывать ворота');
-  course.dispose();
-});
-
-test('ветер сносит ИСКРУ и не трогает ГРУЗ', () => {
-  const course = build('ch4');
-  const zone = course.winds[0];
-  assert.ok(zone, 'в четвёртой главе должен быть ветер');
-
-  const make = role => ({
-    role,
-    position: new THREE.Vector3(0, 1.5, (zone.zMin + zone.zMax) / 2),
-    velocity: new THREE.Vector3()
-  });
-
-  const spark = make(COOP_ROLE.SPARK);
-  const anchor = make(COOP_ROLE.ANCHOR);
-  for (let i = 0; i < 30; i++) {
-    course.interact(spark, i / 60, null, null);
-    course.interact(anchor, i / 60, null, null);
-  }
-  assert.ok(Math.abs(spark.velocity.x) > 0.5, 'ИСКРУ должно сносить');
-  assert.equal(anchor.velocity.x, 0, 'ГРУЗ должен стоять твёрдо');
   course.dispose();
 });
 
@@ -310,12 +221,10 @@ test('подбрасывает того, кто стоит на длинном �
   const catapult = course.catapults[0];
   const rider = {
     id: 'искра',
-    role: COOP_ROLE.SPARK,
     position: new THREE.Vector3(catapult.x, 1.4, catapult.launchZ)
   };
   const bystander = {
     id: 'груз',
-    role: COOP_ROLE.ANCHOR,
     position: new THREE.Vector3(catapult.x, 1.4, catapult.slamZ)
   };
 
@@ -331,7 +240,7 @@ test('подбрасывает того, кто стоит на длинном �
 test('точки возрождения стоят за пройденной аркой', () => {
   const spec = coopSpec('ch1');
   for (let cp = 1; cp <= spec.segmentCount; cp++) {
-    const point = coopSpawnFor(spec, cp, COOP_ROLE.ANCHOR);
+    const point = coopSpawnFor(spec, cp, 1);
     // Возрождение должно быть ЗА аркой по ходу движения, иначе игрок сразу пересечёт её снова
     // и счётчик чекпоинтов пойдёт вразнос.
     assert.ok(point.z < spec.checkpoints[cp - 1], `чекпоинт ${cp}: возрождение перед аркой, а не за ней`);
@@ -366,34 +275,6 @@ test('у каждого светового моста есть фиксатор 
   }
 });
 
-test('фиксатор закрепляет мост навсегда, а луч — только пока его держат', () => {
-  const course = build('ch3');
-  const span = course.spans.get('b1');
-  const latch = course.plates.get(span.latch);
-
-  // Пока держат луч — мост есть, отпустили — исчез.
-  course.setBeam('искра', 'e1');
-  course.updateCoop([], 0);
-  assert.equal(course.spans.get('b1').active, true);
-  course.setBeam('искра', null);
-  course.updateCoop([], 0);
-  assert.equal(course.spans.get('b1').active, false);
-
-  // ГРУЗ встал на фиксатор.
-  const anchorOnLatch = {
-    id: 'груз',
-    role: COOP_ROLE.ANCHOR,
-    position: new THREE.Vector3(latch.x, latch.baseY + 0.48, latch.z)
-  };
-  course.updateCoop([anchorOnLatch], 0);
-  assert.equal(course.spans.get('b1').active, true, 'фиксатор должен закрепить мост');
-
-  // И даже когда ГРУЗ сошёл, мост остаётся: иначе ИСКРА не перейдёт.
-  course.updateCoop([], 0);
-  assert.equal(course.spans.get('b1').active, true, 'закреплённый мост не должен исчезать');
-  course.dispose();
-});
-
 // Обучение — тоже данные, и портится оно так же тихо, как геометрия: достаточно переименовать
 // пролёт или удлинить отрезок, и подсказка либо начнёт ссылаться в пустоту, либо появится не там.
 // Ни то, ни другое не уронит игру — она просто перестанет учить.
@@ -412,7 +293,7 @@ test('уроки ссылаются на существующие объекты
     let previousZ = Infinity;
     for (const item of spec.lessons) {
       const where = `${chapter.id}/${item.id}`;
-      assert.ok(item.spark && item.anchor, `${where}: у обеих ролей должен быть свой текст`);
+      assert.ok(item.text, `${where}: у урока должен быть текст`);
       assert.ok(
         item.z <= previousZ,
         `${where}: уроки должны идти вдоль трассы по порядку, иначе поздний перекроет ранний`
@@ -450,10 +331,11 @@ test('урок уходит с экрана, как только задача р
   };
   const holdZ = course.plates.get('p1').z;
 
-  // Никто ещё не встал на плиту — пролёта нет, урок висит.
+  // Никто ещё не встал на плиту — пролёта нет, урок висит. Плиты стоят по краям дорожки,
+  // поэтому «между ними» — это центр.
   const waiting = [
-    { id: 'a', role: COOP_ROLE.SPARK, position: new THREE.Vector3(3, 1, holdZ) },
-    { id: 'b', role: COOP_ROLE.ANCHOR, position: new THREE.Vector3(-3, 1, holdZ) }
+    { id: 'a', position: new THREE.Vector3(0, 1, holdZ) },
+    { id: 'b', position: new THREE.Vector3(0.5, 1, holdZ) }
   ];
   course.updateCoop(waiting, 0);
   assert.equal(course.activeLesson(waiting)?.id, together.id, 'пока задача не решена, урок держится');
@@ -484,7 +366,18 @@ test('каждая механика объясняется ровно один �
 
   // Механики, которые невозможно вывести из вида уровня, обязаны быть объяснены. Список ведётся
   // руками намеренно: добавили новую механику — придётся сюда заглянуть и решить, учить ли её.
-  for (const id of ['roles', 'together', 'heavy', 'catapult', 'beam', 'latch', 'wind', 'sync']) {
+  for (const id of [
+    'together',
+    'gateLatch',
+    'solo',
+    'catapult',
+    'conveyor',
+    'pendulum',
+    'fan',
+    'collapsing',
+    'crusher',
+    'sync'
+  ]) {
     assert.ok(taught.has(id), `механика «${id}» нигде не объясняется`);
   }
 });
@@ -512,8 +405,10 @@ test('урок стоит в главе, где его механика впер
 
   for (const [lessonId, kind] of [
     ['catapult', 'catapult'],
-    ['beam', 'beamSpan'],
-    ['wind', 'wind'],
+    ['conveyor', 'conveyor'],
+    ['pendulum', 'pendulum'],
+    ['fan', 'fan'],
+    ['crusher', 'crusher'],
     ['sync', 'syncSpan']
   ]) {
     assert.equal(
@@ -535,8 +430,8 @@ test('усвоенный урок не возвращается, когда ус
   };
 
   const holding = [
-    { id: 'a', role: COOP_ROLE.SPARK, position: at('p1') },
-    { id: 'b', role: COOP_ROLE.ANCHOR, position: new THREE.Vector3(3, 1, course.plates.get('p1').z) }
+    { id: 'a', position: at('p1') },
+    { id: 'b', position: new THREE.Vector3(3, 1, course.plates.get('p1').z) }
   ];
   course.updateCoop(holding, 0);
   course.activeLesson(holding);
@@ -630,7 +525,9 @@ test('нет пропастей, которые нечем перейти', () =
 
   for (const chapter of COOP_CHAPTERS) {
     const { pieces } = chapterLayout(chapter.id);
-    const solid = pieces.filter(p => p.kind === 'floor' || p.kind === 'movingSpan').sort((a, b) => b.z - a.z);
+    const solid = pieces
+      .filter(p => p.kind === 'floor' || p.kind === 'movingSpan' || p.kind === 'collapsing')
+      .sort((a, b) => b.z - a.z);
     const spans = pieces.filter(p => p.kind.endsWith('Span') && p.kind !== 'movingSpan');
 
     for (let i = 1; i < solid.length; i++) {

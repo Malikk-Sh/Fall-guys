@@ -1153,9 +1153,6 @@ canvas {
 }
 
 /* Роль в HUD. */
-#roleBox strong {
-  font-size: 0.8rem;
-}
 
 /* Указатель на напарника. Держится у края экрана и всегда смотрит в его сторону. */
 .partner-hud {
@@ -1336,12 +1333,6 @@ canvas {
   box-shadow: 0 10px 28px rgba(20, 12, 48, 0.4);
   backdrop-filter: blur(8px);
   animation: lesson-in 0.32s ease-out;
-}
-.coop-lesson-role {
-  font-size: 8px;
-  font-weight: 950;
-  letter-spacing: 0.16em;
-  color: var(--cyan);
 }
 .coop-lesson p {
   margin: 0;

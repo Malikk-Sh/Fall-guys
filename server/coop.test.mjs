@@ -382,3 +382,115 @@ test('фиксатор закрепляет мост навсегда, а луч
   assert.equal(course.spans.get('b1').active, true, 'закреплённый мост не должен исчезать');
   course.dispose();
 });
+
+// Обучение — тоже данные, и портится оно так же тихо, как геометрия: достаточно переименовать
+// пролёт или удлинить отрезок, и подсказка либо начнёт ссылаться в пустоту, либо появится не там.
+// Ни то, ни другое не уронит игру — она просто перестанет учить.
+test('уроки первой главы ссылаются на существующие объекты и стоят в правильном порядке', () => {
+  const spec = coopSpec('ch1');
+  const { pieces } = chapterLayout('ch1');
+
+  assert.ok(spec.lessons.length >= 3, 'обучающая глава без уроков не обучает');
+
+  const plateIds = new Set();
+  const spanIds = new Set();
+  for (const piece of pieces) {
+    if (piece.id) spanIds.add(piece.id);
+    for (const prop of piece.props || []) if (prop.type === 'plate') plateIds.add(prop.id);
+  }
+
+  let previousZ = Infinity;
+  for (const item of spec.lessons) {
+    assert.ok(item.spark && item.anchor, `${item.id}: у обеих ролей должен быть свой текст`);
+    assert.ok(
+      item.z <= previousZ,
+      `${item.id}: уроки должны идти вдоль трассы по порядку, иначе поздний перекроет ранний`
+    );
+    previousZ = item.z;
+
+    assert.ok(item.z <= 14, `${item.id}: урок не может появляться до начала главы`);
+    assert.ok(item.z > spec.finishZ, `${item.id}: урок не может появляться после финиша`);
+
+    if (item.done.span) {
+      assert.ok(spanIds.has(item.done.span), `${item.id}: ссылка на несуществующий пролёт`);
+    }
+    if (item.done.plates) {
+      for (const id of item.done.plates) {
+        assert.ok(plateIds.has(id), `${item.id}: ссылка на несуществующую плиту ${id}`);
+      }
+    }
+    if (item.done.past !== undefined) {
+      assert.equal(typeof item.done.past, 'number', `${item.id}: отметка должна разрешиться в число`);
+    }
+  }
+});
+
+test('урок уходит с экрана, как только задача решена', () => {
+  const course = build('ch1');
+  const spec = coopSpec('ch1');
+  const together = spec.lessons.find(item => item.done.span === 'g1');
+  assert.ok(together, 'урок про совместные плиты должен существовать');
+
+  // Пара дошла до плит: урок виден.
+  const at = id => {
+    const plate = course.plates.get(id);
+    return new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z);
+  };
+  const spark = { id: 'a', role: COOP_ROLE.SPARK, position: at('p1') };
+  const anchor = { id: 'b', role: COOP_ROLE.ANCHOR, position: at('p2') };
+
+  // Сначала только один на плите — пролёта нет, урок висит.
+  const alone = [spark, { ...anchor, position: new THREE.Vector3(0, 1, spark.position.z) }];
+  course.updateCoop(alone, 0);
+  assert.equal(course.activeLesson(alone)?.id, together.id, 'пока задача не решена, урок держится');
+
+  // Встали вдвоём — пролёт выдвинулся, урок больше не нужен.
+  const both = [spark, anchor];
+  course.updateCoop(both, 0);
+  assert.equal(course.spans.get('g1').active, true);
+  assert.notEqual(course.activeLesson(both)?.id, together.id, 'решённая задача убирает подсказку');
+  course.dispose();
+});
+
+test('в остальных главах обучения нет', () => {
+  for (const chapter of COOP_CHAPTERS.slice(1)) {
+    assert.equal(
+      coopSpec(chapter.id).lessons.length,
+      0,
+      `${chapter.id}: подсказки нужны только в первой главе, дальше они мешают`
+    );
+  }
+});
+
+// Найдено при живой проверке в двух браузерах: пара решала первую задачу, переходила по пролёту —
+// и подсказка «встаньте на плиты» возвращалась, потому что сойдя с плит они убрали пролёт, а
+// условие проверялось как текущее состояние. Усвоенное не разучивается обратно.
+test('усвоенный урок не возвращается, когда условие перестаёт выполняться', () => {
+  const course = build('ch1');
+  const at = id => {
+    const plate = course.plates.get(id);
+    return new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z);
+  };
+
+  const both = [
+    { id: 'a', role: COOP_ROLE.SPARK, position: at('p1') },
+    { id: 'b', role: COOP_ROLE.ANCHOR, position: at('p2') }
+  ];
+  course.updateCoop(both, 0);
+  course.activeLesson(both);
+  assert.ok(course.learned.has('together'), 'решённая задача должна запомниться');
+
+  // Пара перешла по пролёту и сошла с плит: пролёт убрался, состояние вернулось в исходное.
+  const crossed = both.map(actor => ({
+    ...actor,
+    position: new THREE.Vector3(actor.position.x, actor.position.y, course.spans.get('g1').z - 10)
+  }));
+  course.updateCoop(crossed, 0);
+  assert.equal(course.spans.get('g1').active, false, 'без плит пролёт действительно убирается');
+  assert.notEqual(
+    course.activeLesson(crossed)?.id,
+    'together',
+    'подсказка про плиты не должна возвращаться тем, кто уже на той стороне'
+  );
+  course.dispose();
+});

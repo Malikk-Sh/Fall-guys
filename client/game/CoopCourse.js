@@ -51,6 +51,8 @@ export class CoopCourse extends CourseBuilder {
     this.activeBeams = new Map();
     // Отметки пересечения черты синхронности: id ворот → { playerId: время }.
     this.syncCrossings = new Map();
+    // Уроки, которые уже усвоены. Однажды понятое не разучивается обратно.
+    this.learned = new Set();
 
     this._tmp = new THREE.Vector3();
     this.build();
@@ -445,6 +447,44 @@ export class CoopCourse extends CourseBuilder {
     const spread = Math.max(...times) - Math.min(...times);
     const fresh = times.every(t => nowMs - t < span.windowMs);
     return fresh && spread < span.windowMs;
+  }
+
+  // --- Обучение ------------------------------------------------------------------------------
+  //
+  // Какой урок показывать сейчас. Берётся ПОСЛЕДНИЙ из достигнутых и ещё не усвоенных: если игрок
+  // подошёл к следующей задаче, не разобравшись с прошлой подсказкой, актуальна следующая —
+  // висящая позади уже не помогает, а мешает.
+  //
+  // Условие усвоения выводится из того же состояния, что и сами механики, поэтому обучение не
+  // требует ни одного дополнительного сетевого сообщения и одинаково у обоих игроков.
+  activeLesson(actors) {
+    const lessons = this.spec.lessons;
+    if (!lessons?.length || !actors.length) return null;
+    // Ведущий игрок: подсказка появляется, когда до задачи дошёл хотя бы один.
+    const lead = Math.min(...actors.map(actor => actor.position.z));
+    let found = null;
+    for (const item of lessons) {
+      if (lead > item.z) continue;
+      if (this.learned.has(item.id)) continue;
+      if (this.lessonDone(item.done, actors)) {
+        this.learned.add(item.id);
+        continue;
+      }
+      found = item;
+    }
+    return found;
+  }
+
+  // Условие `done` описывает МОМЕНТ, когда стало понятно, а не состояние, которое надо удерживать.
+  // Разница существенная: пролёт выдвинут, только пока обе плиты нажаты, и пара, перешедшая по
+  // нему, сходит с плит — состояние возвращается в исходное. Без запоминания подсказка «встаньте
+  // на плиты» вернулась бы игрокам, которые уже стоят на той стороне.
+  lessonDone(done, actors) {
+    if (done.span) return !!this.spans.get(done.span)?.active;
+    if (done.plates) return done.plates.every(id => this.plates.get(id)?.pressed);
+    // Отметку должны пройти оба: иначе подсказка исчезнет для того, кто ещё не перебрался.
+    if (typeof done.past === 'number') return actors.every(actor => actor.position.z < done.past);
+    return false;
   }
 
   setSpanActive(span, active, sfx = null) {

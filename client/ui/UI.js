@@ -8,6 +8,7 @@ export class UI {
     this.mode = 'single';
     this.quality = 'auto';
     this.toastTimer = 0;
+    this.lessonText = null;
     this.elements = {
       menu: $('#menu'),
       lobby: $('#lobby'),
@@ -97,6 +98,27 @@ export class UI {
     clearTimeout(this.introTimer);
     this.introTimer = setTimeout(() => intro.classList.add('hidden'), 5200);
     $('#roleName').textContent = role === 'anchor' ? 'ГРУЗ' : 'ИСКРА';
+  }
+
+  // Обучающая подсказка первой главы. Показывает текст своей роли и держится, пока задача
+  // не решена, — в отличие от карточки главы, которая исчезает по таймеру.
+  //
+  // Перерисовываем только при смене текста: элемент обновляется каждый кадр, а трогать DOM
+  // шестьдесят раз в секунду ради одной и той же строки незачем.
+  coopLesson(text, role) {
+    const node = $('#coopLesson');
+    if (!text) {
+      if (this.lessonText !== null) {
+        this.lessonText = null;
+        node.classList.add('hidden');
+      }
+      return;
+    }
+    if (this.lessonText === text) return;
+    this.lessonText = text;
+    $('#coopLessonRole').textContent = role === 'anchor' ? 'ГРУЗ' : 'ИСКРА';
+    $('#coopLessonText').textContent = text;
+    node.classList.remove('hidden');
   }
 
   // Указатель на напарника. Пока он в кадре — стрелка не нужна и только мешала бы;
@@ -228,6 +250,7 @@ export class UI {
     $('#roleBox').classList.toggle('hidden', !coop);
     if (!on || !coop) $('#partnerHud').classList.add('hidden');
     if (!on) $('#coopIntro').classList.add('hidden');
+    if (!on || !coop) this.coopLesson(null);
   }
   updateHud({ time, checkpoint, total, progress, stage, place, link }) {
     $('#timer').textContent = formatTime(time);

@@ -1314,3 +1314,53 @@ canvas {
   color: #ffd8e6;
   border-color: rgba(255, 79, 145, 0.45);
 }
+
+/* Обучающая подсказка первой главы. Держится, пока задача не решена, поэтому размещена внизу,
+   где не перекрывает ни трассу впереди, ни указатель на напарника. */
+.coop-lesson {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(112px + var(--safe-bottom));
+  z-index: 7;
+  pointer-events: none;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  max-width: min(88vw, 460px);
+  padding: 10px 16px;
+  border-radius: 14px;
+  text-align: center;
+  background: rgba(38, 22, 83, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  box-shadow: 0 10px 28px rgba(20, 12, 48, 0.4);
+  backdrop-filter: blur(8px);
+  animation: lesson-in 0.32s ease-out;
+}
+.coop-lesson-role {
+  font-size: 8px;
+  font-weight: 950;
+  letter-spacing: 0.16em;
+  color: var(--cyan);
+}
+.coop-lesson p {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+@keyframes lesson-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coop-lesson {
+    animation: none;
+  }
+}

@@ -878,6 +878,10 @@ class Game {
       this.course.updateCoop(actors, this.raceNow(), this.sfx);
       this.updateRoleActions();
       this.tryRevivePartner();
+      // Подсказка обучения — после пересчёта состояния: решённая задача должна убрать её
+      // в том же кадре, а не в следующем.
+      const lesson = this.course.activeLesson(actors);
+      this.ui.coopLesson(lesson ? lesson[this.myRole] || lesson.spark : null, this.myRole);
     }
     // Упавший ждёт напарника и не управляется.
     if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);

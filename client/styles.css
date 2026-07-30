@@ -1129,3 +1129,101 @@ canvas {
     display: none;
   }
 }
+
+/* Кооперативный режим. Вкладка выделена намеренно: это витрина проекта, и она должна
+   притягивать взгляд раньше остальных. */
+.mode-tab-hero {
+  background: linear-gradient(120deg, rgba(255, 79, 145, 0.85), rgba(72, 220, 218, 0.85));
+  color: #241056;
+}
+.coop-lead {
+  font-size: 0.76rem;
+  line-height: 1.45;
+  opacity: 0.85;
+  margin: 0 0 10px;
+}
+.coop-lead b {
+  color: #ffd94b;
+}
+.coop-hint {
+  font-size: 0.72rem;
+  opacity: 0.7;
+  margin: -2px 0 10px;
+  min-height: 2.2em;
+}
+
+/* Роль в HUD. */
+#roleBox strong {
+  font-size: 0.8rem;
+}
+
+/* Указатель на напарника. Держится у края экрана и всегда смотрит в его сторону. */
+.partner-hud {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  z-index: 6;
+  transition: opacity 0.2s;
+}
+.partner-arrow {
+  width: 0;
+  height: 0;
+  border-left: 11px solid transparent;
+  border-right: 11px solid transparent;
+  border-bottom: 18px solid #48dcda;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+}
+.partner-hud[data-state='down'] .partner-arrow {
+  border-bottom-color: #ff4f91;
+}
+.partner-hud span {
+  font-size: 0.6rem;
+  letter-spacing: 0.09em;
+  background: rgba(38, 22, 83, 0.72);
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Заставка главы: название и подсказка перед стартом. */
+.coop-intro {
+  position: fixed;
+  left: 50%;
+  top: 26%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  z-index: 7;
+  animation: coop-intro-in 0.5s ease-out both;
+}
+.coop-intro h2 {
+  margin: 2px 0 6px;
+  font-size: clamp(1.6rem, 6vw, 2.6rem);
+  letter-spacing: 0.04em;
+}
+.coop-intro p {
+  margin: 0;
+  font-size: 0.82rem;
+  opacity: 0.88;
+  max-width: min(90vw, 460px);
+}
+@keyframes coop-intro-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .coop-intro {
+    animation: none;
+  }
+}

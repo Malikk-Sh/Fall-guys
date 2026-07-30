@@ -38,6 +38,67 @@ export class UI {
     });
     $('#single').classList.toggle('hidden', mode !== 'single');
     $('#multi').classList.toggle('hidden', mode !== 'multi');
+    $('#coop').classList.toggle('hidden', mode !== 'coop');
+  }
+
+  // Список глав в меню кооператива.
+  fillChapters(chapters, onChange) {
+    const select = $('#coopChapter');
+    select.replaceChildren();
+    for (const chapter of chapters) {
+      const option = document.createElement('option');
+      option.value = chapter.id;
+      option.textContent = `${chapter.title} — ${chapter.subtitle}`;
+      select.append(option);
+    }
+    const apply = () => {
+      const chapter = chapters.find(item => item.id === select.value) || chapters[0];
+      $('#coopHint').textContent = chapter.hint;
+      onChange?.(chapter);
+    };
+    select.addEventListener('change', apply);
+    apply();
+  }
+
+  coopName() {
+    return ($('#coopName').value.trim() || 'Wobbler').slice(0, 16);
+  }
+
+  coopChapter() {
+    return $('#coopChapter').value;
+  }
+
+  // Заставка перед стартом главы: название и что именно предстоит сделать.
+  coopIntro(spec, role) {
+    const intro = $('#coopIntro');
+    $('#coopIntroRole').textContent = role === 'anchor' ? 'ВЫ — ГРУЗ' : 'ВЫ — ИСКРА';
+    $('#coopIntroTitle').textContent = spec.title;
+    $('#coopIntroHint').textContent = spec.hint;
+    intro.classList.remove('hidden');
+    clearTimeout(this.introTimer);
+    this.introTimer = setTimeout(() => intro.classList.add('hidden'), 5200);
+    $('#roleName').textContent = role === 'anchor' ? 'ГРУЗ' : 'ИСКРА';
+  }
+
+  // Указатель на напарника. Пока он в кадре — стрелка не нужна и только мешала бы;
+  // как только уходит за край, она появляется у ближайшей границы экрана.
+  updatePartnerMarker({ screen, visible, distance, down }) {
+    const hud = $('#partnerHud');
+    if (!screen) {
+      hud.classList.add('hidden');
+      return;
+    }
+    hud.classList.toggle('hidden', visible && !down);
+    if (visible && !down) return;
+
+    const margin = 46;
+    const x = Math.max(margin, Math.min(innerWidth - margin, screen.x));
+    const y = Math.max(margin, Math.min(innerHeight - margin, screen.y));
+    hud.style.left = `${x}px`;
+    hud.style.top = `${y}px`;
+    hud.dataset.state = down ? 'down' : 'ok';
+    $('#partnerArrow').style.transform = `rotate(${Math.atan2(screen.y - y, screen.x - x) + Math.PI / 2}rad)`;
+    $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : `${Math.round(distance)} м`;
   }
   setInputMethod(method) {
     const touch = method === 'touch';
@@ -112,12 +173,16 @@ export class UI {
       list.append(row);
     }
   }
-  hud(on, { multiplayer = false, touch = false } = {}) {
+  hud(on, { multiplayer = false, touch = false, coop = false } = {}) {
     this.racing = on;
     this.elements.hud.classList.toggle('hidden', !on);
     this.elements.touch.classList.toggle('hidden', !on || !touch);
-    $('#placeBox').classList.toggle('hidden', !multiplayer);
+    // В кооперативе места нет — есть общая цель, поэтому счётчик места скрыт.
+    $('#placeBox').classList.toggle('hidden', !multiplayer || coop);
     $('#pingBox').classList.toggle('hidden', !multiplayer);
+    $('#roleBox').classList.toggle('hidden', !coop);
+    if (!on || !coop) $('#partnerHud').classList.add('hidden');
+    if (!on) $('#coopIntro').classList.add('hidden');
   }
   updateHud({ time, checkpoint, total, progress, stage, place, link }) {
     $('#timer').textContent = formatTime(time);

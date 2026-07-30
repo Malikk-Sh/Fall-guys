@@ -32,6 +32,8 @@ const {
 } = require('../shared/protocol.js');
 
 const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/validation.js');
+const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChapters.js');
+const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -292,6 +294,7 @@ const lobbyPayload = room => ({
   host: room.host,
   state: room.state,
   mode: room.mode,
+  chapterId: room.chapterId || null,
   matchId: room.matchId,
   // Оставлено для совместимости с текущим клиентом: булево «идёт ли забег».
   started: room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING,
@@ -476,6 +479,11 @@ function resume(ws, token) {
 // глава считается пройденной только вдвоём.
 function checkMatchEnd(room) {
   if (room.state !== ROOM_STATE.PLAYING) return;
+  if (room.mode === GAME_MODE.COOP) {
+    // Глава засчитывается, только когда дошли оба: одиночный финиш матч не завершает.
+    if (!coopComplete(room)) return;
+    return finishMatch(room);
+  }
   const active = [...room.players.values()].filter(player => !player.disconnectedAt);
   if (!active.length || !active.every(player => player.finished)) return;
   finishMatch(room);
@@ -591,15 +599,23 @@ wss.on('connection', (ws, req) => {
       }
       const mode = message.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
       const code = roomCode();
+      // В кооперативе «сложность» — это выбор главы: сид там ни при чём, уровни рукотворные.
+      const chapterId = COOP_CHAPTER_IDS.includes(message.difficulty)
+        ? message.difficulty
+        : COOP_CHAPTER_IDS[0];
       const room = {
         code,
         host: ws.id,
         state: ROOM_STATE.LOBBY,
         mode,
+        chapterId,
         matchId: null,
         startedAt: null,
         firstFinishAt: null,
-        spec: createCourseSpec(randomSeed(), safeDifficulty(message.difficulty)),
+        spec:
+          mode === GAME_MODE.COOP
+            ? coopSpec(chapterId)
+            : createCourseSpec(randomSeed(), safeDifficulty(message.difficulty)),
         players: new Map(),
         nextJoinOrder: 0,
         createdAt: Date.now(),
@@ -648,7 +664,14 @@ wss.on('connection', (ws, req) => {
         return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Настройки меняет только хост.');
       }
       if (message.difficulty !== undefined) {
-        room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+        if (room.mode === GAME_MODE.COOP) {
+          room.chapterId = COOP_CHAPTER_IDS.includes(message.difficulty)
+            ? message.difficulty
+            : room.chapterId;
+          room.spec = coopSpec(room.chapterId);
+        } else {
+          room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+        }
       }
       if (message.mode !== undefined && message.mode !== room.mode) {
         // Смена режима меняет вместимость: лишних игроков в коопе быть не должно.
@@ -660,6 +683,11 @@ wss.on('connection', (ws, req) => {
           );
         }
         room.mode = message.mode;
+        // Смена режима меняет и тип уровня: у кооператива главы, у гонки процедурная трасса.
+        room.spec =
+          room.mode === GAME_MODE.COOP
+            ? coopSpec(room.chapterId)
+            : createCourseSpec(randomSeed(), room.spec.difficulty || 'normal');
         assignRoles(room);
       }
       // Любое изменение настроек сбрасывает готовность: игроки согласились на другие условия.
@@ -693,7 +721,16 @@ wss.on('connection', (ws, req) => {
           finished: false,
           time: null,
           checkpoint: 0,
-          last: { ...room.spec.start, ry: 0, vx: 0, vz: 0, state: 'ground', checkpoint: 0 },
+          last: {
+            ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.role) : room.spec.start),
+            ry: 0,
+            vx: 0,
+            vz: 0,
+            state: 'ground',
+            checkpoint: 0
+          },
+          downed: false,
+          downedAt: 0,
           lastAt: room.startedAt,
           rematch: false,
           returned: false
@@ -730,10 +767,48 @@ wss.on('connection', (ws, req) => {
       return;
     }
 
+    if (message.type === C2S.COOP_EVENT) {
+      if (room.mode !== GAME_MODE.COOP) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Это действие доступно только в кооперативе.');
+      }
+      if (message.matchId && message.matchId !== room.matchId) return;
+      const result = validateCoopEvent(room, player, message);
+      // Отклонённое кооп-действие — чаще всего рассинхрон на долю секунды, а не обман,
+      // поэтому штрафа здесь нет: игрока не за что наказывать.
+      if (!result.ok) return;
+      if (result.relay) {
+        broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, ...result.relay });
+      }
+      return;
+    }
+
     if (message.type === C2S.RESPAWN) {
       const now = Date.now();
       if (now - (player.lastRespawn || 0) < 450) return;
       player.lastRespawn = now;
+      if (room.mode === GAME_MODE.COOP) {
+        // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
+        // чекпоинта, но остаётся «упавшим», пока его не поднимут.
+        markDowned(player, now);
+        const point = coopSpawnFor(room.spec, player.checkpoint, player.role);
+        player.last = {
+          ...point,
+          ry: 0,
+          vx: 0,
+          vz: 0,
+          state: 'air',
+          checkpoint: player.checkpoint,
+          id: player.id
+        };
+        player.lastAt = now;
+        broadcast(room, {
+          type: S2C.COOP_EVENT,
+          matchId: room.matchId,
+          action: 'downed',
+          target: player.id
+        });
+        return send(ws, { type: S2C.CORRECTION, position: point, reason: 'respawn' });
+      }
       const position = spawnFor(room.spec, player.checkpoint);
       player.last = {
         ...position,
@@ -840,6 +915,13 @@ const heartbeatTimer = setInterval(() => {
     for (const player of [...room.players.values()]) {
       if (player.disconnectedAt && now - player.disconnectedAt > RECONNECT_GRACE_MS) {
         dropPlayer(room, player.id);
+      }
+    }
+    if (room.state === ROOM_STATE.PLAYING && room.mode === GAME_MODE.COOP) {
+      // Упавший поднимается сам по истечении срока — иначе пара, где один отошёл от устройства,
+      // застряла бы в главе навсегда.
+      for (const id of autoRevive(room, now)) {
+        broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, action: 'revive', target: id });
       }
     }
     // Если все ушли из матча, он не должен висеть в PLAYING до истечения TTL.

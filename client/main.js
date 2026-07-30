@@ -6,6 +6,9 @@ import { Sfx } from './audio/sfx.js';
 import { Music } from './audio/Music.js';
 import { Effects } from './game/Effects.js';
 import { Course } from './game/Course.js';
+import { CoopCourse } from './game/CoopCourse.js';
+import { COOP_CHAPTERS, coopSpawnFor } from '/shared/coopChapters.js';
+import { COOP_ROLE, GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
@@ -126,6 +129,8 @@ class Game {
 
     this._shadowFocus = new THREE.Vector3();
     this._previewTarget = new THREE.Vector3();
+    this._forward = new THREE.Vector3();
+    this._marker = new THREE.Vector3();
   }
 
   // Рамка теней следует за игроком.
@@ -235,6 +240,23 @@ class Game {
       if (this.mode === 'preview') this.buildPreview(this.previewSpec);
     });
 
+    // Кооператив: выбор главы и вход в комнату.
+    this.ui.fillChapters(COOP_CHAPTERS, chapter => {
+      this.coopChapterId = chapter.id;
+    });
+    click('#coopCreate', () => {
+      const net = this.ensureNetwork();
+      net.createRoom({
+        name: this.ui.coopName(),
+        mode: GAME_MODE.COOP,
+        difficulty: this.ui.coopChapter()
+      });
+    });
+    click('#coopJoin', () => {
+      const net = this.ensureNetwork();
+      net.joinRoom({ name: this.ui.coopName(), code: $('#coopCode').value.trim().toUpperCase() });
+    });
+
     this.ui.bindAudioControls({
       volumes: this.audio.volumes,
       onChange: (bus, value) => {
@@ -257,7 +279,15 @@ class Game {
       this.ui.lobby(message, this.net.id);
     });
 
-    this.net.on('start', message => this.startRace('multi', message.spec, message.at));
+    this.net.on('start', message =>
+      this.startRace(
+        message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
+        message.spec,
+        message.at,
+        message.roles
+      )
+    );
+    this.net.on('coopEvent', message => this.receiveCoopEvent(message));
     this.net.on('finish', message => this.receiveFinish(message));
 
     this.net.on('correction', message => {
@@ -299,7 +329,11 @@ class Game {
     this.clearActors();
     this.effects?.clear();
     this.course?.dispose();
-    this.course = new Course(this.scene, spec, { quality: this.quality });
+    // Спека кооперативной главы отличается наличием chapterId: уровень собирается из данных,
+    // а не генерируется из сида.
+    this.course = spec.chapterId
+      ? new CoopCourse(this.scene, spec, { quality: this.quality })
+      : new Course(this.scene, spec, { quality: this.quality });
     this.lastSpec = this.course.spec;
   }
 
@@ -318,29 +352,44 @@ class Game {
     this.camera.lookAt(0, 1, -7);
   }
 
-  async startRace(mode, spec, startAt = Date.now() + 1900) {
+  async startRace(mode, spec, startAt = Date.now() + 1900, roles = null) {
     const token = ++this.startToken;
     this.mode = mode;
+    this.roles = roles || {};
+    this.myRole = this.roles[this.net?.id] || null;
+    this.partnerDown = false;
     this.running = false;
     this.raceComplete = false;
     this.finalTime = 0;
     this.accumulator = 0;
     this.buildCourse(spec);
 
+    // Цвет персонажа зависит от роли: игрок должен узнавать себя и напарника мгновенно.
+    const roleColor = this.myRole === COOP_ROLE.ANCHOR ? COLORS.orange : COLORS.cyan;
     this.player = new Player(this.scene, this.course, this.effects, {
-      color: COLORS.pink,
+      color: this.myRole ? roleColor : COLORS.pink,
       accent: COLORS.yellow,
+      role: this.myRole,
       sfx: this.sfx,
       onCheckpoint: index => this.ui.checkpoint(index, this.course.spec.segmentCount),
       onRespawn: checkpoint => {
-        if (mode === 'multi') this.net?.send('respawn', { checkpoint });
+        if (mode !== 'single') this.net?.send('respawn', { checkpoint });
       },
       onFinish: () => this.localFinish()
     });
 
+    if (this.myRole) {
+      const start = coopSpawnFor(this.course.spec, 0, this.myRole);
+      this.player.teleport(new THREE.Vector3(start.x, start.y, start.z));
+      this.ui.coopIntro(this.course.spec, this.myRole);
+    }
     this.cameraController.reset(this.player, true);
     this.ui.show();
-    this.ui.hud(true, { multiplayer: mode === 'multi', touch: this.input.activeMethod === 'touch' });
+    this.ui.hud(true, {
+      multiplayer: mode !== 'single',
+      coop: mode === 'coop',
+      touch: this.input.activeMethod === 'touch'
+    });
     this.input.reset();
     this.input.enabled = false;
 
@@ -363,9 +412,15 @@ class Game {
     this.ui.toast(`${courseName(this.course.spec.seed)} — ВПЕРЁД!`);
   }
 
-  // Единое «сейчас» для гонки: в сетевом режиме — оценка серверного времени, в одиночном — локальное.
+  // Сетевой ли сейчас режим. И гонка, и кооператив идут по сети и одинаково нуждаются в
+  // отправке состояния, синхронизации часов и списке удалённых игроков.
+  get online() {
+    return this.mode === 'multi' || this.mode === 'coop';
+  }
+
+  // Единое «сейчас»: в сетевом режиме — оценка серверного времени, в одиночном — локальное.
   raceNow() {
-    return this.mode === 'multi' && this.net ? this.net.serverNow() : Date.now();
+    return this.online && this.net ? this.net.serverNow() : Date.now();
   }
 
   localFinish() {
@@ -401,7 +456,13 @@ class Game {
         id,
         new Player(this.scene, this.course, this.effects, {
           remote: true,
-          color: info?.color || COLORS.cyan,
+          role: this.roles?.[id] || null,
+          color:
+            this.roles?.[id] === COOP_ROLE.ANCHOR
+              ? COLORS.orange
+              : this.roles?.[id] === COOP_ROLE.SPARK
+                ? COLORS.cyan
+                : info?.color || COLORS.cyan,
           accent: COLORS.yellow,
           name: info?.name || 'Wobbler'
         })
@@ -439,6 +500,13 @@ class Game {
   }
 
   fallbackToSolo() {
+    if (this.mode === 'coop') {
+      // В кооперативе продолжать в одиночку бессмысленно: главу физически не пройти одному.
+      this.running = false;
+      this.input.enabled = false;
+      this.ui.error('Связь с напарником потеряна. Главу вдвоём придётся начать заново.');
+      return;
+    }
     if (this.mode !== 'multi' || !this.player || this.player.finished) return;
     const elapsed = Math.max(0, this.raceNow() - this.startedAt);
     this.mode = 'single';
@@ -521,6 +589,124 @@ class Game {
   }
 
   // Один шаг симуляции. Всегда с постоянным dt.
+  // Состояние кооп-объектов выводится из позиций обоих игроков — обе у нас уже есть.
+  coopActors() {
+    const actors = [];
+    if (this.player && this.net) {
+      actors.push({
+        id: this.net.id,
+        role: this.myRole,
+        position: this.player.position,
+        velocity: this.player.velocity,
+        grounded: this.player.grounded,
+        downed: this.player.downed
+      });
+    }
+    for (const [id, remote] of this.remotes) {
+      actors.push({
+        id,
+        role: this.roles?.[id] || null,
+        position: remote.position,
+        velocity: remote.velocity,
+        grounded: false,
+        downed: remote.downed
+      });
+    }
+    return actors;
+  }
+
+  // Действия, зависящие от роли. Обе повешены на ту же кнопку, что и рывок: на телефоне нельзя
+  // множить кнопки, а смысл действия и так однозначен из роли.
+  updateRoleActions() {
+    if (this.mode !== 'coop' || !this.player || this.player.downed) return;
+    const input = this.input;
+
+    if (this.myRole === COOP_ROLE.SPARK) {
+      // Луч держится, пока держат кнопку. Наводка ищется по направлению взгляда камеры.
+      const holding = input.isHeld('dive');
+      const forward = this._forward.set(
+        -Math.sin(this.cameraController.yaw),
+        0,
+        -Math.cos(this.cameraController.yaw)
+      );
+      const aimed = holding ? this.course.aimedEmitter(this.player.position, forward) : null;
+      if (aimed !== this.player.beamTarget) {
+        this.player.beamTarget = aimed;
+        this.course.setBeam(this.net.id, aimed);
+        this.net?.sendCoopEvent('beam', { objectId: aimed || undefined });
+        if (aimed) this.sfx.checkpoint();
+      }
+      return;
+    }
+
+    if (this.myRole === COOP_ROLE.ANCHOR) {
+      // Удар сверху доступен только в воздухе: так он остаётся осознанным действием,
+      // а не второй кнопкой прыжка.
+      if (input.consume('dive') && this.player.startSlam()) {
+        this.sfx.dive();
+        this.cameraController.addShake(0.3);
+      }
+      // Приземление рядом с катапультой подбрасывает того, кто стоит на плече.
+      if (this.player.grounded && this.wasSlamming) {
+        const hit = this.course.slamTarget(this.player.position);
+        if (hit) this.triggerCatapult(hit);
+      }
+      this.wasSlamming = this.player.slamming;
+    }
+  }
+
+  triggerCatapult(catapultId) {
+    const { actor, catapult } = this.course.launchCandidate(catapultId, this.coopActors());
+    this.course.triggerCatapultVisual(catapultId);
+    this.cameraController.addShake(0.6);
+    this.sfx.spring();
+    this.effects.burst(this.player.position, COLORS.yellow, 20, 1.3);
+    if (!actor || actor.id === this.net.id) return;
+    // Импульс считает инициатор, применяет — цель. Сервер ограничивает модуль и ретранслирует:
+    // это единственное место, где один игрок меняет состояние другого.
+    this.net?.sendCoopEvent('launch', {
+      objectId: catapultId,
+      vector: { x: 0, y: catapult.power, z: -catapult.power * 0.32 }
+    });
+  }
+
+  receiveCoopEvent(message) {
+    if (!this.course || this.mode !== 'coop') return;
+    if (message.action === 'beam') {
+      this.course.setBeam(message.from, message.objectId || null);
+      return;
+    }
+    if (message.action === 'launch' && message.target === this.net?.id) {
+      this.player?.applyLaunch(message.vector);
+      this.sfx.spring();
+      this.cameraController.addShake(0.5);
+      return;
+    }
+    if (message.action === 'downed') {
+      if (message.target === this.net?.id) this.player?.goDown(this.player.position);
+      else this.partnerDown = true;
+      return;
+    }
+    if (message.action === 'revive') {
+      if (message.target === this.net?.id) {
+        this.player?.revive();
+        this.sfx.revive();
+      } else {
+        this.partnerDown = false;
+        this.sfx.revive(this.remotes.values().next().value?.visualPosition);
+      }
+    }
+  }
+
+  // Оживление напарника прикосновением. Проверка простая: подошёл достаточно близко.
+  tryRevivePartner() {
+    if (this.mode !== 'coop' || !this.partnerDown || this.player?.downed) return;
+    const partner = this.remotes.values().next().value;
+    if (!partner) return;
+    if (this.player.position.distanceTo(partner.position) > 3.5) return;
+    this.net?.sendCoopEvent('revive');
+  }
+
   fixedStep(dt) {
     const elapsed = this.courseElapsed();
     // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
@@ -528,7 +714,15 @@ class Game {
     this.course?.update(dt, elapsed);
     if (!this.running || !this.player || this.mode === 'preview') return;
     this.input.update();
-    this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
+    if (this.mode === 'coop') {
+      const actors = this.coopActors();
+      // Пересчёт до шага игрока: пролёт должен появиться раньше, чем по нему пойдут.
+      this.course.updateCoop(actors, this.raceNow());
+      this.updateRoleActions();
+      this.tryRevivePartner();
+    }
+    // Упавший ждёт напарника и не управляется.
+    if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
   }
 
   loop(time) {
@@ -561,16 +755,26 @@ class Game {
     } else if (this.player) {
       this.player.render(alpha);
 
-      if (this.mode === 'multi' && this.net) {
+      if (this.online && this.net) {
         this.net.sendState(this.player.snapshot());
         this.net.tick();
         this.syncRemoteRoster();
       }
       this.updateRemotes(frameDt);
 
+      if (this.mode === 'coop' && this.course.renderBeams) {
+        const sources = new Map();
+        for (const [id, emitterId] of this.course.activeBeams) {
+          const holder =
+            id === this.net?.id ? this.player.visualPosition : this.remotes.get(id)?.visualPosition;
+          if (holder) sources.set(emitterId, holder);
+        }
+        this.course.renderBeams(sources);
+      }
       this.cameraController.update(frameDt, this.player, this.input, this.course, this.partnerPosition());
       this.updateShadow(this.player.visualPosition);
       this.updateAudioScene();
+      if (this.mode === 'coop') this.updatePartnerMarker();
 
       const elapsed =
         this.finalTime && this.player.finished
@@ -591,10 +795,35 @@ class Game {
     requestAnimationFrame(next => this.loop(next));
   }
 
+  // Экранное положение напарника для указателя. Пока он в кадре, указатель скрыт: лишняя
+  // стрелка поверх видимого персонажа только загромождает экран.
+  updatePartnerMarker() {
+    const partner = this.remotes.values().next().value;
+    if (!partner || !this.player) {
+      this.ui.updatePartnerMarker({ screen: null });
+      return;
+    }
+    const world = this._marker.copy(partner.visualPosition).setY(partner.visualPosition.y + 1.6);
+    const projected = world.project(this.camera);
+    // z > 1 означает, что точка позади камеры — проекция там зеркалится, и стрелку надо развернуть.
+    const behind = projected.z > 1;
+    const x = ((behind ? -projected.x : projected.x) * 0.5 + 0.5) * innerWidth;
+    const y = ((behind ? -projected.y : -projected.y) * 0.5 + 0.5) * innerHeight;
+    const onScreen =
+      !behind && projected.x > -0.92 && projected.x < 0.92 && projected.y > -0.92 && projected.y < 0.92;
+    this.ui.updatePartnerMarker({
+      screen: { x, y },
+      visible: onScreen,
+      distance: this.player.visualPosition.distanceTo(partner.visualPosition),
+      down: this.partnerDown
+    });
+  }
+
   // Позиция напарника для кооп-кадрирования камеры. В гонке возвращает null: подстраивать кадр
   // под произвольного соперника не нужно, это только мешало бы целиться в прыжок.
   partnerPosition() {
     if (this.mode !== 'coop') return null;
+    void 0;
     const partner = this.remotes.values().next().value;
     return partner ? partner.visualPosition : null;
   }

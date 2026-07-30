@@ -47,7 +47,10 @@
       <section class="menu-card glass">
         <div class="mode-tabs" role="tablist" aria-label="Game mode">
           <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">SOLO RUN</button>
-          <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">PARTY ONLINE</button>
+          <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">ГОНКА ОНЛАЙН</button>
+          <button class="mode-tab mode-tab-hero" data-mode="coop" role="tab" aria-selected="false">
+            КООП НА ДВОИХ
+          </button>
         </div>
 
         <div id="single" class="mode-panel">
@@ -95,6 +98,36 @@
             /><button id="join" class="button button-secondary">JOIN</button>
           </div>
           <p id="connectStatus" class="status-line">Создайте комнату или введите код из пяти символов.</p>
+        </div>
+
+        <div id="coop" class="mode-panel hidden">
+          <p class="coop-lead">
+            Две роли, одна цель. <b>ИСКРА</b> прыгает выше, планирует и наводит луч. <b>ГРУЗ</b> бьёт сверху и
+            давит тяжёлые плиты. Ни один участок не пройти одному.
+          </p>
+          <label class="field field-full"
+            ><span>Имя</span
+            ><input id="coopName" maxlength="16" autocomplete="nickname" placeholder="Wobbler"
+          /></label>
+          <label class="field field-full"
+            ><span>Глава</span
+            ><select id="coopChapter"></select
+          ></label>
+          <p id="coopHint" class="coop-hint"></p>
+          <button id="coopCreate" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
+          <div class="join-row">
+            <input
+              id="coopCode"
+              maxlength="5"
+              inputmode="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              aria-label="Код комнаты"
+              placeholder="КОД"
+            /><button id="coopJoin" class="button button-secondary">ВОЙТИ</button>
+          </div>
+          <p id="coopStatus" class="status-line">Создайте комнату и позовите напарника.</p>
         </div>
 
         <div class="audio-panel" role="group" aria-label="Громкость">
@@ -160,7 +193,23 @@
       </div>
       <div id="placeBox" class="hud-card"><small>PLACE</small><strong id="place">1st</strong></div>
       <div id="pingBox" class="hud-card compact hidden"><small>СВЯЗЬ</small><strong id="ping">—</strong></div>
+      <div id="roleBox" class="hud-card compact hidden">
+        <small>РОЛЬ</small><strong id="roleName">—</strong>
+      </div>
     </header>
+
+    <!-- Указатель на напарника за краем экрана и его состояние. Без него в коопе постоянно
+         непонятно, где второй и не ждёт ли он помощи. -->
+    <div id="partnerHud" class="partner-hud hidden">
+      <i id="partnerArrow" class="partner-arrow"></i>
+      <span id="partnerLabel">НАПАРНИК</span>
+    </div>
+
+    <div id="coopIntro" class="coop-intro hidden">
+      <span class="eyebrow" id="coopIntroRole">ИСКРА</span>
+      <h2 id="coopIntroTitle">ПЕРВЫЕ ШАГИ</h2>
+      <p id="coopIntroHint">Подсказка</p>
+    </div>
 
     <div id="countdown" class="countdown hidden"><span>3</span></div>
     <div id="checkpointBanner" class="checkpoint-banner hidden">

@@ -447,7 +447,17 @@ export class CoopCourse extends CourseBuilder {
   }
 
   // Ворота синхронности: оба должны пересечь черту в пределах окна.
+  //
+  // Условие ЗАЩЁЛКИВАЕТСЯ — и без этого ворота были непроходимы вовсе. Окно синхронности 800 мс,
+  // а перейти надо четырнадцать единиц, то есть почти две секунды бега: пролёт исчезал прямо
+  // из-под идущих, примерно на середине. Пара делала всё правильно, попадала в окно, ступала на
+  // появившийся пролёт — и падала.
+  //
+  // Задача этих ворот — заставить действовать одновременно, а не пробежать быстрее таймера,
+  // который обогнать нельзя. Синхронность доказана в момент попадания в окно; дальше пролёт
+  // просто стоит.
   syncSatisfied(span, actors, nowMs) {
+    if (span.latched) return true;
     const line = span.z + span.length / 2;
     let crossings = this.syncCrossings.get(span.id);
     if (!crossings) {
@@ -462,7 +472,11 @@ export class CoopCourse extends CourseBuilder {
     const times = [...crossings.values()];
     const spread = Math.max(...times) - Math.min(...times);
     const fresh = times.every(t => nowMs - t < span.windowMs);
-    return fresh && spread < span.windowMs;
+    if (fresh && spread < span.windowMs) {
+      span.latched = true;
+      return true;
+    }
+    return false;
   }
 
   // --- Обучение ------------------------------------------------------------------------------

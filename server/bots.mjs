@@ -260,7 +260,7 @@ export class Runner {
         mover.lookAt(latch.x, latch.z);
         mover.steerTo(latch.x, latch.z);
       },
-      () => holder.position.z < far - 2
+      () => holder.position.z < far - 2 && holder.player.grounded
     );
     if (!followed) return this.fail(`${piece.id}: держащий не смог перейти по закреплённому пролёту`);
     this.log.push(`${piece.id}: ворота пройдены`);
@@ -310,7 +310,7 @@ export class Runner {
         world.anchor.lookAt(0, far - 20);
         world.anchor.steerTo(0, far - 5);
       },
-      () => world.anchor.position.z < far - 2
+      () => world.anchor.position.z < far - 2 && world.anchor.player.grounded
     );
     if (!crossed) return this.fail(`${piece.id}: ГРУЗ не смог перейти, пока ИСКРА держит плиту`);
     this.log.push(`${piece.id}: ворота с катапультой пройдены`);
@@ -364,7 +364,7 @@ export class Runner {
         s.steerTo(0, far - 5);
         world.anchor.steerTo(latch.x, latch.z);
       },
-      () => world.spark.position.z < far - 2
+      () => world.spark.position.z < far - 2 && world.spark.player.grounded
     );
     if (!followed) return this.fail(`${piece.id}: ИСКРА не смогла перейти по закреплённому мосту`);
     this.log.push(`${piece.id}: мост пройден`);
@@ -391,7 +391,10 @@ export class Runner {
           bot.steerTo(bot.position.x, far - 5);
         }
       },
-      () => world.bots.every(bot => bot.position.z < far - 2)
+      // Проверяем не только координату, но и что оба ЖИВЫ и стоят на ногах. Иначе падение сквозь
+      // исчезнувший пролёт засчитывалось бы как успех: координата за время падения тоже
+      // проскакивает нужную отметку. Ровно так этот тест и обманул меня в первый раз.
+      () => world.bots.every(bot => bot.position.z < far - 2 && bot.player.grounded)
     );
     if (!passed) return this.fail(`${piece.id}: синхронные ворота не пройдены`);
     this.log.push(`${piece.id}: синхронные ворота пройдены`);
@@ -412,7 +415,7 @@ export class Runner {
           if (bot.player.grounded && !this.solidAhead(bot)) bot.input.jumpQueued = true;
         }
       },
-      () => world.bots.every(bot => bot.position.z < z + 1)
+      () => world.bots.every(bot => bot.position.z < z + 1 && bot.player.grounded)
     );
   }
 

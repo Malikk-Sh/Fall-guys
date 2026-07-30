@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { Runner, World } from './bots.mjs';
 import * as THREE from 'three';
 import { COOP_CHAPTERS, coopSpec, chapterLayout } from '../shared/coopChapters.js';
+import { COOP_ROLE } from '../shared/protocol.js';
 
 // Где начинается и кончается пролёт с данным идентификатором.
 function spanBounds(chapterId, spanId) {
@@ -359,6 +360,125 @@ test('каждая глава проходима двумя ботами от н
       );
     }
 
+    // И дойти до финиша. Без этой части тест назывался «от начала до конца», а проверял только
+    // кооперативные преграды: всё, что между последней из них и финишной чертой — качели,
+    // узкие пропасти, просто длинный участок пола — оставалось непроверенным. Ровно то же
+    // расхождение между названием и содержанием, из-за которого главы и оказались непроходимыми.
+    const spec = coopSpec(chapter.id);
+    const finished = runner.advanceTo(spec.finishZ + 2, 60);
+    assert.ok(
+      finished,
+      `${chapter.id}: до финиша (z=${spec.finishZ}) не дошли, встали на ` +
+        runner.world.bots.map(bot => `${bot.role} z=${bot.position.z.toFixed(1)}`).join(', ') +
+        `\n  ход прохождения:\n    ` +
+        runner.log.join('\n    ')
+    );
+
     runner.dispose();
+  }
+});
+
+// Обратное свойство, ради которого режим и делается: в одиночку главу пройти НЕЛЬЗЯ.
+//
+// Статические проверки говорят, что пролёты шире прыжка. Это не то же самое: игрок может
+// оказаться проходящим по инерции, по случайной геометрии, по забытой платформе рядом. Здесь
+// один бот честно пытается дойти до финиша всеми доступными ему средствами и должен застрять.
+test('в одиночку ни одна глава не проходится', () => {
+  for (const chapter of COOP_CHAPTERS) {
+    const spec = coopSpec(chapter.id);
+    const runner = new Runner(spec, chapterLayout(chapter.id));
+    const { world } = runner;
+
+    // Напарника уводим с поля: он не должен ни на что влиять.
+    world.anchor.player.teleport(Object.assign(world.anchor.position.clone(), { x: 0, y: 1.2, z: 40 }));
+
+    const alone = world.run(
+      70,
+      w => {
+        const bot = w.spark;
+        bot.input.holding.jump = true;
+        // Одиночка пробует всё: держит луч, жмёт прыжок у каждого края, рвётся вперёд.
+        bot.input.holding.dive = true;
+        bot.lookAt(0, spec.finishZ - 20);
+        bot.steerTo(0, spec.finishZ);
+        if (bot.player.grounded && !runner.solidAhead(bot)) bot.input.jumpQueued = true;
+        // И удерживаем напарника далеко позади, чтобы он не нажал ничего случайно.
+        w.anchor.input.moveX = w.anchor.input.moveForward = 0;
+      },
+      w => w.spark.position.z < spec.finishZ
+    );
+
+    assert.equal(
+      alone,
+      false,
+      `${chapter.id}: ИСКРА дошла до финиша одна — глава перестала быть кооперативной`
+    );
+    runner.dispose();
+  }
+});
+
+// Ширина «перепрыгиваемых» пропастей должна считаться по СЛАБОЙ роли, и не по константе
+// в комментарии, а по измерению. В первой главе стояла пропасть в 5 единиц с подсказкой
+// «перепрыгните сами» — ГРУЗ не мог взять её в принципе и застревал там навсегда.
+//
+// Тест сам меряет дальность прыжка каждой роли и сам сверяет с ней все голые пропасти. Поменяется
+// гравитация, скорость бега или множитель прыжка — тест пересчитает всё заново и укажет, какие
+// пропасти стали непроходимыми.
+test('любую голую пропасть перепрыгивает даже слабая роль, и с запасом', () => {
+  // Дальность одного прыжка с разбега по ровному полу.
+  const jumpRange = role => {
+    const world = new World(coopSpec('ch1'));
+    const bot = role === COOP_ROLE.SPARK ? world.spark : world.anchor;
+    const other = bot === world.spark ? world.anchor : world.spark;
+    // Напарника убираем, чтобы он ничего не задел.
+    other.player.teleport(Object.assign(other.position.clone(), { x: 0, y: 1.2, z: 60 }));
+    // Длинный ровный участок первой главы.
+    bot.player.teleport(Object.assign(bot.position.clone(), { x: 0, y: 1.2, z: -95 }));
+    world.run(2.2, () => {
+      bot.lookAt(0, -200);
+      bot.steerTo(0, -200);
+    });
+
+    bot.input.jumpQueued = true;
+    let takeoff = null;
+    let landing = null;
+    for (let i = 0; i < 240; i++) {
+      bot.lookAt(0, -200);
+      bot.steerTo(0, -200);
+      const wasGrounded = bot.player.grounded;
+      world.step();
+      if (wasGrounded && !bot.player.grounded && takeoff === null) takeoff = bot.position.z;
+      if (takeoff !== null && !wasGrounded && bot.player.grounded) {
+        landing = bot.position.z;
+        break;
+      }
+    }
+    world.dispose();
+    assert.ok(takeoff !== null && landing !== null, `${role}: прыжок не удалось измерить`);
+    return takeoff - landing;
+  };
+
+  const weakest = Math.min(jumpRange(COOP_ROLE.SPARK), jumpRange(COOP_ROLE.ANCHOR));
+  // Четверть запаса: прыжок должен получаться, а не требовать попадания в кадр.
+  const safe = weakest * 0.75;
+
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+    const solid = pieces.filter(p => p.kind === 'floor' || p.kind === 'movingSpan').sort((a, b) => b.z - a.z);
+    const spans = pieces.filter(p => p.kind.endsWith('Span') && p.kind !== 'movingSpan');
+
+    for (let i = 1; i < solid.length; i++) {
+      const back = solid[i - 1].z - solid[i - 1].length / 2;
+      const front = solid[i].z + solid[i].length / 2;
+      const width = back - front;
+      if (width < 0.5) continue;
+      if (spans.some(span => Math.abs(span.z + span.length / 2 - back) < 0.01)) continue;
+
+      assert.ok(
+        width <= safe,
+        `${chapter.id}: пропасть ${width.toFixed(1)} около z=${back.toFixed(0)} — ` +
+          `слабая роль прыгает на ${weakest.toFixed(1)}, безопасный предел ${safe.toFixed(1)}`
+      );
+    }
   }
 });

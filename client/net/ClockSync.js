@@ -21,6 +21,21 @@ export class ClockSync {
     this.synced = false;
   }
 
+  // Грубая начальная оценка по одному серверному времени, без замера RTT.
+  //
+  // Приветственное сообщение приходит без парного запроса: момент отправки нам неизвестен, поэтому
+  // честного RTT из него не получить. Раньше оно всё же клалось в общий набор замеров как пара
+  // (Date.now(), serverTime) — то есть с RTT, равным нулю. Такой замер навсегда выигрывал выбор
+  // минимума, и ни один реальный ping уже не мог уточнить оценку: смещение оставалось смещённым
+  // ровно на время пути пакета.
+  //
+  // Теперь это отдельный путь: значение используется, только пока нет ни одного настоящего замера.
+  seed(serverTime, receivedAt = Date.now()) {
+    if (this.samples.length || !Number.isFinite(serverTime)) return;
+    this.offset = serverTime - receivedAt;
+    this.synced = true;
+  }
+
   // sentAt / receivedAt — по локальным часам, serverTime — по серверным, все в миллисекундах.
   record(sentAt, serverTime, receivedAt = Date.now()) {
     if (![sentAt, serverTime, receivedAt].every(Number.isFinite)) return;

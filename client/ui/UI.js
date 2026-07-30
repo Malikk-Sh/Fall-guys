@@ -101,23 +101,26 @@ export class UI {
 
   // Указатель на напарника. Пока он в кадре — стрелка не нужна и только мешала бы;
   // как только уходит за край, она появляется у ближайшей границы экрана.
-  updatePartnerMarker({ screen, visible, distance, down }) {
+  updatePartnerMarker({ screen, visible, distance, down, away }) {
     const hud = $('#partnerHud');
     if (!screen) {
       hud.classList.add('hidden');
       return;
     }
-    hud.classList.toggle('hidden', visible && !down);
-    if (visible && !down) return;
+    // Указатель прячется, только когда напарник виден и с ним всё в порядке. Упавший и отошедший
+    // остаются отмеченными даже в кадре: неподвижный персонаж сам по себе ничего не объясняет.
+    const quiet = visible && !down && !away;
+    hud.classList.toggle('hidden', quiet);
+    if (quiet) return;
 
     const margin = 46;
     const x = Math.max(margin, Math.min(innerWidth - margin, screen.x));
     const y = Math.max(margin, Math.min(innerHeight - margin, screen.y));
     hud.style.left = `${x}px`;
     hud.style.top = `${y}px`;
-    hud.dataset.state = down ? 'down' : 'ok';
+    hud.dataset.state = down ? 'down' : away ? 'away' : 'ok';
     $('#partnerArrow').style.transform = `rotate(${Math.atan2(screen.y - y, screen.x - x) + Math.PI / 2}rad)`;
-    $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : `${Math.round(distance)} м`;
+    $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : away ? 'ОТОШЁЛ' : `${Math.round(distance)} м`;
   }
   setInputMethod(method) {
     const touch = method === 'touch';

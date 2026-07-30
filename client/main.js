@@ -24,6 +24,10 @@ const FIXED_DT = 1 / 60;
 // времени, и отставание будет только расти. Лишнее время просто отбрасывается.
 const MAX_SUBSTEPS = 5;
 
+// Насколько долгий сон вкладки считать «долгим». Короткое переключение окна ничего не ломает:
+// история снапшотов ещё свежая, оценка часов ещё верна. Дольше секунды — уже нет.
+const WAKE_RESYNC_MS = 1000;
+
 class Game {
   constructor() {
     this.ui = new UI();
@@ -298,6 +302,9 @@ class Game {
 
     this.net.on('lobby', message => {
       this.room = message;
+      // Список игроков — авторитетный источник: событие присутствия могло прийти до того, как
+      // напарник вообще появился в комнате, или потеряться при переподключении.
+      this.partnerAway = message.players.some(p => p.id !== this.net.id && p.away);
       this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
       document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
       document.querySelector('#rematch').disabled = false;
@@ -313,6 +320,13 @@ class Game {
         message.roles
       )
     );
+    this.net.on('presence', message => {
+      if (message.id === this.net.id) return;
+      this.partnerAway = message.away;
+      if (this.mode === 'coop') {
+        this.ui.toast(message.away ? 'Напарник свернул игру — подождите.' : 'Напарник вернулся в игру.');
+      }
+    });
     this.net.on('coopEvent', message => this.receiveCoopEvent(message));
     this.net.on('finish', message => this.receiveFinish(message));
 
@@ -404,6 +418,7 @@ class Game {
     this.roles = roles || {};
     this.myRole = this.roles[this.net?.id] || null;
     this.partnerDown = false;
+    this.partnerAway = this.room?.players.some(p => p.id !== this.net?.id && p.away) || false;
     this.running = false;
     this.raceComplete = false;
     this.finalTime = 0;
@@ -591,22 +606,47 @@ class Game {
   installLifecycle() {
     addEventListener('resize', () => this.resize());
     addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        this.hiddenAt = Date.now();
-        this.input.reset();
-        this.audio.setSuspended(true);
-      } else {
-        this.audio.setSuspended(false);
-        // Пока вкладка была скрыта, кадры не шли. В одиночном режиме сдвигаем момент старта, чтобы
-        // таймер не насчитал время простоя. В сетевом этого делать нельзя — там время серверное.
-        if (this.hiddenAt && this.mode === 'single' && this.running) {
-          this.startedAt += Date.now() - this.hiddenAt;
-        }
-        this.hiddenAt = 0;
-        this.accumulator = 0;
-      }
+    document.addEventListener('visibilitychange', () => (document.hidden ? this.suspend() : this.wake()));
+    // На iOS `visibilitychange` при переключении приложения срабатывает не всегда, а `pagehide`
+    // срабатывает. Дублирующий вызов безвреден: `suspend` идемпотентен.
+    addEventListener('pagehide', () => this.suspend());
+    addEventListener('pageshow', () => {
+      if (!document.hidden) this.wake();
     });
+  }
+
+  // Игру свернули. Задача — ничего не делать в фоне и предупредить напарника.
+  suspend() {
+    if (this.hiddenAt) return;
+    this.hiddenAt = Date.now();
+    this.input.reset();
+    this.audio.setSuspended(true);
+    this.net?.sendPresence(true);
+  }
+
+  // Вернулись. Главное здесь — не сделать вид, что прошедшего времени не было.
+  wake() {
+    if (!this.hiddenAt) return;
+    const hiddenMs = Date.now() - this.hiddenAt;
+    this.hiddenAt = 0;
+    this.audio.setSuspended(false);
+    this.net?.sendPresence(false);
+
+    // Пока вкладка была скрыта, кадры не шли. В одиночном режиме сдвигаем момент старта, чтобы
+    // таймер не насчитал время простоя. В сетевом этого делать нельзя — там время серверное.
+    if (this.mode === 'single' && this.running) this.startedAt += hiddenMs;
+
+    // Накопленное время выбрасываем целиком. Иначе первый же кадр после возвращения потратит все
+    // разрешённые подшаги на симуляцию простоя — игрок увидит, как персонаж дёргается вперёд.
+    this.accumulator = 0;
+    this.resumedFrame = true;
+
+    if (hiddenMs < WAKE_RESYNC_MS || !this.net) return;
+    // После долгого сна оценка часов и история снапшотов описывают уже не ту реальность.
+    // Историю чистим, чтобы напарник встал на своё текущее место, а не проигрывал прошлое;
+    // часы переоцениваем заново.
+    this.net.snapshots.clear();
+    this.net.resyncClock();
   }
 
   resize() {
@@ -775,6 +815,12 @@ class Game {
   }
 
   loop(time) {
+    // Первый кадр после возвращения из фона: между ним и предыдущим прошли минуты, и брать эту
+    // разницу за длительность кадра нельзя ни для физики, ни для частиц. Считаем его обычным.
+    if (this.resumedFrame) {
+      this.resumedFrame = false;
+      this.clockLast = time - FIXED_DT * 1000;
+    }
     const frameDt = Math.min(0.25, Math.max(0.0001, (time - this.clockLast) / 1000));
     this.clockLast = time;
 
@@ -864,7 +910,8 @@ class Game {
       screen: { x, y },
       visible: onScreen,
       distance: this.player.visualPosition.distanceTo(partner.visualPosition),
-      down: this.partnerDown
+      down: this.partnerDown,
+      away: this.partnerAway
     });
   }
 
@@ -872,7 +919,6 @@ class Game {
   // под произвольного соперника не нужно, это только мешало бы целиться в прыжок.
   partnerPosition() {
     if (this.mode !== 'coop') return null;
-    void 0;
     const partner = this.remotes.values().next().value;
     return partner ? partner.visualPosition : null;
   }

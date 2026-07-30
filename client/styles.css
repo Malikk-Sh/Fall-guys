@@ -1181,6 +1181,13 @@ canvas {
 .partner-hud[data-state='down'] .partner-arrow {
   border-bottom-color: #ff4f91;
 }
+/* «Отошёл» — не тревога, а объяснение: приглушённый цвет, чтобы не путать с зовом о помощи. */
+.partner-hud[data-state='away'] .partner-arrow {
+  border-bottom-color: #9a8fc4;
+}
+.partner-hud[data-state='away'] span {
+  opacity: 0.8;
+}
 .partner-hud span {
   font-size: 0.6rem;
   letter-spacing: 0.09em;

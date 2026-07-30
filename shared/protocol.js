@@ -22,6 +22,7 @@ export const C2S = Object.freeze({
   HOST_CONFIGURE: 'configure',
   START_MATCH: 'start',
   PLAYER_STATE: 'state',
+  PRESENCE: 'presence',
   COOP_EVENT: 'coopEvent',
   RESPAWN: 'respawn',
   FINISH: 'finish',
@@ -39,6 +40,7 @@ export const S2C = Object.freeze({
   MATCH_START: 'start',
   SNAPSHOT: 'snapshot',
   CORRECTION: 'correction',
+  PLAYER_PRESENCE: 'presence',
   COOP_EVENT: 'coopEvent',
   PLAYER_FINISHED: 'finish',
   MATCH_RESULTS: 'results',
@@ -95,6 +97,8 @@ export const ALLOWED_IN_STATE = Object.freeze({
   [C2S.HOST_CONFIGURE]: [ROOM_STATE.LOBBY],
   [C2S.START_MATCH]: [ROOM_STATE.LOBBY],
   [C2S.PLAYER_STATE]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
+  // Присутствие сознательно разрешено в любом состоянии комнаты: свернуть игру можно и в лобби,
+  // и на экране результатов, и напарнику полезно знать об этом именно там — там его ждут.
   [C2S.COOP_EVENT]: [ROOM_STATE.PLAYING],
   [C2S.RESPAWN]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
   [C2S.FINISH]: [ROOM_STATE.PLAYING],
@@ -179,6 +183,10 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     }
   },
 
+  // Игра свёрнута или снова на экране. На телефоне переключение в мессенджер — обычное дело,
+  // а для напарника неподвижный персонаж неотличим от вылета: он стоит и ждёт неизвестно чего.
+  [C2S.PRESENCE]: { away: bool() },
+
   // Кооперативное событие: инициатор сообщает о воздействии на объект или на напарника.
   // Сервер ограничивает модуль импульса и ретранслирует — подробности в server/coopRules.js.
   [C2S.COOP_EVENT]: {
@@ -214,6 +222,9 @@ export const RATE_LIMITS = Object.freeze({
   [C2S.HOST_CONFIGURE]: [20, 10_000],
   [C2S.START_MATCH]: [10, 10_000],
   [C2S.PLAYER_STATE]: [25, 1_000],
+  // Переключение приложений — действие человеческого темпа. Лимит отсекает мигание вкладкой,
+  // но оставляет запас на нормальную работу с телефоном.
+  [C2S.PRESENCE]: [20, 10_000],
   [C2S.COOP_EVENT]: [30, 1_000],
   [C2S.RESPAWN]: [5, 5_000],
   [C2S.FINISH]: [5, 10_000],

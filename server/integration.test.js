@@ -190,3 +190,89 @@ test('свёрнутая игра доходит до напарника и сн
   assert.equal(back.id, event.id, 'вернулся тот же игрок');
   await guest.wait('lobby', m => m.players.every(p => !p.away), 2000);
 });
+
+// Обрыв посреди забега раньше проходил молча: оставшийся доигрывал главу один, получал время
+// и не знал, что половину препятствий за напарника не проходил никто. Теперь сервер снимает
+// зачёт и говорит об этом вслух — и тому, кто остался, и в итогах матча.
+test('обрыв связи снимает зачёт с забега', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Хост', mode: 'coop' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await host.wait('lobby', m => m.players.length === 2);
+
+  host.send('ready', { ready: true });
+  guest.send('ready', { ready: true });
+  await host.wait('lobby', m => m.players.every(p => p.ready));
+  host.send('start');
+  const started = await host.wait('start');
+
+  // До обрыва отметки нет: ровно идущий забег ничего не теряет.
+  assert.equal(
+    host.messages.some(m => m.type === 'unranked'),
+    false,
+    'пока оба на связи, зачёт снимать не с чего'
+  );
+
+  guest.ws.terminate();
+  const notice = await host.wait('unranked', () => true, 3000);
+  assert.equal(notice.reason, 'disconnect', 'причина должна доезжать до игрока');
+  assert.equal(notice.matchId, started.matchId, 'отметка относится к текущему забегу');
+
+  const before = host.messages.filter(m => m.type === 'unranked').length;
+  host.send('presence', { away: true });
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(
+    host.messages.filter(m => m.type === 'unranked').length,
+    before,
+    'зачёт снимается один раз за матч, а не на каждое событие'
+  );
+});
+
+// Отметка должна доезжать не только уведомлением, но и в самих итогах: игрок может свернуть
+// игру в момент обрыва и увидеть только карточку финиша.
+test('итоги матча несут отметку «без зачёта»', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Хост' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await host.wait('lobby', m => m.players.length === 2);
+
+  host.send('ready', { ready: true });
+  guest.send('ready', { ready: true });
+  await host.wait('lobby', m => m.players.every(p => p.ready));
+  host.send('start');
+  const started = await host.wait('start');
+
+  // Гость выходит сам — это тоже снимает зачёт, но с другой причиной.
+  guest.send('leave');
+  const notice = await host.wait('unranked', () => true, 3000);
+  assert.equal(notice.reason, 'left', 'добровольный выход отличается от обрыва');
+
+  // Итоги подводятся только для идущего забега, поэтому ждём конца обратного отсчёта.
+  await new Promise(resolve => setTimeout(resolve, Math.max(0, started.at - Date.now()) + 200));
+  // Досрочное завершение матча голосом хоста даёт итоги, не гоняя бота по трассе.
+  host.send('rematch');
+  const results = await host.wait('results', () => true, 3000);
+  assert.equal(results.unranked, 'left', 'итоги обязаны нести отметку и её причину');
+});

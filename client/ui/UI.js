@@ -1,4 +1,5 @@
 import { DIFFICULTIES, courseName, formatTime, ordinal } from '../core/Config.js';
+import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -196,8 +197,7 @@ export class UI {
   }
   preview(seed, difficulty) {
     $('#courseName').textContent = courseName(seed);
-    const key = `wobble-best-${seed}-${difficulty}`,
-      best = Number(localStorage.getItem(key));
+    const best = readBest(soloKey(seed, difficulty));
     $('#bestTime').textContent = best ? `BEST ${formatTime(best)}` : 'BEST —:—';
   }
   singleSettings() {
@@ -317,9 +317,31 @@ export class UI {
       slider.addEventListener('input', () => onChange(bus, Number(slider.value) / 100));
     }
   }
-  finishSolo({ time, respawns, seed, difficulty }) {
+  // Плашка «без зачёта» на карточке финиша. Причина названа прямо: игрок должен понимать,
+  // почему его время никуда не записалось, иначе это выглядит как потерянный рекорд.
+  showUnranked(reason) {
+    const note = $('#unrankedNote');
+    note.classList.toggle('hidden', !reason);
+    if (!reason) return;
+    note.textContent =
+      reason === 'left'
+        ? 'БЕЗ ЗАЧЁТА · напарник вышел посреди забега'
+        : 'БЕЗ ЗАЧЁТА · связь оборвалась посреди забега';
+  }
+
+  // В коопе свой финиш — это ещё не конец: ждём напарника, а не показываем итоги.
+  awaitPartnerFinish() {
+    // HUD остаётся: игрок продолжает смотреть на трассу и видеть, где напарник. Управление к этому
+    // моменту уже отключено вызывающей стороной, поэтому экранные кнопки убираем.
+    this.elements.touch.classList.add('hidden');
+    this.toast('Финиш! Ждём напарника — глава засчитывается только вдвоём.', 'info', 8000);
+  }
+
+  finishSolo({ time, respawns, seed, difficulty, unranked = null }) {
     this.hud(false);
     this.show('finish');
+    this.showUnranked(unranked);
+    $('#finishEyebrow').textContent = 'COURSE COMPLETE';
     const par = DIFFICULTIES[difficulty].parPerSegment * DIFFICULTIES[difficulty].segments * 1000,
       ratio = time / par,
       medal = ratio <= 1 ? 'GOLD' : ratio <= 1.28 ? 'SILVER' : ratio <= 1.65 ? 'BRONZE' : 'FINISH';
@@ -334,16 +356,48 @@ export class UI {
     $('#newCourse').classList.remove('hidden');
     $('#rematch').classList.add('hidden');
     $('#returnLobby').classList.add('hidden');
-    const key = `wobble-best-${seed}-${difficulty}`,
-      old = Number(localStorage.getItem(key));
-    if (!old || time < old) {
-      localStorage.setItem(key, String(Math.round(time)));
-      this.toast(old ? 'New personal best!' : 'First time saved!');
-    }
+    // Забег без зачёта рекорд не переписывает — правило и его причина живут в core/records.js.
+    const saved = saveBest(soloKey(seed, difficulty), time, { unranked });
+    if (saved.improved) this.toast(saved.first ? 'First time saved!' : 'New personal best!');
   }
-  finishMulti({ time, board, selfId, canRematch = true }) {
+
+  // Итоги кооп-главы. Мест здесь нет: команда либо прошла главу, либо нет, и время у неё общее —
+  // по последнему дошедшему.
+  finishCoop({ time, chapter, board, selfId, unranked = null }) {
     this.hud(false);
     this.show('finish');
+    this.showUnranked(unranked);
+    $('#finishEyebrow').textContent = 'КООПЕРАТИВ';
+    $('#finishTitle').textContent = 'ГЛАВА ПРОЙДЕНА!';
+    $('#medal').textContent = '✦';
+    $('#finishTime').textContent = formatTime(time);
+    const best = chapter ? this.recordChapterBest(chapter.chapterId, time, unranked) : null;
+    $('#finishStats').innerHTML = [
+      `<span>${chapter?.title || 'КООПЕРАТИВ'}</span>`,
+      `<span>${chapter?.subtitle || 'ВДВОЁМ'}</span>`,
+      best ? `<span>ЛУЧШЕЕ ${formatTime(best)}</span>` : ''
+    ].join('');
+    this.updateBoard(board || [], selfId);
+    $('#again').classList.add('hidden');
+    $('#newCourse').classList.add('hidden');
+    $('#rematch').classList.remove('hidden');
+    $('#returnLobby').classList.remove('hidden');
+  }
+
+  // Лучшее время главы после возможного обновления либо null, если рекорда ещё нет.
+  recordChapterBest(chapterId, time, unranked) {
+    if (!chapterId) return null;
+    const saved = saveBest(coopKey(chapterId), time, { unranked });
+    if (saved.improved)
+      this.toast(saved.first ? 'Первое время главы сохранено!' : 'Рекорд главы побит!');
+    return saved.best;
+  }
+
+  finishMulti({ time, board, selfId, canRematch = true, unranked = null }) {
+    this.hud(false);
+    this.show('finish');
+    this.showUnranked(unranked);
+    $('#finishEyebrow').textContent = 'COURSE COMPLETE';
     const own = board.findIndex(p => p.id === selfId),
       place = own < 0 ? board.length : own + 1;
     $('#finishTitle').textContent = place === 1 ? 'CROWNED!' : `${ordinal(place).toUpperCase()} PLACE`;

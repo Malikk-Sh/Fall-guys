@@ -44,6 +44,8 @@ export const S2C = Object.freeze({
   COOP_EVENT: 'coopEvent',
   PLAYER_FINISHED: 'finish',
   MATCH_RESULTS: 'results',
+  // Забег перестал идти в зачёт: кто-то оборвался или вышел посреди главы.
+  UNRANKED: 'unranked',
   HOST_CHANGED: 'hostChanged',
   PONG: 'pong',
   ERROR: 'error'

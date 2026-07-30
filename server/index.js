@@ -370,6 +370,8 @@ function leave(ws) {
   if (!ws.room) return;
   const room = rooms.get(ws.room);
   ws.room = null;
+  if (room && (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING))
+    markUnranked(room, 'left');
   if (ws.token) {
     sessions.delete(ws.token);
     ws.token = null;
@@ -396,6 +398,11 @@ function handleDisconnect(ws) {
   player.ws = null;
   player.disconnectedAt = Date.now();
   room.updatedAt = Date.now();
+  // Обрыв посреди забега снимает зачёт. Раньше кооп молча превращался в одиночное прохождение:
+  // оставшийся доходил до финиша, получал время — и не знал, что это время уже ничего не значит,
+  // потому что половину главы за напарника не проходил никто. Честнее сказать это вслух.
+  if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)
+    markUnranked(room, 'disconnect');
   if (ws.token) {
     const session = sessions.get(ws.token);
     if (session) session.expiresAt = Date.now() + SESSION_TTL_MS;
@@ -479,6 +486,20 @@ function resume(ws, token) {
   return true;
 }
 
+// Снимает зачёт с текущего забега и говорит об этом оставшимся — один раз за матч.
+//
+// Кооп после обрыва не прерывается: оставшийся игрок доигрывает главу (иначе он застрял бы
+// навсегда), но результат такого прохождения не рекорд — половину препятствий проходил не тот,
+// кто их задумывался проходить, а автоподъём заменял напарника. Отметка `unranked` уезжает
+// вместе с результатами и в личные рекорды не пишется.
+function markUnranked(room, reason) {
+  if (room.unranked) return false;
+  room.unranked = reason;
+  broadcast(room, { type: S2C.UNRANKED, matchId: room.matchId, reason });
+  log('info', 'match_unranked', { roomId: room.code, matchId: room.matchId, reason });
+  return true;
+}
+
 // Матч завершается, когда дошли все, кто ещё на связи. В коопе это обязательное условие:
 // глава считается пройденной только вдвоём.
 function checkMatchEnd(room) {
@@ -504,7 +525,8 @@ function finishMatch(room) {
     mode: room.mode,
     board,
     // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
-    coopTime
+    coopTime,
+    unranked: room.unranked || null
   });
   log('info', 'match_finished', { roomId: room.code, matchId: room.matchId, players: board.length });
 }
@@ -717,6 +739,8 @@ wss.on('connection', (ws, req) => {
       room.matchId = crypto.randomBytes(8).toString('hex');
       room.startedAt = Date.now() + COUNTDOWN_MS;
       room.firstFinishAt = null;
+      // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
+      room.unranked = null;
       metrics.matchesStarted++;
       assignSlots(room);
 
@@ -853,7 +877,8 @@ wss.on('connection', (ws, req) => {
         matchId: room.matchId,
         id: player.id,
         time: player.time,
-        board: leaderboard(room)
+        board: leaderboard(room),
+        unranked: room.unranked || null
       });
       return checkMatchEnd(room);
     }

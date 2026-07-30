@@ -688,6 +688,20 @@ canvas {
   text-shadow: 0 2px 4px #2a175d;
   transition: opacity 0.5s;
 }
+/* Плашка «без зачёта» на карточке финиша: заметная, но не празднующая — это не награда. */
+.unranked-note {
+  margin: 6px auto 2px;
+  padding: 7px 13px;
+  max-width: 300px;
+  border-radius: 10px;
+  border: 1px solid #ffd76a80;
+  background: #6b4d0f5c;
+  color: #ffe6a3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.45;
+}
 .finish-card .eyebrow {
   margin-top: 2px;
 }

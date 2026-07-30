@@ -23,7 +23,6 @@ const {
   ERROR_CODES,
   ROOM_STATE,
   GAME_MODE,
-  COOP_ROLE,
   ALLOWED_IN_STATE,
   canTransition,
   MAX_MESSAGE_BYTES,
@@ -276,7 +275,7 @@ function log(level, event, fields = {}) {
   else console.log(line);
 }
 
-const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, role, away }) => ({
+const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, slot, away }) => ({
   id,
   name,
   ready: !!ready,
@@ -284,7 +283,7 @@ const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconn
   time: time ?? null,
   rematch: !!rematch,
   color,
-  role: role || null,
+  slot: slot ?? 0,
   online: !disconnectedAt,
   // `online` и `away` — разные вещи. Первое означает «связь оборвалась», второе — «игра свёрнута,
   // человек рядом». Напарнику важно различать их: в первом случае ждать бессмысленно.
@@ -309,15 +308,13 @@ const lobbyPayload = room => ({
 
 const emitLobby = room => broadcast(room, lobbyPayload(room));
 
-// В коопе роли назначает сервер по порядку входа: первый — ИСКРА, второй — ГРУЗ.
-function assignRoles(room) {
-  if (room.mode !== GAME_MODE.COOP) {
-    for (const player of room.players.values()) player.role = null;
-    return;
-  }
+// Ролей больше нет — сервер раздаёт только «место» (0 или 1) по порядку входа. От него зависит
+// лишь точка появления: два персонажа не должны стоять в одной координате, иначе на первом же
+// кадре они выталкивают друг друга.
+function assignSlots(room) {
   const ordered = [...room.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
   ordered.forEach((player, index) => {
-    player.role = index === 0 ? COOP_ROLE.SPARK : COOP_ROLE.ANCHOR;
+    player.slot = index;
   });
 }
 
@@ -339,7 +336,7 @@ function resetLobby(room, { newSeed = false } = {}) {
       lastAt: 0,
       returned: false
     });
-  assignRoles(room);
+  assignSlots(room);
   emitLobby(room);
 }
 
@@ -365,7 +362,7 @@ function dropPlayer(room, playerId) {
     log('info', 'host_migrated', { roomId: room.code, hostId: room.host });
   }
 
-  assignRoles(room);
+  assignSlots(room);
   emitLobby(room);
 }
 
@@ -414,7 +411,7 @@ function addPlayer(room, ws, name) {
     id: ws.id,
     name: safeName(name),
     color,
-    role: null,
+    slot: 0,
     joinOrder: room.nextJoinOrder++,
     ready: false,
     finished: false,
@@ -433,7 +430,7 @@ function addPlayer(room, ws, name) {
     expiresAt: Date.now() + SESSION_TTL_MS
   });
   room.updatedAt = Date.now();
-  assignRoles(room);
+  assignSlots(room);
   emitLobby(room);
 }
 
@@ -695,7 +692,7 @@ wss.on('connection', (ws, req) => {
           room.mode === GAME_MODE.COOP
             ? coopSpec(room.chapterId)
             : createCourseSpec(randomSeed(), room.spec.difficulty || 'normal');
-        assignRoles(room);
+        assignSlots(room);
       }
       // Любое изменение настроек сбрасывает готовность: игроки согласились на другие условия.
       for (const item of room.players.values()) item.ready = false;
@@ -721,7 +718,7 @@ wss.on('connection', (ws, req) => {
       room.startedAt = Date.now() + COUNTDOWN_MS;
       room.firstFinishAt = null;
       metrics.matchesStarted++;
-      assignRoles(room);
+      assignSlots(room);
 
       for (const item of room.players.values())
         Object.assign(item, {
@@ -729,7 +726,7 @@ wss.on('connection', (ws, req) => {
           time: null,
           checkpoint: 0,
           last: {
-            ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.role) : room.spec.start),
+            ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.slot) : room.spec.start),
             ry: 0,
             vx: 0,
             vz: 0,
@@ -750,7 +747,7 @@ wss.on('connection', (ws, req) => {
         matchId: room.matchId,
         mode: room.mode,
         spec: room.spec,
-        roles: Object.fromEntries([...room.players.values()].map(item => [item.id, item.role]))
+        slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot]))
       });
     }
 
@@ -807,7 +804,7 @@ wss.on('connection', (ws, req) => {
         // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
         // чекпоинта, но остаётся «упавшим», пока его не поднимут.
         markDowned(player, now);
-        const point = coopSpawnFor(room.spec, player.checkpoint, player.role);
+        const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
         player.last = {
           ...point,
           ry: 0,

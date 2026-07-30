@@ -1,10 +1,10 @@
 // Боты для проверки проходимости кооперативных глав.
 //
 // Зачем это нужно. Прежние тесты проверяли механизмы по отдельности: нажимается ли плита,
-// выдвигается ли пролёт, находится ли излучатель в конусе наводки. Все они проходили — и при этом
-// главы оказались непроходимыми. Потому что «пролёт выдвинулся» и «по нему можно перейти» — разные
-// утверждения, и второе из первого не следует. Классический пример: пролёт держится, пока ОБА
-// стоят на плитах, значит сойти с плиты и перейти не может никто.
+// выдвигается ли пролёт. Все они проходили — и при этом главы оказались непроходимыми. Потому что
+// «пролёт выдвинулся» и «по нему можно перейти» — разные утверждения, и второе из первого не
+// следует. Классический пример: пролёт держался, пока ОБА стоят на плитах, значит сойти с плиты
+// и перейти не мог никто.
 //
 // Бот не проверяет механизмы. Бот играет: жмёт те же кнопки, что и человек, двигается той же
 // физикой и должен дойти до финиша. Если он не дошёл — глава непроходима, и неважно, какие
@@ -18,7 +18,6 @@ import * as THREE from 'three';
 import { Player } from '../client/game/Player.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
 import { updateRoleActions } from '../client/game/CoopActions.js';
-import { COOP_ROLE } from '../shared/protocol.js';
 
 export const FIXED_DT = 1 / 60;
 
@@ -60,14 +59,14 @@ class BotInput {
 const NO_EFFECTS = { burst() {}, trail() {}, ring() {} };
 
 export class Bot {
-  constructor(course, role, scene) {
-    this.role = role;
+  constructor(course, slot, scene) {
+    this.slot = slot;
     this.input = new BotInput();
     // Без имени: табличка рисуется на canvas, которого в Node нет, а на физику она не влияет.
-    this.player = new Player(scene, course, NO_EFFECTS, { role, remote: false });
-    this.player.teleport(new THREE.Vector3().copy(course.spawnFor(0, role)));
+    this.player = new Player(scene, course, NO_EFFECTS, { remote: false });
+    this.player.teleport(new THREE.Vector3().copy(course.spawnFor(0, slot)));
     this.course = course;
-    this.id = role;
+    this.id = `bot${slot}`;
     // Куда «смотрит камера». Бот держит взгляд по направлению движения, как обычно делает игрок.
     this.yaw = 0;
     this._forward = new THREE.Vector3();
@@ -79,15 +78,10 @@ export class Bot {
 
   // Состояние в том виде, в каком его ждёт CoopCourse.updateCoop.
   get actor() {
-    return {
-      id: this.id,
-      role: this.role,
-      position: this.player.position,
-      grounded: this.player.grounded
-    };
+    return { id: this.id, position: this.player.position, grounded: this.player.grounded };
   }
 
-  // Взгляд в сторону точки: наводка луча берётся именно отсюда.
+  // Взгляд в сторону точки: от него зависит направление бега.
   lookAt(x, z) {
     const dx = x - this.player.position.x;
     const dz = z - this.player.position.z;
@@ -119,8 +113,10 @@ export class World {
   constructor(chapterSpec) {
     this.scene = new THREE.Scene();
     this.course = new CoopCourse(this.scene, chapterSpec, { quality: 'low' });
-    this.spark = new Bot(this.course, COOP_ROLE.SPARK, this.scene);
-    this.anchor = new Bot(this.course, COOP_ROLE.ANCHOR, this.scene);
+    // Имена оставлены прежними, чтобы не переписывать все сценарии: это просто «первый» и
+    // «второй» игрок, никакой разницы в способностях между ними больше нет.
+    this.spark = new Bot(this.course, 0, this.scene);
+    this.anchor = new Bot(this.course, 1, this.scene);
     this.bots = [this.spark, this.anchor];
     this.elapsed = 0;
     this.events = [];
@@ -130,7 +126,7 @@ export class World {
     return this.bots.map(bot => bot.actor);
   }
 
-  // Один шаг симуляции — тот же порядок, что в игре: сперва состояние мира, потом действия ролей,
+  // Один шаг симуляции — тот же порядок, что в игре: сперва состояние мира, потом действия,
   // потом физика. Порядок важен: пролёт должен появиться раньше, чем по нему пойдут.
   step() {
     this.elapsed += FIXED_DT;
@@ -141,12 +137,6 @@ export class World {
 
     for (const bot of this.bots) {
       updateRoleActions(bot.player, this.course, bot.input, bot.yaw, {
-        role: bot.role,
-        forward: bot._forward,
-        onBeamChange: aimed => {
-          this.course.setBeam(bot.id, aimed);
-          this.events.push({ t: this.elapsed, who: bot.role, what: 'beam', aimed });
-        },
         onCatapult: id => this.launch(bot, id)
       });
     }
@@ -161,7 +151,7 @@ export class World {
   // Подброс катапультой: инициатор считает импульс, цель его применяет — как и по сети.
   launch(bot, catapultId) {
     const { actor, catapult } = this.course.launchCandidate(catapultId, this.actors());
-    this.events.push({ t: this.elapsed, who: bot.role, what: 'catapult', id: catapultId, hit: !!actor });
+    this.events.push({ t: this.elapsed, who: bot.id, what: 'catapult', id: catapultId, hit: !!actor });
     if (!actor || actor.id === bot.id) return;
     const target = this.bots.find(item => item.id === actor.id);
     target?.player.applyLaunch({ x: 0, y: catapult.power, z: -catapult.power * catapult.forward });
@@ -211,7 +201,7 @@ export class Runner {
   // Преграды идут по порядку, поэтому решаем их одну за другой.
   obstacles() {
     return this.layout.pieces
-      .filter(p => ['gateSpan', 'beamSpan', 'syncSpan'].includes(p.kind))
+      .filter(p => ['gateSpan', 'syncSpan'].includes(p.kind))
       .sort((a, b) => b.z - a.z);
   }
 
@@ -224,9 +214,9 @@ export class Runner {
     if (hold.z < piece.z - piece.length / 2) return this.passCatapultGate(piece, hold);
     const latch = world.course.plates.get(piece.latch);
     const far = piece.z - piece.length / 2;
-    // Держит тот, кому плита по силам; переходит второй.
-    const holder = hold.role === COOP_ROLE.ANCHOR ? world.anchor : world.spark;
-    const mover = holder === world.spark ? world.anchor : world.spark;
+    // Кто держит, а кто идёт — не важно: персонажи одинаковые. Берём первого и второго.
+    const holder = world.spark;
+    const mover = world.anchor;
 
     const held = world.run(
       16,
@@ -260,7 +250,7 @@ export class Runner {
         mover.lookAt(latch.x, latch.z);
         mover.steerTo(latch.x, latch.z);
       },
-      () => holder.position.z < far - 2
+      () => holder.position.z < far - 2 && holder.player.grounded
     );
     if (!followed) return this.fail(`${piece.id}: держащий не смог перейти по закреплённому пролёту`);
     this.log.push(`${piece.id}: ворота пройдены`);
@@ -310,64 +300,10 @@ export class Runner {
         world.anchor.lookAt(0, far - 20);
         world.anchor.steerTo(0, far - 5);
       },
-      () => world.anchor.position.z < far - 2
+      () => world.anchor.position.z < far - 2 && world.anchor.player.grounded
     );
     if (!crossed) return this.fail(`${piece.id}: ГРУЗ не смог перейти, пока ИСКРА держит плиту`);
     this.log.push(`${piece.id}: ворота с катапультой пройдены`);
-    return true;
-  }
-
-  // Световой мост: ИСКРА наводит, ГРУЗ переходит и давит фиксатор, ИСКРА идёт следом.
-  passBeam(piece) {
-    const { world } = this;
-    const emitter = world.course.emitters.get(piece.emitter);
-    const latch = world.course.plates.get(piece.latch);
-    const far = piece.z - piece.length / 2;
-
-    const lit = world.run(
-      26,
-      () => {
-        const s = world.spark;
-        s.input.holding.dive = true;
-        s.input.holding.jump = true;
-        s.lookAt(emitter.position.x, emitter.position.z);
-        const d = s.steerTo(emitter.position.x, emitter.position.z);
-        if (s.player.grounded && d < 6) s.input.jumpQueued = true;
-        world.anchor.lookAt(0, piece.z);
-        world.anchor.steerTo(0, piece.z + piece.length / 2 + 3);
-      },
-      () => world.course.spans.get(piece.id).active
-    );
-    if (!lit) return this.fail(`${piece.id}: ИСКРА не смогла поднять мост`);
-
-    const crossed = world.run(
-      24,
-      () => {
-        const s = world.spark;
-        s.input.holding.dive = true;
-        s.lookAt(emitter.position.x, emitter.position.z);
-        s.steerTo(emitter.position.x, emitter.position.z);
-        world.anchor.lookAt(latch.x, latch.z - 10);
-        world.anchor.steerTo(latch.x, latch.z);
-      },
-      () => world.course.spans.get(piece.id).latched
-    );
-    if (!crossed) return this.fail(`${piece.id}: ГРУЗ не добрался до фиксатора моста`);
-
-    const followed = world.run(
-      26,
-      () => {
-        const s = world.spark;
-        s.input.holding.dive = false;
-        s.input.holding.jump = true;
-        s.lookAt(0, far - 20);
-        s.steerTo(0, far - 5);
-        world.anchor.steerTo(latch.x, latch.z);
-      },
-      () => world.spark.position.z < far - 2
-    );
-    if (!followed) return this.fail(`${piece.id}: ИСКРА не смогла перейти по закреплённому мосту`);
-    this.log.push(`${piece.id}: мост пройден`);
     return true;
   }
 
@@ -391,7 +327,10 @@ export class Runner {
           bot.steerTo(bot.position.x, far - 5);
         }
       },
-      () => world.bots.every(bot => bot.position.z < far - 2)
+      // Проверяем не только координату, но и что оба ЖИВЫ и стоят на ногах. Иначе падение сквозь
+      // исчезнувший пролёт засчитывалось бы как успех: координата за время падения тоже
+      // проскакивает нужную отметку. Ровно так этот тест и обманул меня в первый раз.
+      () => world.bots.every(bot => bot.position.z < far - 2 && bot.player.grounded)
     );
     if (!passed) return this.fail(`${piece.id}: синхронные ворота не пройдены`);
     this.log.push(`${piece.id}: синхронные ворота пройдены`);
@@ -412,7 +351,7 @@ export class Runner {
           if (bot.player.grounded && !this.solidAhead(bot)) bot.input.jumpQueued = true;
         }
       },
-      () => world.bots.every(bot => bot.position.z < z + 1)
+      () => world.bots.every(bot => bot.position.z < z + 1 && bot.player.grounded)
     );
   }
 

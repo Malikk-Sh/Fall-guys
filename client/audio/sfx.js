@@ -240,29 +240,6 @@ export class Sfx {
   // Своё звучание здесь не украшение — по звуку игрок понимает, сработало ли действие, не отводя
   // взгляда от напарника.
 
-  // Луч: непрерывный тон, пока держат наводку. Не одиночный сигнал, а именно длящийся —
-  // так слышно, что мост держится на тебе.
-  beamStart(position = null) {
-    this.engine.playTone({ freq: [420, 880], type: 'sawtooth', duration: 0.24, volume: 0.14, position });
-    this.engine.playTone({ freq: [840, 1320], type: 'sine', duration: 0.3, volume: 0.08, position });
-  }
-
-  beamStop(position = null) {
-    this.engine.playTone({ freq: [880, 300], type: 'sawtooth', duration: 0.2, volume: 0.1, position });
-  }
-
-  // Тихий гул, пока луч держат: подсказывает напарнику, что можно идти.
-  beamHold(position = null) {
-    if (!this.engine.throttle('beamHold', 0.32)) return;
-    this.engine.playTone({
-      freq: vary(660, 25),
-      type: 'triangle',
-      duration: 0.34,
-      volume: 0.05,
-      position
-    });
-  }
-
   // Удар сверху: тяжёлый, низкий, с ощутимым весом. Ровно противоположность лёгкому рывку ИСКРЫ.
   slam(position = null) {
     this.engine.playTone({ freq: [90, 38], type: 'sine', duration: 0.3, volume: 0.34, position });

@@ -89,15 +89,14 @@ export class UI {
   }
 
   // Заставка перед стартом главы: название и что именно предстоит сделать.
-  coopIntro(spec, role) {
+  coopIntro(spec) {
     const intro = $('#coopIntro');
-    $('#coopIntroRole').textContent = role === 'anchor' ? 'ВЫ — ГРУЗ' : 'ВЫ — ИСКРА';
+    $('#coopIntroRole').textContent = 'ГЛАВА';
     $('#coopIntroTitle').textContent = spec.title;
     $('#coopIntroHint').textContent = spec.hint;
     intro.classList.remove('hidden');
     clearTimeout(this.introTimer);
     this.introTimer = setTimeout(() => intro.classList.add('hidden'), 5200);
-    $('#roleName').textContent = role === 'anchor' ? 'ГРУЗ' : 'ИСКРА';
   }
 
   // Обучающая подсказка первой главы. Показывает текст своей роли и держится, пока задача
@@ -105,7 +104,7 @@ export class UI {
   //
   // Перерисовываем только при смене текста: элемент обновляется каждый кадр, а трогать DOM
   // шестьдесят раз в секунду ради одной и той же строки незачем.
-  coopLesson(text, role) {
+  coopLesson(text) {
     const node = $('#coopLesson');
     if (!text) {
       if (this.lessonText !== null) {
@@ -116,7 +115,6 @@ export class UI {
     }
     if (this.lessonText === text) return;
     this.lessonText = text;
-    $('#coopLessonRole').textContent = role === 'anchor' ? 'ГРУЗ' : 'ИСКРА';
     $('#coopLessonText').textContent = text;
     node.classList.remove('hidden');
   }
@@ -247,7 +245,6 @@ export class UI {
     // В кооперативе места нет — есть общая цель, поэтому счётчик места скрыт.
     $('#placeBox').classList.toggle('hidden', !multiplayer || coop);
     $('#pingBox').classList.toggle('hidden', !multiplayer);
-    $('#roleBox').classList.toggle('hidden', !coop);
     if (!on || !coop) $('#partnerHud').classList.add('hidden');
     if (!on) $('#coopIntro').classList.add('hidden');
     if (!on || !coop) this.coopLesson(null);

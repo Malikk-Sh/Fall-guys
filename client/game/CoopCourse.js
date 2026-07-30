@@ -2,18 +2,17 @@ import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 import { CourseBuilder, PLAYER_FOOT } from './CourseBuilder.js';
 import { chapterLayout, coopSpawnFor, LANE_WIDTH } from '/shared/coopChapters.js';
-import { COOP_ROLE } from '/shared/protocol.js';
 
 // Постройка кооперативной главы из данных.
 //
 // Ключевое отличие от гоночной трассы: почти всё состояние здесь ВЫВОДИМОЕ. Нажата ли плита,
-// выдвинут ли пролёт, существует ли мост — всё это однозначно определяется позициями двух игроков,
-// а обе позиции у каждого клиента уже есть: своя из физики, напарника из буфера снапшотов. Значит,
-// оба клиента приходят к одному состоянию сами, и по сети ничего передавать не нужно.
+// выдвинут ли пролёт, в какой фазе пресс — всё это однозначно определяется позициями игроков и
+// общим временем, а и то и другое у каждого клиента уже есть: своя позиция из физики, позиция
+// напарника из буфера снапшотов, время — общее серверное. Значит, оба клиента приходят к одному
+// состоянию сами, и по сети ничего передавать не нужно.
 //
-// По сети идут только те действия, которые нельзя вывести из позиции: наводка луча (это намерение,
-// а не положение) и удар катапульты (импульс, применяемый к другому игроку). Их шлёт инициатор,
-// сервер проверяет и ретранслирует.
+// По сети идёт единственное действие, которое из позиции не выводится: удар катапульты (импульс,
+// применяемый к ДРУГОМУ игроку). Его шлёт инициатор, сервер проверяет и ретранслирует.
 
 // Цвет пролёта, когда он выдвинут и когда убран.
 const SPAN_ACTIVE = COLORS.mint;
@@ -24,17 +23,9 @@ const PLATE_PRESS_DEPTH = 0.12;
 
 // Радиус срабатывания плиты. Заметно больше самой плиты: попадать в пиксель на телефоне
 // неприятно, а промах здесь ничего не решает по смыслу.
-const PLATE_RADIUS = 1.5;
+const PLATE_RADIUS = 1.6;
 
-// Дальность луча ИСКРЫ и максимальный угол отклонения от направления взгляда.
-export const BEAM_RANGE = 26;
-export const BEAM_CONE = Math.cos(0.55);
-
-// Ближе этого по горизонтали направление на излучатель теряет смысл: игрок стоит практически
-// под ним, и любой поворот камеры менял бы наводку рывками.
-const BEAM_NEAR = 2.5;
-
-// На каком расстоянии удар ГРУЗА приводит в действие катапульту.
+// На каком расстоянии удар сверху приводит в действие катапульту.
 const SLAM_RADIUS = 3.2;
 
 export class CoopCourse extends CourseBuilder {
@@ -45,14 +36,15 @@ export class CoopCourse extends CourseBuilder {
 
     this.plates = new Map();
     this.spans = new Map();
-    this.emitters = new Map();
     this.catapults = [];
-    this.winds = [];
+    this.conveyors = [];
+    this.fans = [];
+    this.pendulums = [];
+    this.crushers = [];
+    this.tiles = [];
     this.syncGates = [];
     this.stageNames = [];
 
-    // Кто из игроков сейчас держит луч на каком излучателе. Приходит по сети.
-    this.activeBeams = new Map();
     // Отметки пересечения черты синхронности: id ворот → { playerId: время }.
     this.syncCrossings = new Map();
     // Уроки, которые уже усвоены. Однажды понятое не разучивается обратно.
@@ -78,14 +70,14 @@ export class CoopCourse extends CourseBuilder {
       case 'gateSpan':
         this.addSpan(piece, 'gate');
         break;
-      case 'beamSpan':
-        this.addSpan(piece, 'beam');
-        break;
       case 'syncSpan':
         this.addSpan(piece, 'sync');
         break;
       case 'movingSpan':
         this.addMovingSpan(piece);
+        break;
+      case 'collapsing':
+        this.addCollapsing(piece);
         break;
     }
   }
@@ -107,21 +99,25 @@ export class CoopCourse extends CourseBuilder {
   addProp(prop, piece) {
     if (prop.type === 'plate') return this.addPlate(prop, piece);
     if (prop.type === 'catapult') return this.addCatapult(prop, piece);
-    if (prop.type === 'perch') return this.addPerch(prop, piece);
-    if (prop.type === 'emitter') return this.addEmitter(prop, piece);
-    if (prop.type === 'wind') return this.addWind(prop, piece);
+    if (prop.type === 'conveyor') return this.addConveyor(prop, piece);
+    if (prop.type === 'fan') return this.addFan(prop, piece);
+    if (prop.type === 'pendulum') return this.addPendulum(prop, piece);
+    if (prop.type === 'crusher') return this.addCrusher(prop, piece);
   }
 
+  // Плита. Нажимается кем угодно: ролей нет, важно только что кто-то на ней стоит.
   addPlate(prop, piece) {
-    const heavy = prop.role === COOP_ROLE.ANCHOR;
-    // Тяжёлая плита выглядит иначе, и это не украшение: игрок должен понимать, кому на неё вставать,
-    // не читая подсказок.
-    const color = heavy ? COLORS.orange : COLORS.cyan;
-    const base = this.cylinder({ x: prop.x, y: 0.54, z: piece.z, r: 1.25, h: 0.22, color });
+    const base = this.cylinder({
+      x: prop.x,
+      y: 0.54,
+      z: piece.z,
+      r: 1.25,
+      h: 0.22,
+      color: COLORS.cyan
+    });
     const ring = this.cylinder({ x: prop.x, y: 0.66, z: piece.z, r: 0.85, h: 0.08, color: COLORS.white });
     this.plates.set(prop.id, {
       id: prop.id,
-      role: prop.role,
       x: prop.x,
       z: piece.z,
       baseY: 0.54,
@@ -134,7 +130,6 @@ export class CoopCourse extends CourseBuilder {
   addCatapult(prop, piece) {
     const pivot = new THREE.Group();
     pivot.position.set(prop.x, 0.9, piece.z);
-    // Длинное плечо — площадка для ИСКРЫ, короткое — та часть, по которой бьёт ГРУЗ.
     const arm = new THREE.Mesh(
       new THREE.BoxGeometry(3.2, 0.3, 9),
       this.material({ color: COLORS.yellow, roughness: 0.25 })
@@ -144,7 +139,8 @@ export class CoopCourse extends CourseBuilder {
     this.group.add(pivot);
     this.cameraMeshes.push(arm);
 
-    // Опора — она же коллайдер, чтобы на качели можно было встать.
+    // Длинное плечо — площадка для того, кого подбрасывают, и она же коллайдер. Кто именно на неё
+    // встанет, значения не имеет: ролей нет, стороны выбирают сами игроки.
     const seat = this.box({
       x: prop.x,
       y: 0.55,
@@ -155,7 +151,7 @@ export class CoopCourse extends CourseBuilder {
       color: COLORS.yellow
     });
     this.cylinder({ x: prop.x, y: 0.55, z: piece.z, r: 0.6, h: 1.1, color: COLORS.purpleDark });
-    // Ударная площадка со стороны ГРУЗА — визуально отличается цветом.
+    // Ударная площадка — по ней бьют сверху. Отличается цветом, чтобы стороны не путались.
     this.box({
       x: prop.x,
       y: 0.55,
@@ -176,93 +172,207 @@ export class CoopCourse extends CourseBuilder {
       forward: prop.forward,
       pivot,
       seat,
-      // Точка, где стоит ИСКРА, и точка, куда бьёт ГРУЗ.
       launchZ: piece.z - 3,
       slamZ: piece.z + 3,
       recoil: 0
     });
   }
 
-  addPerch(prop, piece) {
-    // Возвышение сбоку: с него виден излучатель, но спрыгнуть прямо на мост нельзя.
-    this.box({
-      x: prop.x,
-      y: prop.height - 0.5,
-      z: piece.z,
-      w: 6,
-      h: 1,
-      d: 8,
-      color: COLORS.blue,
-      bevel: true
-    });
-    // Пандус, чтобы на площадку можно было забежать, а не только запрыгнуть.
-    for (let i = 0; i < 4; i++) {
-      this.box({
-        x: prop.x + (prop.x < 0 ? 3.4 + i * 1.2 : -3.4 - i * 1.2),
-        y: prop.height - 0.5 - (i + 1) * (prop.height / 5),
-        z: piece.z,
-        w: 1.4,
-        h: 1,
-        d: 6,
-        color: COLORS.blue
-      });
+  // Конвейер: полосы на полу показывают направление, сила прикладывается в interact.
+  addConveyor(prop, piece) {
+    const arrows = [];
+    const stripes = Math.max(3, Math.round(piece.length / 3));
+    for (let i = 0; i < stripes; i++) {
+      arrows.push(
+        this.box({
+          x: 0,
+          y: 0.53,
+          z: piece.z - piece.length / 2 + (i + 0.5) * (piece.length / stripes),
+          w: LANE_WIDTH - 1.5,
+          h: 0.05,
+          d: 0.9,
+          color: COLORS.mint,
+          collider: false,
+          emissive: COLORS.mint,
+          emissiveIntensity: 0.7
+        }).mesh
+      );
     }
-  }
-
-  addEmitter(prop, piece) {
-    const post = this.cylinder({
-      x: prop.x,
-      y: prop.height - 0.8,
-      z: piece.z - 3,
-      r: 0.35,
-      h: 1.6,
-      color: COLORS.purpleDark
-    });
-    const lens = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.7, 1),
-      this.material({ color: COLORS.cyan, emissive: COLORS.cyan, emissiveIntensity: 0.6 })
-    );
-    lens.position.set(prop.x, prop.height, piece.z - 3);
-    this.group.add(lens);
-
-    // Луч рисуется отдельным вытянутым мешем, который появляется только когда его держат.
-    const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.14, 0.14, 1, 6),
-      this.material({ color: COLORS.cyan, emissive: COLORS.cyan, emissiveIntensity: 2.6, opacity: 0.75 })
-    );
-    beam.visible = false;
-    this.group.add(beam);
-
-    this.emitters.set(prop.id, {
-      id: prop.id,
-      position: new THREE.Vector3(prop.x, prop.height, piece.z - 3),
-      lens,
-      beam,
-      post,
-      active: false
+    this.conveyors.push({
+      zMin: piece.z - piece.length / 2,
+      zMax: piece.z + piece.length / 2,
+      z: piece.z,
+      length: piece.length,
+      force: prop.force,
+      arrows
     });
   }
 
-  addWind(prop, piece) {
-    this.winds.push({
+  // Вентилятор: сдувает вбок. Раньше это был «ветер», действовавший только на лёгкую роль;
+  // теперь ролей нет и сдувает всех одинаково.
+  addFan(prop, piece) {
+    this.fans.push({
       zMin: piece.z - piece.length / 2,
       zMax: piece.z + piece.length / 2,
       force: prop.force
     });
-    // Зона ветра обозначена полосами на полу: невидимая механика ощущается как несправедливая.
-    const stripes = Math.max(2, Math.round(piece.length / 5));
-    for (let i = 0; i < stripes; i++) {
+    const rows = Math.max(2, Math.round(piece.length / 5));
+    for (let i = 0; i < rows; i++) {
+      const z = piece.z - piece.length / 2 + (i + 0.5) * (piece.length / rows);
+      // Сам вентилятор — со стороны, откуда дует.
+      this.box({
+        x: prop.force > 0 ? -LANE_WIDTH / 2 + 1 : LANE_WIDTH / 2 - 1,
+        y: 1.1,
+        z,
+        w: 1.6,
+        h: 1.6,
+        d: 1.6,
+        color: COLORS.blue,
+        collider: false,
+        opacity: 0.8
+      });
+      // Струя: невидимая механика ощущается как несправедливая, поэтому она нарисована.
       this.box({
         x: 0,
-        y: 0.52,
-        z: piece.z - piece.length / 2 + (i + 0.5) * (piece.length / stripes),
+        y: 0.9,
+        z,
         w: LANE_WIDTH - 1,
-        h: 0.04,
-        d: 0.5,
+        h: 0.05,
+        d: 0.35,
         color: COLORS.white,
         collider: false,
         opacity: 0.35
       });
+    }
+  }
+
+  // Маятник: качающийся молот. Жёсткая опасность — отбрасывает, но не убивает.
+  addPendulum(prop, piece) {
+    const pivot = new THREE.Group();
+    pivot.position.set(prop.x, 6, piece.z);
+    this.group.add(pivot);
+
+    const rod = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.12, 5, 6),
+      this.material({ color: COLORS.purpleDark })
+    );
+    rod.position.y = -2.5;
+    pivot.add(rod);
+
+    const head = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 1.6, 1.6),
+      this.material({ color: COLORS.pink, emissive: COLORS.pink, emissiveIntensity: 0.5 })
+    );
+    head.position.y = -5.2;
+    head.castShadow = this.quality !== 'low';
+    pivot.add(head);
+    this.cameraMeshes.push(head);
+
+    this.pendulums.push({
+      id: prop.id,
+      x: prop.x,
+      z: piece.z,
+      range: prop.range,
+      speed: prop.speed,
+      knock: prop.knock,
+      pivot,
+      head,
+      // Мировая позиция головы: по ней считается попадание, и её надо пересчитывать каждый кадр.
+      world: new THREE.Vector3(prop.x, 0.8, piece.z)
+    });
+  }
+
+  // Пресс. Смертельная опасность, но честная: три такта, и первый из них — предупреждение.
+  // Внезапная смерть читается как несправедливость, а не как ошибка игрока.
+  addCrusher(prop, piece) {
+    const head = this.box({
+      x: prop.x,
+      y: 6,
+      z: piece.z,
+      w: prop.width,
+      h: 1.6,
+      d: prop.width,
+      color: COLORS.orange,
+      collider: false
+    }).mesh;
+    // Отметка на полу: куда именно ударит. Без неё непонятно, где безопасно стоять.
+    const mark = this.box({
+      x: prop.x,
+      y: 0.52,
+      z: piece.z,
+      w: prop.width,
+      h: 0.05,
+      d: prop.width,
+      color: COLORS.orange,
+      collider: false,
+      opacity: 0.4
+    }).mesh;
+    // Направляющие: делают механизм читаемым сбоку и подсказывают высоту.
+    for (const dx of [-prop.width / 2, prop.width / 2]) {
+      this.box({
+        x: prop.x + dx,
+        y: 4,
+        z: piece.z,
+        w: 0.2,
+        h: 8,
+        d: 0.2,
+        color: COLORS.purpleDark,
+        collider: false
+      });
+    }
+
+    this.crushers.push({
+      id: prop.id,
+      x: prop.x,
+      z: piece.z,
+      width: prop.width,
+      period: prop.period,
+      warn: prop.warn,
+      strike: prop.strike,
+      // Фаза сдвинута по координате: два пресса рядом не должны бить одновременно, иначе
+      // участок проходится не по расписанию, а по удаче.
+      phase: (Math.abs(prop.x) * 0.37 + Math.abs(piece.z) * 0.11) % prop.period,
+      head,
+      mark,
+      danger: false
+    });
+  }
+
+  // Осыпающиеся плитки: пол, который исчезает вскоре после того, как на него наступили.
+  //
+  // В кооперативе интереснее, чем в одиночку: второй бежит по уже подломленным плиткам и должен
+  // выбирать другой ряд. Поэтому плитки возвращаются — иначе идущий вторым остался бы без пола.
+  addCollapsing(piece) {
+    const lanes = piece.lanes;
+    const rows = Math.max(3, Math.round(piece.length / 3.2));
+    const laneWidth = (LANE_WIDTH - 1) / lanes;
+    const rowDepth = piece.length / rows;
+
+    for (let r = 0; r < rows; r++) {
+      for (let l = 0; l < lanes; l++) {
+        const x = -LANE_WIDTH / 2 + 0.5 + laneWidth * (l + 0.5);
+        const z = piece.z + piece.length / 2 - rowDepth * (r + 0.5);
+        const platform = this.box({
+          x,
+          y: 0,
+          z,
+          w: laneWidth - 0.2,
+          h: 1,
+          d: rowDepth - 0.2,
+          color: COLORS.blue,
+          bevel: true
+        });
+        this.tiles.push({
+          id: `${piece.id}-${r}-${l}`,
+          platform,
+          baseY: 0,
+          delay: piece.delay,
+          respawn: piece.respawn,
+          // 0 — цела и никто не наступал; >0 — идёт отсчёт; после обрушения отсчёт возврата.
+          timer: 0,
+          fallen: false
+        });
+      }
     }
   }
 
@@ -301,12 +411,10 @@ export class CoopCourse extends CourseBuilder {
       control,
       platform,
       requires: piece.requires || [],
-      emitter: piece.emitter || null,
-      // Фиксатор: плита на дальней стороне, закрепляющая мост насовсем. Без него ИСКРА, которая
-      // держала луч, сама перейти не сможет — мост исчезнет, едва она потеряет наводку.
+      // Фиксатор: плита ЗА пролётом, закрепляющая его насовсем.
       latch: piece.latch || null,
       latched: false,
-      windowMs: piece.windowMs || 800,
+      windowMs: piece.windowMs || 900,
       z: piece.z,
       length: piece.length,
       active: false
@@ -393,8 +501,8 @@ export class CoopCourse extends CourseBuilder {
 
   // Пересчёт по позициям обоих игроков. Вызывается каждый шаг физики.
   //
-  // `actors` — массив вида { id, role, position, grounded }. Здесь и свой игрок, и напарник:
-  // именно поэтому состояние получается одинаковым у обоих клиентов без обмена сообщениями.
+  // `actors` — массив вида { id, position, grounded }. Здесь и свой игрок, и напарник: именно
+  // поэтому состояние получается одинаковым у обоих клиентов без обмена сообщениями.
   updateCoop(actors, nowMs, sfx = null) {
     for (const plate of this.plates.values()) {
       const pressed = actors.some(actor => this.standsOnPlate(actor, plate));
@@ -411,22 +519,19 @@ export class CoopCourse extends CourseBuilder {
     for (const span of this.spans.values()) {
       let active = false;
       if (span.control === 'gate') {
-        // Фиксатор на дальней стороне — обязательная часть конструкции, а не украшение.
+        // Фиксатор за пролётом — обязательная часть конструкции, а не украшение.
         //
-        // Без него ворота были головоломкой без решения: пролёт держится, пока плиты нажаты,
-        // а нажать их можно только стоя на них. Сойти, чтобы перейти, значит убрать пролёт —
+        // Без него ворота были головоломкой без решения: пролёт держится, пока плита нажата,
+        // а нажать её можно только стоя на ней. Сойти, чтобы перейти, значит убрать пролёт —
         // из-под себя или из-под напарника. Все проверки при этом были зелёными: пролёт ведь
         // честно выдвигался. Он просто ни для кого не был проходим.
         //
-        // Схема поэтому трёхтактная, как и у светового моста: один держит плиту → второй
-        // переходит → второй встаёт на фиксатор за пролётом и закрепляет его насовсем → первый
-        // сходит с плиты и переходит следом.
+        // Схема поэтому трёхтактная: один держит плиту → второй переходит → второй встаёт на
+        // фиксатор за пролётом и закрепляет его насовсем → первый сходит с плиты и идёт следом.
         if (span.latch && this.plates.get(span.latch)?.pressed) span.latched = true;
-        active = span.latched || span.requires.every(id => this.plates.get(id)?.pressed);
-      } else if (span.control === 'beam') {
-        // Фиксатор срабатывает один раз и больше не отпускает: он именно «закрепляет» мост.
-        if (span.latch && this.plates.get(span.latch)?.pressed) span.latched = true;
-        active = span.latched || this.emitters.get(span.emitter)?.active || false;
+        // Достаточно ЛЮБОЙ из плит: их бывает несколько по разные стороны дорожки, и игроку не
+        // должно быть важно, до какой он добежал.
+        active = span.latched || span.requires.some(id => this.plates.get(id)?.pressed);
       } else if (span.control === 'sync') {
         active = this.syncSatisfied(span, actors, nowMs);
       }
@@ -436,9 +541,6 @@ export class CoopCourse extends CourseBuilder {
 
   standsOnPlate(actor, plate) {
     if (!actor) return false;
-    // Тяжёлую плиту продавливает только ГРУЗ. Это и есть источник асимметрии: без напарника
-    // нужной роли участок не проходится вообще.
-    if (plate.role === COOP_ROLE.ANCHOR && actor.role !== COOP_ROLE.ANCHOR) return false;
     const dx = actor.position.x - plate.x;
     const dz = actor.position.z - plate.z;
     if (dx * dx + dz * dz > PLATE_RADIUS * PLATE_RADIUS) return false;
@@ -447,7 +549,16 @@ export class CoopCourse extends CourseBuilder {
   }
 
   // Ворота синхронности: оба должны пересечь черту в пределах окна.
+  //
+  // Условие ЗАЩЁЛКИВАЕТСЯ — и без этого ворота были непроходимы вовсе. Окно синхронности меньше
+  // секунды, а перейти надо четырнадцать единиц, то есть почти две секунды бега: пролёт исчезал
+  // прямо из-под идущих, примерно на середине. Пара делала всё правильно, попадала в окно,
+  // ступала на появившийся пролёт — и падала.
+  //
+  // Задача этих ворот — заставить действовать одновременно, а не пробежать быстрее таймера,
+  // который обогнать нельзя. Синхронность доказана в момент попадания в окно; дальше пролёт стоит.
   syncSatisfied(span, actors, nowMs) {
+    if (span.latched) return true;
     const line = span.z + span.length / 2;
     let crossings = this.syncCrossings.get(span.id);
     if (!crossings) {
@@ -462,7 +573,11 @@ export class CoopCourse extends CourseBuilder {
     const times = [...crossings.values()];
     const spread = Math.max(...times) - Math.min(...times);
     const fresh = times.every(t => nowMs - t < span.windowMs);
-    return fresh && spread < span.windowMs;
+    if (fresh && spread < span.windowMs) {
+      span.latched = true;
+      return true;
+    }
+    return false;
   }
 
   // --- Обучение ------------------------------------------------------------------------------
@@ -470,9 +585,6 @@ export class CoopCourse extends CourseBuilder {
   // Какой урок показывать сейчас. Берётся ПОСЛЕДНИЙ из достигнутых и ещё не усвоенных: если игрок
   // подошёл к следующей задаче, не разобравшись с прошлой подсказкой, актуальна следующая —
   // висящая позади уже не помогает, а мешает.
-  //
-  // Условие усвоения выводится из того же состояния, что и сами механики, поэтому обучение не
-  // требует ни одного дополнительного сетевого сообщения и одинаково у обоих игроков.
   activeLesson(actors) {
     const lessons = this.spec.lessons;
     if (!lessons?.length || !actors.length) return null;
@@ -492,9 +604,9 @@ export class CoopCourse extends CourseBuilder {
   }
 
   // Условие `done` описывает МОМЕНТ, когда стало понятно, а не состояние, которое надо удерживать.
-  // Разница существенная: пролёт выдвинут, только пока обе плиты нажаты, и пара, перешедшая по
-  // нему, сходит с плит — состояние возвращается в исходное. Без запоминания подсказка «встаньте
-  // на плиты» вернулась бы игрокам, которые уже стоят на той стороне.
+  // Разница существенная: пролёт выдвинут, только пока плита нажата, и пара, перешедшая по нему,
+  // сходит с плиты — состояние возвращается в исходное. Без запоминания подсказка «встаньте на
+  // плиту» вернулась бы игрокам, которые уже стоят на той стороне.
   lessonDone(done, actors) {
     if (done.span) return !!this.spans.get(done.span)?.active;
     if (done.plates) return done.plates.every(id => this.plates.get(id)?.pressed);
@@ -518,45 +630,7 @@ export class CoopCourse extends CourseBuilder {
     });
   }
 
-  // Наводка луча приходит по сети: это намерение игрока, из позиции его не вывести.
-  setBeam(playerId, emitterId) {
-    if (emitterId) this.activeBeams.set(playerId, emitterId);
-    else this.activeBeams.delete(playerId);
-    const held = new Set(this.activeBeams.values());
-    for (const emitter of this.emitters.values()) emitter.active = held.has(emitter.id);
-  }
-
-  // Ближайший излучатель, на который смотрит ИСКРА. Возвращает id либо null.
-  // Наводка луча.
-  //
-  // Сравнение ведётся В ГОРИЗОНТАЛЬНОЙ ПЛОСКОСТИ, и это не мелочь. Раньше направление на излучатель
-  // бралось в трёх измерениях, а направление взгляда было горизонтальным по построению (камера
-  // даёт только рыскание). Излучатель стоит на столбе выше игрока, поэтому чем ближе к нему
-  // подходишь, тем круче вверх смотрит вектор «на цель» — и тем меньше его скалярное произведение
-  // с горизонтальным взглядом. В итоге навести можно было только издалека: с шести единиц и ближе
-  // луч не включался вовсе, а обучение как раз велит подняться на площадку и встать рядом.
-  //
-  // Игрок при этом делал всё правильно, кнопку держал, и ничего не происходило.
-  aimedEmitter(position, forward) {
-    let best = null;
-    let bestDistance = BEAM_RANGE;
-    for (const emitter of this.emitters.values()) {
-      const to = this._tmp.copy(emitter.position).sub(position);
-      const distance = to.length();
-      if (distance > bestDistance) continue;
-
-      const horizontal = Math.hypot(to.x, to.z);
-      // Стоя вплотную, целиться не во что: игрок и так у самого излучателя.
-      if (horizontal > BEAM_NEAR) {
-        if ((to.x / horizontal) * forward.x + (to.z / horizontal) * forward.z < BEAM_CONE) continue;
-      }
-      best = emitter.id;
-      bestDistance = distance;
-    }
-    return best;
-  }
-
-  // Удар ГРУЗА рядом с катапультой. Возвращает id катапульты, если удар пришёлся в цель.
+  // Удар сверху рядом с катапультой. Возвращает id катапульты, если удар пришёлся в цель.
   slamTarget(position) {
     for (const catapult of this.catapults) {
       const dx = position.x - catapult.x;
@@ -588,15 +662,79 @@ export class CoopCourse extends CourseBuilder {
   update(dt, elapsed) {
     this.updateDynamic(elapsed);
 
-    for (const emitter of this.emitters.values()) {
-      emitter.lens.rotation.y += dt * 1.4;
-      emitter.lens.scale.setScalar(emitter.active ? 1.25 : 1);
-    }
     for (const catapult of this.catapults) {
       // Плечо отыгрывает удар и возвращается — движение подсказывает, что механизм сработал.
       catapult.recoil = Math.max(0, catapult.recoil - dt * 3.2);
       catapult.pivot.rotation.x = -catapult.recoil * 0.5;
     }
+
+    for (const conveyor of this.conveyors) {
+      // Полосы бегут в ту сторону, куда тянет лента: направление должно читаться без подсказки.
+      const step = conveyor.length / conveyor.arrows.length;
+      const shift = (-elapsed * conveyor.force * 0.6) % conveyor.length;
+      conveyor.arrows.forEach((arrow, i) => {
+        const offset = (i * step + shift + conveyor.length * 2) % conveyor.length;
+        arrow.position.z = conveyor.z - conveyor.length / 2 + offset;
+      });
+    }
+
+    for (const item of this.pendulums) {
+      item.pivot.rotation.z = Math.sin(elapsed * item.speed + item.z * 0.1) * (item.range / 6);
+      item.head.getWorldPosition(item.world);
+    }
+
+    // Пресс. Такты считаются от ОБЩЕГО времени, поэтому фаза одинакова у обоих игроков без
+    // единого сетевого сообщения.
+    for (const crusher of this.crushers) {
+      const t = (elapsed + crusher.phase) % crusher.period;
+      const strikeUntil = crusher.warn + crusher.strike;
+      if (t < crusher.warn) {
+        // Такт 1: висит наверху и мигает. Предупреждение обязательно.
+        crusher.head.position.y = 6;
+        crusher.danger = false;
+        const blink = Math.sin(t * 26) * 0.5 + 0.5;
+        crusher.mark.material = this.material({
+          color: COLORS.orange,
+          emissive: COLORS.orange,
+          emissiveIntensity: 0.4 + blink * 2.4,
+          opacity: 0.4
+        });
+      } else if (t < strikeUntil) {
+        // Такт 2: внизу. Здесь и убивает.
+        crusher.head.position.y = 1.4;
+        crusher.danger = true;
+      } else {
+        // Такт 3: поднимается. Окно, в которое надо проскочить.
+        const rise = (t - strikeUntil) / (crusher.period - strikeUntil);
+        crusher.head.position.y = 1.4 + rise * 4.6;
+        crusher.danger = false;
+      }
+    }
+
+    // Осыпающиеся плитки: отсчёт до обрушения и обратно до возврата.
+    for (const tile of this.tiles) {
+      if (tile.timer === 0) continue;
+      tile.timer -= dt;
+      if (tile.timer <= 0) {
+        if (!tile.fallen) {
+          tile.fallen = true;
+          tile.timer = tile.respawn;
+          tile.platform.disabled = true;
+          tile.platform.mesh.visible = false;
+          tile.platform.mesh.position.y = tile.baseY;
+        } else {
+          // Возвращается: иначе идущий вторым остался бы без пола навсегда.
+          tile.fallen = false;
+          tile.timer = 0;
+          tile.platform.disabled = false;
+          tile.platform.mesh.visible = true;
+        }
+      } else if (!tile.fallen) {
+        // Дрожит перед обрушением — то же предупреждение, что и мигание пресса.
+        tile.platform.mesh.position.y = tile.baseY + Math.sin(tile.timer * 40) * 0.06;
+      }
+    }
+
     for (const span of this.spans.values()) {
       if (!span.active) continue;
       // Лёгкое подрагивание активного пролёта: он держится «на честном слове» напарника.
@@ -604,40 +742,65 @@ export class CoopCourse extends CourseBuilder {
     }
   }
 
-  // Луч рисуется от игрока к излучателю. Вызывается при отрисовке, а не в шаге физики.
-  renderBeams(sources) {
-    for (const emitter of this.emitters.values()) {
-      const from = sources.get(emitter.id);
-      if (!from || !emitter.active) {
-        emitter.beam.visible = false;
-        continue;
-      }
-      const to = emitter.position;
-      const mid = this._tmp.copy(from).add(to).multiplyScalar(0.5);
-      const length = from.distanceTo(to);
-      emitter.beam.visible = true;
-      emitter.beam.position.copy(mid);
-      emitter.beam.scale.set(1, length, 1);
-      emitter.beam.lookAt(to);
-      // Цилиндр вытянут по своей оси Y, а lookAt разворачивает по Z — компенсируем поворотом.
-      emitter.beam.rotateX(Math.PI / 2);
-    }
-  }
-
-  // Ветер и прочие постоянные воздействия.
+  // Постоянные воздействия: лента, вентилятор, молот, пресс, осыпающиеся плитки.
+  //
+  // Все действуют на всех одинаково — ролей нет, и «эта опасность не для тебя» больше не бывает.
+  // Задача препятствий не в том, чтобы разделить игроков по способностям, а в том, чтобы им
+  // приходилось договариваться, кто идёт первым и кто кого ждёт.
   interact(player, elapsed, effects, sfx) {
     const position = player.position;
-    for (const zone of this.winds) {
+    const dt = 1 / 60;
+
+    for (const zone of this.conveyors) {
       if (position.z > zone.zMax || position.z < zone.zMin) continue;
-      // ГРУЗ тяжёлый — его не сдувает. Это делает ветер задачей на прикрытие, а не помехой обоим.
-      if (player.role === COOP_ROLE.ANCHOR) continue;
+      // Лента действует через ноги: в прыжке над ней не тянет.
+      if (!player.grounded) continue;
+      player.velocity.z += zone.force * dt;
+    }
+
+    for (const zone of this.fans) {
+      if (position.z > zone.zMax || position.z < zone.zMin) continue;
       const gust = Math.sin(elapsed * 1.6) * 0.4 + 0.8;
-      player.velocity.x += zone.force * gust * (1 / 60);
+      player.velocity.x += zone.force * gust * dt;
       if (Math.random() < 0.06) {
         effects?.trail(this._tmp.copy(position).setY(position.y + 0.4), COLORS.white);
       }
     }
-    void sfx;
+
+    for (const item of this.pendulums) {
+      const dx = position.x - item.world.x;
+      const dz = position.z - item.world.z;
+      if (dx * dx + dz * dz > 2.6 * 2.6) continue;
+      if (Math.abs(position.y - item.world.y) > 2.2) continue;
+      // Отбрасывает в ту сторону, с которой пришёл удар: случайное направление читалось бы
+      // как сбой, а не как попадание.
+      const away = Math.sign(dx) || 1;
+      player.velocity.x = away * item.knock;
+      player.velocity.y = Math.max(player.velocity.y, 4.5);
+      effects?.burst(position, COLORS.pink, 14, 1.1);
+      sfx?.bumper(position);
+    }
+
+    for (const crusher of this.crushers) {
+      if (!crusher.danger) continue;
+      if (Math.abs(position.x - crusher.x) > crusher.width / 2) continue;
+      if (Math.abs(position.z - crusher.z) > crusher.width / 2) continue;
+      if (position.y > 3) continue;
+      // Смертельно: отправляет на чекпоинт. Предупреждение было — это уже ошибка игрока.
+      effects?.burst(position, COLORS.orange, 24, 1.5);
+      sfx?.puncher(position);
+      player.respawn(this.spawnFor(player.checkpoint), true);
+      return;
+    }
+
+    for (const tile of this.tiles) {
+      if (tile.fallen || tile.timer !== 0) continue;
+      const mesh = tile.platform.mesh;
+      if (Math.abs(position.x - mesh.position.x) > tile.platform.w / 2) continue;
+      if (Math.abs(position.z - mesh.position.z) > tile.platform.d / 2) continue;
+      if (Math.abs(position.y - PLAYER_FOOT - 0.5) > 0.6) continue;
+      tile.timer = tile.delay;
+    }
   }
 
   checkpointFor(position, current) {
@@ -652,8 +815,9 @@ export class CoopCourse extends CourseBuilder {
     return next;
   }
 
-  spawnFor(checkpoint, role = COOP_ROLE.SPARK) {
-    const point = coopSpawnFor(this.spec, checkpoint, role);
+  // `slot` — порядковый номер игрока в комнате. Раньше здесь была роль; ролей больше нет.
+  spawnFor(checkpoint, slot = 0) {
+    const point = coopSpawnFor(this.spec, checkpoint, slot);
     return new THREE.Vector3(point.x, point.y, point.z);
   }
 
@@ -671,12 +835,14 @@ export class CoopCourse extends CourseBuilder {
     super.dispose();
     this.plates.clear();
     this.spans.clear();
-    this.emitters.clear();
     this.catapults.length = 0;
-    this.winds.length = 0;
+    this.conveyors.length = 0;
+    this.fans.length = 0;
+    this.pendulums.length = 0;
+    this.crushers.length = 0;
+    this.tiles.length = 0;
     this.syncGates.length = 0;
     this.stageNames.length = 0;
-    this.activeBeams.clear();
     this.syncCrossings.clear();
   }
 }

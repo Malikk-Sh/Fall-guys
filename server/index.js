@@ -85,15 +85,27 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Код клиента и общие с сервером правила НЕ кэшируются надолго.
+//
+// Имена файлов без хеша, а протокол между клиентом и сервером обязан совпадать. Пятиминутный
+// кэш означал, что после деплоя часть игроков несколько минут говорит со свежим сервером старым
+// клиентом: сообщения не сходятся по схеме, и сбои выглядят случайными. Долгий immutable-кэш
+// оставлен только для vendor-файлов, чьи версии меняются вместе с именем пакета.
+const NO_CACHE = 'no-cache, must-revalidate';
 app.use(
   express.static(clientPath, {
     setHeaders: (res, file) => {
-      if (/\.(js|css)$/.test(file)) res.setHeader('Cache-Control', 'public, max-age=300');
+      if (/\.(js|css|html)$/.test(file)) res.setHeader('Cache-Control', NO_CACHE);
     }
   })
 );
 // Общие с клиентом правила: один и тот же файл исполняется и на сервере, и в браузере.
-app.use('/shared', express.static(sharedPath, { maxAge: '5m' }));
+app.use(
+  '/shared',
+  express.static(sharedPath, {
+    setHeaders: res => res.setHeader('Cache-Control', NO_CACHE)
+  })
+);
 app.use(
   '/vendor',
   express.static(path.join(__dirname, '..', 'node_modules', 'three', 'build'), {
@@ -122,7 +134,16 @@ const metrics = {
   matchesFinished: 0,
   invalidMessages: 0,
   disconnectsForAbuse: 0,
-  reconnects: 0
+  reconnects: 0,
+  // Наблюдаемость сетевых сбоев. Без этих счётчиков «иногда ломается» остаётся догадкой:
+  // отклонённый финиш и отброшенный хвостовой пакет выглядят для игрока одинаково, а чинятся
+  // по-разному.
+  finishRejected: 0,
+  latePacketsDropped: 0,
+  resumeSucceeded: 0,
+  resumeFailed: 0,
+  socketSendFailures: 0,
+  handlerErrors: 0
 };
 
 const health = () => ({
@@ -150,6 +171,7 @@ app.get('/health/ready', (_req, res) => {
 // несуществующим ассетам — браузер получал HTML вместо 404 и молча ломался на разборе.
 app.get('*', (req, res, next) => {
   if (path.extname(req.path)) return next();
+  res.setHeader('Cache-Control', NO_CACHE);
   res.sendFile(path.join(clientPath, 'index.html'));
 });
 
@@ -213,16 +235,49 @@ const wss = new WebSocketServer({
   verifyClient: ({ origin, req }) => originAllowed(origin, req.headers.host)
 });
 
+// Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.
+// Все они относятся к идущему забегу и после RESULTS не значат ничего.
+const MATCH_TRAILING_TYPES = new Set([
+  C2S.PLAYER_STATE,
+  C2S.COOP_EVENT,
+  C2S.RESPAWN,
+  C2S.FINISH
+]);
+
 // Порог, после которого соединение считается захлебнувшимся. При медленном канале очередь
 // отправки растёт неограниченно и съедает память сервера; лучше отбросить устаревший снапшот.
 const MAX_BUFFERED_BYTES = 512 * 1024;
 
 const canSend = ws => ws && ws.readyState === WebSocket.OPEN;
 
-const send = (ws, data) => {
-  if (!canSend(ws)) return;
-  ws.send(JSON.stringify(data));
-};
+// Отправка в сокет, которая не роняет процесс.
+//
+// Между проверкой readyState и самим send() соединение может закрыться — с точки зрения Node это
+// разные тики. Тогда `ws.send()` бросает исключение, и без перехвата оно уходит наверх: один
+// оборвавшийся игрок гасит сервер целиком вместе со всеми чужими комнатами. Ошибка доставки —
+// нормальное событие сети, а не повод падать.
+function socketSend(ws, payload) {
+  if (!canSend(ws)) return false;
+  try {
+    ws.send(payload, error => {
+      if (!error) return;
+      metrics.socketSendFailures++;
+      log('warn', 'socket_send_failed', { playerId: ws.id, message: error.message });
+      try {
+        ws.terminate();
+      } catch {
+        // Сокет уже мёртв — этого мы и добивались.
+      }
+    });
+    return true;
+  } catch (error) {
+    metrics.socketSendFailures++;
+    log('warn', 'socket_send_threw', { playerId: ws.id, message: error.message });
+    return false;
+  }
+}
+
+const send = (ws, data) => socketSend(ws, JSON.stringify(data));
 
 const sendError = (ws, code, message, recoverable = true) =>
   send(ws, { type: S2C.ERROR, code, message, recoverable });
@@ -237,7 +292,7 @@ const broadcast = (room, data, { dropIfCongested = false } = {}) => {
     // Снапшоты можно пропускать: следующий придёт через 66 мс и полностью заменит этот.
     // Сообщения о состоянии комнаты пропускать нельзя — они не повторяются.
     if (dropIfCongested && ws.bufferedAmount > MAX_BUFFERED_BYTES) continue;
-    ws.send(payload);
+    socketSend(ws, payload);
   }
 };
 
@@ -275,13 +330,28 @@ function log(level, event, fields = {}) {
   else console.log(line);
 }
 
-const publicPlayer = ({ id, name, ready, finished, time, rematch, color, disconnectedAt, slot, away }) => ({
+const publicPlayer = ({
+  id,
+  name,
+  ready,
+  finished,
+  time,
+  rematch,
+  returned,
+  color,
+  disconnectedAt,
+  slot,
+  away
+}) => ({
   id,
   name,
   ready: !!ready,
   finished: !!finished,
   time: time ?? null,
   rematch: !!rematch,
+  // Кто уже нажал «вернуться в лобби»: на экране результатов это надо показывать так же,
+  // как голоса за реванш, иначе нажавший не понимает, ждут его или он ждёт.
+  returned: !!returned,
   color,
   slot: slot ?? 0,
   online: !disconnectedAt,
@@ -323,6 +393,8 @@ function resetLobby(room, { newSeed = false } = {}) {
   room.startedAt = null;
   room.matchId = null;
   room.firstFinishAt = null;
+  room.results = null;
+  room.unranked = null;
   room.updatedAt = Date.now();
   if (newSeed) room.spec = createCourseSpec(randomSeed(), room.spec.difficulty);
   for (const player of room.players.values())
@@ -383,6 +455,12 @@ function leave(ws) {
 // Обрыв связи — не то же самое, что выход. Слот держится RECONNECT_GRACE_MS, чтобы игрок,
 // у которого моргнул wi-fi, вернулся в тот же забег, а не обнаружил пустое меню.
 function handleDisconnect(ws) {
+  // `close` и `error` приходят оба, и почти всегда подряд. Без этого флага счётчик подключений
+  // с адреса уменьшался дважды за один разрыв и со временем уходил в минус, раздавая лишние
+  // соединения одному клиенту, — а отметка времени обрыва переписывалась второй раз.
+  if (ws.disconnectHandled) return;
+  ws.disconnectHandled = true;
+
   const ip = ws.ip;
   if (ip && ipConnections.has(ip)) {
     const left = ipConnections.get(ip) - 1;
@@ -395,6 +473,13 @@ function handleDisconnect(ws) {
   if (!room) return;
   const player = room.players.get(ws.id);
   if (!player) return;
+  // Сокет уже заменён: игрок вернулся по resume с нового соединения, а это — запоздавшее
+  // закрытие старого. Пометить игрока отключённым здесь значило бы выкинуть того, кто только
+  // что успешно вернулся.
+  if (player.ws !== ws) {
+    log('info', 'stale_socket_closed', { roomId: room.code, playerId: ws.id });
+    return;
+  }
   player.ws = null;
   player.disconnectedAt = Date.now();
   room.updatedAt = Date.now();
@@ -462,25 +547,50 @@ function resume(ws, token) {
   ws.id = session.playerId;
   ws.token = token;
   ws.room = room.code;
+
+  // Прежний сокет мог ещё не закрыться — так бывает, когда клиент переподключился раньше, чем
+  // сервер заметил обрыв. Отвязываем его от комнаты ДО закрытия: иначе его `close` придёт уже
+  // после подмены и попытается пометить вернувшегося игрока отключённым.
+  const previousWs = player.ws;
   player.ws = ws;
   player.disconnectedAt = null;
+  // `disconnectHandled` здесь НЕ ставим: закрытие старого сокета всё ещё должно вернуть
+  // счётчик подключений с адреса. Отвязки от комнаты достаточно — до игрока обработчик
+  // после неё не доходит.
+  if (previousWs && previousWs !== ws) {
+    previousWs.room = null;
+    try {
+      previousWs.close(4001, 'Session resumed elsewhere');
+    } catch {
+      // Уже закрыт — ровно то состояние, которого мы хотели.
+    }
+  }
   // Раз соединение восстанавливается, вкладка снова на экране: иначе флаг «отошёл» пережил бы
   // возвращение и напарник продолжал бы ждать уже вернувшегося игрока.
   player.away = false;
   session.expiresAt = Date.now() + SESSION_TTL_MS;
   room.updatedAt = Date.now();
   metrics.reconnects++;
+  metrics.resumeSucceeded++;
 
-  send(ws, { type: S2C.RESUMED, id: ws.id, serverTime: Date.now() });
+  // Токен возвращается вместе с ответом. Клиенту он нужен: при подключении сервер выдал ему
+  // новый временный токен в `hello`, и без этой строки клиент сохранил бы у себя токен,
+  // который сервер только что удалил, — следующий обрыв уже не восстановился бы.
+  send(ws, { type: S2C.RESUMED, id: ws.id, token: ws.token, serverTime: Date.now() });
   if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
     send(ws, {
       type: S2C.MATCH_START,
       at: room.startedAt,
       matchId: room.matchId,
       mode: room.mode,
-      spec: room.spec
+      spec: room.spec,
+      slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot]))
     });
   }
+  // Вернулся на экран результатов — верни и сами результаты. Иначе игрок, у которого связь
+  // моргнула сразу после финиша, попадал в комнату без карточки: голосовать не за что,
+  // времени не видно, и единственный выход — выйти из игры.
+  if (room.state === ROOM_STATE.RESULTS && room.results) send(ws, room.results);
   emitLobby(room);
   log('info', 'player_resumed', { roomId: room.code, playerId: ws.id });
   return true;
@@ -519,7 +629,9 @@ function finishMatch(room) {
   metrics.matchesFinished++;
   const board = leaderboard(room);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
-  broadcast(room, {
+  // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
+  // по resume уже на экране результатов.
+  room.results = {
     type: S2C.MATCH_RESULTS,
     matchId: room.matchId,
     mode: room.mode,
@@ -527,12 +639,32 @@ function finishMatch(room) {
     // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
     coopTime,
     unranked: room.unranked || null
-  });
+  };
+  broadcast(room, room.results);
+  // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до
+  // старта: счётчик голосов на экране результатов не с чего было бы нарисовать до первого голоса.
+  emitLobby(room);
   log('info', 'match_finished', { roomId: room.code, matchId: room.matchId, players: board.length });
 }
 
+// Адрес клиента с учётом обратного прокси.
+//
+// За Nginx `req.socket.remoteAddress` — это адрес самого Nginx, один на всех. Тогда лимиты
+// «24 соединения» и «40 операций с комнатами в минуту» делятся между ВСЕМИ игроками сразу, и при
+// нескольких десятках человек отказы начинают сыпаться на случайных людей. Заголовку доверяем
+// только по явному разрешению: если Node смотрит в интернет напрямую, его подделает кто угодно.
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+
+function clientIp(req) {
+  if (TRUST_PROXY) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded) return forwarded.split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || 'unknown';
+}
+
 wss.on('connection', (ws, req) => {
-  const ip = req.socket.remoteAddress;
+  const ip = clientIp(req);
   const openFromIp = (ipConnections.get(ip) || 0) + 1;
   if (openFromIp > MAX_CONNECTIONS_PER_IP) {
     sendError(ws, ERROR_CODES.RATE_LIMITED, 'Слишком много подключений с одного адреса.', false);
@@ -577,7 +709,24 @@ wss.on('connection', (ws, req) => {
     }
   };
 
+  // Внешняя обёртка ловит всё, что не предусмотрено внутри. Непредвиденная ошибка в обработке
+  // одного сообщения одного игрока не должна ронять процесс со всеми остальными комнатами:
+  // это единственный обработчик, куда приходят данные из внешнего мира.
   ws.on('message', raw => {
+    try {
+      handleClientMessage(raw);
+    } catch (error) {
+      metrics.handlerErrors++;
+      log('error', 'message_handler_threw', {
+        playerId: ws.id,
+        roomId: ws.room || null,
+        message: error?.message,
+        stack: error?.stack
+      });
+    }
+  });
+
+  function handleClientMessage(raw) {
     let message;
     try {
       message = JSON.parse(raw.toString());
@@ -606,6 +755,8 @@ wss.on('connection', (ws, req) => {
 
     if (message.type === C2S.RESUME) {
       if (resume(ws, message.token)) return;
+      metrics.resumeFailed++;
+      log('info', 'resume_failed', { playerId: ws.id });
       return send(ws, { type: S2C.RESUME_FAILED, code: ERROR_CODES.RECONNECT_EXPIRED });
     }
 
@@ -669,6 +820,25 @@ wss.on('connection', (ws, req) => {
     const player = room?.players.get(ws.id);
     if (!room || !player) {
       return sendError(ws, ERROR_CODES.NOT_IN_ROOM, 'Сначала создайте комнату или войдите в неё.');
+    }
+
+    // Пакет из чужого забега — опоздавший, а не злонамеренный. Молча отбрасываем ДО проверки
+    // состояния: иначе хвост прошлого матча получал бы WRONG_STATE и начислял игроку нарушения.
+    if (message.matchId && room.matchId && message.matchId !== room.matchId) {
+      metrics.latePacketsDropped++;
+      return;
+    }
+
+    // Хвост завершившегося матча.
+    //
+    // Это и есть главная причина «ошибки сервера, когда второй игрок доходит до конца». Клиент
+    // шлёт `finish`, сервер тут же переводит комнату в RESULTS — а следующий кадр того же клиента
+    // уже отправил `state`. Пакет приходит через миллисекунды, находит комнату в RESULTS, не
+    // проходит по таблице состояний и превращается в ошибку протокола со штрафом. Ничьей вины
+    // здесь нет: так работает порядок доставки, и правильная реакция — тишина.
+    if (room.state === ROOM_STATE.RESULTS && MATCH_TRAILING_TYPES.has(message.type)) {
+      metrics.latePacketsDropped++;
+      return;
     }
 
     // Проверка допустимости действия в текущем состоянии комнаты. Закрывает целый класс ошибок:
@@ -862,9 +1032,23 @@ wss.on('connection', (ws, req) => {
     }
 
     if (message.type === C2S.FINISH) {
+      // Повторный финиш ничего не меняет и не является нарушением: он приходит при
+      // переподключении и при повторной попытке после отказа.
+      if (player.finished) return;
       if (!canFinish(player, room.spec)) {
+        metrics.finishRejected++;
+        log('info', 'finish_rejected', {
+          roomId: room.code,
+          matchId: room.matchId,
+          playerId: player.id
+        });
+        // Отказ помечен явно, а не спрятан в обычную коррекцию: клиент должен понять, что финиш
+        // НЕ засчитан, и повторить его после следующего валидного состояния. Раньше он видел
+        // рядовую коррекцию, считал себя финишировавшим и навсегда оставался в «Подтверждаем
+        // результат…».
         return send(ws, {
-          type: S2C.CORRECTION,
+          type: S2C.FINISH_REJECTED,
+          matchId: room.matchId,
           position: player.last || spawnFor(room.spec, player.checkpoint),
           reason: 'finish-validation'
         });
@@ -883,29 +1067,38 @@ wss.on('connection', (ws, req) => {
       return checkMatchEnd(room);
     }
 
+    // Реванш — единогласное решение, а не команда хоста.
+    //
+    // Раньше голос хоста мгновенно распускал комнату в лобби. На экране результатов это выглядело
+    // так: один нажал «реванш» — и карточка исчезла у обоих, второй просто не успевал ничего
+    // нажать. Теперь голос — это голос: комната остаётся в RESULTS, пока не проголосуют все,
+    // кто на связи, а рассылка состояния показывает счёт голосов.
     if (message.type === C2S.REMATCH_VOTE) {
+      if (player.rematch) return;
       player.rematch = true;
       const voters = [...room.players.values()].filter(item => !item.disconnectedAt);
-      if (room.host === player.id || voters.every(item => item.rematch)) {
-        if (room.state === ROOM_STATE.PLAYING) finishMatch(room);
-        return resetLobby(room);
-      }
+      if (voters.length > 0 && voters.every(item => item.rematch)) return resetLobby(room);
       return emitLobby(room);
     }
 
+    // Возврат в лобби — тоже общее решение. Хост здесь не привилегирован по той же причине:
+    // его нажатие закрывало карточку результатов остальным.
     if (message.type === C2S.RETURN_TO_LOBBY) {
+      if (player.returned) return;
       player.returned = true;
       const active = [...room.players.values()].filter(item => !item.disconnectedAt);
-      if (room.host === player.id || active.every(item => item.finished || item.returned)) {
-        if (room.state === ROOM_STATE.PLAYING) finishMatch(room);
-        return resetLobby(room);
-      }
-      return send(ws, lobbyPayload(room));
+      if (active.length > 0 && active.every(item => item.returned)) return resetLobby(room);
+      return emitLobby(room);
     }
-  });
+  }
 
   ws.on('close', () => handleDisconnect(ws));
-  ws.on('error', () => handleDisconnect(ws));
+  // `error` тоже ведёт к разрыву, но состояние меняем один раз — этим занимается
+  // `disconnectHandled` внутри. Здесь только причина в лог.
+  ws.on('error', error => {
+    log('warn', 'socket_error', { playerId: ws.id, message: error?.message });
+    handleDisconnect(ws);
+  });
 });
 
 const snapshotTimer = setInterval(() => {

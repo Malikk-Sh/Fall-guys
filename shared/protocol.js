@@ -10,7 +10,7 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
@@ -46,6 +46,10 @@ export const S2C = Object.freeze({
   MATCH_RESULTS: 'results',
   // Забег перестал идти в зачёт: кто-то оборвался или вышел посреди главы.
   UNRANKED: 'unranked',
+  // Финиш НЕ засчитан: по данным сервера игрок ещё не пересёк черту. Отдельный тип, а не обычная
+  // коррекция, — клиент обязан отличить «тебя подвинуло» от «твой финиш не принят» и повторить
+  // попытку, иначе он навсегда зависнет в «Подтверждаем результат…».
+  FINISH_REJECTED: 'finishRejected',
   HOST_CHANGED: 'hostChanged',
   PONG: 'pong',
   ERROR: 'error'
@@ -104,8 +108,10 @@ export const ALLOWED_IN_STATE = Object.freeze({
   [C2S.COOP_EVENT]: [ROOM_STATE.PLAYING],
   [C2S.RESPAWN]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
   [C2S.FINISH]: [ROOM_STATE.PLAYING],
-  [C2S.REMATCH_VOTE]: [ROOM_STATE.PLAYING, ROOM_STATE.RESULTS],
-  [C2S.RETURN_TO_LOBBY]: [ROOM_STATE.PLAYING, ROOM_STATE.RESULTS]
+  // Только на экране результатов. Раньше эти типы принимались и в PLAYING, и кнопка «реванш»
+  // работала как скрытое «завершить матч досрочно» — побочный эффект, которого никто не просил.
+  [C2S.REMATCH_VOTE]: [ROOM_STATE.RESULTS],
+  [C2S.RETURN_TO_LOBBY]: [ROOM_STATE.RESULTS]
 });
 
 // Режимы игры. Соревновательные форматы (турниры, выбывание) сюда сознательно не входят —
@@ -174,8 +180,10 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     mode: optional(oneOf(Object.values(GAME_MODE)))
   },
 
+  // `matchId` обязателен во всех сообщениях, относящихся к забегу. Пока он был необязательным,
+  // пакет прошлого матча без него проходил проверку и применялся к новому.
   [C2S.PLAYER_STATE]: {
-    matchId: optional(str(32)),
+    matchId: str(32),
     state: {
       kind: 'object',
       fields: {
@@ -198,7 +206,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // Кооперативное событие: инициатор сообщает о воздействии на объект или на напарника.
   // Сервер ограничивает модуль импульса и ретранслирует — подробности в server/coopRules.js.
   [C2S.COOP_EVENT]: {
-    matchId: optional(str(32)),
+    matchId: str(32),
     action: oneOf(['plate', 'launch', 'revive']),
     target: optional(str(32)),
     objectId: optional(str(48)),
@@ -209,14 +217,14 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     })
   },
 
-  [C2S.RESPAWN]: { checkpoint: optional(num(0, 64)) },
+  [C2S.RESPAWN]: { matchId: str(32), checkpoint: optional(num(0, 64)) },
   [C2S.FINISH]: {
-    matchId: optional(str(32)),
+    matchId: str(32),
     clientTime: optional(num(0, Number.MAX_SAFE_INTEGER))
   },
   [C2S.LEAVE_ROOM]: {},
-  [C2S.REMATCH_VOTE]: {},
-  [C2S.RETURN_TO_LOBBY]: {}
+  [C2S.REMATCH_VOTE]: { matchId: str(32) },
+  [C2S.RETURN_TO_LOBBY]: { matchId: str(32) }
 });
 
 // Ограничения частоты по действиям. Формат: [сколько сообщений, за сколько миллисекунд].

@@ -43,9 +43,35 @@ test('валидатор принимает корректные сообщен�
   assert.ok(
     validateMessage({
       type: C2S.PLAYER_STATE,
+      matchId: 'a1b2c3d4e5f60718',
       state: { x: 1, y: 2, z: -3, ry: 0.5, vx: 1, vz: -1, state: 'ground' }
     }).ok
   );
+});
+
+// `matchId` стал обязательным во всех сообщениях забега. Пока он был необязательным, пакет
+// прошлого матча без него проходил проверку и применялся к новому: игрока дёргало в позицию
+// из предыдущей гонки, а кооп-действие срабатывало на объекте, которого в новой главе нет.
+test('сообщения забега без matchId отклоняются', () => {
+  const withoutMatch = [
+    { type: C2S.PLAYER_STATE, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
+    { type: C2S.COOP_EVENT, action: 'plate' },
+    { type: C2S.RESPAWN, checkpoint: 2 },
+    { type: C2S.FINISH, clientTime: 1000 },
+    { type: C2S.REMATCH_VOTE },
+    { type: C2S.RETURN_TO_LOBBY }
+  ];
+  for (const message of withoutMatch) {
+    const result = validateMessage(message);
+    assert.equal(result.ok, false, `${message.type} без matchId должен отклоняться`);
+  }
+
+  // С идентификатором те же сообщения проходят.
+  const matchId = 'a1b2c3d4e5f60718';
+  assert.ok(validateMessage({ type: C2S.REMATCH_VOTE, matchId }).ok);
+  assert.ok(validateMessage({ type: C2S.RETURN_TO_LOBBY, matchId }).ok);
+  assert.ok(validateMessage({ type: C2S.RESPAWN, matchId, checkpoint: 2 }).ok);
+  assert.ok(validateMessage({ type: C2S.FINISH, matchId, clientTime: 1000 }).ok);
 });
 
 test('валидатор отклоняет некорректные сообщения', () => {
@@ -78,8 +104,10 @@ test('валидатор отсекает NaN и Infinity в координат�
 });
 
 test('вложенные объекты проверяются рекурсивно', () => {
+  const matchId = 'a1b2c3d4e5f60718';
   const ok = validateMessage({
     type: C2S.COOP_EVENT,
+    matchId,
     action: 'launch',
     vector: { x: 1, y: 8, z: 0 }
   });
@@ -87,12 +115,13 @@ test('вложенные объекты проверяются рекурсив�
 
   const bad = validateMessage({
     type: C2S.COOP_EVENT,
+    matchId,
     action: 'launch',
     vector: { x: 1, y: 'вверх', z: 0 }
   });
   assert.equal(bad.ok, false);
 
-  const unknownAction = validateMessage({ type: C2S.COOP_EVENT, action: 'взорвать-всё' });
+  const unknownAction = validateMessage({ type: C2S.COOP_EVENT, matchId, action: 'взорвать-всё' });
   assert.equal(unknownAction.ok, false);
 });
 

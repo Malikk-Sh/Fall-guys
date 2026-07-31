@@ -9,7 +9,7 @@ import { Course } from './game/Course.js';
 import { CoopCourse } from './game/CoopCourse.js';
 import { updateRoleActions } from './game/CoopActions.js';
 import { COOP_CHAPTERS, coopSpawnFor } from '/shared/coopChapters.js';
-import { GAME_MODE } from '/shared/protocol.js';
+import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
@@ -252,14 +252,18 @@ class Game {
     $('#lobbyDifficulty').addEventListener('change', e =>
       this.net?.send('configure', { difficulty: e.target.value })
     );
+    // Голос за реванш. Экран не трогаем: комната остаётся на результатах, пока не проголосуют
+    // оба. Раньше первый же голос немедленно уводил обоих в лобби, и второй не успевал нажать.
     click('#rematch', () => {
-      this.net?.send('rematch');
+      if (!this.net?.matchId) return;
+      this.net.send('rematch', { matchId: this.net.matchId });
       $('#rematch').disabled = true;
-      $('#rematch').textContent = 'ГОЛОС ОТПРАВЛЕН';
     });
     click('#returnLobby', () => {
-      this.net?.send('returnLobby');
-      if (this.room) this.ui.lobby(this.room, this.net.id);
+      if (!this.net?.matchId) return;
+      this.net.send('returnLobby', { matchId: this.net.matchId });
+      $('#returnLobby').disabled = true;
+      // Экран переключит авторитетное состояние комнаты, а не локальная догадка.
     });
     $('#copyInvite').addEventListener('click', async () => {
       const link = this.ui.inviteLink($('#roomCode').textContent.trim());
@@ -361,16 +365,61 @@ class Game {
     if (this.net) return this.net;
     this.net = new NetworkManager(this.ui);
 
+    // Состояние комнаты приходит одним и тем же типом сообщения в любом состоянии — и в лобби,
+    // и на экране результатов. Раньше обработчик этого не различал и на каждое обновление открывал
+    // лобби. Из-за этого первый же чужой голос за реванш закрывал карточку результатов: сервер
+    // просто разослал новый состав комнаты, а клиент понял это как «матч окончен, все в лобби».
     this.net.on('lobby', message => {
       this.room = message;
       // Список игроков — авторитетный источник: событие присутствия могло прийти до того, как
       // напарник вообще появился в комнате, или потеряться при переподключении.
       this.partnerAway = message.players.some(p => p.id !== this.net.id && p.away);
       this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
+
+      if (message.state === ROOM_STATE.RESULTS) return this.ui.updateResultRoom(message, this.net.id);
+      // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
+      if (message.state !== ROOM_STATE.LOBBY) return;
+
       document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
       document.querySelector('#rematch').disabled = false;
       document.querySelector('#rematch').textContent = 'ГОЛОСОВАТЬ ЗА РЕВАНШ';
+      document.querySelector('#returnLobby').disabled = false;
       this.ui.lobby(message, this.net.id);
+    });
+
+    // Сервер не принял финиш: по его данным черта ещё не пересечена. Разрешаем повтор и ставим
+    // игрока туда, где сервер его видит, — иначе он навсегда останется в «Подтверждаем результат…».
+    this.net.on('finishRejected', message => {
+      this.net.allowFinishRetry();
+      this.player.finished = false;
+      this.running = true;
+      this.input.enabled = true;
+      if (message.position) {
+        this.player.respawn(
+          new THREE.Vector3(message.position.x, message.position.y, message.position.z),
+          false
+        );
+      }
+      this.ui.toast('Финиш не засчитан — добегите до ленты ещё раз.');
+    });
+
+    // Клиент старее сервера. Всплывающая подсказка тут не годится: она исчезнет через пять секунд,
+    // а игра останется нерабочей. Нужен постоянный оверлей с единственным действием.
+    this.net.on('versionMismatch', () => {
+      this.running = false;
+      this.input.enabled = false;
+      this.ui.linkOverlay('failed', {
+        title: 'Версия игры устарела',
+        detail: 'Сервер обновился. Обновите страницу, чтобы продолжить играть по сети.',
+        action: { label: 'ОБНОВИТЬ СТРАНИЦУ', onClick: () => location.reload() }
+      });
+    });
+
+    // Вернуться в комнату не удалось: её уже нет или истёк срок. Это не «сеть лежит», а «идти
+    // некуда», и вести себя надо иначе — увести в меню, а не крутить переподключение.
+    this.net.on('sessionExpired', () => {
+      this.ui.error('Комната больше не существует. Возвращаемся в меню.');
+      this.goHome();
     });
 
     this.net.on('start', message =>
@@ -507,7 +556,8 @@ class Game {
       sfx: this.sfx,
       onCheckpoint: index => this.ui.checkpoint(index, this.course.spec.segmentCount),
       onRespawn: checkpoint => {
-        if (mode !== 'single') this.net?.send('respawn', { checkpoint });
+        if (mode !== 'single' && this.net?.matchId)
+          this.net.send('respawn', { matchId: this.net.matchId, checkpoint });
       },
       onFinish: () => this.localFinish()
     });
@@ -574,7 +624,10 @@ class Game {
       });
     } else {
       this.input.enabled = false;
-      this.net?.send('finish', { clientTime: time });
+      // Финиш вместе с последним состоянием — одной операцией. Отдельная отправка позиции
+      // отставала на кадр и приводила либо к отказу сервера, либо к хвостовому пакету после
+      // перехода комнаты в «результаты».
+      this.net?.finish(this.player.snapshot(), time);
       this.ui.toast('Финиш! Подтверждаем результат…');
     }
   }
@@ -977,7 +1030,8 @@ class Game {
       this.player.render(alpha);
 
       if (this.online && this.net) {
-        this.net.sendState(this.player.snapshot());
+        // Финишировавший больше не участвует в забеге, и его позиция никому не нужна.
+        if (!this.player.finished) this.net.sendState(this.player.snapshot());
         this.net.tick();
         this.syncRemoteRoster();
       }

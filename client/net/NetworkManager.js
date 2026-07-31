@@ -19,6 +19,23 @@ const RECONNECT_JITTER_MS = 250;
 
 const SESSION_KEY = 'wobble-session';
 
+// Пакеты, которые НЕЛЬЗЯ копить в очереди на время обрыва.
+//
+// Все они описывают «сейчас»: позиция, финиш, респавн, голос. Пока сокет был закрыт, это «сейчас»
+// прошло. Отправленные пачкой после переподключения, они в лучшем случае бессмысленны, а в худшем
+// приходят раньше, чем сервер подтвердил восстановление сессии, — и он отвечает на них ошибками
+// игроку, которого в комнате ещё нет, начисляя нарушения протокола.
+const TRANSIENT_TYPES = new Set([
+  C2S.PLAYER_STATE,
+  C2S.COOP_EVENT,
+  C2S.RESPAWN,
+  C2S.FINISH,
+  C2S.REMATCH_VOTE,
+  C2S.RETURN_TO_LOBBY,
+  C2S.PRESENCE,
+  C2S.PING
+]);
+
 // Снапшоты приходят каждые 66 мс. Пропуском считаем паузу вчетверо длиннее: тройного запаса мало —
 // в него попадают обычные задержки основного потока браузера на тяжёлых кадрах.
 const SNAPSHOT_GAP_MS = STATE_INTERVAL_MS * 4;
@@ -68,6 +85,21 @@ export class NetworkManager {
     this.intentionalClose = false;
     this.linkState = LINK_STATE.OFFLINE;
     this.away = false;
+
+    // Финиш отправляется ровно один раз за матч, и после него состояние больше не шлётся.
+    // Именно хвостовой `state` после `finish` и вызывал серверную ошибку у второго дошедшего.
+    this.finishSentFor = null;
+
+    // Рукопожатие. Пока идёт восстановление сессии, `hello` считается предварительным: сервер
+    // выдаёт его КАЖДОМУ новому сокету, включая тот, которым мы собираемся вернуться в старую
+    // комнату. Принять этот временный id и токен сразу — значит разойтись с сервером в том, кто
+    // мы такие: он считает нас прежним игроком, мы себя — новым.
+    this.pendingWelcome = null;
+    this.resumeInFlight = false;
+    this.resumeToken = null;
+    this.handshakeReady = false;
+    // Клиент старее сервера: говорить с ним бессмысленно, страницу надо обновить.
+    this.versionMismatch = false;
 
     this.clock = new ClockSync();
     this.snapshots = new SnapshotBuffer();
@@ -168,9 +200,14 @@ export class NetworkManager {
       this.gapTimes.length = 0;
       this.setLinkState(LINK_STATE.ONLINE);
       this.ui.status('Подключено — создайте комнату или войдите по коду.');
-      // Если у нас есть токен прошлой сессии, сначала пробуем вернуться в свою комнату.
-      if (this.sessionToken) this.raw({ type: C2S.RESUME, token: this.sessionToken });
-      for (const item of this.queue.splice(0)) this.ws.send(item);
+      // Если у нас есть токен прошлой сессии, сначала пробуем вернуться в свою комнату — и до
+      // ответа сервера не отправляем ничего, кроме самого запроса на возврат. Иначе очередь
+      // уйдёт от имени игрока, которого в комнате ещё нет.
+      this.resumeToken = this.sessionToken;
+      this.resumeInFlight = !!this.resumeToken;
+      this.handshakeReady = !this.resumeInFlight;
+      if (this.resumeInFlight) this.raw({ type: C2S.RESUME, token: this.resumeToken });
+      else this.flushQueue();
     });
 
     this.ws.addEventListener('message', event => {
@@ -203,16 +240,40 @@ export class NetworkManager {
       this.rttSamples.reduce((sum, value) => sum + Math.abs(value - mean), 0) / this.rttSamples.length;
   }
 
+  // Принять личность, выданную сервером новому сокету. Вызывается либо сразу (обычное
+  // подключение), либо после неудачного восстановления сессии.
+  adoptWelcome() {
+    const welcome = this.pendingWelcome;
+    this.pendingWelcome = null;
+    if (!welcome) return;
+    this.id = welcome.id;
+    if (welcome.token) this.saveSession(welcome.token);
+    this.handshakeReady = true;
+    this.flushQueue();
+  }
+
+  flushQueue() {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    for (const item of this.queue.splice(0)) this.ws.send(item);
+  }
+
   handleMessage(message) {
     switch (message.type) {
       case S2C.WELCOME:
-        this.id = message.id;
-        if (message.token) this.saveSession(message.token);
         // Несовпадение версий ловим сразу, а не когда сервер отклонит вход: так игрок узнаёт
-        // причину до того, как что-то сломается.
+        // причину до того, как что-то сломается. И перестаём слать: несовместимый клиент,
+        // который продолжает говорить, только собирает ошибки протокола.
         if (message.protocolVersion && message.protocolVersion !== PROTOCOL_VERSION) {
+          this.versionMismatch = true;
+          this.intentionalClose = true;
           this.ui.error(ERROR_TEXT.VERSION_MISMATCH);
+          this.emit('versionMismatch', message);
+          this.ws?.close();
+          return;
         }
+        this.pendingWelcome = { id: message.id, token: message.token };
+        // Пока восстановление в полёте, эта личность — запасная: настоящую пришлёт `resumed`.
+        if (!this.resumeInFlight) this.adoptWelcome();
         // Грубая начальная оценка: настоящие замеры приедут с первыми pong.
         this.clock.seed(message.serverTime);
         break;
@@ -226,6 +287,8 @@ export class NetworkManager {
 
       case S2C.MATCH_START:
         this.matchId = message.matchId || null;
+        // Новый забег — новое право на финиш.
+        this.finishSentFor = null;
         // Новый забег — старая история позиций больше не имеет смысла.
         this.snapshots.clear();
         this.gapTimes.length = 0;
@@ -245,13 +308,39 @@ export class NetworkManager {
       }
 
       case S2C.RESUMED:
+        // Возвращаем себе ПРЕЖНИЙ идентификатор, а не тот временный, что выдали этому сокету.
+        // Иначе игрок перестаёт узнавать самого себя: свой снапшот выглядит чужим, и игра
+        // создаёт вторую модель себя же рядом с настоящей.
+        this.id = message.id;
+        this.saveSession(message.token || this.resumeToken);
+        this.pendingWelcome = null;
+        this.resumeInFlight = false;
+        this.resumeToken = null;
+        this.handshakeReady = true;
         this.setLinkState(LINK_STATE.ONLINE);
         this.ui.toast('Соединение восстановлено.');
+        this.flushQueue();
         // Сервер снимает признак «отошёл» при возврате в комнату. Если игра всё ещё свёрнута
         // (на компьютере фоновая вкладка успевает переподключиться), сообщаем об этом заново —
         // иначе напарник увидит вернувшегося, которого на самом деле нет.
         if (this.away) this.send(C2S.PRESENCE, { away: true });
         break;
+
+      case S2C.RESUME_FAILED: {
+        // Вернуться не удалось: комнаты уже нет либо срок истёк. Старый токен мёртв — держать
+        // его значит гарантированно провалить и следующую попытку.
+        const hadSession = !!this.roomCode || !!this.matchId;
+        this.saveSession(null);
+        this.resumeInFlight = false;
+        this.resumeToken = null;
+        this.matchId = null;
+        this.finishSentFor = null;
+        // Транзиентные пакеты прошлой жизни отправлять некуда и незачем.
+        this.queue.length = 0;
+        this.adoptWelcome();
+        if (hadSession) this.emit('sessionExpired', message);
+        break;
+      }
 
       case S2C.ERROR:
         this.ui.error(ERROR_TEXT[message.code] || message.message || 'Сетевой запрос не удался.');
@@ -289,13 +378,20 @@ export class NetworkManager {
   }
 
   send(type, data = {}) {
+    // Несовместимый клиент молчит: любое его сообщение сервер всё равно отвергнет, а нам важнее,
+    // чтобы игрок увидел «обновите страницу», а не поток сетевых ошибок поверх него.
+    if (this.versionMismatch) return false;
     const payload = JSON.stringify({ type, ...data });
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(payload);
-    else {
-      this.connect();
-      if (this.queue.length < 8) this.queue.push(payload);
-      this.ui.status('Подключаемся… запрос поставлен в очередь.');
+    if (this.ws?.readyState === WebSocket.OPEN && this.handshakeReady) {
+      this.ws.send(payload);
+      return true;
     }
+    this.connect();
+    // Транзиентные пакеты не копим — см. TRANSIENT_TYPES.
+    if (TRANSIENT_TYPES.has(type)) return false;
+    if (this.queue.length < 8) this.queue.push(payload);
+    this.ui.status('Подключаемся… запрос поставлен в очередь.');
+    return false;
   }
 
   createRoom({ name, difficulty, mode }) {
@@ -306,17 +402,41 @@ export class NetworkManager {
     this.send(C2S.JOIN_ROOM, { name, code, protocolVersion: PROTOCOL_VERSION });
   }
 
-  sendState(state) {
+  sendState(state, { force = false } = {}) {
+    if (!this.matchId) return false;
+    // После отправки финиша состояние не шлём вовсе. Сервер к этому моменту уже мог перевести
+    // комнату в «результаты», и опоздавший пакет стал бы ошибкой протокола на ровном месте.
+    if (this.finishSentFor === this.matchId) return false;
     const now = performance.now();
-    if (now - this.lastState < STATE_INTERVAL_MS) return;
+    if (!force && now - this.lastState < STATE_INTERVAL_MS) return false;
     this.lastState = now;
-    this.send(C2S.PLAYER_STATE, { state, matchId: this.matchId ?? undefined });
+    return this.send(C2S.PLAYER_STATE, { state, matchId: this.matchId });
   }
 
-  // Кооперативное действие: нажатие плиты, запуск напарника катапультой, луч, оживление.
+  // Финиш и последнее состояние — одной операцией, в этом порядке.
+  //
+  // Позиция уходит на сервер не каждый кадр, а раз в 66 мс. Без принудительной отправки сервер
+  // проверяет финиш по позиции, снятой до пересечения черты, и отказывает — а клиент уже считает
+  // себя финишировавшим и второй раз не попросит. Так и появлялось вечное «Подтверждаем
+  // результат…». Поэтому сначала актуальное состояние, сразу за ним — финиш.
+  finish(state, clientTime) {
+    if (!this.matchId || this.finishSentFor === this.matchId) return false;
+    this.sendState(state, { force: true });
+    this.finishSentFor = this.matchId;
+    return this.send(C2S.FINISH, { matchId: this.matchId, clientTime });
+  }
+
+  // Сервер финиш не принял: позиция ещё не за чертой. Разрешаем повторить — иначе игрок,
+  // который реально добежал, останется без результата.
+  allowFinishRetry() {
+    this.finishSentFor = null;
+  }
+
+  // Кооперативное действие: нажатие плиты, запуск напарника катапультой, оживление.
   // Сервер проверяет допустимость и ретранслирует напарнику.
   sendCoopEvent(action, data = {}) {
-    this.send(C2S.COOP_EVENT, { action, matchId: this.matchId ?? undefined, ...data });
+    if (!this.matchId) return false;
+    return this.send(C2S.COOP_EVENT, { action, matchId: this.matchId, ...data });
   }
 
   // Игра свёрнута или снова на экране. Флаг хранится здесь, а не в игре, потому что его надо
@@ -354,6 +474,11 @@ export class NetworkManager {
     this.clock.reset();
     this.saveSession(null);
     this.matchId = null;
+    this.finishSentFor = null;
+    this.pendingWelcome = null;
+    this.resumeInFlight = false;
+    this.resumeToken = null;
+    this.handshakeReady = false;
     this.rttSamples.length = 0;
     this.setLinkState(LINK_STATE.OFFLINE);
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: C2S.LEAVE_ROOM }));

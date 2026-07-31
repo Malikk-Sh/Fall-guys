@@ -153,6 +153,21 @@ const optional = schema => ({ ...schema, optional: true });
 const COORD = num(-500, 500);
 const VELOCITY = num(-200, 200);
 
+// Форма состояния игрока. Одна на два сообщения: обычное `state` и финальное внутри `finish`.
+const PLAYER_STATE_SHAPE = {
+  kind: 'object',
+  fields: {
+    x: COORD,
+    y: COORD,
+    z: COORD,
+    ry: num(-100, 100),
+    vx: VELOCITY,
+    vz: VELOCITY,
+    checkpoint: optional(num(0, 64)),
+    state: optional(oneOf(['ground', 'air', 'dive']))
+  }
+};
+
 export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.PING]: { at: num(0, Number.MAX_SAFE_INTEGER) },
 
@@ -184,19 +199,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // пакет прошлого матча без него проходил проверку и применялся к новому.
   [C2S.PLAYER_STATE]: {
     matchId: str(32),
-    state: {
-      kind: 'object',
-      fields: {
-        x: COORD,
-        y: COORD,
-        z: COORD,
-        ry: num(-100, 100),
-        vx: VELOCITY,
-        vz: VELOCITY,
-        checkpoint: optional(num(0, 64)),
-        state: optional(oneOf(['ground', 'air', 'dive']))
-      }
-    }
+    state: PLAYER_STATE_SHAPE
   },
 
   // Игра свёрнута или снова на экране. На телефоне переключение в мессенджер — обычное дело,
@@ -218,8 +221,16 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   },
 
   [C2S.RESPAWN]: { matchId: str(32), checkpoint: optional(num(0, 64)) },
+  // Финальное состояние едет ВНУТРИ finish, а не отдельным пакетом перед ним.
+  //
+  // Отдельным оно проходило через общий обработчик состояния, а тот отбрасывает всё, что пришло
+  // раньше 32 мс после предыдущего. Обычные позиции идут раз в 66 мс, поэтому примерно в половине
+  // случаев принудительная финальная позиция молча терялась, и финиш проверялся по точке ПЕРЕД
+  // лентой. Игрок видел «Финиш не засчитан» на ровном месте. Внутри finish состояние проверяется
+  // в том же обработчике, без ограничения по частоте, — позиция и завершение стали одной операцией.
   [C2S.FINISH]: {
     matchId: str(32),
+    state: PLAYER_STATE_SHAPE,
     clientTime: optional(num(0, Number.MAX_SAFE_INTEGER))
   },
   [C2S.LEAVE_ROOM]: {},

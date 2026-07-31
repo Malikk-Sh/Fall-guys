@@ -140,16 +140,19 @@ test('неудачный resume чистит токен и не отправля
   assert.deepEqual(net.queue, [], 'очередь прошлой жизни отправлять некуда');
 });
 
-test('финиш уходит вместе с последним состоянием и строго после него', () => {
+// Финальная позиция едет ВНУТРИ финиша, а не отдельным пакетом перед ним. Отдельным она попадала
+// под серверное ограничение «не чаще раза в 32 мс» и примерно в половине случаев терялась молча,
+// после чего финиш проверялся по точке перед лентой и отклонялся.
+test('финиш несёт финальную позицию внутри себя', () => {
   const net = bringOnline(makeNet());
   net.finish(SNAPSHOT, 42_000);
 
-  assert.equal(net.sent.length, 2, 'ровно два пакета: состояние и финиш');
-  assert.equal(net.sent[0].type, C2S.PLAYER_STATE, 'сначала позиция');
-  assert.equal(net.sent[1].type, C2S.FINISH, 'потом финиш');
-  assert.equal(net.sent[0].matchId, 'm1');
-  assert.equal(net.sent[1].matchId, 'm1');
-  assert.equal(net.sent[1].clientTime, 42_000);
+  assert.equal(net.sent.length, 1, 'один пакет, а не два — иначе позицию можно потерять по дороге');
+  const [packet] = net.sent;
+  assert.equal(packet.type, C2S.FINISH);
+  assert.equal(packet.matchId, 'm1');
+  assert.equal(packet.clientTime, 42_000);
+  assert.deepEqual(packet.state, SNAPSHOT, 'позиция обязана ехать вместе с финишем');
 });
 
 test('после финиша состояние больше не отправляется', () => {
@@ -173,7 +176,7 @@ test('финиш отправляется один раз за матч и сн�
   net.handleMessage({ type: S2C.MATCH_START, matchId: 'm2', at: Date.now(), spec: {} });
   net.sent.length = 0;
   assert.equal(net.finish(SNAPSHOT, 2000), true, 'новый забег — новое право на финиш');
-  assert.equal(net.sent[1].matchId, 'm2');
+  assert.equal(net.sent[0].matchId, 'm2');
 });
 
 test('отказ сервера разрешает повторить финиш', () => {
@@ -182,7 +185,8 @@ test('отказ сервера разрешает повторить финиш
   net.allowFinishRetry();
   net.sent.length = 0;
   assert.equal(net.finish(SNAPSHOT, 1200), true, 'иначе добежавший останется без результата навсегда');
-  assert.equal(net.sent[0].type, C2S.PLAYER_STATE, 'и снова с актуальной позицией впереди');
+  assert.equal(net.sent[0].type, C2S.FINISH);
+  assert.deepEqual(net.sent[0].state, SNAPSHOT, 'и снова с актуальной позицией');
 });
 
 test('вне матча состояние и кооп-события не отправляются вовсе', () => {

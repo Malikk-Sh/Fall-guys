@@ -435,6 +435,7 @@ function dropPlayer(room, playerId) {
   }
 
   assignSlots(room);
+  if (resolveResultsDecision(room)) return;
   emitLobby(room);
 }
 
@@ -493,6 +494,9 @@ function handleDisconnect(ws) {
     if (session) session.expiresAt = Date.now() + SESSION_TTL_MS;
   }
   log('info', 'player_disconnected', { roomId: room.code, playerId: ws.id });
+  // Если оставшиеся уже проголосовали, обрыв второго обязан довести решение до конца — иначе
+  // комната зависнет на результатах навсегда.
+  if (resolveResultsDecision(room)) return;
   emitLobby(room);
 }
 
@@ -584,7 +588,19 @@ function resume(ws, token) {
       matchId: room.matchId,
       mode: room.mode,
       spec: room.spec,
-      slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot]))
+      slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot])),
+      // Продолжение, а не начало заново.
+      //
+      // Сервер всё это время помнил, где игрок находится и что с ним. Без этих полей клиент
+      // строил уровень с нуля и ставил персонажа на старт — то есть в середине главы игрока
+      // отбрасывало к началу, а сервер продолжал видеть его там, где он был. Хуже всего это
+      // работало у финишировавшего: он снова оказывался на трассе, хотя уже ждал напарника.
+      resumed: {
+        position: player.last || spawnFor(room.spec, player.checkpoint),
+        checkpoint: player.checkpoint || 0,
+        finished: !!player.finished,
+        downed: !!player.downed
+      }
     });
   }
   // Вернулся на экран результатов — верни и сами результаты. Иначе игрок, у которого связь
@@ -608,6 +624,24 @@ function markUnranked(room, reason) {
   broadcast(room, { type: S2C.UNRANKED, matchId: room.matchId, reason });
   log('info', 'match_unranked', { roomId: room.code, matchId: room.matchId, reason });
   return true;
+}
+
+// Решение на экране результатов: пора ли распускать комнату в лобби.
+//
+// Считать это только в момент голосования нельзя. Если один уже проголосовал, а второй оборвался,
+// активным остаётся один — и условие «все проголосовали» выполнено, но пересчитать его некому:
+// повторно голосовать первый не может, его голос уже учтён. Комната зависала на результатах
+// навсегда. Поэтому пересчёт вызывается и на голос, и на обрыв, и на освобождение слота.
+function resolveResultsDecision(room) {
+  if (room.state !== ROOM_STATE.RESULTS) return false;
+  const active = [...room.players.values()].filter(player => !player.disconnectedAt);
+  if (!active.length) return false;
+  if (active.every(player => player.rematch) || active.every(player => player.returned)) {
+    resetLobby(room);
+    return true;
+  }
+  emitLobby(room);
+  return false;
 }
 
 // Матч завершается, когда дошли все, кто ещё на связи. В коопе это обязательное условие:
@@ -1035,6 +1069,24 @@ wss.on('connection', (ws, req) => {
       // Повторный финиш ничего не меняет и не является нарушением: он приходит при
       // переподключении и при повторной попытке после отказа.
       if (player.finished) return;
+
+      // Финальная позиция приезжает внутри самого финиша и применяется здесь же — без
+      // ограничения «не чаще раза в 32 мс», которое действует на поток обычных состояний.
+      //
+      // Раньше клиент слал её отдельным пакетом непосредственно перед финишем, и она попадала
+      // ровно в это окно: обычные позиции идут раз в 66 мс, поэтому примерно в половине случаев
+      // финальная терялась молча. Финиш проверялся по точке ПЕРЕД лентой и отклонялся, а игрок
+      // видел «Финиш не засчитан» после честно пройденной трассы. Теперь позиция и завершение —
+      // одна операция.
+      const now = Date.now();
+      const result = validateState(player, message.state, room.spec, now);
+      if (result.ok) {
+        player.last = { ...result.state, id: player.id };
+        player.lastAt = now;
+        player.receivedAt = now;
+        player.checkpoint = result.checkpoint;
+      }
+
       if (!canFinish(player, room.spec)) {
         metrics.finishRejected++;
         log('info', 'finish_rejected', {
@@ -1076,9 +1128,7 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.REMATCH_VOTE) {
       if (player.rematch) return;
       player.rematch = true;
-      const voters = [...room.players.values()].filter(item => !item.disconnectedAt);
-      if (voters.length > 0 && voters.every(item => item.rematch)) return resetLobby(room);
-      return emitLobby(room);
+      return resolveResultsDecision(room);
     }
 
     // Возврат в лобби — тоже общее решение. Хост здесь не привилегирован по той же причине:
@@ -1086,9 +1136,7 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.RETURN_TO_LOBBY) {
       if (player.returned) return;
       player.returned = true;
-      const active = [...room.players.values()].filter(item => !item.disconnectedAt);
-      if (active.length > 0 && active.every(item => item.returned)) return resetLobby(room);
-      return emitLobby(room);
+      return resolveResultsDecision(room);
     }
   }
 

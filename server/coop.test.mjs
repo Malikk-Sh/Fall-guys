@@ -99,7 +99,6 @@ test('каждая объявленная плита кем-то использ�
     const usedPlates = new Set();
     for (const piece of pieces) {
       for (const id of piece.requires || []) usedPlates.add(id);
-      if (piece.latch) usedPlates.add(piece.latch);
     }
 
     for (const id of usedPlates) {
@@ -133,9 +132,9 @@ test('игроки стартуют в разных точках, но на од
   assert.equal(first.z, second.z);
 });
 
-// Ворота работают в три такта, как и световой мост: держащий стоит на плите, переходящий идёт,
-// потом закрепляет пролёт фиксатором за ним — и только тогда держащий может сойти.
-test('ворота проходятся в три такта и закрепляются фиксатором', () => {
+// Ворота живут ровно столько, сколько на плите кто-то стоит. Никакой фиксации: сошёл — моста нет.
+// Поэтому плиты стоят по обе стороны пропасти, и проход всегда пятитактный.
+test('мост держится только нажатой плитой, с обеих сторон', () => {
   const course = build('ch1');
   const span = course.spans.get('g1');
   assert.ok(span, 'в первой главе должен быть пролёт g1');
@@ -147,27 +146,28 @@ test('ворота проходятся в три такта и закрепля
     return { id: role, position: new THREE.Vector3(plate.x, plate.baseY + 0.48, plate.z) };
   };
 
-  // Такт первый: держащий встал — пролёт появился.
+  // Такт 1: первый встал на ближнюю плиту — мост появился.
   const holder = onPlate('p1');
   course.updateCoop([holder], 0);
-  assert.equal(course.spans.get('g1').active, true, 'плита держащего выдвигает пролёт');
+  assert.equal(course.spans.get('g1').active, true, 'плита выдвигает мост');
   assert.equal(course.spans.get('g1').platform.disabled, false);
 
-  // Пока фиксатор не нажат, уход с плиты убирает пролёт — иначе преграда ничего не значила бы.
+  // Такт 3: первый сошёл — моста нет. Это главное отличие от прежней фиксации.
   course.updateCoop([], 0);
-  assert.equal(course.spans.get('g1').active, false, 'без фиксатора пролёт держится только плитой');
+  assert.equal(course.spans.get('g1').active, false, 'без нажатой плиты моста быть не должно');
+  assert.equal(course.spans.get('g1').platform.disabled, true);
 
-  // Такт второй и третий: держащий снова на плите, второй перешёл и встал на фиксатор.
-  course.updateCoop([holder, onPlate('p2', 'b')], 0);
-  assert.equal(course.spans.get('g1').latched, true, 'фиксатор должен закрепить пролёт');
+  // Такт 4: перешедший встал на ДАЛЬНЮЮ плиту — тот же мост появился снова.
+  course.updateCoop([onPlate('p2', 'b')], 0);
+  assert.equal(course.spans.get('g1').active, true, 'дальняя плита открывает тот же мост');
 
-  // И теперь держащий может сойти: пролёт остаётся, и он проходит следом.
+  // И как только он сходит, мост снова исчезает: закрепить его нечем и незачем.
   course.updateCoop([], 0);
-  assert.equal(
-    course.spans.get('g1').active,
-    true,
-    'закреплённый пролёт обязан остаться — иначе перейти не может никто'
-  );
+  assert.equal(course.spans.get('g1').active, false, 'фиксации не осталось нигде');
+
+  // Любая плита ворот подходит: их несколько по разные стороны дорожки.
+  course.updateCoop([onPlate('p1b')], 0);
+  assert.equal(course.spans.get('g1').active, true, 'вторая ближняя плита работает так же');
   course.dispose();
 });
 
@@ -369,7 +369,7 @@ test('каждая механика объясняется ровно один �
   // руками намеренно: добавили новую механику — придётся сюда заглянуть и решить, учить ли её.
   for (const id of [
     'together',
-    'gateLatch',
+    'gateSwap',
     'solo',
     'catapult',
     'conveyor',
@@ -453,14 +453,16 @@ test('усвоенный урок не возвращается, когда ус
   course.dispose();
 });
 
-// Инвариант, которого не хватало и из-за которого главы оказались непроходимыми.
+// Инвариант проходимости, без которого глава молча превращается в тупик.
 //
-// Ворота держатся, пока нажаты их плиты. Значит, если ВСЕ такие плиты стоят перед пролётом, то
-// перейти не может никто: чтобы шагнуть на пролёт, надо сойти с плиты, а сойти — значит убрать
-// пролёт. Прежние проверки этого не видели: они спрашивали «выдвинулся ли пролёт», и ответ был
-// «да». Он выдвигался. Просто ни для кого не был проходим.
+// Мост держится, пока нажата какая-нибудь его плита. Значит:
+//   - если ВСЕ плиты стоят перед пропастью, перейти не может никто: чтобы шагнуть на мост, надо
+//     сойти с плиты, а сойти — значит убрать мост;
+//   - если все плиты стоят ЗА пропастью, до них не добраться ногами — такое допустимо только
+//     когда через пропасть перебрасывает катапульта.
 //
-// Требование: у ворот либо есть фиксатор ЗА пролётом, либо все управляющие плиты уже за ним.
+// Прежние проверки этого не видели: они спрашивали «выдвинулся ли мост», и ответ был «да».
+// Он выдвигался. Просто ни для кого не был проходим.
 test('через каждые ворота может перейти каждый', () => {
   for (const chapter of COOP_CHAPTERS) {
     const { pieces } = chapterLayout(chapter.id);
@@ -471,21 +473,36 @@ test('через каждые ворота может перейти кажды�
         if (prop.type === 'plate') plateZ.set(prop.id, piece.z);
       }
     }
+    const catapultZ = pieces
+      .flatMap(piece => (piece.props || []).filter(prop => prop.type === 'catapult').map(() => piece.z))
+      .sort((a, b) => b - a);
 
     for (const piece of pieces) {
       if (piece.kind !== 'gateSpan') continue;
       const where = `${chapter.id}/${piece.id}`;
-      // Уровень идёт в минус по Z, поэтому «за пролётом» — это Z меньше дальнего края.
+      // Уровень идёт в минус по Z, поэтому «за пропастью» — это Z меньше дальнего края.
       const farEdge = piece.z - piece.length / 2;
-      const allRequiredBeyond = piece.requires.every(id => plateZ.get(id) < farEdge);
+      const nearEdge = piece.z + piece.length / 2;
 
-      if (allRequiredBeyond) continue;
+      for (const id of piece.requires) {
+        assert.ok(plateZ.has(id), `${where}: плита «${id}» не существует`);
+      }
+      const beyond = piece.requires.filter(id => plateZ.get(id) < farEdge);
+      const before = piece.requires.filter(id => plateZ.get(id) > nearEdge);
 
-      assert.ok(piece.latch, `${where}: ворота без фиксатора — с плиты не сойти, перейти некому`);
-      assert.ok(plateZ.has(piece.latch), `${where}: фиксатор «${piece.latch}» не существует`);
       assert.ok(
-        plateZ.get(piece.latch) < farEdge,
-        `${where}: фиксатор стоит перед пролётом — до него не добраться, не перейдя`
+        beyond.length > 0,
+        `${where}: нет плиты ЗА пропастью — держащий останется на своей стороне навсегда`
+      );
+
+      if (before.length > 0) continue;
+
+      // Плит перед пропастью нет: единственный способ попасть на ту сторону — катапульта,
+      // и она обязана стоять перед этой же пропастью.
+      const launcher = catapultZ.find(z => z > nearEdge);
+      assert.ok(
+        launcher !== undefined,
+        `${where}: все плиты за пропастью, но катапульты перед ней нет — попасть туда нечем`
       );
     }
   }
@@ -681,4 +698,72 @@ test('осыпающаяся плитка трещит, проваливаетс
   assert.equal(tile.fallen, false, 'плитка обязана вернуться');
   assert.equal(tile.platform.disabled, false, 'вернувшаяся плитка снова пол');
   assert.deepEqual(heard, ['crack', 'collapse'], 'возвращение не должно ничего озвучивать');
+});
+
+// Ветер должен ощущаться. Первая версия прибавляла силу к скорости, а торможение управления в
+// Player.step тянет скорость к желаемой каждый кадр — от прибавки оставались проценты. Формально
+// механика работала, на деле её не было: «слишком слабый ветер».
+test('ветер сносит заметно и даёт окно затишья', () => {
+  const course = build('ch4');
+  assert.ok(course.fans.length > 0, 'в этой главе должны быть вентиляторы');
+  const fan = course.fans[0];
+
+  // Прогон цикла: собираем силу порыва по всему периоду.
+  const gusts = [];
+  for (let i = 0; i <= Math.ceil(fan.period * 60); i++) {
+    course.update(1 / 60, i / 60);
+    gusts.push(fan.gust);
+  }
+  const peak = Math.max(...gusts);
+  const calm = Math.min(...gusts);
+  assert.ok(peak > 0.9, `на пике ветер должен дуть в полную силу, а не ${peak.toFixed(2)}`);
+  assert.ok(calm < 0.25, `в затишье ветер должен почти стихать, а не ${calm.toFixed(2)}`);
+
+  // Окно затишья — это и есть механика: должно хватать на переход, но не на прогулку.
+  const quiet = gusts.filter(g => g < 0.35).length / gusts.length;
+  assert.ok(quiet > 0.2, `окно затишья слишком узкое: ${(quiet * 100).toFixed(0)}% цикла`);
+  assert.ok(quiet < 0.6, `затишье занимает почти весь цикл (${(quiet * 100).toFixed(0)}%) — это не ветер`);
+
+  // Снос стоящего игрока за секунду на пике. Сравнивать надо с шириной дорожки: сдвиг меньше
+  // единицы игрок просто не заметит.
+  const still = {
+    position: new THREE.Vector3(0, PLAYER_FOOT + 0.5, (fan.zMin + fan.zMax) / 2),
+    velocity: new THREE.Vector3(),
+    grounded: true,
+    checkpoint: 0,
+    impact: 0,
+    respawn: () => {}
+  };
+  // Ставим цикл на пик и держим его там: интересует сила, а не форма кривой.
+  const peakAt = gusts.indexOf(peak) / 60;
+  const startX = still.position.x;
+  for (let i = 0; i < 60; i++) {
+    course.update(1 / 60, peakAt);
+    course.interact(still, peakAt, null, null);
+  }
+  const drift = Math.abs(still.position.x - startX);
+  assert.ok(
+    drift > 2.5,
+    `за секунду на пике должно сносить заметно, а сносит на ${drift.toFixed(2)} единицы`
+  );
+  // И при этом не мгновенно за край: полосу шириной 12 нельзя пересекать за полсекунды.
+  assert.ok(drift < 9, `снос ${drift.toFixed(2)} за секунду — это уже не ветер, а телепорт`);
+
+  course.dispose();
+});
+
+// Вентилятор без разметки — несправедливая механика: игрока тащит, а почему, он не видит.
+test('у каждого вентилятора есть чем показать себя', () => {
+  for (const id of ['ch4', 'ch5']) {
+    const course = build(id);
+    for (const fan of course.fans) {
+      assert.ok(fan.rotors.length > 0, `${id}: у вентилятора нет лопастей`);
+      assert.ok(fan.streaks.length >= fan.rotors.length, `${id}: полос потока меньше, чем турбин`);
+      // Полосы анимируются по отдельности, поэтому материал у каждой обязан быть свой:
+      // общий кэшированный материал погасил бы половину сцены разом.
+      const materials = new Set(fan.streaks.map(streak => streak.mesh.material));
+      assert.equal(materials.size, fan.streaks.length, `${id}: полосы делят один материал`);
+    }
+    course.dispose();
+  }
 });

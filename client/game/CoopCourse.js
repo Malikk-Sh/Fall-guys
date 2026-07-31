@@ -208,42 +208,116 @@ export class CoopCourse extends CourseBuilder {
     });
   }
 
-  // Вентилятор: сдувает вбок. Раньше это был «ветер», действовавший только на лёгкую роль;
-  // теперь ролей нет и сдувает всех одинаково.
+  // Вентилятор: сдувает вбок.
+  //
+  // Ветер невидим, поэтому его рисуют целиком: сами турбины с вращающимися лопастями, полосы
+  // потока, летящие поперёк дорожки, и разметка зоны на полу. Игрок должен видеть три вещи —
+  // где дует, куда дует и насколько сильно прямо сейчас. Без третьего ветер читается как
+  // случайность: пройти удалось или не удалось, а почему — непонятно.
   addFan(prop, piece) {
+    const fromLeft = prop.force > 0;
+    const wallX = fromLeft ? -LANE_WIDTH / 2 - 0.4 : LANE_WIDTH / 2 + 0.4;
+    const rows = Math.max(2, Math.round(piece.length / 6));
+    const rotors = [];
+    const streaks = [];
+
+    // Разметка зоны на полу: видно ещё на подходе, до того как потащит.
+    this.box({
+      x: 0,
+      y: 0.52,
+      z: piece.z,
+      w: LANE_WIDTH - 0.6,
+      h: 0.04,
+      d: piece.length,
+      color: COLORS.blue,
+      collider: false,
+      opacity: 0.22,
+      emissive: COLORS.blue,
+      emissiveIntensity: 0.35
+    });
+
+    for (let i = 0; i < rows; i++) {
+      const z = piece.z - piece.length / 2 + (i + 0.5) * (piece.length / rows);
+
+      // Корпус турбины — задняя стенка снаружи дорожки. Лопасти висят ПЕРЕД ней, иначе их
+      // не видно: в первой версии крестовина оказалась внутри корпуса и вращалась впустую.
+      const hubY = 2.3;
+      this.box({
+        x: wallX,
+        y: hubY,
+        z,
+        w: 0.5,
+        h: 3.6,
+        d: 3.6,
+        color: COLORS.purpleDark,
+        collider: false
+      });
+      // Ось. Кубик, а не цилиндр: helper строит цилиндры только вертикально, а ось здесь
+      // горизонтальная — на таком размере разницы всё равно не видно.
+      this.box({
+        x: wallX + (fromLeft ? 0.55 : -0.55),
+        y: hubY,
+        z,
+        w: 1.1,
+        h: 0.6,
+        d: 0.6,
+        color: COLORS.white,
+        collider: false
+      });
+      // Лопасти: крестовина, вращающаяся вокруг оси ветра. Скорость вращения — это и есть
+      // индикатор силы порыва, читаемый боковым зрением, не отрываясь от дороги.
+      const rotor = new THREE.Group();
+      rotor.position.set(wallX + (fromLeft ? 0.8 : -0.8), hubY, z);
+      rotor.rotation.z = Math.PI / 2;
+      for (let blade = 0; blade < 4; blade++) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(0.22, 0.5, 1.5),
+          this.material({ color: COLORS.cyan, emissive: COLORS.cyan, emissiveIntensity: 1.1 })
+        );
+        mesh.geometry.translate(0, 0, 0.85);
+        mesh.rotation.y = (blade * Math.PI) / 2;
+        rotor.add(mesh);
+      }
+      this.group.add(rotor);
+      rotors.push(rotor);
+
+      // Полосы потока. Их положение анимируется в update: неподвижные линии не читаются как ветер.
+      for (let s = 0; s < 3; s++) {
+        const streak = this.box({
+          x: 0,
+          y: 0.9 + s * 0.85,
+          z: z + (s - 1) * 1.1,
+          w: 3.4,
+          h: 0.08,
+          d: 0.22,
+          color: COLORS.white,
+          collider: false,
+          opacity: 0.5,
+          emissive: COLORS.white,
+          emissiveIntensity: 0.6
+        }).mesh;
+        // Своя копия материала на каждую полосу: прозрачность анимируется отдельно, а материалы
+        // кэшируются по внешнему виду — правка общего объекта погасила бы половину сцены разом.
+        streak.material = streak.material.clone();
+        streaks.push({ mesh: streak, offset: (i * 3 + s) / (rows * 3) });
+      }
+    }
+
     this.fans.push({
       zMin: piece.z - piece.length / 2,
       zMax: piece.z + piece.length / 2,
-      force: prop.force
+      force: prop.force,
+      period: prop.period,
+      // Фаза сдвинута по координате: соседние вентиляторы не должны дуть в такт, иначе участок
+      // проходится не по расписанию, а по удаче.
+      phase: (Math.abs(piece.z) * 0.13) % prop.period,
+      fromLeft,
+      rotors,
+      streaks,
+      // Текущая сила порыва, 0..1. Считается в update и читается в interact.
+      gust: 0,
+      spin: 0
     });
-    const rows = Math.max(2, Math.round(piece.length / 5));
-    for (let i = 0; i < rows; i++) {
-      const z = piece.z - piece.length / 2 + (i + 0.5) * (piece.length / rows);
-      // Сам вентилятор — со стороны, откуда дует.
-      this.box({
-        x: prop.force > 0 ? -LANE_WIDTH / 2 + 1 : LANE_WIDTH / 2 - 1,
-        y: 1.1,
-        z,
-        w: 1.6,
-        h: 1.6,
-        d: 1.6,
-        color: COLORS.blue,
-        collider: false,
-        opacity: 0.8
-      });
-      // Струя: невидимая механика ощущается как несправедливая, поэтому она нарисована.
-      this.box({
-        x: 0,
-        y: 0.9,
-        z,
-        w: LANE_WIDTH - 1,
-        h: 0.05,
-        d: 0.35,
-        color: COLORS.white,
-        collider: false,
-        opacity: 0.35
-      });
-    }
   }
 
   // Маятник: качающийся молот. Жёсткая опасность — отбрасывает, но не убивает.
@@ -414,8 +488,8 @@ export class CoopCourse extends CourseBuilder {
       control,
       platform,
       requires: piece.requires || [],
-      // Фиксатор: плита ЗА пролётом, закрепляющая его насовсем.
-      latch: piece.latch || null,
+      // Защёлка осталась ТОЛЬКО у ворот синхронности: там она часть механики, а не костыль.
+      // У обычных ворот её больше нет — мост живёт, пока на плите кто-то стоит.
       latched: false,
       windowMs: piece.windowMs || 900,
       z: piece.z,
@@ -522,19 +596,14 @@ export class CoopCourse extends CourseBuilder {
     for (const span of this.spans.values()) {
       let active = false;
       if (span.control === 'gate') {
-        // Фиксатор за пролётом — обязательная часть конструкции, а не украшение.
+        // Мост существует ровно столько, сколько на какой-нибудь из его плит кто-то СТОИТ.
+        // Никакой фиксации: сошёл — моста нет. Плиты стоят по обе стороны пропасти, поэтому
+        // проход всегда один и тот же: первый держит → второй переходит → первый сходит →
+        // второй встаёт на дальнюю плиту → первый переходит.
         //
-        // Без него ворота были головоломкой без решения: пролёт держится, пока плита нажата,
-        // а нажать её можно только стоя на ней. Сойти, чтобы перейти, значит убрать пролёт —
-        // из-под себя или из-под напарника. Все проверки при этом были зелёными: пролёт ведь
-        // честно выдвигался. Он просто ни для кого не был проходим.
-        //
-        // Схема поэтому трёхтактная: один держит плиту → второй переходит → второй встаёт на
-        // фиксатор за пролётом и закрепляет его насовсем → первый сходит с плиты и идёт следом.
-        if (span.latch && this.plates.get(span.latch)?.pressed) span.latched = true;
         // Достаточно ЛЮБОЙ из плит: их бывает несколько по разные стороны дорожки, и игроку не
         // должно быть важно, до какой он добежал.
-        active = span.latched || span.requires.some(id => this.plates.get(id)?.pressed);
+        active = span.requires.some(id => this.plates.get(id)?.pressed);
       } else if (span.control === 'sync') {
         active = this.syncSatisfied(span, actors, nowMs);
       }
@@ -687,6 +756,34 @@ export class CoopCourse extends CourseBuilder {
       item.head.getWorldPosition(item.world);
     }
 
+    // Ветер. Сила меняется по циклу «затишье → порыв»: примерно треть цикла дует слабо, и это
+    // окно, в которое надо успеть перейти. Кривая намеренно несимметричная — порыв нарастает
+    // быстрее, чем спадает, поэтому опоздать страшнее, чем выйти рано.
+    for (const fan of this.fans) {
+      const t = ((elapsed + fan.phase) % fan.period) / fan.period;
+      // Порыв нарастает быстрее, чем спадает: перекос показателя сдвигает пик к началу цикла.
+      // Опоздать в затишье должно быть страшнее, чем выйти рано, — иначе ждать нечего.
+      const wave = Math.sin(Math.PI * Math.pow(t, 0.8));
+      fan.gust = 0.1 + 0.9 * Math.pow(Math.max(0, wave), 1.35);
+      fan.spin += dt * (2 + fan.gust * 22) * (fan.fromLeft ? 1 : -1);
+      for (const rotor of fan.rotors) rotor.rotation.y = fan.spin;
+      // Полосы летят поперёк дорожки со скоростью порыва и на пике становятся ярче.
+      const travel = LANE_WIDTH + 4;
+      for (const streak of fan.streaks) {
+        const shift = (elapsed * (1.5 + fan.gust * 9) * 0.1 + streak.offset) % 1;
+        const across = -travel / 2 + shift * travel;
+        streak.mesh.position.x = fan.fromLeft ? across : -across;
+        streak.mesh.scale.x = 0.6 + fan.gust * 1.5;
+        streak.mesh.material.opacity = 0.18 + fan.gust * 0.55;
+      }
+      // Шум ветра — позиционный, поэтому слышно и то, что дует у напарника впереди. Дросселируется
+      // внутри самого эффекта по его собственной длительности.
+      if (fan.gust > 0.3 && sfx?.engine?.throttle(`wind-${fan.zMin}`, 0.45)) {
+        this._tmp.set(0, 1.2, (fan.zMin + fan.zMax) / 2);
+        sfx.wind(fan.gust, this._tmp);
+      }
+    }
+
     // Пресс. Такты считаются от ОБЩЕГО времени, поэтому фаза одинакова у обоих игроков без
     // единого сетевого сообщения.
     for (const crusher of this.crushers) {
@@ -779,10 +876,21 @@ export class CoopCourse extends CourseBuilder {
 
     for (const zone of this.fans) {
       if (position.z > zone.zMax || position.z < zone.zMin) continue;
-      const gust = Math.sin(elapsed * 1.6) * 0.4 + 0.8;
-      player.velocity.x += zone.force * gust * dt;
-      if (Math.random() < 0.06) {
-        effects?.trail(this._tmp.copy(position).setY(position.y + 0.4), COLORS.white);
+      const push = zone.force * zone.gust;
+      // Снос применяется к ПОЗИЦИИ, а не к скорости.
+      //
+      // Через скорость ветер почти не ощущался: торможение управления в Player.step тянет
+      // скорость к желаемой каждый кадр с коэффициентом 18, и от прибавки оставалась пара
+      // процентов — на бумаге сила семь, на деле треть единицы в секунду. Снос позиции
+      // торможению не подчиняется: бежать против ветра можно, стоять на месте — нет.
+      position.x += push * dt;
+      // Небольшая добавка к скорости поверх сноса: без неё персонаж едет боком, не наклоняясь,
+      // и это читается как ошибка физики, а не как ветер.
+      player.velocity.x += push * dt * 1.5;
+      // В воздухе сдувает сильнее — ногами не за что держаться.
+      if (!player.grounded) position.x += push * dt * 0.45;
+      if (Math.random() < 0.05 + zone.gust * 0.25) {
+        effects?.trail(this._tmp.copy(position).setY(position.y + 0.4 + Math.random()), COLORS.white);
       }
     }
 

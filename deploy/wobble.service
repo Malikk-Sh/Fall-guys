@@ -1,0 +1,53 @@
+# systemd-юнит для Wobble Rush 3D.
+#
+# Копировать в /etc/systemd/system/wobble.service.
+# Затем: systemctl daemon-reload && systemctl enable --now wobble
+#
+# Зачем юнит, а не «запустить в screen»: процесс должен подниматься после перезагрузки сервера и
+# после падения, а логи — попадать в journald, где их можно читать и ротировать. Запуск руками
+# переживает ровно до первого разрыва вашей ssh-сессии.
+
+[Unit]
+Description=Wobble Rush 3D
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wobble
+Group=wobble
+WorkingDirectory=/opt/wobble
+ExecStart=/usr/bin/node server/index.js
+
+# Настройки берутся из файла, а не пишутся здесь: так их можно менять, не трогая юнит,
+# и не хранить в git.
+EnvironmentFile=/etc/wobble.env
+
+Restart=always
+RestartSec=3
+# Если падает чаще пяти раз за минуту — это не случайность, и бесконечный перезапуск только
+# мешает разбираться. Пусть остановится и ждёт.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wobble
+
+# Ограничения прав. Игре не нужен доступ ни к чему, кроме своего каталога.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wobble
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+[Install]
+WantedBy=multi-user.target

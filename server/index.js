@@ -1215,8 +1215,16 @@ const heartbeatTimer = setInterval(() => {
 heartbeatTimer.unref();
 
 const port = process.env.PORT || 3000;
+
+// К какому интерфейсу привязываться.
+//
+// По умолчанию — ко всем: так работает на платформах вроде Render, где снаружи слушает их
+// собственный балансировщик. На своём VPS за Nginx правильнее `HOST=127.0.0.1`: тогда порт 3000
+// не виден из интернета вовсе и попасть в игру можно только через прокси, где стоит TLS,
+// заголовки безопасности и ограничения.
+const host = process.env.HOST || '0.0.0.0';
 if (require.main === module) {
-  server.listen(port, () => log('info', 'server_started', { port }));
+  server.listen(port, host, () => log('info', 'server_started', { port, host }));
 }
 
 module.exports = { app, server, rooms, sessions, metrics, leave, resetLobby, originAllowed };

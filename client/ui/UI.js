@@ -317,6 +317,40 @@ export class UI {
       slider.addEventListener('input', () => onChange(bus, Number(slider.value) / 100));
     }
   }
+  // Кнопки экрана результатов в исходное состояние. Голоса считаются заново для каждого матча,
+  // а `disabled` мог остаться с прошлого.
+  resetResultButtons() {
+    const rematch = $('#rematch');
+    rematch.disabled = false;
+    rematch.textContent = 'ГОЛОСОВАТЬ ЗА РЕВАНШ';
+    const back = $('#returnLobby');
+    back.disabled = false;
+    back.textContent = 'ВЕРНУТЬСЯ В ЛОББИ';
+  }
+
+  // Обновление карточки результатов, пока комната ещё в RESULTS.
+  //
+  // Раньше любое обновление состава комнаты открывало лобби, поэтому первый же голос за реванш
+  // закрывал результаты обоим. Теперь состояние RESULTS приходит сюда и меняет только то, что
+  // действительно изменилось, — счёт голосов.
+  updateResultRoom(data, selfId) {
+    const active = data.players.filter(player => player.online);
+    const votes = active.filter(player => player.rematch).length;
+    const self = active.find(player => player.id === selfId);
+    const rematch = $('#rematch');
+    rematch.disabled = !!self?.rematch;
+    rematch.textContent = self?.rematch
+      ? `ГОЛОС ОТПРАВЛЕН · ${votes}/${active.length}`
+      : `ГОЛОСОВАТЬ ЗА РЕВАНШ · ${votes}/${active.length}`;
+
+    const returned = active.filter(player => player.returned).length;
+    const back = $('#returnLobby');
+    back.disabled = !!self?.returned;
+    back.textContent = self?.returned
+      ? `ЖДЁМ ОСТАЛЬНЫХ · ${returned}/${active.length}`
+      : 'ВЕРНУТЬСЯ В ЛОББИ';
+  }
+
   // Плашка «без зачёта» на карточке финиша. Причина названа прямо: игрок должен понимать,
   // почему его время никуда не записалось, иначе это выглядит как потерянный рекорд.
   showUnranked(reason) {
@@ -382,6 +416,7 @@ export class UI {
     $('#newCourse').classList.add('hidden');
     $('#rematch').classList.remove('hidden');
     $('#returnLobby').classList.remove('hidden');
+    this.resetResultButtons();
   }
 
   // Лучшее время главы после возможного обновления либо null, если рекорда ещё нет.
@@ -409,6 +444,7 @@ export class UI {
     $('#newCourse').classList.add('hidden');
     $('#rematch').classList.toggle('hidden', !canRematch);
     $('#returnLobby').classList.remove('hidden');
+    this.resetResultButtons();
   }
   updateBoard(board, selfId) {
     const list = $('#board');

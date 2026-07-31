@@ -56,6 +56,49 @@ class TestClient {
 const listen = () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const shutdown = () => new Promise(resolve => server.close(resolve));
 
+// Довести клиента до финишной черты по-настоящему: сервер проверяет позицию, и телепорт он
+// отвергнет. Шаги подобраны под серверное правило скорости (3.2 + dt*18 за пакет) и под
+// ограничение «не чаще раза в 32 мс».
+const STATE_STEP = 3.2;
+const STATE_GAP_MS = 55;
+
+async function runToFinish(client, spec, matchId, { stopBefore = 0 } = {}) {
+  let z = spec.start.z;
+  const target = spec.finishZ - 1;
+  while (z > target) {
+    z = Math.max(target, z - STATE_STEP);
+    client.send('state', {
+      matchId,
+      state: { x: 0, y: spec.start.y, z, ry: 0, vx: 0, vz: -8, state: 'ground' }
+    });
+    await new Promise(resolve => setTimeout(resolve, STATE_GAP_MS));
+  }
+  if (stopBefore) return z;
+  client.send('finish', { matchId, clientTime: 1000 });
+  return z;
+}
+
+// Ждём конца обратного отсчёта: до него сервер игнорирует состояния.
+const waitForStart = at => new Promise(resolve => setTimeout(resolve, Math.max(0, at - Date.now()) + 150));
+
+// Готовая комната из двух игроков с начатым матчем.
+async function startedRoom(url, mode = 'coop') {
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Хост', mode });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await host.wait('lobby', m => m.players.length === 2);
+  host.send('ready', { ready: true });
+  guest.send('ready', { ready: true });
+  await host.wait('lobby', m => m.players.every(p => p.ready));
+  host.send('start');
+  const started = await host.wait('start');
+  await waitForStart(started.at);
+  return { host, guest, started, code: created.code };
+}
+
 test('игрок возвращается в свою комнату после обрыва связи', async t => {
   await listen();
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
@@ -244,35 +287,229 @@ test('обрыв связи снимает зачёт с забега', async t 
 test('итоги матча несут отметку «без зачёта»', async t => {
   await listen();
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
-  const host = new TestClient(url);
-  const guest = new TestClient(url);
+  const { host, guest, started } = await startedRoom(url, 'race');
 
   t.after(async () => {
     await Promise.all([host.close(), guest.close()]);
     await shutdown();
   });
 
-  await Promise.all([host.wait('hello'), guest.wait('hello')]);
-  host.send('create', { name: 'Хост' });
-  const created = await host.wait('lobby', m => m.players.length === 1);
-  guest.send('join', { name: 'Гость', code: created.code });
-  await host.wait('lobby', m => m.players.length === 2);
-
-  host.send('ready', { ready: true });
-  guest.send('ready', { ready: true });
-  await host.wait('lobby', m => m.players.every(p => p.ready));
-  host.send('start');
-  const started = await host.wait('start');
-
   // Гость выходит сам — это тоже снимает зачёт, но с другой причиной.
   guest.send('leave');
   const notice = await host.wait('unranked', () => true, 3000);
   assert.equal(notice.reason, 'left', 'добровольный выход отличается от обрыва');
 
-  // Итоги подводятся только для идущего забега, поэтому ждём конца обратного отсчёта.
-  await new Promise(resolve => setTimeout(resolve, Math.max(0, started.at - Date.now()) + 200));
-  // Досрочное завершение матча голосом хоста даёт итоги, не гоняя бота по трассе.
-  host.send('rematch');
-  const results = await host.wait('results', () => true, 3000);
+  // Оставшийся доходит до финиша по-настоящему: телепорт сервер бы не принял.
+  await runToFinish(host, started.spec, started.matchId);
+  const results = await host.wait('results', () => true, 5000);
   assert.equal(results.unranked, 'left', 'итоги обязаны нести отметку и её причину');
+});
+
+// --- Регрессии жизненного цикла матча ---------------------------------------------------------
+//
+// Всё, что ниже, воспроизводит сбои, которые игрок видел как «ошибка сервера, когда второй
+// доходит до конца» и «окно голосования не держится».
+
+// Главный симптом. Порядок доставки в WebSocket строгий: клиент шлёт `finish`, сервер тут же
+// переводит комнату в RESULTS, а следующий кадр того же клиента уже отправил `state`. Пакет
+// приходит через миллисекунды и раньше получал WRONG_STATE со штрафом за нарушение протокола.
+test('хвостовой state после финиша второго игрока не вызывает ошибку', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  // Оба идут до конца; в коопе глава засчитывается, только когда дошли оба.
+  const lastZ = await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', m => m.id === host.messages.find(x => x.type === 'hello').id, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+
+  // И сразу вдогонку — то самое опоздавшее состояние.
+  guest.send('state', {
+    matchId: started.matchId,
+    state: { x: 0, y: started.spec.start.y, z: lastZ, ry: 0, vx: 0, vz: -8, state: 'ground' }
+  });
+
+  const results = await Promise.all([
+    host.wait('results', () => true, 5000),
+    guest.wait('results', () => true, 5000)
+  ]);
+  assert.equal(results.length, 2, 'итоги должны прийти обоим');
+
+  await new Promise(resolve => setTimeout(resolve, 400));
+  for (const [name, client] of [
+    ['хост', host],
+    ['гость', guest]
+  ]) {
+    const errors = client.messages.filter(m => m.type === 'error');
+    assert.deepEqual(errors, [], `${name} не должен получать ошибок протокола: ${JSON.stringify(errors)}`);
+    assert.equal(client.ws.readyState, WebSocket.OPEN, `соединение ${name} обязано остаться живым`);
+    assert.equal(
+      client.messages.filter(m => m.type === 'results').length,
+      1,
+      `${name} должен получить ровно одни итоги`
+    );
+  }
+});
+
+// Повторный финиш приходит при переподключении и при повторной попытке после отказа. Он не
+// должен ни удваивать итоги, ни считаться нарушением.
+test('повторный finish идемпотентен', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  const finishesAfterFirst = host.messages.filter(m => m.type === 'finish').length;
+
+  host.send('finish', { matchId: started.matchId, clientTime: 1000 });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(
+    host.messages.filter(m => m.type === 'finish').length,
+    finishesAfterFirst,
+    'второй финиш не должен порождать новых сообщений'
+  );
+  assert.deepEqual(host.messages.filter(m => m.type === 'error'), [], 'и не должен быть нарушением');
+  void guest;
+});
+
+// Голос за реванш больше не распускает комнату в одиночку. Раньше первый же голос — особенно
+// голос хоста — мгновенно уводил обоих в лобби, и второй просто не успевал нажать кнопку.
+test('первый голос за реванш не закрывает экран результатов', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+
+  // Голосует хост — тот, кто раньше мог решать за всех.
+  host.send('rematch', { matchId: started.matchId });
+  const afterFirst = await guest.wait(
+    'lobby',
+    m => m.players.some(p => p.rematch),
+    3000
+  );
+  assert.equal(afterFirst.state, 'RESULTS', 'комната обязана остаться на результатах');
+  assert.equal(
+    afterFirst.players.filter(p => p.rematch).length,
+    1,
+    'засчитан ровно один голос'
+  );
+
+  // И только второй голос открывает лобби.
+  guest.send('rematch', { matchId: started.matchId });
+  const lobby = await guest.wait('lobby', m => m.state === 'LOBBY', 3000);
+  assert.equal(lobby.players.every(p => !p.rematch), true, 'в лобби голоса сброшены');
+  assert.equal(lobby.matchId, null, 'новый забег ещё не начат');
+});
+
+// Кнопка реванша не должна работать как скрытое «завершить матч досрочно».
+test('реванш во время забега отклоняется и матч не завершает', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  host.send('rematch', { matchId: started.matchId });
+  const error = await host.wait('error', () => true, 2000);
+  assert.equal(error.code, 'WRONG_STATE', 'во время забега голосовать не за что');
+
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(
+    guest.messages.some(m => m.type === 'results'),
+    false,
+    'матч обязан продолжаться'
+  );
+});
+
+// Запоздавшее закрытие старого сокета не должно выкидывать игрока, который уже вернулся.
+test('закрытие старого сокета после resume не отключает новый', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const guest = new TestClient(url);
+  let host = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const [hostHello] = await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Хост', mode: 'coop' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', code: created.code });
+  await guest.wait('lobby', m => m.players.length === 2);
+
+  // Возвращаемся с НОВОГО сокета, не закрывая старый: так бывает, когда клиент переподключился
+  // раньше, чем сервер заметил обрыв.
+  const oldWs = host.ws;
+  host = new TestClient(url);
+  await host.wait('hello');
+  host.send('resume', { token: hostHello.token });
+  const resumed = await host.wait('resumed', () => true, 3000);
+  assert.equal(resumed.id, hostHello.id, 'идентификатор должен сохраниться');
+  assert.ok(resumed.token, 'токен обязан вернуться клиенту, иначе следующий обрыв не восстановится');
+
+  // Теперь добиваем старое соединение.
+  oldWs.terminate();
+  await new Promise(resolve => setTimeout(resolve, 400));
+
+  const lobby = await guest.wait('lobby', m => m.players.every(p => p.online), 3000);
+  assert.equal(lobby.players.length, 2, 'оба игрока на месте');
+  assert.equal(host.ws.readyState, WebSocket.OPEN, 'новое соединение должно остаться живым');
+
+  // И новое соединение продолжает работать.
+  host.send('ready', { ready: true });
+  await guest.wait('lobby', m => m.players.some(p => p.id === hostHello.id && p.ready), 3000);
+});
+
+// Вернувшийся на экран результатов должен получить сами результаты, а не пустую комнату.
+test('переподключение на экране результатов возвращает итоги', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+  let back = null;
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close(), back ? back.close() : Promise.resolve()]);
+    await shutdown();
+  });
+
+  const guestHello = guest.messages.find(m => m.type === 'hello');
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  const original = await guest.wait('results', () => true, 5000);
+
+  guest.ws.terminate();
+  back = new TestClient(url);
+  await back.wait('hello');
+  back.send('resume', { token: guestHello.token });
+  await back.wait('resumed', () => true, 3000);
+
+  const restored = await back.wait('results', () => true, 3000);
+  assert.equal(restored.matchId, original.matchId, 'итоги должны быть те же самые');
+  assert.deepEqual(restored.board, original.board, 'и с тем же составом доски');
 });

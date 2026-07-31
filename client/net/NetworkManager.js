@@ -194,7 +194,13 @@ export class NetworkManager {
     this.ws = new WebSocket(url);
 
     this.ws.addEventListener('open', () => {
-      this.reconnectAttempt = 0;
+      // Счётчик попыток здесь НЕ сбрасывается.
+      //
+      // Открытый TCP-сокет ещё не значит рабочее соединение: сервер может принимать подключение
+      // и тут же рвать его на рукопожатии — например, при несовпадении версий или отказе по
+      // лимиту адреса. Сбрасывая счётчик на `open`, клиент бесконечно повторял бы ПЕРВУЮ попытку
+      // каждые полсекунды вместо пяти затухающих. Сброс перенесён в успешное завершение
+      // рукопожатия — туда, где соединение действительно работает.
       this.pingCount = 0;
       this.lastPing = 0;
       this.gapTimes.length = 0;
@@ -249,6 +255,8 @@ export class NetworkManager {
     this.id = welcome.id;
     if (welcome.token) this.saveSession(welcome.token);
     this.handshakeReady = true;
+    // Рукопожатие завершилось — соединение рабочее, счётчик попыток можно обнулить.
+    this.reconnectAttempt = 0;
     this.flushQueue();
   }
 
@@ -285,6 +293,14 @@ export class NetworkManager {
         }
         break;
 
+      // Код комнаты нужен, чтобы отличить «мы были в комнате» от «мы только подключились».
+      // Без него неудачное восстановление из ЛОББИ проходило незамеченным: matchId там ещё null,
+      // и клиент оставлял на экране комнату, которой на сервере уже нет. Кнопки в ней начинали
+      // отвечать «сначала войдите в комнату».
+      case S2C.ROOM_STATE:
+        this.roomCode = message.code || null;
+        break;
+
       case S2C.MATCH_START:
         this.matchId = message.matchId || null;
         // Новый забег — новое право на финиш.
@@ -317,6 +333,7 @@ export class NetworkManager {
         this.resumeInFlight = false;
         this.resumeToken = null;
         this.handshakeReady = true;
+        this.reconnectAttempt = 0;
         this.setLinkState(LINK_STATE.ONLINE);
         this.ui.toast('Соединение восстановлено.');
         this.flushQueue();
@@ -334,6 +351,7 @@ export class NetworkManager {
         this.resumeInFlight = false;
         this.resumeToken = null;
         this.matchId = null;
+        this.roomCode = null;
         this.finishSentFor = null;
         // Транзиентные пакеты прошлой жизни отправлять некуда и незачем.
         this.queue.length = 0;
@@ -413,17 +431,16 @@ export class NetworkManager {
     return this.send(C2S.PLAYER_STATE, { state, matchId: this.matchId });
   }
 
-  // Финиш и последнее состояние — одной операцией, в этом порядке.
+  // Финиш вместе с финальной позицией — одним пакетом.
   //
-  // Позиция уходит на сервер не каждый кадр, а раз в 66 мс. Без принудительной отправки сервер
-  // проверяет финиш по позиции, снятой до пересечения черты, и отказывает — а клиент уже считает
-  // себя финишировавшим и второй раз не попросит. Так и появлялось вечное «Подтверждаем
-  // результат…». Поэтому сначала актуальное состояние, сразу за ним — финиш.
+  // Отдельным пакетом позиция не годилась: сервер отбрасывает состояния, пришедшие раньше 32 мс
+  // после предыдущего, а обычные позиции идут раз в 66 мс. Примерно в половине случаев финальная
+  // попадала в это окно и терялась молча, финиш проверялся по точке перед лентой и отклонялся.
+  // Внутри `finish` состояние применяется без ограничения по частоте.
   finish(state, clientTime) {
     if (!this.matchId || this.finishSentFor === this.matchId) return false;
-    this.sendState(state, { force: true });
     this.finishSentFor = this.matchId;
-    return this.send(C2S.FINISH, { matchId: this.matchId, clientTime });
+    return this.send(C2S.FINISH, { matchId: this.matchId, state, clientTime });
   }
 
   // Сервер финиш не принял: позиция ещё не за чертой. Разрешаем повторить — иначе игрок,

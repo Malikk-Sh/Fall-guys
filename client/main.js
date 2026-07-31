@@ -422,14 +422,17 @@ class Game {
       this.goHome();
     });
 
-    this.net.on('start', message =>
-      this.startRace(
+    // `start` приходит и в начале забега, и при возвращении в уже идущий. Различает их поле
+    // `resumed`: если оно есть, забег продолжается с того места, где сервер видел игрока.
+    this.net.on('start', async message => {
+      await this.startRace(
         message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
         message.spec,
         message.at,
         message.slots
-      )
-    );
+      );
+      if (message.resumed) this.restoreRun(message.resumed);
+    });
     this.net.on('presence', message => {
       if (message.id === this.net.id) return;
       this.partnerAway = message.away;
@@ -605,6 +608,31 @@ class Game {
   // Единое «сейчас»: в сетевом режиме — оценка серверного времени, в одиночном — локальное.
   raceNow() {
     return this.online && this.net ? this.net.serverNow() : Date.now();
+  }
+
+  // Вернуть игрока туда, где его всё это время видел сервер.
+  //
+  // Вызывается после `startRace` при возвращении в уже идущий забег. Уровень к этому моменту
+  // построен заново — это нормально, геометрия детерминирована, — но персонаж стоит на старте,
+  // а сервер помнит его в середине главы. Без переноса возникает расхождение, которое сервер
+  // тут же исправит коррекцией: игрока дёрнет обратно, и он не поймёт, что произошло.
+  restoreRun({ position, checkpoint = 0, finished = false, downed = false }) {
+    if (!this.player) return;
+    this.player.checkpoint = Math.max(this.player.checkpoint, checkpoint);
+    if (position) {
+      this.player.respawn(new THREE.Vector3(position.x, position.y, position.z), false);
+    }
+    this.player.downed = downed;
+    if (!finished) return;
+
+    // Финишировавший не должен снова оказаться на трассе: для сервера он уже дошёл, и повторный
+    // финиш тот не примет. Возвращаем его в то состояние, в котором он был до обрыва, — ожидание.
+    this.player.finished = true;
+    this.running = false;
+    this.input.enabled = false;
+    this.music.setIntensity(0);
+    if (this.mode === 'coop') this.ui.awaitPartnerFinish();
+    else this.ui.toast('Вы уже финишировали — ждём остальных.');
   }
 
   localFinish() {

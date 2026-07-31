@@ -57,7 +57,7 @@ test('сообщения забега без matchId отклоняются', ()
     { type: C2S.PLAYER_STATE, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
     { type: C2S.COOP_EVENT, action: 'plate' },
     { type: C2S.RESPAWN, checkpoint: 2 },
-    { type: C2S.FINISH, clientTime: 1000 },
+    { type: C2S.FINISH, clientTime: 1000, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
     { type: C2S.REMATCH_VOTE },
     { type: C2S.RETURN_TO_LOBBY }
   ];
@@ -71,7 +71,10 @@ test('сообщения забега без matchId отклоняются', ()
   assert.ok(validateMessage({ type: C2S.REMATCH_VOTE, matchId }).ok);
   assert.ok(validateMessage({ type: C2S.RETURN_TO_LOBBY, matchId }).ok);
   assert.ok(validateMessage({ type: C2S.RESPAWN, matchId, checkpoint: 2 }).ok);
-  assert.ok(validateMessage({ type: C2S.FINISH, matchId, clientTime: 1000 }).ok);
+  const shape = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' };
+  assert.ok(validateMessage({ type: C2S.FINISH, matchId, state: shape, clientTime: 1000 }).ok);
+  // И без позиции финиш теперь неполон: сервер обязан проверять его по свежей точке.
+  assert.equal(validateMessage({ type: C2S.FINISH, matchId, clientTime: 1000 }).ok, false);
 });
 
 test('валидатор отклоняет некорректные сообщения', () => {

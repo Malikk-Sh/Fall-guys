@@ -65,16 +65,15 @@ const STATE_GAP_MS = 55;
 async function runToFinish(client, spec, matchId, { stopBefore = 0 } = {}) {
   let z = spec.start.z;
   const target = spec.finishZ - 1;
+  const at = value => ({ x: 0, y: spec.start.y, z: value, ry: 0, vx: 0, vz: -8, state: 'ground' });
   while (z > target) {
     z = Math.max(target, z - STATE_STEP);
-    client.send('state', {
-      matchId,
-      state: { x: 0, y: spec.start.y, z, ry: 0, vx: 0, vz: -8, state: 'ground' }
-    });
+    client.send('state', { matchId, state: at(z) });
     await new Promise(resolve => setTimeout(resolve, STATE_GAP_MS));
   }
   if (stopBefore) return z;
-  client.send('finish', { matchId, clientTime: 1000 });
+  // Финальная позиция едет ВНУТРИ finish — именно так её теперь отправляет клиент.
+  client.send('finish', { matchId, state: at(z), clientTime: 1000 });
   return z;
 }
 
@@ -372,7 +371,11 @@ test('повторный finish идемпотентен', async t => {
   await host.wait('finish', () => true, 5000);
   const finishesAfterFirst = host.messages.filter(m => m.type === 'finish').length;
 
-  host.send('finish', { matchId: started.matchId, clientTime: 1000 });
+  host.send('finish', {
+    matchId: started.matchId,
+    state: { x: 0, y: started.spec.start.y, z: started.spec.finishZ - 1, ry: 0, vx: 0, vz: -8, state: 'ground' },
+    clientTime: 1000
+  });
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(
     host.messages.filter(m => m.type === 'finish').length,
@@ -512,4 +515,141 @@ test('переподключение на экране результатов в
   const restored = await back.wait('results', () => true, 3000);
   assert.equal(restored.matchId, original.matchId, 'итоги должны быть те же самые');
   assert.deepEqual(restored.board, original.board, 'и с тем же составом доски');
+});
+
+// Финальная позиция внутри finish не подчиняется ограничению «не чаще раза в 32 мс».
+//
+// Отдельным пакетом она попадала в это окно примерно в половине случаев и терялась молча: финиш
+// проверялся по точке ПЕРЕД лентой и отклонялся. Игрок видел «Финиш не засчитан» после честно
+// пройденной трассы. Тест воспроизводит именно этот момент — состояние прямо перед финишем.
+test('финиш принимается, даже если позиция пришла миллисекунду назад', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'race');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const spec = started.spec;
+  const at = z => ({ x: 0, y: spec.start.y, z, ry: 0, vx: 0, vz: -8, state: 'ground' });
+
+  // Доходим почти до конца обычным потоком позиций.
+  const stopped = await runToFinish(host, spec, started.matchId, { stopBefore: 1 });
+  assert.ok(stopped <= spec.finishZ - 1, 'подготовка: игрок должен стоять у ленты');
+
+  // А теперь — состояние и финиш подряд, без паузы. Ровно так это и происходит в игре.
+  host.send('state', { matchId: started.matchId, state: at(spec.finishZ - 2) });
+  host.send('finish', { matchId: started.matchId, state: at(spec.finishZ - 3), clientTime: 1234 });
+
+  const finished = await host.wait('finish', () => true, 4000);
+  assert.equal(finished.id, host.messages.find(m => m.type === 'hello').id);
+  assert.equal(
+    host.messages.some(m => m.type === 'finishRejected'),
+    false,
+    'финиш обязан быть принят с первого раза'
+  );
+});
+
+// Если один уже проголосовал, а второй оборвался, решение обязано довестись до конца.
+// Раньше пересчёт происходил только при получении голоса, а повторно голосовать первый не может —
+// его голос уже учтён. Комната зависала на результатах навсегда.
+test('обрыв второго игрока после голоса не подвешивает комнату', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await host.wait('results', () => true, 5000);
+
+  // Голосует только хост.
+  host.send('rematch', { matchId: started.matchId });
+  await host.wait('lobby', m => m.state === 'RESULTS' && m.players.some(p => p.rematch), 3000);
+
+  // Второй обрывается, так и не проголосовав.
+  //
+  // Историю чистим намеренно: в ней уже есть состояния LOBBY, полученные до старта забега, и
+  // ожидание нашло бы их, ничего на самом деле не проверив.
+  host.messages.length = 0;
+  guest.ws.terminate();
+
+  const lobby = await host.wait('lobby', m => m.state === 'LOBBY', 4000);
+  assert.equal(lobby.matchId, null, 'комната обязана вернуться в лобби, а не зависнуть');
+  assert.equal(
+    lobby.players.every(p => !p.rematch),
+    true,
+    'голоса сброшены под новый забег'
+  );
+});
+
+// Возвращение в идущий забег — это продолжение, а не начало заново. Сервер помнит, где игрок
+// находится и что с ним, и обязан это прислать: иначе клиент строит уровень с нуля и ставит
+// персонажа на старт, а сервер продолжает видеть его в середине главы.
+test('возвращение в идущий забег отдаёт позицию и состояние игрока', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+  let back = null;
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close(), back ? back.close() : Promise.resolve()]);
+    await shutdown();
+  });
+
+  const hostHello = host.messages.find(m => m.type === 'hello');
+  // Уходим в середину главы.
+  const middle = await runToFinish(host, started.spec, started.matchId, { stopBefore: 1 });
+  assert.ok(middle < started.spec.start.z, 'подготовка: игрок должен уйти со старта');
+
+  host.ws.terminate();
+  back = new TestClient(url);
+  await back.wait('hello');
+  back.send('resume', { token: hostHello.token });
+  await back.wait('resumed', () => true, 3000);
+
+  const restart = await back.wait('start', () => true, 3000);
+  assert.ok(restart.resumed, 'возвращение обязано нести состояние игрока');
+  assert.ok(
+    restart.resumed.position.z < started.spec.start.z - 5,
+    `игрока нельзя возвращать на старт: сервер видит его на z=${restart.resumed.position.z}`
+  );
+  assert.equal(restart.resumed.finished, false);
+  assert.equal(typeof restart.resumed.checkpoint, 'number');
+  void guest;
+});
+
+// Финишировавший, у которого оборвалась связь, не должен снова оказаться на трассе: сервер уже
+// считает его дошедшим и второй финиш не примет.
+test('финишировавший возвращается в ожидание, а не на трассу', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+  let back = null;
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close(), back ? back.close() : Promise.resolve()]);
+    await shutdown();
+  });
+
+  const hostHello = host.messages.find(m => m.type === 'hello');
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+
+  host.ws.terminate();
+  back = new TestClient(url);
+  await back.wait('hello');
+  back.send('resume', { token: hostHello.token });
+  await back.wait('resumed', () => true, 3000);
+
+  const restart = await back.wait('start', () => true, 3000);
+  assert.equal(restart.resumed.finished, true, 'сервер обязан сказать, что игрок уже дошёл');
+  void guest;
 });

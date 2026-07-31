@@ -205,55 +205,90 @@ export class Runner {
       .sort((a, b) => b.z - a.z);
   }
 
-  // Провести пару через одни ворота с плитой и фиксатором.
+  // Провести пару через одни ворота.
+  //
+  // Фиксации больше нет: мост живёт, только пока на какой-нибудь плите кто-то стоит. Значит,
+  // проход обязан быть пятитактным, и именно это здесь и проверяется — если хоть один такт
+  // невозможен, глава непроходима, как бы честно ни выдвигался пролёт.
+  //
+  //   1. первый встаёт на ближнюю плиту — мост появился;
+  //   2. второй переходит;
+  //   3. первый сходит с плиты — мост исчез, но второй уже на той стороне;
+  //   4. второй встаёт на дальнюю плиту — мост появился снова;
+  //   5. первый переходит.
   passGate(piece) {
     const { world } = this;
-    const hold = world.course.plates.get(piece.requires[0]);
-    // Особый случай: держащая плита лежит ЗА пропастью. Дойти до неё ногами нельзя — туда
-    // забрасывает катапульта, и только после этого напарник переходит по выдвинувшемуся пролёту.
-    if (hold.z < piece.z - piece.length / 2) return this.passCatapultGate(piece, hold);
-    const latch = world.course.plates.get(piece.latch);
+    const near = piece.z + piece.length / 2;
     const far = piece.z - piece.length / 2;
-    // Кто держит, а кто идёт — не важно: персонажи одинаковые. Берём первого и второго.
+    const plates = piece.requires.map(id => world.course.plates.get(id)).filter(Boolean);
+    if (plates.length !== piece.requires.length) return this.fail(`${piece.id}: плита не найдена`);
+
+    const nearPlate = plates.filter(plate => plate.z > near).sort((a, b) => b.z - a.z)[0];
+    const farPlate = plates.filter(plate => plate.z < far).sort((a, b) => b.z - a.z)[0];
+
+    // Плита только за пропастью — значит, переправляет катапульта, а не мост.
+    if (!nearPlate && farPlate) return this.passCatapultGate(piece, farPlate);
+    if (!nearPlate) return this.fail(`${piece.id}: нет плиты перед пропастью`);
+    if (!farPlate) return this.fail(`${piece.id}: нет плиты за пропастью — первому не перейти`);
+
+    // Кто держит, а кто идёт — не важно: персонажи одинаковые.
     const holder = world.spark;
     const mover = world.anchor;
+    const span = () => world.course.spans.get(piece.id);
 
+    // Такт 1: держащий встаёт на ближнюю плиту.
     const held = world.run(
       16,
       () => {
-        holder.lookAt(hold.x, hold.z - 10);
-        holder.steerTo(hold.x, hold.z);
+        holder.lookAt(nearPlate.x, nearPlate.z - 10);
+        holder.steerTo(nearPlate.x, nearPlate.z);
         mover.lookAt(0, far - 20);
-        mover.steerTo(0, piece.z + piece.length / 2 + 3);
+        mover.steerTo(0, near + 3);
       },
-      () => world.course.spans.get(piece.id).active
+      () => span().active
     );
-    if (!held) return this.fail(`${piece.id}: держащий не смог выдвинуть пролёт`);
+    if (!held) return this.fail(`${piece.id}: держащий не смог выдвинуть мост`);
 
+    // Такт 2: второй переходит, пока первый держит.
     const crossed = world.run(
       20,
       () => {
-        holder.lookAt(hold.x, hold.z - 10);
-        holder.steerTo(hold.x, hold.z);
-        mover.lookAt(latch.x, latch.z - 10);
-        mover.steerTo(latch.x, latch.z);
+        holder.lookAt(nearPlate.x, nearPlate.z - 10);
+        holder.steerTo(nearPlate.x, nearPlate.z);
+        mover.lookAt(farPlate.x, farPlate.z - 10);
+        mover.steerTo(farPlate.x, farPlate.z);
       },
-      () => world.course.spans.get(piece.id).latched
+      () => mover.position.z < far - 1 && mover.player.grounded
     );
-    if (!crossed) return this.fail(`${piece.id}: переходящий не добрался до фиксатора`);
+    if (!crossed) return this.fail(`${piece.id}: переходящий не добрался до той стороны`);
 
-    const followed = world.run(
+    // Такты 3 и 4: держащий сходит, перешедший встаёт на дальнюю плиту. Мост при этом обязан
+    // исчезнуть и появиться снова — иначе фиксация вернулась незамеченной.
+    const swapped = world.run(
       20,
+      () => {
+        holder.lookAt(0, near + 20);
+        holder.steerTo(0, near + 4);
+        mover.lookAt(farPlate.x, farPlate.z - 10);
+        mover.steerTo(farPlate.x, farPlate.z);
+      },
+      () => world.course.plates.get(farPlate.id).pressed && span().active
+    );
+    if (!swapped) return this.fail(`${piece.id}: перешедший не смог открыть мост с той стороны`);
+
+    // Такт 5: первый переходит следом.
+    const followed = world.run(
+      22,
       () => {
         holder.lookAt(0, far - 20);
         holder.steerTo(0, far - 5);
-        mover.lookAt(latch.x, latch.z);
-        mover.steerTo(latch.x, latch.z);
+        mover.lookAt(farPlate.x, farPlate.z);
+        mover.steerTo(farPlate.x, farPlate.z);
       },
       () => holder.position.z < far - 2 && holder.player.grounded
     );
-    if (!followed) return this.fail(`${piece.id}: держащий не смог перейти по закреплённому пролёту`);
-    this.log.push(`${piece.id}: ворота пройдены`);
+    if (!followed) return this.fail(`${piece.id}: держащий не смог перейти по мосту напарника`);
+    this.log.push(`${piece.id}: ворота пройдены в пять тактов`);
     return true;
   }
 

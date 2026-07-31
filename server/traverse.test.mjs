@@ -23,11 +23,12 @@ function spanBounds(chapterId, spanId) {
 
 test('глава 1: через первые ворота проходят оба', () => {
   const world = new World(coopSpec('ch1'));
-  const { far } = spanBounds('ch1', 'g1');
+  const { near, far } = spanBounds('ch1', 'g1');
   const hold = world.course.plates.get('p1');
-  const latch = world.course.plates.get('p2');
+  const farPlate = world.course.plates.get('p2');
+  const span = () => world.course.spans.get('g1');
 
-  // Такт 1: первый встаёт на плиту — пролёт выдвигается.
+  // Такт 1: первый встаёт на плиту — мост выдвигается.
   const held = world.run(
     14,
     w => {
@@ -38,27 +39,53 @@ test('глава 1: через первые ворота проходят оба
     },
     w => w.course.spans.get('g1').active
   );
-  assert.ok(held, 'плита должна выдвигать пролёт');
+  assert.ok(held, 'плита должна выдвигать мост');
 
-  // Такт 2: второй переходит и встаёт на фиксатор за пролётом.
+  // Такт 2: второй переходит, пока первый держит.
   const crossed = world.run(
     20,
     w => {
       w.spark.steerTo(hold.x, hold.z);
-      w.anchor.lookAt(latch.x, latch.z - 10);
-      w.anchor.steerTo(latch.x, latch.z);
+      w.anchor.lookAt(farPlate.x, farPlate.z - 10);
+      w.anchor.steerTo(farPlate.x, farPlate.z);
     },
-    w => w.course.spans.get('g1').latched && w.anchor.player.grounded
+    w => w.anchor.position.z < far - 1 && w.anchor.player.grounded
   );
-  assert.ok(crossed, 'второй должен суметь перейти и закрепить пролёт');
+  assert.ok(crossed, 'второй должен суметь перейти по мосту');
 
-  // Такт 3: первый сходит с плиты и идёт следом. Именно здесь глава ломалась.
+  // Такт 3: первый сходит с плиты — мост обязан ИСЧЕЗНУТЬ. Фиксации больше нет, и это главное,
+  // что здесь проверяется: если мост остался стоять, вторая половина головоломки не нужна.
+  const vanished = world.run(
+    10,
+    w => {
+      w.spark.lookAt(0, near + 20);
+      w.spark.steerTo(0, near + 5);
+      w.anchor.lookAt(farPlate.x, farPlate.z + 10);
+      w.anchor.steerTo(farPlate.x, farPlate.z + 6);
+    },
+    () => !span().active
+  );
+  assert.ok(vanished, 'без нажатой плиты моста быть не должно');
+
+  // Такт 4: перешедший встаёт на дальнюю плиту — мост появляется снова.
+  const reopened = world.run(
+    14,
+    w => {
+      w.spark.steerTo(0, near + 5);
+      w.anchor.lookAt(farPlate.x, farPlate.z - 10);
+      w.anchor.steerTo(farPlate.x, farPlate.z);
+    },
+    () => span().active
+  );
+  assert.ok(reopened, 'дальняя плита должна открывать тот же мост');
+
+  // Такт 5: первый переходит следом. Именно здесь глава ломалась раньше.
   const followed = world.run(
-    20,
+    22,
     w => {
       w.spark.lookAt(0, far - 20);
       w.spark.steerTo(0, far - 5);
-      w.anchor.steerTo(latch.x, latch.z);
+      w.anchor.steerTo(farPlate.x, farPlate.z);
     },
     w => w.spark.position.z < far - 2 && w.spark.player.grounded
   );

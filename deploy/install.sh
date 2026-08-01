@@ -142,6 +142,20 @@ else
   sed -i "s/listen \[::\]:8443 ssl;/listen [::]:${HTTPS_PORT} ssl;/" "$site"
   sed -i "s|/etc/letsencrypt/live/example.com/|${cert_dir}/|g" "$site"
 
+  # Отдельная директива http2 появилась только в nginx 1.25.1. В Ubuntu 24.04 ставится 1.24, и
+  # конфиг с ней не проходит проверку: unknown directive "http2" — установка обрывается на
+  # `nginx -t`, уже написав все файлы. До 1.25.1 http2 задавался параметром у listen; эта форма
+  # работает и в новых версиях, но там она объявлена устаревшей и печатает предупреждение при
+  # каждой перезагрузке. Поэтому не пишем везде по-старому, а смотрим на версию.
+  nginx_ver="$(nginx -v 2>&1 | sed 's|.*nginx/||; s|[^0-9.].*||')"
+  if [ -n "$nginx_ver" ] && [ "$(printf '%s\n1.25.1\n' "$nginx_ver" | sort -V | head -1)" != "1.25.1" ]; then
+    sed -i -e '/^[[:space:]]*http2 on;$/d' \
+      -e "s|^\([[:space:]]*listen ${HTTPS_PORT}\) ssl;|\1 ssl http2;|" \
+      -e "s|^\([[:space:]]*listen \[::\]:${HTTPS_PORT}\) ssl;|\1 ssl http2;|" \
+      "$site"
+    echo "nginx ${nginx_ver} старше 1.25.1 — http2 записан параметром listen"
+  fi
+
   if [ "$have_cert" -eq 0 ]; then
     # Сертификата ещё нет — nginx не запустится, сославшись на несуществующий файл.
     #

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
-const { server, setResultsTimeout } = require('./index');
+const { server, setResultsTimeout, shutdown: shutdownServer } = require('./index');
 
 class TestClient {
   constructor(url) {
@@ -746,4 +746,39 @@ test('финишировавший возвращается в ожидание,
   const restart = await back.wait('start', () => true, 3000);
   assert.equal(restart.resumed.finished, true, 'сервер обязан сказать, что игрок уже дошёл');
   void guest;
+});
+
+// ВНИМАНИЕ: этот тест обязан оставаться ПОСЛЕДНИМ в файле.
+//
+// Выключение — процессное событие: оно снимает флаг готовности, останавливает рассылку снапшотов
+// и закрывает приём подключений на весь оставшийся процесс. Тесты идут по порядку в одном
+// процессе, поэтому всё, что объявлено ниже, уже не поднимется. Новые тесты добавляйте ВЫШЕ.
+// Перезапуск службы рвал соединения посреди забега, и клиент видел обычный обрыв: он честно уходил
+// в переподключение к серверу, которого ещё нет. Отличить «сеть моргнула» от «сервер выключается»
+// было нечем, и каждое обновление игры выглядело как поломка сети.
+test('выключение сервера предупреждает игроков до разрыва', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const warned = Promise.all([
+    host.wait('shutdown', () => true, 3000),
+    guest.wait('shutdown', () => true, 3000)
+  ]);
+  const closed = new Promise(resolve => guest.ws.once('close', (code, reason) => resolve({ code, reason })));
+
+  shutdownServer('TEST', { exitProcess: false });
+
+  const [notice] = await warned;
+  assert.equal(notice.reason, 'restart', 'клиенту нужна причина, а не голый факт');
+
+  // Предупреждение обязано прийти РАНЬШЕ закрытия, иначе оно останется в буфере отправки и игрок
+  // увидит только обрыв — ровно то, что чинится.
+  const closeEvent = await closed;
+  assert.equal(closeEvent.code, 1001, 'штатный код «going away», а не аварийный обрыв');
 });

@@ -105,6 +105,9 @@ export class NetworkManager {
     this.snapshots = new SnapshotBuffer();
     this.reconnectAttempt = 0;
     this.reconnectTimer = null;
+    // Сервер предупредил о перезапуске. Отличает штатное обновление от обрыва связи: восстановление
+    // идёт по-разному, и говорить игроку надо разное.
+    this.serverRestarting = false;
     this.sessionToken = this.loadSession();
 
     // Статистика качества связи. Джиттер считаем как среднее отклонение задержки: именно он,
@@ -233,6 +236,10 @@ export class NetworkManager {
     this.ws.addEventListener('close', () => {
       if (this.intentionalClose) return;
       this.emit('connectionLost', {});
+      // После предупреждения о перезапуске счётчик попыток начинаем заново: сервер поднимется
+      // через несколько секунд, а исчерпанные попытки прошлого обрыва отправили бы игрока прямо
+      // в «Не удалось восстановить соединение», ни разу не попробовав.
+      if (this.serverRestarting) this.reconnectAttempt = 0;
       this.scheduleReconnect();
     });
   }
@@ -360,6 +367,24 @@ export class NetworkManager {
         break;
       }
 
+      // Сервер выключается — обновление или перезапуск.
+      //
+      // Отличать это от обрыва связи обязательно. Комнаты живут в памяти процесса и перезапуск не
+      // переживают, поэтому цепляться за старую сессию бессмысленно: resume гарантированно
+      // провалится. Сбрасываем токен заранее и подключаемся заново уже начисто — и говорим прямо,
+      // что происходит, вместо «соединение потеряно», которое выглядит как проблема у игрока.
+      case S2C.SERVER_SHUTDOWN:
+        this.serverRestarting = true;
+        this.saveSession(null);
+        this.resumeToken = null;
+        this.resumeInFlight = false;
+        this.matchId = null;
+        this.roomCode = null;
+        this.finishSentFor = null;
+        this.queue.length = 0;
+        this.ui.status('Сервер обновляется. Подключимся заново через несколько секунд…');
+        break;
+
       case S2C.ERROR:
         this.ui.error(ERROR_TEXT[message.code] || message.message || 'Сетевой запрос не удался.');
         break;
@@ -369,6 +394,13 @@ export class NetworkManager {
 
   scheduleReconnect() {
     this.setLinkState(LINK_STATE.RECONNECTING);
+    if (this.serverRestarting) {
+      this.serverRestarting = false;
+      this.reconnectAttempt = 1;
+      this.ui.status('Сервер обновляется, подключаемся заново…');
+      this.reconnectTimer = setTimeout(() => this.connect(), 2500);
+      return;
+    }
     if (this.reconnectAttempt >= RECONNECT_DELAYS.length) {
       this.setLinkState(LINK_STATE.FAILED);
       this.ui.status('Не удалось восстановить соединение.');

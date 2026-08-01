@@ -184,7 +184,7 @@ server {
     include /etc/nginx/wobble-locations.conf;
 
     gzip on;
-    gzip_types application/javascript text/css text/html application/json;
+    gzip_types application/javascript text/css application/json;
     gzip_min_length 1024;
     client_max_body_size 64k;
 }

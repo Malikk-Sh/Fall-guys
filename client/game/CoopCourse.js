@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 import { CourseBuilder, PLAYER_FOOT } from './CourseBuilder.js';
+import { RUN_SPEED } from './Player.js';
 import { chapterLayout, coopSpawnFor, LANE_WIDTH } from '/shared/coopChapters.js';
 
 // Постройка кооперативной главы из данных.
@@ -13,6 +14,21 @@ import { chapterLayout, coopSpawnFor, LANE_WIDTH } from '/shared/coopChapters.js
 //
 // По сети идёт единственное действие, которое из позиции не выводится: удар катапульты (импульс,
 // применяемый к ДРУГОМУ игроку). Его шлёт инициатор, сервер проверяет и ретранслирует.
+
+// Потолок сноса — доля беговой скорости.
+//
+// Ветер обязан уметь почти остановить, но не тащить назад: движение спиной вперёд читается как
+// поломка управления, а не как сильный порыв. Рельс стоит в коде, а не в данных, потому что force
+// в shared/coopChapters.js правится на глаз при балансировке, и промах там не должен выводить
+// участок за грань проходимого.
+const WIND_MAX = RUN_SPEED * 0.78;
+
+// Попутный ветер помогает заметно слабее, чем встречный мешает.
+//
+// Симметрия здесь вредна: при равном вкладе порыв в спину разгонял до полутора беговых скоростей,
+// и участок проходился не по расписанию ветра, а по тому, повезло ли поймать порыв. Ощущалось это
+// как сбой — «иду то слишком медленно, то слишком быстро».
+const WIND_TAILWIND = 0.4;
 
 // Цвет пролёта, когда он выдвинут и когда убран.
 const SPAN_ACTIVE = COLORS.mint;
@@ -266,16 +282,19 @@ export class CoopCourse extends CourseBuilder {
       });
       // Лопасти: крестовина, вращающаяся вокруг оси ветра. Скорость вращения — это и есть
       // индикатор силы порыва, читаемый боковым зрением, не отрываясь от дороги.
+      // Крестовина собирается сразу вокруг оси X — той самой, вдоль которой дует. Наклонять
+      // группу через rotation.z нельзя: эйлеровы углы в порядке XYZ применяются как Z→Y→X, то
+      // есть наклон лёг бы ДО вращения, и лопасти крутились бы вокруг мировой вертикали. Со
+      // стороны это выглядит не вращением, а разворотом вентилятора на месте.
       const rotor = new THREE.Group();
       rotor.position.set(wallX + (fromLeft ? 0.8 : -0.8), hubY, z);
-      rotor.rotation.z = Math.PI / 2;
       for (let blade = 0; blade < 4; blade++) {
         const mesh = new THREE.Mesh(
           new THREE.BoxGeometry(0.22, 0.5, 1.5),
           this.material({ color: COLORS.cyan, emissive: COLORS.cyan, emissiveIntensity: 1.1 })
         );
         mesh.geometry.translate(0, 0, 0.85);
-        mesh.rotation.y = (blade * Math.PI) / 2;
+        mesh.rotation.x = (blade * Math.PI) / 2;
         rotor.add(mesh);
       }
       this.group.add(rotor);
@@ -766,7 +785,8 @@ export class CoopCourse extends CourseBuilder {
       const wave = Math.sin(Math.PI * Math.pow(t, 0.8));
       fan.gust = 0.1 + 0.9 * Math.pow(Math.max(0, wave), 1.35);
       fan.spin += dt * (2 + fan.gust * 22) * (fan.fromLeft ? 1 : -1);
-      for (const rotor of fan.rotors) rotor.rotation.y = fan.spin;
+      // Вокруг X — вдоль ветра. Единственная эйлерова компонента, так что порядок углов не важен.
+      for (const rotor of fan.rotors) rotor.rotation.x = fan.spin;
       // Полосы летят поперёк дорожки со скоростью порыва и на пике становятся ярче.
       const travel = LANE_WIDTH + 4;
       for (const streak of fan.streaks) {
@@ -876,7 +896,14 @@ export class CoopCourse extends CourseBuilder {
 
     for (const zone of this.fans) {
       if (position.z > zone.zMax || position.z < zone.zMin) continue;
-      const push = zone.force * zone.gust;
+      // Потолок и ослабление попутного считаются до применения: см. WIND_MAX и WIND_TAILWIND.
+      //
+      // Сравнивается именно НАМЕРЕНИЕ игрока, не его скорость. По скорости получалась петля:
+      // ветер сносит стоящего, снос попадает в velocity.x, и со следующего шага собственный
+      // снос начинает считаться «попутным бегом» — ветер глушит сам себя ровно тогда, когда
+      // работает. Стоящему на месте (intentX = 0) дует в полную силу.
+      let push = THREE.MathUtils.clamp(zone.force * zone.gust, -WIND_MAX, WIND_MAX);
+      if (push * (player.intentX || 0) > 0) push *= WIND_TAILWIND;
       // Снос применяется к ПОЗИЦИИ, а не к скорости.
       //
       // Через скорость ветер почти не ощущался: торможение управления в Player.step тянет

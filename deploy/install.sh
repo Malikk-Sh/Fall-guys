@@ -74,6 +74,10 @@ if ! git config --global --get-all safe.directory 2>/dev/null | grep -qx "$APP_D
   git config --global --add safe.directory "$APP_DIR"
 fi
 
+self="$APP_DIR/deploy/install.sh"
+before=""
+[ -f "$self" ] && before="$(sha256sum "$self" | cut -d' ' -f1)"
+
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
   git -C "$APP_DIR" reset --hard "origin/${BRANCH}"
@@ -82,6 +86,24 @@ else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP_DIR"
 fi
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+
+# Установщик лежит в том же репозитории, который сам же и обновляет, — и это ловушка.
+#
+# bash читает скрипт с диска по мере выполнения. К этому моменту git уже подменил файл новой
+# версией, но выполняться продолжает старая: та, что была прочитана при запуске. Значит любое
+# исправление самого установщика вступает в силу только со следующего запуска — молча, без
+# единого признака, что запущено не то, что лежит на диске. Отладка такого занимает часы:
+# в репозитории исправление есть, на сервере оно не срабатывает.
+#
+# Сравниваем контрольную сумму до и после обновления. Изменилась — перезапускаемся новой версией.
+# Переменные окружения (DOMAIN, HTTPS_PORT и прочие) переживают exec, повторять их не нужно.
+# WOBBLE_REEXEC защищает от петли, если сумма почему-то продолжит отличаться.
+if [ -n "$before" ] && [ "${WOBBLE_REEXEC:-0}" != "1" ] &&
+  [ "$before" != "$(sha256sum "$self" | cut -d' ' -f1)" ]; then
+  say "Установщик обновился — перезапускаю свежую версию"
+  export WOBBLE_REEXEC=1
+  exec bash "$self"
+fi
 
 say "Зависимости"
 # --omit=dev: на сервере не нужны ни линтер, ни playwright.
@@ -142,20 +164,6 @@ else
   sed -i "s/listen \[::\]:8443 ssl;/listen [::]:${HTTPS_PORT} ssl;/" "$site"
   sed -i "s|/etc/letsencrypt/live/example.com/|${cert_dir}/|g" "$site"
 
-  # Отдельная директива http2 появилась только в nginx 1.25.1. В Ubuntu 24.04 ставится 1.24, и
-  # конфиг с ней не проходит проверку: unknown directive "http2" — установка обрывается на
-  # `nginx -t`, уже написав все файлы. До 1.25.1 http2 задавался параметром у listen; эта форма
-  # работает и в новых версиях, но там она объявлена устаревшей и печатает предупреждение при
-  # каждой перезагрузке. Поэтому не пишем везде по-старому, а смотрим на версию.
-  nginx_ver="$(nginx -v 2>&1 | sed 's|.*nginx/||; s|[^0-9.].*||')"
-  if [ -n "$nginx_ver" ] && [ "$(printf '%s\n1.25.1\n' "$nginx_ver" | sort -V | head -1)" != "1.25.1" ]; then
-    sed -i -e '/^[[:space:]]*http2 on;$/d' \
-      -e "s|^\([[:space:]]*listen ${HTTPS_PORT}\) ssl;|\1 ssl http2;|" \
-      -e "s|^\([[:space:]]*listen \[::\]:${HTTPS_PORT}\) ssl;|\1 ssl http2;|" \
-      "$site"
-    echo "nginx ${nginx_ver} старше 1.25.1 — http2 записан параметром listen"
-  fi
-
   if [ "$have_cert" -eq 0 ]; then
     # Сертификата ещё нет — nginx не запустится, сославшись на несуществующий файл.
     #
@@ -186,7 +194,27 @@ fi
 
 ln -sfn "$site" /etc/nginx/sites-enabled/wobble
 rm -f /etc/nginx/sites-enabled/default
-nginx -t
+# Отдельная директива `http2 on;` появилась только в nginx 1.25.1, а в Ubuntu 24.04 — актуальной
+# LTS — ставится 1.24, которая обрывается на ней с `unknown directive "http2"`.
+#
+# Версию не выясняем: спрашиваем сам nginx. Сравнение номеров врёт на сборках вроде openresty и на
+# nginx, собранном без модуля http_v2, а его собственный вердикт верен всегда. До 1.25.1 http2
+# включался параметром у listen — эта форма понятна и новым версиям, но объявлена там устаревшей и
+# печатает предупреждение при каждой перезагрузке, поэтому по умолчанию пишем современный вариант
+# и откатываемся к старому, только если этот не приняли.
+if ! nginx_out="$(nginx -t 2>&1)"; then
+  if printf '%s' "$nginx_out" | grep -q 'unknown directive "http2"'; then
+    warn "nginx не знает директиву http2 — записываю её параметром listen"
+    sed -i -e '/^[[:space:]]*http2 on;$/d' \
+      -e 's|^\([[:space:]]*listen [0-9]\+\) ssl;|\1 ssl http2;|' \
+      -e 's|^\([[:space:]]*listen \[::\]:[0-9]\+\) ssl;|\1 ssl http2;|' \
+      "$site"
+    nginx -t
+  else
+    printf '%s\n' "$nginx_out" >&2
+    exit 1
+  fi
+fi
 systemctl reload nginx
 
 say "Файрвол"

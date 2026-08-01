@@ -285,3 +285,16 @@ ufw status                                  # файрвол
 ```bash
 git config --global --add safe.directory /opt/wobble
 ```
+
+**Скрипт обрывается на `unknown directive "http2"`.** Отдельная директива `http2 on;` появилась
+только в nginx 1.25.1, а в Ubuntu 24.04 ставится 1.24. Скрипт теперь смотрит на `nginx -v` и на
+старых версиях записывает http2 прежним способом — параметром у `listen`. Если конфиг уже написан
+и переустанавливать не хочется, то же самое делается вручную:
+
+```bash
+sed -i -e '/^\s*http2 on;$/d' \
+       -e 's/^\(\s*listen 8443\) ssl;/\1 ssl http2;/' \
+       -e 's/^\(\s*listen \[::\]:8443\) ssl;/\1 ssl http2;/' \
+       /etc/nginx/sites-available/wobble
+nginx -t && systemctl reload nginx
+```

@@ -88,7 +88,10 @@ export const ROOM_TRANSITIONS = Object.freeze({
   LOBBY: ['COUNTDOWN', 'CLOSING'],
   COUNTDOWN: ['PLAYING', 'LOBBY', 'CLOSING'],
   PLAYING: ['RESULTS', 'CLOSING'],
-  RESULTS: ['LOBBY', 'CLOSING'],
+  // RESULTS → COUNTDOWN — это реванш: единогласное решение запускает тот же уровень заново, минуя
+  // лобби и повторную готовность. Пока перехода не было, обе кнопки экрана результатов вели в
+  // LOBBY, то есть делали одно и то же, и голосовать было не за что.
+  RESULTS: ['LOBBY', 'COUNTDOWN', 'CLOSING'],
   CLOSING: []
 });
 

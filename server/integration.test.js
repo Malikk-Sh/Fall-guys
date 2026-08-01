@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
-const { server } = require('./index');
+const { server, setResultsTimeout } = require('./index');
 
 class TestClient {
   constructor(url) {
@@ -407,21 +407,111 @@ test('первый голос за реванш не закрывает экра
   host.send('rematch', { matchId: started.matchId });
   const afterFirst = await guest.wait(
     'lobby',
-    m => m.players.some(p => p.rematch),
+    m => m.players.some(p => p.choice === 'rematch'),
     3000
   );
   assert.equal(afterFirst.state, 'RESULTS', 'комната обязана остаться на результатах');
   assert.equal(
-    afterFirst.players.filter(p => p.rematch).length,
+    afterFirst.players.filter(p => p.choice === 'rematch').length,
     1,
     'засчитан ровно один голос'
   );
+  assert.ok(afterFirst.resultsDeadline, 'клиенту нужен срок, чтобы показать отсчёт');
 
-  // И только второй голос открывает лобби.
+  // И только второй голос запускает забег. Именно ЗАБЕГ, а не возврат в лобби: иначе кнопка
+  // «реванш» делала бы ровно то же, что «в лобби», и голосовать было бы не за что.
   guest.send('rematch', { matchId: started.matchId });
+  // Предикат обязан отсекать матч, который уже был: в истории клиента лежит `start` первого
+  // забега, и ожидание «любого start» нашло бы его, ничего на самом деле не проверив.
+  const restart = await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+  assert.notEqual(restart.matchId, started.matchId, 'у реванша свой matchId');
+  assert.equal(restart.spec.seed, started.spec.seed, 'реванш идёт по той же трассе');
+});
+
+// Разошедшиеся голоса вешали комнату намертво: «все за реванш» и «все за лобби» — оба условия
+// ложны, а переголосовать было нельзя. Обе кнопки погашены, выхода нет.
+test('разные голоса на результатах не вешают комнату', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+
+  // Историю чистим намеренно: в ней уже лежат состояния LOBBY, полученные до старта забега,
+  // и ожидание нашло бы их, ничего на самом деле не проверив.
+  guest.messages.length = 0;
+  host.send('rematch', { matchId: started.matchId });
+  guest.send('returnLobby', { matchId: started.matchId });
+
+  // Несогласие разрешается в пользу лобби: заставлять играть ещё раз того, кто уже уходит, нельзя.
   const lobby = await guest.wait('lobby', m => m.state === 'LOBBY', 3000);
-  assert.equal(lobby.players.every(p => !p.rematch), true, 'в лобби голоса сброшены');
-  assert.equal(lobby.matchId, null, 'новый забег ещё не начат');
+  assert.equal(lobby.matchId, null, 'новый забег начинать не за что');
+  assert.equal(lobby.players.every(p => !p.choice), true, 'выборы сброшены');
+});
+
+// Пара, где один просто отложил телефон, запирала второго на карточке итогов навсегда: ни одна
+// кнопка ничего не меняла, пока не оборвётся связь. Срок ожидания решает это без обрыва.
+test('истечение срока на результатах уводит комнату в лобби', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  // Двадцать секунд в прогоне тестов ждать незачем — важно поведение, а не длительность.
+  setResultsTimeout(1500);
+  t.after(async () => {
+    setResultsTimeout(20_000);
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+
+  // Голосует только один, второй молчит. Молчание не должно толковаться как согласие на реванш.
+  host.messages.length = 0;
+  host.send('rematch', { matchId: started.matchId });
+
+  const lobby = await host.wait('lobby', m => m.state === 'LOBBY', 6000);
+  assert.equal(lobby.matchId, null, 'по таймауту уходим в лобби, а не в новый забег');
+  assert.equal(lobby.players.every(p => !p.choice), true, 'выборы сброшены');
+});
+
+// Передумать — нормальное поведение. Запрет на смену выбора и был причиной тупика.
+test('выбор на результатах можно поменять', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+
+  // Хост сначала за лобби, потом передумал.
+  host.send('returnLobby', { matchId: started.matchId });
+  await guest.wait('lobby', m => m.players.some(p => p.choice === 'lobby'), 3000);
+  host.send('rematch', { matchId: started.matchId });
+  guest.send('rematch', { matchId: started.matchId });
+
+  // Предикат обязан отсекать матч, который уже был: в истории клиента лежит `start` первого
+  // забега, и ожидание «любого start» нашло бы его, ничего на самом деле не проверив.
+  const restart = await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+  assert.notEqual(restart.matchId, started.matchId, 'смена выбора привела к реваншу');
 });
 
 // Кнопка реванша не должна работать как скрытое «завершить матч досрочно».
@@ -572,7 +662,11 @@ test('обрыв второго игрока после голоса не под
 
   // Голосует только хост.
   host.send('rematch', { matchId: started.matchId });
-  await host.wait('lobby', m => m.state === 'RESULTS' && m.players.some(p => p.rematch), 3000);
+  await host.wait(
+    'lobby',
+    m => m.state === 'RESULTS' && m.players.some(p => p.choice === 'rematch'),
+    3000
+  );
 
   // Второй обрывается, так и не проголосовав.
   //
@@ -584,7 +678,7 @@ test('обрыв второго игрока после голоса не под
   const lobby = await host.wait('lobby', m => m.state === 'LOBBY', 4000);
   assert.equal(lobby.matchId, null, 'комната обязана вернуться в лобби, а не зависнуть');
   assert.equal(
-    lobby.players.every(p => !p.rematch),
+    lobby.players.every(p => !p.choice),
     true,
     'голоса сброшены под новый забег'
   );

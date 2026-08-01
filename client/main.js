@@ -252,18 +252,16 @@ class Game {
     $('#lobbyDifficulty').addEventListener('change', e =>
       this.net?.send('configure', { difficulty: e.target.value })
     );
-    // Голос за реванш. Экран не трогаем: комната остаётся на результатах, пока не проголосуют
-    // оба. Раньше первый же голос немедленно уводил обоих в лобби, и второй не успевал нажать.
+    // Голоса на экране результатов. Кнопки НЕ гасим: выбор можно менять, пока комната не решила.
+    // Раньше нажатая кнопка гасла навсегда, и разошедшиеся голоса запирали обоих без выхода.
+    // Экран переключит авторитетное состояние комнаты, а не локальная догадка.
     click('#rematch', () => {
       if (!this.net?.matchId) return;
       this.net.send('rematch', { matchId: this.net.matchId });
-      $('#rematch').disabled = true;
     });
     click('#returnLobby', () => {
       if (!this.net?.matchId) return;
       this.net.send('returnLobby', { matchId: this.net.matchId });
-      $('#returnLobby').disabled = true;
-      // Экран переключит авторитетное состояние комнаты, а не локальная догадка.
     });
     $('#copyInvite').addEventListener('click', async () => {
       const link = this.ui.inviteLink($('#roomCode').textContent.trim());
@@ -376,14 +374,13 @@ class Game {
       this.partnerAway = message.players.some(p => p.id !== this.net.id && p.away);
       this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
 
-      if (message.state === ROOM_STATE.RESULTS) return this.ui.updateResultRoom(message, this.net.id);
+      if (message.state === ROOM_STATE.RESULTS)
+        return this.ui.updateResultRoom(message, this.net.id, this.net.serverNow());
       // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
       if (message.state !== ROOM_STATE.LOBBY) return;
 
       document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
-      document.querySelector('#rematch').disabled = false;
-      document.querySelector('#rematch').textContent = 'ГОЛОСОВАТЬ ЗА РЕВАНШ';
-      document.querySelector('#returnLobby').disabled = false;
+      this.ui.resetResultButtons();
       this.ui.lobby(message, this.net.id);
     });
 

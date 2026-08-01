@@ -44,20 +44,46 @@ function normalizeState(value) {
     state: ['ground', 'air', 'dive'].includes(n.state) ? n.state : 'air'
   };
 }
+// Потолок интервала между двумя состояниями, по которому считается допустимый шаг.
+//
+// Время берётся по часам сервера: клиентское подделывает кто угодно. Потолок нужен потому, что
+// между пакетами проходит сколько угодно времени — свернули игру, пропала связь, — и без него
+// пауза превращалась бы в разрешение на прыжок вперёд. Было 1.5 с, то есть 3.2 + 27 = 30 единиц
+// за один пакет при длине сегмента 18.
+//
+// Ниже опускать нельзя: падение с потерей пакетов — законный случай большого шага. Секунда
+// свободного падения при гравитации 22.5 даёт около 13 единиц по вертикали плюс бег по
+// горизонтали; при 0.8 с потолок выходит 17.6 и такой игрок проходит, а телепорт — нет.
+const MAX_STEP_DT = 0.8;
+
 function validateState(player, value, spec, now = Date.now()) {
   const state = normalizeState(value);
   if (!state) return { ok: false, reason: 'invalid' };
   if (Math.abs(state.x) > 24 || state.y > 35 || state.y < -16 || state.z > 18 || state.z < spec.finishZ - 18)
     return { ok: false, reason: 'bounds' };
   const previous = player.last || spawnFor(spec, player.checkpoint || 0),
-    dt = Math.max(0.04, Math.min(1.5, (now - (player.lastAt || now - 100)) / 1000)),
+    dt = Math.max(0.04, Math.min(MAX_STEP_DT, (now - (player.lastAt || now - 100)) / 1000)),
     distance = Math.hypot(state.x - previous.x, state.y - previous.y, state.z - previous.z),
     maxDistance = 3.2 + dt * 18;
   if (distance > maxDistance) return { ok: false, reason: 'speed', position: previous };
+
+  // Чекпоинт засчитывается по факту ПЕРЕСЕЧЕНИЯ арки и не больше одного за пакет.
+  //
+  // Раньше здесь стоял цикл, а условием было «оказался за чертой». Вместе оба недостатка давали
+  // готовый способ срезать трассу: подождать (пауза поднимала потолок шага до тридцати единиц при
+  // длине сегмента восемнадцать), прислать одно формально допустимое состояние — и цикл засчитывал
+  // сразу два чекпоинта.
+  //
+  // Теперь требуется, чтобы ПРЕДЫДУЩЕЕ состояние было перед аркой, а новое — за ней. Появиться
+  // сразу за чертой не выйдет даже крошечным шагом: сервер не видел, как игрок к ней подходил.
+  // Потерянные по дороге пакеты этому не мешают — важны не все промежуточные точки, а то, что
+  // отрезок между двумя известными серверу положениями пересекает арку.
   let checkpoint = player.checkpoint || 0;
-  while (
+  const line = spec.checkpoints[checkpoint];
+  if (
     checkpoint < spec.checkpoints.length &&
-    state.z < spec.checkpoints[checkpoint] &&
+    previous.z >= line &&
+    state.z < line &&
     state.y > -3 &&
     Math.abs(state.x) < 11
   )

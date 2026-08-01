@@ -61,6 +61,19 @@ say "Пользователь ${APP_USER}"
 id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --home "$APP_DIR" --shell /usr/sbin/nologin "$APP_USER"
 
 say "Код в ${APP_DIR}"
+# Каталог принадлежит пользователю wobble (chown ниже), а git здесь работает от root.
+#
+# Начиная с версии 2.35 git отказывается работать в репозитории, чей владелец отличается от
+# запустившего команду: "detected dubious ownership". Без этого исключения первый запуск проходит
+# (каталога ещё нет, клонируем и только потом отдаём владение), а любой повторный обрывается на
+# обновлении кода — то есть ломается ровно то, ради чего скрипт делался идемпотентным.
+#
+# Проверка перед добавлением обязательна: --add дописывает строку всякий раз, и без неё
+# ~/.gitconfig распухал бы на одну запись за запуск.
+if ! git config --global --get-all safe.directory 2>/dev/null | grep -qx "$APP_DIR"; then
+  git config --global --add safe.directory "$APP_DIR"
+fi
+
 if [ -d "$APP_DIR/.git" ]; then
   git -C "$APP_DIR" fetch --depth 1 origin "$BRANCH"
   git -C "$APP_DIR" reset --hard "origin/${BRANCH}"

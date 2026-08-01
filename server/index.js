@@ -183,6 +183,18 @@ const MAX_ROOMS = 500;
 const ROOM_TTL = 45 * 60 * 1000;
 const COUNTDOWN_MS = 2800;
 
+// Сколько комната ждёт решения на экране результатов, прежде чем уйти в лобби сама.
+// Двадцати секунд хватает прочитать итоги и нажать кнопку, но не хватает, чтобы отошедший
+// напарник запер остальных на карточке навсегда.
+//
+// Не const: значение подменяется в тестах. Ждать двадцать секунд в каждом прогоне бессмысленно,
+// а проверять поведение по таймауту нужно — без теста истечение срока легко сломать незаметно,
+// оно ведь не срабатывает при обычной игре.
+let RESULTS_TIMEOUT_MS = 20_000;
+const setResultsTimeout = ms => {
+  RESULTS_TIMEOUT_MS = ms;
+};
+
 // Сколько держим слот игрока после обрыва связи, прежде чем выкинуть его из комнаты.
 const RECONNECT_GRACE_MS = 30 * 1000;
 const SESSION_TTL_MS = 60 * 1000;
@@ -336,8 +348,7 @@ const publicPlayer = ({
   ready,
   finished,
   time,
-  rematch,
-  returned,
+  resultChoice,
   color,
   disconnectedAt,
   slot,
@@ -348,10 +359,12 @@ const publicPlayer = ({
   ready: !!ready,
   finished: !!finished,
   time: time ?? null,
-  rematch: !!rematch,
-  // Кто уже нажал «вернуться в лобби»: на экране результатов это надо показывать так же,
-  // как голоса за реванш, иначе нажавший не понимает, ждут его или он ждёт.
-  returned: !!returned,
+  // Единый выбор на экране результатов вместо двух независимых флагов. Раньше «реванш» и
+  // «в лобби» были отдельными булевыми, и разойтись они могли беспрепятственно: комната ждала
+  // либо единогласного реванша, либо единогласного возврата, а смешанный случай не подходил ни
+  // под одно условие и не подходил уже никогда — переголосовать было нельзя. Комната зависала
+  // навсегда, и выглядело это как поломка: обе кнопки погашены, ничего не происходит.
+  choice: resultChoice || null,
   color,
   slot: slot ?? 0,
   online: !disconnectedAt,
@@ -373,6 +386,10 @@ const lobbyPayload = room => ({
   seed: room.spec.seed,
   difficulty: room.spec.difficulty,
   maxPlayers: MAX_PLAYERS[room.mode],
+  // Срок голосования: до этого времени комната ждёт решения, после — уходит в лобби сама.
+  // Клиенту нужен именно момент, а не остаток: часы уже синхронизированы, а обратный отсчёт,
+  // присланный числом, начал бы врать при первой же задержке пакета.
+  resultsDeadline: room.state === ROOM_STATE.RESULTS ? room.resultsDeadline || null : null,
   players: [...room.players.values()].map(publicPlayer)
 });
 
@@ -395,6 +412,7 @@ function resetLobby(room, { newSeed = false } = {}) {
   room.firstFinishAt = null;
   room.results = null;
   room.unranked = null;
+  room.resultsDeadline = null;
   room.updatedAt = Date.now();
   if (newSeed) room.spec = createCourseSpec(randomSeed(), room.spec.difficulty);
   for (const player of room.players.values())
@@ -402,11 +420,10 @@ function resetLobby(room, { newSeed = false } = {}) {
       ready: false,
       finished: false,
       time: null,
-      rematch: false,
+      resultChoice: null,
       checkpoint: 0,
       last: null,
-      lastAt: 0,
-      returned: false
+      lastAt: 0
     });
   assignSlots(room);
   emitLobby(room);
@@ -512,7 +529,7 @@ function addPlayer(room, ws, name) {
     ready: false,
     finished: false,
     time: null,
-    rematch: false,
+    resultChoice: null,
     checkpoint: 0,
     last: null,
     lastAt: 0,
@@ -626,22 +643,92 @@ function markUnranked(room, reason) {
   return true;
 }
 
+// Запуск забега: отсчёт, новый matchId, сброс состояния игроков по местам появления.
+//
+// Вынесено из обработчика START_MATCH, потому что вызывать это надо из двух мест: по команде хоста
+// и по единогласному реваншу. Реванш обязан именно ЗАПУСКАТЬ забег, а не возвращать в лобби —
+// раньше обе кнопки экрана результатов вели в resetLobby, то есть делали в точности одно и то же,
+// и «голосование за реванш» ничего не решало.
+function beginCountdown(room) {
+  if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return;
+  // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
+  // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
+  room.matchId = crypto.randomBytes(8).toString('hex');
+  room.startedAt = Date.now() + COUNTDOWN_MS;
+  room.firstFinishAt = null;
+  // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
+  room.unranked = null;
+  room.results = null;
+  room.resultsDeadline = null;
+  metrics.matchesStarted++;
+  assignSlots(room);
+
+  for (const item of room.players.values())
+    Object.assign(item, {
+      finished: false,
+      time: null,
+      checkpoint: 0,
+      last: {
+        ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.slot) : room.spec.start),
+        ry: 0,
+        vx: 0,
+        vz: 0,
+        state: 'ground',
+        checkpoint: 0
+      },
+      downed: false,
+      downedAt: 0,
+      lastAt: room.startedAt,
+      // Готовность снимается: следующий выход в лобби не должен начинаться с чужого «готов»
+      // прошлого забега. На реванш это не влияет — он идёт мимо лобби.
+      ready: false,
+      resultChoice: null
+    });
+
+  log('info', 'match_started', { roomId: room.code, matchId: room.matchId, mode: room.mode });
+  return broadcast(room, {
+    type: S2C.MATCH_START,
+    at: room.startedAt,
+    matchId: room.matchId,
+    mode: room.mode,
+    spec: room.spec,
+    slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot]))
+  });
+}
+
 // Решение на экране результатов: пора ли распускать комнату в лобби.
 //
 // Считать это только в момент голосования нельзя. Если один уже проголосовал, а второй оборвался,
 // активным остаётся один — и условие «все проголосовали» выполнено, но пересчитать его некому:
 // повторно голосовать первый не может, его голос уже учтён. Комната зависала на результатах
 // навсегда. Поэтому пересчёт вызывается и на голос, и на обрыв, и на освобождение слота.
-function resolveResultsDecision(room) {
+function resolveResultsDecision(room, now = Date.now()) {
   if (room.state !== ROOM_STATE.RESULTS) return false;
   const active = [...room.players.values()].filter(player => !player.disconnectedAt);
   if (!active.length) return false;
-  if (active.every(player => player.rematch) || active.every(player => player.returned)) {
-    resetLobby(room);
+
+  const decided = active.every(player => player.resultChoice);
+  const expired = !!room.resultsDeadline && now >= room.resultsDeadline;
+  if (!decided && !expired) {
+    emitLobby(room);
+    return false;
+  }
+
+  // Состава должно хватать на забег. Кооперативную главу проходят вдвоём, и запускать её на
+  // одного, когда напарник оборвался, бессмысленно: игрок упрётся в первую же плиту, которую
+  // некому держать. Такой случай уводим в лобби — оттуда видно, что напарника ждут.
+  const enoughPlayers = room.mode === GAME_MODE.COOP ? active.length === 2 : active.length > 0;
+
+  // Реванш — только единогласно и только явным выбором. Во всех остальных исходах уходим в лобби:
+  // и когда кто-то выбрал лобби, и когда время вышло, а кто-то так и не решил. Молчание не должно
+  // толковаться как согласие на ещё один забег — человек мог просто отложить телефон.
+  if (enoughPlayers && decided && active.every(player => player.resultChoice === 'rematch')) {
+    log('info', 'rematch', { roomId: room.code, players: active.length });
+    beginCountdown(room);
     return true;
   }
-  emitLobby(room);
-  return false;
+  resetLobby(room);
+  return true;
 }
 
 // Матч завершается, когда дошли все, кто ещё на связи. В коопе это обязательное условие:
@@ -661,6 +748,10 @@ function checkMatchEnd(room) {
 function finishMatch(room) {
   if (!setRoomState(room, ROOM_STATE.RESULTS)) return;
   metrics.matchesFinished++;
+  // Потолок ожидания решения. Без него комната жила в RESULTS до последнего обрыва связи: один
+  // отложил телефон — и второй заперт на карточке итогов, не имея ни одной кнопки, которая
+  // что-то изменит.
+  room.resultsDeadline = Date.now() + RESULTS_TIMEOUT_MS;
   const board = leaderboard(room);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
   // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
@@ -937,46 +1028,7 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.NOT_READY, 'Все игроки должны быть готовы.');
       }
 
-      if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return;
-      // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
-      // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
-      room.matchId = crypto.randomBytes(8).toString('hex');
-      room.startedAt = Date.now() + COUNTDOWN_MS;
-      room.firstFinishAt = null;
-      // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
-      room.unranked = null;
-      metrics.matchesStarted++;
-      assignSlots(room);
-
-      for (const item of room.players.values())
-        Object.assign(item, {
-          finished: false,
-          time: null,
-          checkpoint: 0,
-          last: {
-            ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.slot) : room.spec.start),
-            ry: 0,
-            vx: 0,
-            vz: 0,
-            state: 'ground',
-            checkpoint: 0
-          },
-          downed: false,
-          downedAt: 0,
-          lastAt: room.startedAt,
-          rematch: false,
-          returned: false
-        });
-
-      log('info', 'match_started', { roomId: room.code, matchId: room.matchId, mode: room.mode });
-      return broadcast(room, {
-        type: S2C.MATCH_START,
-        at: room.startedAt,
-        matchId: room.matchId,
-        mode: room.mode,
-        spec: room.spec,
-        slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot]))
-      });
+      return beginCountdown(room);
     }
 
     if (message.type === C2S.PLAYER_STATE) {
@@ -1125,17 +1177,19 @@ wss.on('connection', (ws, req) => {
     // так: один нажал «реванш» — и карточка исчезла у обоих, второй просто не успевал ничего
     // нажать. Теперь голос — это голос: комната остаётся в RESULTS, пока не проголосуют все,
     // кто на связи, а рассылка состояния показывает счёт голосов.
+    // Выбор можно менять, пока комната не решила: передумать — нормальное поведение, а запрет
+    // на смену и создавал тупик. Пересчёт после каждого нажатия.
     if (message.type === C2S.REMATCH_VOTE) {
-      if (player.rematch) return;
-      player.rematch = true;
+      if (player.resultChoice === 'rematch') return;
+      player.resultChoice = 'rematch';
       return resolveResultsDecision(room);
     }
 
     // Возврат в лобби — тоже общее решение. Хост здесь не привилегирован по той же причине:
     // его нажатие закрывало карточку результатов остальным.
     if (message.type === C2S.RETURN_TO_LOBBY) {
-      if (player.returned) return;
-      player.returned = true;
+      if (player.resultChoice === 'lobby') return;
+      player.resultChoice = 'lobby';
       return resolveResultsDecision(room);
     }
   }
@@ -1152,6 +1206,14 @@ wss.on('connection', (ws, req) => {
 const snapshotTimer = setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
+    // Истёк срок голосования на результатах — решаем без опоздавших. Проверка живёт здесь, а не
+    // в отдельном таймере на комнату: таймеры пришлось бы заводить, снимать и не забывать снимать
+    // при роспуске, а этот цикл и так обходит все комнаты каждый тик.
+    if (room.state === ROOM_STATE.RESULTS && room.resultsDeadline && now >= room.resultsDeadline) {
+      resolveResultsDecision(room, now);
+      continue;
+    }
+
     // Комната без активного матча не участвует в рассылке вообще (ТЗ 12.5).
     if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
 
@@ -1227,4 +1289,14 @@ if (require.main === module) {
   server.listen(port, host, () => log('info', 'server_started', { port, host }));
 }
 
-module.exports = { app, server, rooms, sessions, metrics, leave, resetLobby, originAllowed };
+module.exports = {
+  app,
+  server,
+  rooms,
+  sessions,
+  metrics,
+  leave,
+  resetLobby,
+  originAllowed,
+  setResultsTimeout
+};

@@ -322,10 +322,13 @@ export class UI {
   resetResultButtons() {
     const rematch = $('#rematch');
     rematch.disabled = false;
-    rematch.textContent = 'ГОЛОСОВАТЬ ЗА РЕВАНШ';
+    rematch.textContent = 'РЕВАНШ';
     const back = $('#returnLobby');
     back.disabled = false;
-    back.textContent = 'ВЕРНУТЬСЯ В ЛОББИ';
+    back.textContent = 'В ЛОББИ';
+    // Отсчёт прошлого экрана обязан остановиться: интервал, переживший закрытие карточки,
+    // продолжал бы писать в невидимый элемент до конца сессии.
+    this.showResultsTimer(null);
   }
 
   // Обновление карточки результатов, пока комната ещё в RESULTS.
@@ -333,22 +336,56 @@ export class UI {
   // Раньше любое обновление состава комнаты открывало лобби, поэтому первый же голос за реванш
   // закрывал результаты обоим. Теперь состояние RESULTS приходит сюда и меняет только то, что
   // действительно изменилось, — счёт голосов.
-  updateResultRoom(data, selfId) {
+  updateResultRoom(data, selfId, serverNow = Date.now()) {
     const active = data.players.filter(player => player.online);
-    const votes = active.filter(player => player.rematch).length;
     const self = active.find(player => player.id === selfId);
-    const rematch = $('#rematch');
-    rematch.disabled = !!self?.rematch;
-    rematch.textContent = self?.rematch
-      ? `ГОЛОС ОТПРАВЛЕН · ${votes}/${active.length}`
-      : `ГОЛОСОВАТЬ ЗА РЕВАНШ · ${votes}/${active.length}`;
+    const forRematch = active.filter(player => player.choice === 'rematch').length;
+    const forLobby = active.filter(player => player.choice === 'lobby').length;
 
-    const returned = active.filter(player => player.returned).length;
+    // Кнопки остаются нажимаемыми: выбор меняют, пока комната не решила. Отметка «✓» показывает
+    // свой выбор, счётчик — чужой. Без второго игрок не понимает, ждут его или он ждёт.
+    const rematch = $('#rematch');
+    rematch.disabled = false;
+    rematch.textContent =
+      (self?.choice === 'rematch' ? '✓ РЕВАНШ' : 'РЕВАНШ') + ` · ${forRematch}/${active.length}`;
+
     const back = $('#returnLobby');
-    back.disabled = !!self?.returned;
-    back.textContent = self?.returned
-      ? `ЖДЁМ ОСТАЛЬНЫХ · ${returned}/${active.length}`
-      : 'ВЕРНУТЬСЯ В ЛОББИ';
+    back.disabled = false;
+    back.textContent =
+      (self?.choice === 'lobby' ? '✓ В ЛОББИ' : 'В ЛОББИ') + ` · ${forLobby}/${active.length}`;
+
+    this.showResultsTimer(data.resultsDeadline, serverNow);
+  }
+
+  // Обратный отсчёт до автоматического возврата в лобби.
+  //
+  // Считается от присланного сервером МОМЕНТА по синхронизированным часам: остаток, присланный
+  // числом секунд, начал бы врать при первой же задержке пакета. Тикает локально, потому что
+  // состояние комнаты рассылается только при смене голосов — иначе цифра застыла бы.
+  showResultsTimer(deadline, serverNow = Date.now()) {
+    const note = $('#resultsTimer');
+    if (!note) return;
+    clearInterval(this._resultsTick);
+    this._resultsTick = null;
+    if (!deadline) {
+      note.textContent = '';
+      return;
+    }
+    // Расхождение локальных часов с серверными на момент получения. Дальше отсчитываем локально:
+    // за двадцать секунд оно не изменится, а лишних сообщений не потребуется.
+    const skew = serverNow - Date.now();
+    const render = () => {
+      const left = Math.max(0, Math.ceil((deadline - (Date.now() + skew)) / 1000));
+      note.textContent = left
+        ? `Без общего решения — в лобби через ${left} с`
+        : 'Возвращаемся в лобби…';
+      if (!left) {
+        clearInterval(this._resultsTick);
+        this._resultsTick = null;
+      }
+    };
+    render();
+    this._resultsTick = setInterval(render, 1000);
   }
 
   // Плашка «без зачёта» на карточке финиша. Причина названа прямо: игрок должен понимать,

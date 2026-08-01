@@ -10,7 +10,10 @@
 # Скрипт идемпотентный: повторный запуск обновляет код и перезапускает службу, ничего не ломая.
 # Настройки берутся из окружения:
 #
-#   DOMAIN=example.com   — если есть домен. Тогда же будет предложен сертификат.
+#   DOMAIN=example.com   — если есть домен. Тогда же выпускается сертификат.
+#   HTTPS_PORT=8443      — если 443 занят (например, там VPN). Ссылка выйдет https://домен:8443.
+#   ENABLE_FIREWALL=1    — включить ufw, если он выключен. По умолчанию НЕ включаем: на сервере
+#                          с другими сервисами это закрыло бы их порты вслепую.
 #   REPO=...             — адрес репозитория (по умолчанию — этот).
 #   BRANCH=main          — какую ветку разворачивать.
 
@@ -19,6 +22,8 @@ set -euo pipefail
 REPO="${REPO:-https://github.com/Malikk-Sh/Fall-guys.git}"
 BRANCH="${BRANCH:-main}"
 DOMAIN="${DOMAIN:-}"
+HTTPS_PORT="${HTTPS_PORT:-443}"
+ENABLE_FIREWALL="${ENABLE_FIREWALL:-}"
 APP_DIR=/opt/wobble
 APP_USER=wobble
 NODE_MAJOR=22
@@ -74,7 +79,10 @@ say "Настройки"
 if [ ! -f /etc/wobble.env ]; then
   cp "$APP_DIR/deploy/wobble.env.example" /etc/wobble.env
   if [ -n "$DOMAIN" ]; then
-    sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=https://${DOMAIN}|" /etc/wobble.env
+    # Порт входит в Origin, если он нестандартный: браузер пришлёт https://домен:8443.
+    origin="https://${DOMAIN}"
+    [ "$HTTPS_PORT" != "443" ] && origin="https://${DOMAIN}:${HTTPS_PORT}"
+    sed -i "s|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=${origin}|" /etc/wobble.env
   else
     # Без домена играть можно по адресу сервера, но тогда список источников оставляем пустым:
     # иначе он запретит единственный работающий вариант.
@@ -94,23 +102,93 @@ systemctl restart wobble
 
 say "Nginx"
 site=/etc/nginx/sites-available/wobble
-cp "$APP_DIR/deploy/nginx.conf" "$site"
-if [ -n "$DOMAIN" ]; then
-  sed -i "s/server_name example.com;/server_name ${DOMAIN};/" "$site"
+# Общая часть (проксирование игры и сокета) лежит отдельно и подключается include — чтобы два
+# варианта server-блока не разъезжались между собой.
+cp "$APP_DIR/deploy/nginx-locations.conf" /etc/nginx/wobble-locations.conf
+
+cert_dir="/etc/letsencrypt/live/${DOMAIN}"
+have_cert=0
+[ -n "$DOMAIN" ] && [ -f "${cert_dir}/fullchain.pem" ] && have_cert=1
+
+if [ "$HTTPS_PORT" = "443" ]; then
+  cp "$APP_DIR/deploy/nginx.conf" "$site"
+  if [ -n "$DOMAIN" ]; then
+    sed -i "s/server_name example.com;/server_name ${DOMAIN};/" "$site"
+  else
+    # Без домена принимаем любое имя — игра будет доступна по адресу сервера.
+    sed -i "s/server_name example.com;/server_name _;/" "$site"
+  fi
 else
-  # Без домена принимаем любое имя — игра будет доступна по адресу сервера.
-  sed -i "s/server_name example.com;/server_name _;/" "$site"
+  # 443 занят: TLS переезжает на другой порт, а 80 остаётся под проверку Let's Encrypt.
+  [ -n "$DOMAIN" ] || { echo "HTTPS_PORT без DOMAIN бессмысленен: сертификат выдают на имя" >&2; exit 1; }
+  mkdir -p /var/www/certbot
+  cp "$APP_DIR/deploy/nginx-altport.conf" "$site"
+  sed -i "s/server_name example.com;/server_name ${DOMAIN};/g" "$site"
+  sed -i "s|https://\$host:8443|https://\$host:${HTTPS_PORT}|" "$site"
+  sed -i "s/listen 8443 ssl;/listen ${HTTPS_PORT} ssl;/" "$site"
+  sed -i "s/listen \[::\]:8443 ssl;/listen [::]:${HTTPS_PORT} ssl;/" "$site"
+  sed -i "s|/etc/letsencrypt/live/example.com/|${cert_dir}/|g" "$site"
+
+  if [ "$have_cert" -eq 0 ]; then
+    # Сертификата ещё нет — nginx не запустится, сославшись на несуществующий файл.
+    #
+    # Пишем временный конфиг только на порт 80: он отдаёт каталог проверки Let's Encrypt и
+    # саму игру. Игру — потому что иначе до выпуска сертификата нечем проверить, что установка
+    # вообще удалась. Повторный запуск скрипта заменит это на полный вариант с TLS.
+    warn "сертификата ещё нет — поднимаю только порт 80 под проверку Let's Encrypt"
+    cat >"$site" <<NGINX
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    include /etc/nginx/wobble-locations.conf;
+
+    gzip on;
+    gzip_types application/javascript text/css text/html application/json;
+    gzip_min_length 1024;
+    client_max_body_size 64k;
+}
+NGINX
+  fi
 fi
+
 ln -sfn "$site" /etc/nginx/sites-enabled/wobble
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
 
 say "Файрвол"
-ufw allow OpenSSH >/dev/null
-ufw allow 'Nginx Full' >/dev/null
-ufw --force enable >/dev/null
-ufw status | head -n 8
+# Правила добавляем всегда, а вот ВКЛЮЧАТЬ ufw вслепую нельзя.
+#
+# На сервере может уже работать что-то ещё — VPN, панель управления, чужой сайт. Включение
+# файрвола с одними только нашими правилами закроет их порты, и человек потеряет доступ туда,
+# куда заходил минуту назад. Поэтому включаем, только если ufw уже активен либо это явно
+# разрешили переменной.
+ufw allow OpenSSH >/dev/null 2>&1 || true
+ufw allow 80/tcp >/dev/null 2>&1 || true
+[ "$HTTPS_PORT" != "443" ] || ufw allow 443/tcp >/dev/null 2>&1 || true
+[ "$HTTPS_PORT" = "443" ] || ufw allow "${HTTPS_PORT}/tcp" >/dev/null 2>&1 || true
+# Порт приложения снаружи не нужен: наружу смотрит только Nginx.
+ufw delete allow 3000/tcp >/dev/null 2>&1 || true
+
+# Именно "Status: active", а не поиск подстроки "active": строка "Status: inactive" её тоже
+# содержит, и проверка срабатывала бы всегда. LC_ALL=C — чтобы вывод не зависел от локали.
+if LC_ALL=C ufw status 2>/dev/null | head -1 | grep -q "Status: active"; then
+  ufw status | head -n 10
+elif [ "$ENABLE_FIREWALL" = "1" ]; then
+  ufw --force enable >/dev/null
+  ufw status | head -n 10
+else
+  warn "ufw выключен, и я его не включаю: на сервере могут работать другие сервисы,"
+  warn "чьи порты закрылись бы вслед за включением. Правила уже добавлены — когда"
+  warn "убедитесь, что все нужные порты в списке, включите сам: ufw enable"
+  ufw status | head -n 10 || true
+fi
 
 say "Проверка"
 sleep 2
@@ -122,7 +200,23 @@ else
 fi
 
 say "Готово"
-if [ -n "$DOMAIN" ]; then
+if [ -n "$DOMAIN" ] && [ "$HTTPS_PORT" != "443" ]; then
+  if [ "$have_cert" -eq 1 ]; then
+    echo "Игра: https://${DOMAIN}:${HTTPS_PORT}"
+  else
+    echo "Порт 80 поднят, игра пока доступна только по адресу сервера."
+    echo
+    echo "Теперь сертификат. Плагин --nginx здесь НЕ подходит: он попытается занять 443,"
+    echo "который у вас занят, и уронит конфигурацию. Выпускаем через каталог проверки:"
+    echo
+    echo "  apt-get install -y certbot"
+    echo "  certbot certonly --webroot -w /var/www/certbot -d ${DOMAIN} \\"
+    echo "    --agree-tos --register-unsafely-without-email --non-interactive"
+    echo "  bash ${APP_DIR}/deploy/install.sh   # повторный запуск допишет TLS на ${HTTPS_PORT}"
+    echo
+    echo "После этого игра будет на https://${DOMAIN}:${HTTPS_PORT}"
+  fi
+elif [ -n "$DOMAIN" ]; then
   echo "Игра: http://${DOMAIN}"
   echo
   echo "Теперь сертификат (HTTPS обязателен: без него не работают кнопка «поделиться»"

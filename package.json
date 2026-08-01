@@ -13,7 +13,8 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "load": "node server/loadProbe.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -9,7 +9,7 @@ const FOOT = 0.48;
 const GRAVITY = 22.5;
 const JUMP_SPEED = 8.7;
 const DIVE_SPEED = 10.8;
-const RUN_SPEED = 7.7;
+export const RUN_SPEED = 7.7;
 const ACCEL_GROUND = 18;
 const ACCEL_AIR = 7.2;
 
@@ -106,6 +106,10 @@ export class Player {
       -sin * move.x - cos * move.forward
     );
     if (desired.lengthSq() > 1) desired.normalize();
+    // Куда игрок ХОЧЕТ двигаться по X, независимо от того, что с ним делают внешние силы.
+    // Ветру нужно именно намерение: сама скорость к моменту проверки уже содержит его снос,
+    // и по ней выходило бы, что сдуваемый игрок «бежит по ветру».
+    this.intentX = desired.x;
 
     if (input.consume('jump')) this.jumpBuffer = JUMP_BUFFER;
     else this.jumpBuffer = Math.max(0, this.jumpBuffer - dt);

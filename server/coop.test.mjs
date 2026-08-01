@@ -18,6 +18,7 @@ import {
   getChapter
 } from '../shared/coopChapters.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
+import { RUN_SPEED } from '../client/game/Player.js';
 import { PLAYER_FOOT } from '../client/game/CourseBuilder.js';
 
 const build = id => new CoopCourse(new THREE.Scene(), coopSpec(id), { quality: 'low' });
@@ -749,6 +750,97 @@ test('ветер сносит заметно и даёт окно затишья
   // И при этом не мгновенно за край: полосу шириной 12 нельзя пересекать за полсекунды.
   assert.ok(drift < 9, `снос ${drift.toFixed(2)} за секунду — это уже не ветер, а телепорт`);
 
+  course.dispose();
+});
+
+// Ставит цикл вентилятора на пик и прогоняет игрока, бегущего вдоль X с полной скоростью.
+// Возвращает среднюю скорость по X: она и есть то, что игрок ощущает как «иду быстро/медленно».
+const runAcross = (course, fan, dirX, seconds = 1) => {
+  const gusts = [];
+  for (let i = 0; i <= Math.ceil(fan.period * 60); i++) {
+    course.update(1 / 60, i / 60);
+    gusts.push(fan.gust);
+  }
+  const peakAt = gusts.indexOf(Math.max(...gusts)) / 60;
+
+  const player = {
+    position: new THREE.Vector3(0, PLAYER_FOOT + 0.5, (fan.zMin + fan.zMax) / 2),
+    velocity: new THREE.Vector3(dirX * RUN_SPEED, 0, 0),
+    // Игрок держит стик в сторону dirX — именно это читает ветер, отличая бег по ветру от сноса.
+    intentX: dirX,
+    grounded: true,
+    checkpoint: 0,
+    impact: 0,
+    respawn: () => {}
+  };
+  const startX = player.position.x;
+  const steps = Math.round(seconds * 60);
+  for (let i = 0; i < steps; i++) {
+    course.update(1 / 60, peakAt);
+    // Каждый шаг возвращаем скорость к беговой: в игре это делает damp в Player.step, который
+    // тянет velocity к желаемой. Без этого прибавка от ветра копилась бы без предела.
+    player.velocity.x = dirX * RUN_SPEED;
+    player.position.x += player.velocity.x / 60;
+    course.interact(player, peakAt, null, null);
+  }
+  return (player.position.x - startX) / seconds;
+};
+
+// Ветер мог оказаться сильнее бега: на пике игрока уносило НАЗАД, хотя он бежал навстречу.
+// Читалось это не как сильный порыв, а как отказ управления.
+test('встречный ветер тормозит, но не разворачивает', () => {
+  for (const id of ['ch4', 'ch5']) {
+    const course = build(id);
+    for (const fan of course.fans) {
+      const into = -Math.sign(fan.force);
+      const speed = runAcross(course, fan, into);
+      assert.ok(
+        Math.sign(speed) === into,
+        `${id}: против ветра игрока несёт назад (${speed.toFixed(2)} при беге ${into})`
+      );
+      assert.ok(
+        Math.abs(speed) < RUN_SPEED * 0.6,
+        `${id}: встречный ветер почти не мешает — ${Math.abs(speed).toFixed(2)} из ${RUN_SPEED}`
+      );
+    }
+    course.dispose();
+  }
+});
+
+// Обратная крайность той же симметрии: порыв в спину разгонял вдвое, и участок проходился по
+// удаче — успел поймать порыв или нет.
+test('попутный ветер помогает, но не разгоняет вдвое', () => {
+  for (const id of ['ch4', 'ch5']) {
+    const course = build(id);
+    for (const fan of course.fans) {
+      const along = Math.sign(fan.force);
+      const speed = Math.abs(runAcross(course, fan, along));
+      assert.ok(
+        speed > RUN_SPEED,
+        `${id}: попутный ветер вовсе не ощущается (${speed.toFixed(2)})`
+      );
+      assert.ok(
+        speed < RUN_SPEED * 1.4,
+        `${id}: по ветру разгоняет до ${speed.toFixed(2)} при беге ${RUN_SPEED} — это снаряд`
+      );
+    }
+    course.dispose();
+  }
+});
+
+// Лопасти обязаны вращаться вокруг оси ветра. Наклон группы через rotation.z вместе с вращением
+// через rotation.y давал разворот вентилятора вокруг вертикали: порядок эйлеровых углов XYZ
+// применяет наклон ДО вращения.
+test('лопасти вращаются вокруг оси ветра', () => {
+  const course = build('ch4');
+  const rotor = course.fans[0].rotors[0];
+  course.update(1 / 60, 0.5);
+  const first = rotor.rotation.x;
+  course.update(1 / 60, 0.6);
+
+  assert.notEqual(rotor.rotation.x, first, 'ротор не вращается');
+  assert.equal(rotor.rotation.y, 0, 'ротор разворачивает вокруг вертикали, а не вращает');
+  assert.equal(rotor.rotation.z, 0, 'ротор наклонён — вращение уйдёт не вокруг оси ветра');
   course.dispose();
 });
 

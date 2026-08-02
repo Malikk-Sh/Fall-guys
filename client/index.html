@@ -1,12 +1,12 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="theme-color" content="#4b35b7" />
     <meta
       name="description"
-      content="Wobble Rush 3D — a bright, procedural obstacle racer for desktop and mobile."
+      content="Wobble Rush 3D — яркая полоса препятствий для компьютеров и мобильных устройств."
     />
     <title>Wobble Rush 3D</title>
     <!-- Фавикон встроен как data-URI: в проекте принципиально нет файлов-ассетов,
@@ -32,21 +32,23 @@
     </script>
   </head>
   <body>
-    <canvas id="game" aria-label="Wobble Rush 3D game view"></canvas>
+    <canvas id="game" aria-label="Игровая сцена Wobble Rush 3D"></canvas>
     <div id="vignette"></div>
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <div id="error" class="toast toast-error hidden" role="alert"></div>
 
     <main id="menu" class="screen screen-menu">
       <div class="brand" aria-label="Wobble Rush 3D">
-        <span class="brand-kicker">THE SKY PARK CHALLENGE</span>
+        <span class="brand-kicker">ИСПЫТАНИЕ В НЕБЕСНОМ ПАРКЕ</span>
         <h1>WOBBLE <em>RUSH</em></h1>
-        <p>Fresh courses. Chunky chaos. One heroic little runner.</p>
+        <p>Новые трассы. Весёлый хаос. Один отважный бегун.</p>
       </div>
 
       <section class="menu-card glass">
-        <div class="mode-tabs" role="tablist" aria-label="Game mode">
-          <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">SOLO RUN</button>
+        <div class="mode-tabs" role="tablist" aria-label="Режим игры">
+          <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">
+            ОДИНОЧНАЯ
+          </button>
           <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">ГОНКА ОНЛАЙН</button>
           <button class="mode-tab mode-tab-hero" data-mode="coop" role="tab" aria-selected="false">
             КООП НА ДВОИХ
@@ -56,35 +58,43 @@
         <div id="single" class="mode-panel">
           <div class="field-grid">
             <label class="field"
-              ><span>Course</span
+              ><span>Трасса</span
               ><select id="runType">
-                <option value="daily">Daily challenge</option>
-                <option value="random">Fresh remix</option>
+                <option value="daily">Испытание дня</option>
+                <option value="random">Новая трасса</option>
               </select></label
             >
             <label class="field"
-              ><span>Difficulty</span
+              ><span>Сложность</span
               ><select id="difficulty">
-                <option value="easy">Breezy</option>
-                <option value="normal" selected>Rush</option>
-                <option value="chaos">Mayhem</option>
+                <option value="easy">Легко</option>
+                <option value="normal" selected>Забег</option>
+                <option value="chaos">Хаос</option>
               </select></label
             >
           </div>
           <div class="run-summary">
-            <span id="courseName">CLOUD CIRCUIT</span><strong id="bestTime">BEST —:—</strong>
+            <span id="courseName">ОБЛАЧНАЯ ТРАССА</span><strong id="bestTime">РЕКОРД —:—</strong>
+          </div>
+          <div id="challengeRule" class="challenge-rule" role="status">
+            <strong>ЧАС ПИК</strong><span>Препятствия движутся быстрее · цель: без падений</span>
+          </div>
+          <div class="profile-strip" aria-label="Локальный прогресс">
+            <span>ЗАБЕГИ <b id="profileRuns">0</b></span>
+            <span>БЕЗ ПАДЕНИЙ <b id="profileFlawless">0</b></span>
+            <span>СЕРИЯ ДНЯ <b id="profileStreak">0</b></span>
           </div>
           <button id="play" class="button button-primary" data-testid="play-single">
-            <span>START RUN</span><b>▶</b>
+            <span>НАЧАТЬ ЗАБЕГ</span><b>▶</b>
           </button>
         </div>
 
         <div id="multi" class="mode-panel hidden">
           <label class="field field-full"
-            ><span>Runner name</span
+            ><span>Имя игрока</span
             ><input id="name" maxlength="16" autocomplete="nickname" placeholder="Wobbler" value="Wobbler"
           /></label>
-          <button id="create" class="button button-primary"><span>CREATE PARTY</span><b>＋</b></button>
+          <button id="create" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
           <div class="join-row">
             <input
               id="code"
@@ -95,7 +105,7 @@
               spellcheck="false"
               aria-label="Код комнаты"
               placeholder="КОД"
-            /><button id="join" class="button button-secondary">JOIN</button>
+            /><button id="join" class="button button-secondary">ВОЙТИ</button>
           </div>
           <p id="connectStatus" class="status-line">Создайте комнату или введите код из пяти символов.</p>
         </div>
@@ -114,6 +124,11 @@
             ><select id="coopChapter"></select
           ></label>
           <p id="coopHint" class="coop-hint"></p>
+          <div class="profile-strip coop-profile" aria-label="Прогресс кооперативной пары">
+            <span>ГЛАВЫ <b id="coopProfileChapters">0</b></span>
+            <span>СПАСЕНИЯ <b id="coopProfileRevives">0</b></span>
+            <span>РЕКОРД <b id="coopProfileBest">—</b></span>
+          </div>
           <button id="coopCreate" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
           <div class="join-row">
             <input
@@ -146,53 +161,60 @@
         </div>
 
         <div class="menu-footer">
-          <button id="quality" class="icon-button" aria-label="Change graphics quality">AUTO QUALITY</button>
-          <span id="controlHint">WASD · SPACE · SHIFT · DRAG TO LOOK</span>
+          <button id="quality" class="icon-button" aria-label="Изменить качество графики">
+            АВТО КАЧЕСТВО
+          </button>
+          <span id="controlHint">WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА</span>
         </div>
       </section>
 
       <div class="feature-pills" aria-hidden="true">
-        <span>PROCEDURAL COURSES</span><span>1–16 PLAYERS</span><span>TOUCH READY</span>
+        <span>ПРОЦЕДУРНЫЕ ТРАССЫ</span><span>1–16 ИГРОКОВ</span><span>СЕНСОРНОЕ УПРАВЛЕНИЕ</span>
       </div>
     </main>
 
     <section id="lobby" class="screen center-screen hidden">
       <div class="lobby-card glass">
-        <button class="close-button back" aria-label="Leave party">×</button>
-        <span class="eyebrow">PARTY LOBBY</span>
+        <button class="close-button back" aria-label="Покинуть комнату">×</button>
+        <span class="eyebrow">КОМНАТА ИГРОКОВ</span>
         <div class="room-heading">
           <div>
-            <small>ROOM CODE</small>
+            <small>КОД КОМНАТЫ</small>
             <h2 id="roomCode">----</h2>
           </div>
           <button id="copyCode" class="copy-button">КОД</button>
           <button id="copyInvite" class="copy-button">ССЫЛКА</button>
         </div>
         <div class="lobby-course">
-          <div><small>COURSE</small><strong id="lobbyCourse">Cloud Circuit</strong></div>
+          <div><small>ТРАССА</small><strong id="lobbyCourse">Облачная трасса</strong></div>
           <label id="lobbyDifficultyWrap"
-            ><small>DIFFICULTY</small
+            ><small>СЛОЖНОСТЬ</small
             ><select id="lobbyDifficulty">
-              <option value="easy">Breezy</option>
-              <option value="normal">Rush</option>
-              <option value="chaos">Mayhem</option>
+              <option value="easy">Легко</option>
+              <option value="normal">Забег</option>
+              <option value="chaos">Хаос</option>
             </select></label
           >
         </div>
         <div id="players" class="player-list"></div>
-        <button id="ready" class="button button-primary">READY UP</button>
-        <button id="start" class="button button-start hidden">START RACE</button>
-        <p id="lobbyHint" class="status-line">Ready up while the host prepares the course.</p>
+        <div id="verifiedTop" class="verified-top" role="status">
+          <small>ПОДТВЕРЖДЁННЫЙ РЕКОРД</small><strong id="verifiedTopValue">—</strong>
+        </div>
+        <button id="ready" class="button button-primary">Я ГОТОВ</button>
+        <button id="start" class="button button-start hidden">НАЧАТЬ ГОНКУ</button>
+        <p id="lobbyHint" class="status-line">Отметьтесь готовым, пока хост выбирает трассу.</p>
       </div>
     </section>
 
     <header id="hud" class="hud hidden">
-      <div class="hud-card"><small>TIME</small><strong id="timer">00:00.00</strong></div>
+      <div class="hud-card"><small>ВРЕМЯ</small><strong id="timer">00:00.00</strong></div>
       <div class="hud-progress">
-        <div class="hud-progress-label"><span id="stageName">LAUNCH PAD</span><b id="checks">0 / 6</b></div>
+        <div class="hud-progress-label">
+          <span id="stageName">СТАРТОВАЯ ПЛОЩАДКА</span><b id="checks">0 / 6</b>
+        </div>
         <div class="progress-track"><i id="progressFill"></i></div>
       </div>
-      <div id="placeBox" class="hud-card"><small>PLACE</small><strong id="place">1st</strong></div>
+      <div id="placeBox" class="hud-card"><small>МЕСТО</small><strong id="place">1</strong></div>
       <div id="pingBox" class="hud-card compact hidden"><small>СВЯЗЬ</small><strong id="ping">—</strong></div>
     </header>
 
@@ -215,33 +237,33 @@
 
     <div id="countdown" class="countdown hidden"><span>3</span></div>
     <div id="checkpointBanner" class="checkpoint-banner hidden">
-      <small>CHECKPOINT</small><strong>1 / 6</strong>
+      <small>КОНТРОЛЬНАЯ ТОЧКА</small><strong>1 / 6</strong>
     </div>
 
     <div id="touch" class="touch-ui hidden">
-      <div id="stick" class="stick" aria-label="Movement joystick"><i></i><span>MOVE</span></div>
+      <div id="stick" class="stick" aria-label="Джойстик движения"><i></i><span>БЕГ</span></div>
       <button id="recenter" class="recenter" aria-label="Посмотреть за спину">⌖</button>
       <button id="cameraMode" class="recenter camera-mode" aria-label="Режим камеры">◲</button>
-      <button id="dive" class="action-button dive-button"><i>➤</i><span>DIVE</span></button>
-      <button id="jump" class="action-button jump-button"><i>↑</i><span>JUMP</span></button>
-      <div id="lookHint" class="look-hint">SWIPE TO LOOK</div>
+      <button id="dive" class="action-button dive-button"><i>➤</i><span>РЫВОК</span></button>
+      <button id="jump" class="action-button jump-button"><i>↑</i><span>ПРЫЖОК</span></button>
+      <div id="lookHint" class="look-hint">ПРОВЕДИТЕ ДЛЯ ОБЗОРА</div>
     </div>
 
     <section id="finish" class="screen center-screen hidden">
       <div class="finish-card glass">
         <div id="medal" class="medal">★</div>
-        <span id="finishEyebrow" class="eyebrow">COURSE COMPLETE</span>
-        <h2 id="finishTitle">GOLD RUN!</h2>
+        <span id="finishEyebrow" class="eyebrow">ТРАССА ПРОЙДЕНА</span>
+        <h2 id="finishTitle">ЗОЛОТОЙ ЗАБЕГ!</h2>
         <p id="finishTime">00:00.00</p>
         <div id="unrankedNote" class="unranked-note hidden" role="status"></div>
         <div id="finishStats" class="finish-stats"></div>
         <div id="board" class="leaderboard"></div>
-        <button id="again" class="button button-primary">RACE THIS COURSE</button>
-        <button id="newCourse" class="button button-secondary">NEW COURSE</button>
+        <button id="again" class="button button-primary">ПОВТОРИТЬ ТРАССУ</button>
+        <button id="newCourse" class="button button-secondary">НОВАЯ ТРАССА</button>
         <button id="rematch" class="button button-primary hidden">РЕВАНШ</button>
         <button id="returnLobby" class="button button-secondary hidden">В ЛОББИ</button>
         <div id="resultsTimer" class="results-timer" role="status" aria-live="polite"></div>
-        <button class="text-button back">RETURN HOME</button>
+        <button class="text-button back">В ГЛАВНОЕ МЕНЮ</button>
       </div>
     </section>
 
@@ -256,7 +278,7 @@
 
     <div id="loading" class="loading">
       <div class="loader-orb"></div>
-      <strong>BUILDING SKY PARK…</strong><span>Preparing the wobble physics</span>
+      <strong>СТРОИМ НЕБЕСНЫЙ ПАРК…</strong><span>Настраиваем физику забега</span>
     </div>
     <script type="module" src="main.js"></script>
   </body>

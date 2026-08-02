@@ -28,9 +28,9 @@ export const COLORS = {
 // Число сегментов берётся из общего модуля, чтобы не разойтись с сервером;
 // скорость препятствий и целевое время — чисто клиентская настройка подачи.
 export const DIFFICULTIES = {
-  easy: { label: 'Breezy', segments: DIFFICULTY_SEGMENTS.easy, speed: 0.82, parPerSegment: 15 },
-  normal: { label: 'Rush', segments: DIFFICULTY_SEGMENTS.normal, speed: 1, parPerSegment: 13 },
-  chaos: { label: 'Mayhem', segments: DIFFICULTY_SEGMENTS.chaos, speed: 1.2, parPerSegment: 12 }
+  easy: { label: 'Легко', segments: DIFFICULTY_SEGMENTS.easy, speed: 0.82, parPerSegment: 15 },
+  normal: { label: 'Забег', segments: DIFFICULTY_SEGMENTS.normal, speed: 1, parPerSegment: 13 },
+  chaos: { label: 'Хаос', segments: DIFFICULTY_SEGMENTS.chaos, speed: 1.2, parPerSegment: 12 }
 };
 
 export function hashString(value) {
@@ -42,8 +42,13 @@ export function hashString(value) {
   return h >>> 0;
 }
 export function dailySeed(date = new Date()) {
-  const day = `${date.getUTCFullYear()}-${date.getUTCMonth() + 1}-${date.getUTCDate()}`;
+  const day = dailyDayKey(date);
   return hashString(`wobble-${day}`);
+}
+export function dailyDayKey(date = new Date()) {
+  return [date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate()]
+    .map((part, index) => (index ? String(part).padStart(2, '0') : String(part)))
+    .join('-');
 }
 export function randomSeed() {
   return (crypto?.getRandomValues?.(new Uint32Array(1))[0] ?? Math.floor(Math.random() * 0xffffffff)) >>> 0;
@@ -59,6 +64,32 @@ export function seededRandom(seed) {
   };
 }
 export const courseSpec = createCourseSpec;
+
+export const DAILY_MODIFIER = Object.freeze({
+  id: 'rush-hour',
+  label: 'ЧАС ПИК',
+  description: 'Препятствия движутся на 18% быстрее.',
+  obstacleSpeed: 1.18
+});
+
+// Испытание дня использует общий UTC-сид, один явно показанный модификатор и дополнительную цель.
+// Всё записано в spec, поэтому повтор, превью и результат не могут разойтись в трактовке правил.
+export function dailyCourseSpec(difficulty = 'normal', date = new Date()) {
+  return {
+    ...createCourseSpec(dailySeed(date), difficulty),
+    challenge: 'daily',
+    dayKey: dailyDayKey(date),
+    modifier: { ...DAILY_MODIFIER },
+    objectives: ['no-falls']
+  };
+}
+
+export function evaluateCourseObjectives(spec, { respawns = 0 } = {}) {
+  return (spec?.objectives || []).map(id => ({
+    id,
+    complete: id === 'no-falls' ? respawns === 0 : false
+  }));
+}
 export function formatTime(ms) {
   if (!Number.isFinite(ms)) return '—';
   const minutes = Math.floor(ms / 60000),
@@ -67,13 +98,10 @@ export function formatTime(ms) {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
 }
 export function ordinal(value) {
-  const n = Math.max(1, Math.floor(value)),
-    mod = n % 100;
-  if (mod >= 11 && mod <= 13) return `${n}th`;
-  return `${n}${n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th'}`;
+  return String(Math.max(1, Math.floor(value)));
 }
 export function courseName(seed) {
-  const a = ['Cloud', 'Nova', 'Candy', 'Turbo', 'Prism', 'Comet', 'Jelly', 'Rocket'],
-    b = ['Circuit', 'Causeway', 'Carnival', 'Skyway', 'Sprint', 'Shuffle', 'Dash', 'Run'];
+  const a = ['Облачный', 'Звёздный', 'Сладкий', 'Турбо', 'Призменный', 'Кометный', 'Желейный', 'Ракетный'],
+    b = ['круг', 'мост', 'карнавал', 'путь', 'спринт', 'микс', 'рывок', 'забег'];
   return `${a[seed % a.length]} ${b[(seed >>> 5) % b.length]}`.toUpperCase();
 }

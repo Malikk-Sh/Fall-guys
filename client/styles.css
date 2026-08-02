@@ -218,6 +218,51 @@ canvas {
 .run-summary strong {
   color: #7ce9df;
 }
+.challenge-rule {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 12px;
+  padding: 8px 11px;
+  border: 1px solid rgba(255, 217, 75, 0.45);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 217, 75, 0.09);
+  font-size: 0.67rem;
+  font-weight: 700;
+}
+.challenge-rule strong {
+  flex: none;
+  color: var(--yellow);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+}
+.challenge-rule.hidden {
+  display: none;
+}
+.profile-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin: -4px 0 10px;
+  color: rgba(255, 255, 255, 0.58);
+  font-size: 0.56rem;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: 0.045em;
+}
+.profile-strip span {
+  padding: 5px 3px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.profile-strip b {
+  color: var(--cyan);
+}
+.coop-profile {
+  margin: 2px 0 10px;
+}
 .button {
   border: 0;
   border-radius: 13px;
@@ -430,6 +475,20 @@ canvas {
   margin: 10px 0 15px;
   max-height: 225px;
   overflow: auto;
+}
+.verified-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.58);
+  background: rgba(72, 220, 218, 0.08);
+}
+.verified-top strong {
+  color: var(--cyan);
+  font-size: 0.72rem;
 }
 .player-row {
   display: grid;

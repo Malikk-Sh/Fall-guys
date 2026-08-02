@@ -1,5 +1,8 @@
-import { DIFFICULTIES, courseName, formatTime, ordinal } from '../core/Config.js';
+import { DIFFICULTIES, courseName, evaluateCourseObjectives, formatTime, ordinal } from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
+import { buildInviteLink, readInvite } from '../core/invite.js';
+import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
+import { GAME_MODE } from '/shared/protocol.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -21,6 +24,7 @@ export class UI {
       button.addEventListener('click', () => this.selectMode(button.dataset.mode))
     );
     this.selectMode('single');
+    this.profile(readProfile());
     this.setInputMethod(
       document.body.dataset.input ||
         (matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0 ? 'touch' : 'keyboard')
@@ -56,6 +60,7 @@ export class UI {
     const apply = () => {
       const chapter = chapters.find(item => item.id === select.value) || chapters[0];
       $('#coopHint').textContent = chapter.hint;
+      this.coopProfile(chapter.id);
       onChange?.(chapter);
     };
     select.addEventListener('change', apply);
@@ -64,21 +69,13 @@ export class UI {
 
   // Ссылка-приглашение. На телефоне диктовать пятисимвольный код неудобно и легко ошибиться,
   // а ссылку можно отправить в любой мессенджер одним касанием.
-  inviteLink(code) {
-    const url = new URL(location.href);
-    url.hash = '';
-    url.search = `?room=${encodeURIComponent(code)}`;
-    return url.toString();
+  inviteLink(code, mode) {
+    return buildInviteLink(location.href, code, mode);
   }
 
-  // Код комнаты из адреса, если игрок пришёл по приглашению.
-  static invitedCode() {
-    try {
-      const code = new URL(location.href).searchParams.get('room');
-      return code ? code.trim().toUpperCase().slice(0, 5) : null;
-    } catch {
-      return null;
-    }
+  // Код и режим комнаты из адреса, если игрок пришёл по приглашению.
+  static invitedRoom() {
+    return readInvite(location.href);
   }
 
   coopName() {
@@ -146,8 +143,8 @@ export class UI {
   setInputMethod(method) {
     const touch = method === 'touch';
     $('#controlHint').textContent = touch
-      ? 'JOYSTICK · JUMP · DIVE · SWIPE TO LOOK'
-      : 'WASD · SPACE · SHIFT · DRAG TO LOOK · C КАМЕРА';
+      ? 'ДЖОЙСТИК · ПРЫЖОК · РЫВОК · СВАЙП — КАМЕРА'
+      : 'WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА · C — РЕЖИМ';
     if (this.racing) this.elements.touch.classList.toggle('hidden', !touch);
   }
   show(id) {
@@ -195,10 +192,27 @@ export class UI {
   status(message) {
     $('#connectStatus').textContent = message;
   }
-  preview(seed, difficulty) {
-    $('#courseName').textContent = courseName(seed);
-    const best = readBest(soloKey(seed, difficulty));
-    $('#bestTime').textContent = best ? `BEST ${formatTime(best)}` : 'BEST —:—';
+  preview(spec) {
+    $('#courseName').textContent = courseName(spec.seed);
+    const best = readBest(soloKey(spec.seed, spec.difficulty));
+    $('#bestTime').textContent = best ? `РЕКОРД ${formatTime(best)}` : 'РЕКОРД —:—';
+    const rule = $('#challengeRule');
+    rule.classList.toggle('hidden', spec.challenge !== 'daily');
+    if (spec.challenge === 'daily') {
+      rule.querySelector('strong').textContent = spec.modifier.label;
+      rule.querySelector('span').textContent = `${spec.modifier.description} Цель: пройти без падений.`;
+    }
+  }
+  profile(data) {
+    $('#profileRuns').textContent = data.completedRuns;
+    $('#profileFlawless').textContent = data.flawlessRuns;
+    $('#profileStreak').textContent = data.daily.streak;
+  }
+  coopProfile(chapterId, data = readProfile()) {
+    $('#coopProfileChapters').textContent = data.coop.completedChapters;
+    $('#coopProfileRevives').textContent = data.coop.totalRevives;
+    const best = data.coop.bestByChapter[chapterId];
+    $('#coopProfileBest').textContent = best ? formatTime(best) : '—';
   }
   singleSettings() {
     return { type: $('#runType').value, difficulty: $('#difficulty').value };
@@ -217,8 +231,8 @@ export class UI {
     $('#start').classList.toggle('hidden', !host);
     $('#start').disabled = !data.players.length || !data.players.every(p => p.ready);
     $('#lobbyHint').textContent = host
-      ? 'Everyone must be ready before you launch.'
-      : 'Ready up — the host will start the race.';
+      ? 'Все игроки должны быть готовы перед стартом.'
+      : 'Отметьтесь готовым — гонку запустит хост.';
     const list = $('#players');
     list.replaceChildren();
     for (const player of data.players) {
@@ -230,12 +244,34 @@ export class UI {
         .toString(16)
         .padStart(6, '0')}`;
       const name = document.createElement('span');
-      name.textContent = `${player.id === data.host ? '♛ ' : ''}${player.name}${player.id === selfId ? ' (you)' : ''}`;
+      name.textContent = `${player.id === data.host ? '♛ ' : ''}${player.name}${player.id === selfId ? ' (вы)' : ''}`;
       const state = document.createElement('b');
       state.className = player.ready ? 'ready' : '';
-      state.textContent = player.ready ? 'READY' : 'WAITING';
+      state.textContent = player.ready ? 'ГОТОВ' : 'ОЖИДАНИЕ';
       row.append(avatar, name, state);
       list.append(row);
+    }
+    const verifiedTop = $('#verifiedTop');
+    const race = data.mode === GAME_MODE.RACE;
+    verifiedTop.classList.toggle('hidden', !race);
+    if (race) this.loadVerifiedTop(data.seed, data.difficulty);
+  }
+  async loadVerifiedTop(seed, difficulty) {
+    const key = `${seed}:${difficulty}`;
+    if (this.verifiedTopKey === key) return;
+    this.verifiedTopKey = key;
+    const value = $('#verifiedTopValue');
+    value.textContent = 'ЗАГРУЗКА…';
+    try {
+      const response = await fetch(
+        `/leaderboard?seed=${encodeURIComponent(seed)}&difficulty=${encodeURIComponent(difficulty)}&limit=1`
+      );
+      if (!response.ok) throw new Error('leaderboard unavailable');
+      const entry = (await response.json()).entries?.[0];
+      value.textContent = entry ? `${entry.name} · ${formatTime(entry.time)}` : 'ПОКА НЕТ РЕЗУЛЬТАТОВ';
+    } catch {
+      value.textContent = 'НЕДОСТУПЕН';
+      this.verifiedTopKey = null;
     }
   }
   hud(on, { multiplayer = false, touch = false, coop = false } = {}) {
@@ -292,7 +328,7 @@ export class UI {
     let last = '';
     while (now() < startAt + 420) {
       const left = startAt - now(),
-        value = left > 2000 ? '3' : left > 1000 ? '2' : left > 0 ? '1' : 'GO!';
+        value = left > 2000 ? '3' : left > 1000 ? '2' : left > 0 ? '1' : 'ВПЕРЁД!';
       if (value !== last) {
         label.textContent = value;
         // Перезапуск CSS-анимации: без принудительного пересчёта макета браузер не считает
@@ -376,9 +412,7 @@ export class UI {
     const skew = serverNow - Date.now();
     const render = () => {
       const left = Math.max(0, Math.ceil((deadline - (Date.now() + skew)) / 1000));
-      note.textContent = left
-        ? `Без общего решения — в лобби через ${left} с`
-        : 'Возвращаемся в лобби…';
+      note.textContent = left ? `Без общего решения — в лобби через ${left} с` : 'Возвращаемся в лобби…';
       if (!left) {
         clearInterval(this._resultsTick);
         this._resultsTick = null;
@@ -408,20 +442,30 @@ export class UI {
     this.toast('Финиш! Ждём напарника — глава засчитывается только вдвоём.', 'info', 8000);
   }
 
-  finishSolo({ time, respawns, seed, difficulty, unranked = null }) {
+  finishSolo({ time, respawns, spec, unranked = null }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
-    $('#finishEyebrow').textContent = 'COURSE COMPLETE';
+    $('#finishEyebrow').textContent = 'ТРАССА ПРОЙДЕНА';
+    const { seed, difficulty } = spec;
     const par = DIFFICULTIES[difficulty].parPerSegment * DIFFICULTIES[difficulty].segments * 1000,
       ratio = time / par,
       medal = ratio <= 1 ? 'GOLD' : ratio <= 1.28 ? 'SILVER' : ratio <= 1.65 ? 'BRONZE' : 'FINISH';
-    $('#finishTitle').textContent = medal === 'FINISH' ? 'COURSE CLEARED!' : `${medal} RUN!`;
+    const medalTitles = { GOLD: 'ЗОЛОТОЙ ЗАБЕГ!', SILVER: 'СЕРЕБРЯНЫЙ ЗАБЕГ!', BRONZE: 'БРОНЗОВЫЙ ЗАБЕГ!' };
+    $('#finishTitle').textContent = medal === 'FINISH' ? 'ТРАССА ПОКОРЕНА!' : medalTitles[medal];
     $('#medal').textContent =
       medal === 'GOLD' ? '★' : medal === 'SILVER' ? '◆' : medal === 'BRONZE' ? '●' : '✓';
     $('#finishTime').textContent = formatTime(time);
-    $('#finishStats').innerHTML =
-      `<span>${courseName(seed)}</span><span>${respawns} RESPAWN${respawns === 1 ? '' : 'S'}</span><span>${DIFFICULTIES[difficulty].label.toUpperCase()}</span>`;
+    const objectives = evaluateCourseObjectives(spec, { respawns });
+    const profile = recordSoloProfile(spec, { objectives, unranked });
+    this.profile(profile);
+    $('#finishStats').innerHTML = [
+      `<span>${courseName(seed)}</span>`,
+      `<span>ВОЗВРАЩЕНИЙ: ${respawns}</span>`,
+      `<span>${DIFFICULTIES[difficulty].label.toUpperCase()}</span>`,
+      ...objectives.map(goal => `<span>БЕЗ ПАДЕНИЙ ${goal.complete ? '✓' : '✗'}</span>`),
+      spec.challenge === 'daily' ? `<span>СЕРИЯ: ${profile.daily.streak}</span>` : ''
+    ].join('');
     $('#board').replaceChildren();
     $('#again').classList.remove('hidden');
     $('#newCourse').classList.remove('hidden');
@@ -429,12 +473,12 @@ export class UI {
     $('#returnLobby').classList.add('hidden');
     // Забег без зачёта рекорд не переписывает — правило и его причина живут в core/records.js.
     const saved = saveBest(soloKey(seed, difficulty), time, { unranked });
-    if (saved.improved) this.toast(saved.first ? 'First time saved!' : 'New personal best!');
+    if (saved.improved) this.toast(saved.first ? 'Первое время сохранено!' : 'Новый личный рекорд!');
   }
 
   // Итоги кооп-главы. Мест здесь нет: команда либо прошла главу, либо нет, и время у неё общее —
   // по последнему дошедшему.
-  finishCoop({ time, chapter, board, selfId, unranked = null }) {
+  finishCoop({ time, chapter, board, selfId, revives = 0, matchId = null, unranked = null }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
@@ -443,10 +487,13 @@ export class UI {
     $('#medal').textContent = '✦';
     $('#finishTime').textContent = formatTime(time);
     const best = chapter ? this.recordChapterBest(chapter.chapterId, time, unranked) : null;
+    const profile = recordCoopProfile(chapter, { time, revives, matchId, unranked });
+    this.coopProfile(chapter?.chapterId, profile);
     $('#finishStats').innerHTML = [
       `<span>${chapter?.title || 'КООПЕРАТИВ'}</span>`,
       `<span>${chapter?.subtitle || 'ВДВОЁМ'}</span>`,
-      best ? `<span>ЛУЧШЕЕ ${formatTime(best)}</span>` : ''
+      best ? `<span>ЛУЧШЕЕ ${formatTime(best)}</span>` : '',
+      `<span>СПАСЕНИЙ: ${revives}</span>`
     ].join('');
     this.updateBoard(board || [], selfId);
     $('#again').classList.add('hidden');
@@ -460,8 +507,7 @@ export class UI {
   recordChapterBest(chapterId, time, unranked) {
     if (!chapterId) return null;
     const saved = saveBest(coopKey(chapterId), time, { unranked });
-    if (saved.improved)
-      this.toast(saved.first ? 'Первое время главы сохранено!' : 'Рекорд главы побит!');
+    if (saved.improved) this.toast(saved.first ? 'Первое время главы сохранено!' : 'Рекорд главы побит!');
     return saved.best;
   }
 
@@ -469,13 +515,15 @@ export class UI {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
-    $('#finishEyebrow').textContent = 'COURSE COMPLETE';
+    // После возврата в лобби перечитываем таблицу: только что завершённый матч мог сменить лидера.
+    this.verifiedTopKey = null;
+    $('#finishEyebrow').textContent = 'ГОНКА ЗАВЕРШЕНА';
     const own = board.findIndex(p => p.id === selfId),
       place = own < 0 ? board.length : own + 1;
-    $('#finishTitle').textContent = place === 1 ? 'CROWNED!' : `${ordinal(place).toUpperCase()} PLACE`;
+    $('#finishTitle').textContent = place === 1 ? 'КОРОНА ВАША!' : `${ordinal(place)}-Е МЕСТО`;
     $('#medal').textContent = place === 1 ? '♛' : '★';
     $('#finishTime').textContent = formatTime(time);
-    $('#finishStats').innerHTML = '<span>ONLINE PARTY</span><span>LIVE RESULTS</span>';
+    $('#finishStats').innerHTML = '<span>ОНЛАЙН-ГОНКА</span><span>РЕЗУЛЬТАТЫ</span>';
     this.updateBoard(board, selfId);
     $('#again').classList.add('hidden');
     $('#newCourse').classList.add('hidden');
@@ -496,7 +544,7 @@ export class UI {
         .toString(16)
         .padStart(6, '0')}`;
       const name = document.createElement('span');
-      name.textContent = `${player.name}${player.id === selfId ? ' (you)' : ''}`;
+      name.textContent = `${player.name}${player.id === selfId ? ' (вы)' : ''}`;
       const time = document.createElement('span');
       time.textContent = formatTime(player.time);
       row.append(rank, color, name, time);
@@ -505,6 +553,7 @@ export class UI {
   }
   setQuality(value) {
     this.quality = value;
-    $('#quality').textContent = `${value.toUpperCase()} QUALITY`;
+    const labels = { auto: 'АВТО', high: 'ВЫСОКОЕ', low: 'НИЗКОЕ' };
+    $('#quality').textContent = `${labels[value] || value.toUpperCase()} КАЧЕСТВО`;
   }
 }

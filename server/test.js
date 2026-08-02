@@ -6,9 +6,22 @@ const {
   createCourseSpec,
   spawnFor,
   validateState,
-  canFinish
+  canFinish,
+  leaderboard,
+  verifyCheckpointTime,
+  verifyMovement,
+  MIN_CHECKPOINT_INTERVAL_MS
 } = require('./gameRules');
-const { originAllowed } = require('./index');
+const {
+  originAllowed,
+  positiveInt,
+  capacityStatus,
+  loadStatus,
+  createEventCounters,
+  trackEvent
+} = require('./index');
+const { coopSpec } = require('../shared/coopChapters.js');
+const { validateCoopEvent, findCatapult } = require('./coopRules');
 
 test('player names preserve safe international characters and stay bounded', () => {
   assert.equal(safeName('<b>Малик 🚀</b>'), 'bМалик b');
@@ -103,6 +116,110 @@ test('finish requires every server checkpoint and the finish plane', () => {
   assert.equal(canFinish(player, spec), false);
 });
 
+test('слишком быстро пройденный сегмент помечается как неподтверждённый', () => {
+  const player = { checkpoint: 0, checkpointAt: 1000 };
+  const suspicious = verifyCheckpointTime(player, 1, 1000 + MIN_CHECKPOINT_INTERVAL_MS - 1);
+  assert.equal(suspicious.reason, 'segment-too-fast');
+  assert.equal(suspicious.checkpoint, 1);
+
+  player.checkpoint = 1;
+  const honest = verifyCheckpointTime(player, 2, player.checkpointAt + MIN_CHECKPOINT_INTERVAL_MS);
+  assert.equal(honest, null);
+  assert.equal(player.checkpointAt, 1000 + MIN_CHECKPOINT_INTERVAL_MS * 2 - 1);
+});
+
+test('таблица результатов отделяет подтверждённые времена', () => {
+  const room = {
+    players: new Map([
+      ['trusted', { id: 'trusted', name: 'Честный', time: 2000, color: 1, finished: true }],
+      [
+        'fast',
+        {
+          id: 'fast',
+          name: 'Слишком быстрый',
+          time: 1000,
+          color: 2,
+          finished: true,
+          verificationReasons: ['segment-too-fast', 'observed-speed']
+        }
+      ]
+    ])
+  };
+  const board = leaderboard(room);
+  assert.equal(board[0].verified, false);
+  assert.equal(board[0].verificationReason, 'segment-too-fast');
+  assert.deepEqual(board[0].verificationReasons, ['segment-too-fast', 'observed-speed']);
+  assert.equal(board[1].verified, true);
+  assert.equal(board[1].verificationReason, null);
+});
+
+test('проверка движения отличает честный бег, speedhack и невозможное ускорение', () => {
+  const player = {
+    last: { x: 0, y: 1, z: 0, vx: 0, vz: -8 },
+    lastAt: 1000
+  };
+  assert.deepEqual(
+    verifyMovement(player, { x: 0, y: 1, z: -0.8, ry: 0, vx: 0, vy: 0, vz: -8, state: 'ground' }, 1100),
+    []
+  );
+
+  const speedhack = verifyMovement(
+    player,
+    { x: 0, y: 1, z: -4, ry: 0, vx: 0, vy: 0, vz: -30, state: 'ground' },
+    1100
+  );
+  assert.ok(speedhack.includes('reported-speed'));
+  assert.ok(speedhack.includes('observed-speed'));
+  assert.ok(speedhack.includes('horizontal-acceleration'));
+
+  const dive = verifyMovement(
+    player,
+    { x: 0, y: 2, z: -1, ry: 0, vx: 0, vy: 3, vz: -10.8, state: 'dive' },
+    1050
+  );
+  assert.equal(dive.includes('horizontal-acceleration'), false, 'штатный dive получает больший лимит');
+});
+
+test('катапульта проверяется по авторитетной геометрии главы', () => {
+  const spec = coopSpec('ch2');
+  const catapult = findCatapult(spec, 'c1');
+  const launcher = {
+    id: 'launcher',
+    last: { x: catapult.x, y: 1.4, z: catapult.slamZ },
+    lastLaunchAt: 0
+  };
+  const rider = { id: 'rider', last: { x: catapult.x, y: 1.4, z: catapult.launchZ } };
+  const room = {
+    spec,
+    players: new Map([
+      [launcher.id, launcher],
+      [rider.id, rider]
+    ])
+  };
+  const message = {
+    action: 'launch',
+    objectId: catapult.id,
+    vector: { x: 0, y: catapult.power, z: -catapult.power * catapult.forward }
+  };
+
+  const valid = validateCoopEvent(room, launcher, message, 2_000);
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.relay.vector, message.vector);
+
+  launcher.lastLaunchAt = 0;
+  assert.equal(
+    validateCoopEvent(room, launcher, { ...message, objectId: 'несуществующая' }, 2_000).reason,
+    'неизвестная катапульта'
+  );
+  assert.equal(
+    validateCoopEvent(room, launcher, { ...message, vector: { x: 20, y: 20, z: 0 } }, 2_000).reason,
+    'неверный импульс катапульты'
+  );
+
+  launcher.last = { ...launcher.last, z: catapult.slamZ + 10 };
+  assert.equal(validateCoopEvent(room, launcher, message, 3_000).reason, 'инициатор не у катапульты');
+});
+
 test('проверка источника при апгрейде сокета', () => {
   // Запросы без Origin пропускаем: этот заголовок ставят только браузеры, а Node-клиенты,
   // мобильные обёртки и тесты его не шлют.
@@ -121,4 +238,44 @@ test('проверка источника при апгрейде сокета',
 
   // Мусор вместо адреса — отклоняется, а не роняет сервер.
   assert.equal(originAllowed('не-адрес', 'game.example'), false);
+});
+
+test('глобальные пределы нагрузки имеют безопасные значения и явное состояние', () => {
+  assert.equal(positiveInt('42', 10), 42);
+  assert.equal(positiveInt('0', 10), 10);
+  assert.equal(positiveInt('много', 10), 10);
+
+  const available = capacityStatus({ socketCount: 1, activeMatches: 1, maxSockets: 2, maxMatches: 2 });
+  assert.equal(available.socketsFull, false);
+  assert.equal(available.matchesFull, false);
+
+  const full = capacityStatus({ socketCount: 2, activeMatches: 3, maxSockets: 2, maxMatches: 3 });
+  assert.equal(full.socketsFull, true);
+  assert.equal(full.matchesFull, true);
+});
+
+test('состояние нагрузки показывает задержку event loop и память', () => {
+  const healthy = loadStatus({
+    lagMs: 12.34,
+    memory: { heapUsed: 10 * 1024 * 1024, heapTotal: 20 * 1024 * 1024, rss: 30 * 1024 * 1024 }
+  });
+  assert.deepEqual(healthy, {
+    eventLoopP95Ms: 12.3,
+    heapUsedMb: 10,
+    heapTotalMb: 20,
+    rssMb: 30,
+    overloaded: false
+  });
+
+  assert.equal(loadStatus({ lagMs: 10_000, memory: process.memoryUsage() }).overloaded, true);
+});
+
+test('анонимные продуктовые события ограничены фиксированным набором', () => {
+  const events = createEventCounters();
+  assert.equal(trackEvent(events, 'roomCreated'), true);
+  assert.equal(trackEvent(events, 'checkpointReached', 3), true);
+  assert.equal(trackEvent(events, 'имя-игрока'), false, 'произвольные и персональные ключи запрещены');
+  assert.equal(events.roomCreated, 1);
+  assert.equal(events.checkpointReached, 3);
+  assert.equal(Object.hasOwn(events, 'имя-игрока'), false);
 });

@@ -27,6 +27,10 @@ function checkField(value, schema, path) {
 
     case 'str':
       if (typeof value !== 'string') return `${path}: ожидалась строка`;
+      // Пробелы по краям допустимы (код комнаты затем нормализуется), но строка только из
+      // пробелов не считается содержимым. Проверяем длину нормализованного пользовательского
+      // ввода, чтобы `"   "` не обходило обязательность поля.
+      if (value.trim().length < schema.min) return `${path}: короче ${schema.min} символов`;
       if (value.length > schema.max) return `${path}: длиннее ${schema.max} символов`;
       return null;
 
@@ -40,6 +44,8 @@ function checkField(value, schema, path) {
 
     case 'object': {
       if (typeof value !== 'object' || Array.isArray(value)) return `${path}: ожидался объект`;
+      const unknown = Object.keys(value).find(key => !Object.hasOwn(schema.fields, key));
+      if (unknown) return `${path}.${unknown}: неизвестное поле`;
       for (const [key, fieldSchema] of Object.entries(schema.fields)) {
         const error = checkField(value[key], fieldSchema, `${path}.${key}`);
         if (error) return error;
@@ -64,6 +70,14 @@ export function validateMessage(message) {
   const schema = MESSAGE_SCHEMAS[message.type];
   if (!schema) {
     return { ok: false, reason: 'UNKNOWN_TYPE', detail: `неизвестный тип «${message.type}»` };
+  }
+
+  // Схемы протокола закрытые: лишнее поле чаще означает рассинхрон версий или попытку протащить
+  // данные, которые обработчик не собирался принимать. `type` — единственное общее поле вне
+  // конкретной схемы сообщения.
+  const unknown = Object.keys(message).find(key => key !== 'type' && !Object.hasOwn(schema, key));
+  if (unknown) {
+    return { ok: false, reason: 'INVALID_SCHEMA', detail: `${unknown}: неизвестное поле` };
   }
 
   for (const [key, fieldSchema] of Object.entries(schema)) {

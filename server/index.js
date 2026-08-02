@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
+const { monitorEventLoopDelay } = require('perf_hooks');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const {
@@ -12,6 +13,8 @@ const {
   createCourseSpec,
   spawnFor,
   validateState,
+  verifyCheckpointTime,
+  verifyMovement,
   canFinish,
   leaderboard
 } = require('./gameRules');
@@ -33,6 +36,7 @@ const {
 const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/validation.js');
 const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChapters.js');
 const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
+const { VerifiedLeaderboard } = require('./verifiedLeaderboard');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -124,9 +128,79 @@ app.use(
 );
 
 const rooms = new Map();
+const verifiedLeaderboard = new VerifiedLeaderboard();
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Глобальные пределы защищают процесс, а не отдельный IP. Без них тысячи адресов могли каждый
+// остаться внутри персонального лимита и всё равно исчерпать память одним экземпляром Node.js.
+const MAX_ROOMS = positiveInt(process.env.MAX_ROOMS, 500);
+const MAX_ACTIVE_SOCKETS = positiveInt(process.env.MAX_ACTIVE_SOCKETS, 2000);
+const MAX_ACTIVE_MATCHES = positiveInt(process.env.MAX_ACTIVE_MATCHES, 300);
+const MAX_EVENT_LOOP_LAG_MS = positiveInt(process.env.MAX_EVENT_LOOP_LAG_MS, 120);
+
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelay.enable();
+
+const PRODUCT_EVENT_NAMES = Object.freeze([
+  'roomCreated',
+  'roomJoined',
+  'matchStarted',
+  'checkpointReached',
+  'playerDowned',
+  'matchCompleted',
+  'matchAbandoned',
+  'connectionRecovered'
+]);
+
+function createEventCounters() {
+  return Object.fromEntries(PRODUCT_EVENT_NAMES.map(name => [name, 0]));
+}
+
+function trackEvent(counters, name, amount = 1) {
+  if (!Object.hasOwn(counters, name) || !Number.isSafeInteger(amount) || amount < 1) return false;
+  counters[name] += amount;
+  return true;
+}
+
+const productEvents = createEventCounters();
+
+function loadStatus({ lagMs = eventLoopDelay.percentile(95) / 1e6, memory = process.memoryUsage() } = {}) {
+  const normalizedLag = Number.isFinite(lagMs) ? Math.round(lagMs * 10) / 10 : 0;
+  return {
+    eventLoopP95Ms: normalizedLag,
+    heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+    heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+    rssMb: Math.round(memory.rss / 1024 / 1024),
+    overloaded: normalizedLag >= MAX_EVENT_LOOP_LAG_MS
+  };
+}
+
+function capacityStatus({
+  socketCount = wss.clients.size,
+  activeMatches = null,
+  maxSockets = MAX_ACTIVE_SOCKETS,
+  maxMatches = MAX_ACTIVE_MATCHES
+} = {}) {
+  const playing =
+    activeMatches ??
+    [...rooms.values()].filter(room => [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING].includes(room.state))
+      .length;
+  return {
+    socketCount,
+    activeMatches: playing,
+    maxSockets,
+    maxMatches,
+    socketsFull: socketCount >= maxSockets,
+    matchesFull: playing >= maxMatches
+  };
+}
 
 const metrics = {
   connections: 0,
@@ -143,7 +217,10 @@ const metrics = {
   resumeSucceeded: 0,
   resumeFailed: 0,
   socketSendFailures: 0,
-  handlerErrors: 0
+  handlerErrors: 0,
+  capacityRejected: 0,
+  snapshotsSkippedForLoad: 0,
+  verificationFailed: 0
 };
 
 const health = () => ({
@@ -154,6 +231,9 @@ const health = () => ({
   rooms: rooms.size,
   players: [...rooms.values()].reduce((sum, room) => sum + room.players.size, 0),
   sessions: sessions.size,
+  capacity: capacityStatus(),
+  load: loadStatus(),
+  events: productEvents,
   uptime: Math.round(process.uptime()),
   metrics
 });
@@ -169,8 +249,25 @@ app.get('/health/live', (_req, res) => res.json({ ok: true }));
 app.get('/health/ready', (_req, res) => {
   // Во время выключения — 503, хотя сокет ещё слушает. Это и есть смысл разделения live и ready:
   // процесс жив и доигрывает начатое, но новых игроков сюда направлять уже не нужно.
-  const ready = !shuttingDown && !!wss && server.listening;
+  const capacity = capacityStatus();
+  const load = loadStatus();
+  const ready = !shuttingDown && !!wss && server.listening && !capacity.socketsFull && !load.overloaded;
   res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
+});
+
+app.get('/leaderboard', (req, res) => {
+  const seedText = String(req.query.seed || '');
+  const seed = Number(seedText);
+  const difficulty = safeDifficulty(req.query.difficulty);
+  if (!/^\d{1,10}$/.test(seedText) || !Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff)
+    return res.status(400).json({ ok: false, error: 'invalid-seed' });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({
+    ok: true,
+    seed: seed >>> 0,
+    difficulty,
+    entries: verifiedLeaderboard.get(seed, difficulty, req.query.limit)
+  });
 });
 
 // Отдаём index.html только для навигационных запросов. Раньше сюда попадали и запросы к
@@ -185,7 +282,6 @@ const server = http.createServer(app);
 
 // Вместимость зависит от режима: кооп — строго на двоих, гонка — до шестнадцати.
 const MAX_PLAYERS = { [GAME_MODE.RACE]: 16, [GAME_MODE.COOP]: 2 };
-const MAX_ROOMS = 500;
 const ROOM_TTL = 45 * 60 * 1000;
 const COUNTDOWN_MS = 2800;
 
@@ -258,12 +354,7 @@ const wss = new WebSocketServer({
 
 // Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.
 // Все они относятся к идущему забегу и после RESULTS не значат ничего.
-const MATCH_TRAILING_TYPES = new Set([
-  C2S.PLAYER_STATE,
-  C2S.COOP_EVENT,
-  C2S.RESPAWN,
-  C2S.FINISH
-]);
+const MATCH_TRAILING_TYPES = new Set([C2S.PLAYER_STATE, C2S.COOP_EVENT, C2S.RESPAWN, C2S.FINISH]);
 
 // Порог, после которого соединение считается захлебнувшимся. При медленном канале очередь
 // отправки растёт неограниченно и съедает память сервера; лучше отбросить устаревший снапшот.
@@ -432,7 +523,8 @@ function resetLobby(room, { newSeed = false } = {}) {
       resultChoice: null,
       checkpoint: 0,
       last: null,
-      lastAt: 0
+      lastAt: 0,
+      lastSequence: -1
     });
   assignSlots(room);
   emitLobby(room);
@@ -469,8 +561,13 @@ function leave(ws) {
   if (!ws.room) return;
   const room = rooms.get(ws.room);
   ws.room = null;
-  if (room && (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING))
+  if (room && (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)) {
+    if (!room.abandonTracked) {
+      room.abandonTracked = true;
+      trackEvent(productEvents, 'matchAbandoned');
+    }
     markUnranked(room, 'left');
+  }
   if (ws.token) {
     sessions.delete(ws.token);
     ws.token = null;
@@ -542,6 +639,7 @@ function addPlayer(room, ws, name) {
     checkpoint: 0,
     last: null,
     lastAt: 0,
+    lastSequence: -1,
     disconnectedAt: null,
     away: false,
     ws
@@ -602,6 +700,7 @@ function resume(ws, token) {
   room.updatedAt = Date.now();
   metrics.reconnects++;
   metrics.resumeSucceeded++;
+  trackEvent(productEvents, 'connectionRecovered');
 
   // Токен возвращается вместе с ответом. Клиенту он нужен: при подключении сервер выдал ему
   // новый временный токен в `hello`, и без этой строки клиент сохранил бы у себя токен,
@@ -625,7 +724,8 @@ function resume(ws, token) {
         position: player.last || spawnFor(room.spec, player.checkpoint),
         checkpoint: player.checkpoint || 0,
         finished: !!player.finished,
-        downed: !!player.downed
+        downed: !!player.downed,
+        nextSequence: (player.lastSequence ?? -1) + 1
       }
     });
   }
@@ -652,6 +752,33 @@ function markUnranked(room, reason) {
   return true;
 }
 
+function addVerificationFindings(room, player, findings, details = {}) {
+  if (room.mode !== GAME_MODE.RACE || !findings?.length) return false;
+  let added = false;
+  for (const reason of findings) {
+    if (player.verificationReasons.includes(reason)) continue;
+    player.verificationReasons.push(reason);
+    metrics.verificationFailed++;
+    added = true;
+    log('info', 'result_unverified', {
+      roomId: room.code,
+      matchId: room.matchId,
+      playerId: player.id,
+      reason,
+      ...details
+    });
+  }
+  return added;
+}
+
+function verifyPlayerProgress(room, player, checkpoint, now) {
+  if (room.mode !== GAME_MODE.RACE) return null;
+  const verification = verifyCheckpointTime(player, checkpoint, now);
+  if (!verification) return null;
+  addVerificationFindings(room, player, [verification.reason], verification);
+  return verification;
+}
+
 // Запуск забега: отсчёт, новый matchId, сброс состояния игроков по местам появления.
 //
 // Вынесено из обработчика START_MATCH, потому что вызывать это надо из двух мест: по команде хоста
@@ -663,13 +790,16 @@ function beginCountdown(room) {
   // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
   // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
   room.matchId = crypto.randomBytes(8).toString('hex');
+  room.snapshotSequence = 0;
   room.startedAt = Date.now() + COUNTDOWN_MS;
   room.firstFinishAt = null;
   // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
   room.unranked = null;
   room.results = null;
   room.resultsDeadline = null;
+  room.abandonTracked = false;
   metrics.matchesStarted++;
+  trackEvent(productEvents, 'matchStarted');
   assignSlots(room);
 
   for (const item of room.players.values())
@@ -688,6 +818,11 @@ function beginCountdown(room) {
       downed: false,
       downedAt: 0,
       lastAt: room.startedAt,
+      lastSequence: -1,
+      checkpointAt: room.startedAt,
+      matchStartedAt: room.startedAt,
+      unverifiedReason: null,
+      verificationReasons: [],
       // Готовность снимается: следующий выход в лобби не должен начинаться с чужого «готов»
       // прошлого забега. На реванш это не влияет — он идёт мимо лобби.
       ready: false,
@@ -757,11 +892,13 @@ function checkMatchEnd(room) {
 function finishMatch(room) {
   if (!setRoomState(room, ROOM_STATE.RESULTS)) return;
   metrics.matchesFinished++;
+  trackEvent(productEvents, 'matchCompleted');
   // Потолок ожидания решения. Без него комната жила в RESULTS до последнего обрыва связи: один
   // отложил телефон — и второй заперт на карточке итогов, не имея ни одной кнопки, которая
   // что-то изменит.
   room.resultsDeadline = Date.now() + RESULTS_TIMEOUT_MS;
   const board = leaderboard(room);
+  const verificationFailed = board.some(entry => !entry.verified);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
   // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
   // по resume уже на экране результатов.
@@ -772,8 +909,17 @@ function finishMatch(room) {
     board,
     // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
     coopTime,
-    unranked: room.unranked || null
+    unranked: room.unranked || (verificationFailed ? 'verification' : null),
+    trusted: !room.unranked && !verificationFailed
   };
+  if (room.mode === GAME_MODE.RACE && room.results.trusted) {
+    verifiedLeaderboard.record({
+      matchId: room.matchId,
+      seed: room.spec.seed,
+      difficulty: room.spec.difficulty,
+      entries: board
+    });
+  }
   broadcast(room, room.results);
   // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до
   // старта: счётчик голосов на экране результатов не с чего было бы нарисовать до первого голоса.
@@ -798,6 +944,12 @@ function clientIp(req) {
 }
 
 wss.on('connection', (ws, req) => {
+  if (wss.clients.size > MAX_ACTIVE_SOCKETS) {
+    metrics.capacityRejected++;
+    sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервер заполнен. Попробуйте подключиться позже.', false);
+    ws.close(1013, 'server capacity');
+    return;
+  }
   const ip = clientIp(req);
   const openFromIp = (ipConnections.get(ip) || 0) + 1;
   if (openFromIp > MAX_CONNECTIONS_PER_IP) {
@@ -905,6 +1057,10 @@ wss.on('connection', (ws, req) => {
 
     if (message.type === C2S.CREATE_ROOM) {
       leave(ws);
+      if (loadStatus().overloaded) {
+        metrics.capacityRejected++;
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервер перегружен. Попробуйте чуть позже.');
+      }
       if (rooms.size >= MAX_ROOMS) {
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
       }
@@ -921,6 +1077,7 @@ wss.on('connection', (ws, req) => {
         mode,
         chapterId,
         matchId: null,
+        snapshotSequence: 0,
         startedAt: null,
         firstFinishAt: null,
         spec:
@@ -933,6 +1090,7 @@ wss.on('connection', (ws, req) => {
         updatedAt: Date.now()
       };
       rooms.set(code, room);
+      trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
       return addPlayer(room, ws, message.name);
     }
@@ -947,6 +1105,7 @@ wss.on('connection', (ws, req) => {
       if (room.players.size >= MAX_PLAYERS[room.mode]) {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
+      trackEvent(productEvents, 'roomJoined');
       return addPlayer(room, ws, message.name);
     }
 
@@ -1029,6 +1188,10 @@ wss.on('connection', (ws, req) => {
       if (room.host !== ws.id) {
         return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
       }
+      if (capacityStatus().matchesFull) {
+        metrics.capacityRejected++;
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Все игровые слоты заняты. Попробуйте чуть позже.');
+      }
       const active = [...room.players.values()].filter(item => !item.disconnectedAt);
       if (room.mode === GAME_MODE.COOP && active.length !== 2) {
         return sendError(ws, ERROR_CODES.NOT_READY, 'Для кооператива нужны ровно два игрока на связи.');
@@ -1043,6 +1206,9 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.PLAYER_STATE) {
       // Сообщения прошлого забега приходят после рестарта и не должны применяться.
       if (message.matchId && message.matchId !== room.matchId) return;
+      // После reconnect старый и новый сокеты могут кратко пересечься. Номер состояния не даёт
+      // запоздавшему пакету откатить игрока к уже пройденной позиции.
+      if (message.sequence <= (player.lastSequence ?? -1)) return;
       if (Date.now() < room.startedAt - 300) return;
       const now = Date.now();
       if (now - (player.receivedAt || 0) < 32) return;
@@ -1054,8 +1220,12 @@ wss.on('connection', (ws, req) => {
         }
         return;
       }
+      addVerificationFindings(room, player, verifyMovement(player, result.state, now));
       player.last = { ...result.state, id: player.id };
       player.lastAt = now;
+      player.lastSequence = message.sequence;
+      verifyPlayerProgress(room, player, result.checkpoint, now);
+      if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
       player.checkpoint = result.checkpoint;
       return;
     }
@@ -1092,7 +1262,7 @@ wss.on('connection', (ws, req) => {
       if (room.mode === GAME_MODE.COOP) {
         // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
         // чекпоинта, но остаётся «упавшим», пока его не поднимут.
-        markDowned(player, now);
+        if (markDowned(player, now)) trackEvent(productEvents, 'playerDowned');
         const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
         player.last = {
           ...point,
@@ -1130,6 +1300,7 @@ wss.on('connection', (ws, req) => {
       // Повторный финиш ничего не меняет и не является нарушением: он приходит при
       // переподключении и при повторной попытке после отказа.
       if (player.finished) return;
+      if (message.sequence <= (player.lastSequence ?? -1)) return;
 
       // Финальная позиция приезжает внутри самого финиша и применяется здесь же — без
       // ограничения «не чаще раза в 32 мс», которое действует на поток обычных состояний.
@@ -1142,10 +1313,14 @@ wss.on('connection', (ws, req) => {
       const now = Date.now();
       const result = validateState(player, message.state, room.spec, now);
       if (result.ok) {
+        addVerificationFindings(room, player, verifyMovement(player, result.state, now));
         player.last = { ...result.state, id: player.id };
         player.lastAt = now;
         player.receivedAt = now;
+        verifyPlayerProgress(room, player, result.checkpoint, now);
+        if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
         player.checkpoint = result.checkpoint;
+        player.lastSequence = message.sequence;
       }
 
       if (!canFinish(player, room.spec)) {
@@ -1175,7 +1350,8 @@ wss.on('connection', (ws, req) => {
         id: player.id,
         time: player.time,
         board: leaderboard(room),
-        unranked: room.unranked || null
+        unranked: room.unranked || player.verificationReasons[0] || null,
+        trusted: !room.unranked && player.verificationReasons.length === 0
       });
       return checkMatchEnd(room);
     }
@@ -1212,8 +1388,13 @@ wss.on('connection', (ws, req) => {
   });
 });
 
+let snapshotTick = 0;
 const snapshotTimer = setInterval(() => {
   const now = Date.now();
+  snapshotTick++;
+  // При перегрузке отправляем два тика из трёх: частота падает с 15 до 10 Гц, но таймеры комнат
+  // и переход COUNTDOWN → PLAYING продолжают обрабатываться на каждом тике.
+  const skipBroadcast = loadStatus().overloaded && snapshotTick % 3 === 0;
   for (const room of rooms.values()) {
     // Истёк срок голосования на результатах — решаем без опоздавших. Проверка живёт здесь, а не
     // в отдельном таймере на комнату: таймеры пришлось бы заводить, снимать и не забывать снимать
@@ -1231,6 +1412,11 @@ const snapshotTimer = setInterval(() => {
       setRoomState(room, ROOM_STATE.PLAYING);
     }
 
+    if (skipBroadcast) {
+      metrics.snapshotsSkippedForLoad++;
+      continue;
+    }
+
     const players = [...room.players.values()]
       .filter(player => player.last)
       .map(player => ({
@@ -1242,7 +1428,13 @@ const snapshotTimer = setInterval(() => {
 
     broadcast(
       room,
-      { type: S2C.SNAPSHOT, matchId: room.matchId, serverTime: now, players },
+      {
+        type: S2C.SNAPSHOT,
+        matchId: room.matchId,
+        sequence: room.snapshotSequence++,
+        serverTime: now,
+        players
+      },
       { dropIfCongested: true }
     );
   }
@@ -1265,6 +1457,13 @@ const heartbeatTimer = setInterval(() => {
   for (const room of [...rooms.values()]) {
     for (const player of [...room.players.values()]) {
       if (player.disconnectedAt && now - player.disconnectedAt > RECONNECT_GRACE_MS) {
+        if (
+          (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) &&
+          !room.abandonTracked
+        ) {
+          room.abandonTracked = true;
+          trackEvent(productEvents, 'matchAbandoned');
+        }
         dropPlayer(room, player.id);
       }
     }
@@ -1311,6 +1510,7 @@ function shutdown(signal, { exitProcess = true } = {}) {
   log('info', 'shutdown_started', { signal, rooms: rooms.size, sessions: sessions.size });
 
   clearInterval(snapshotTimer);
+  eventLoopDelay.disable();
   clearInterval(heartbeatTimer);
 
   // Предупреждение уходит ДО закрытия сокетов, иначе клиент увидит только обрыв. Состояние комнат
@@ -1360,9 +1560,15 @@ module.exports = {
   rooms,
   sessions,
   metrics,
+  verifiedLeaderboard,
   leave,
   resetLobby,
   originAllowed,
+  positiveInt,
+  capacityStatus,
+  loadStatus,
+  createEventCounters,
+  trackEvent,
   setResultsTimeout,
   shutdown
 };

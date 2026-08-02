@@ -44,6 +44,7 @@ test('валидатор принимает корректные сообщен�
     validateMessage({
       type: C2S.PLAYER_STATE,
       matchId: 'a1b2c3d4e5f60718',
+      sequence: 0,
       state: { x: 1, y: 2, z: -3, ry: 0.5, vx: 1, vz: -1, state: 'ground' }
     }).ok
   );
@@ -57,7 +58,11 @@ test('сообщения забега без matchId отклоняются', ()
     { type: C2S.PLAYER_STATE, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
     { type: C2S.COOP_EVENT, action: 'plate' },
     { type: C2S.RESPAWN, checkpoint: 2 },
-    { type: C2S.FINISH, clientTime: 1000, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
+    {
+      type: C2S.FINISH,
+      clientTime: 1000,
+      state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' }
+    },
     { type: C2S.REMATCH_VOTE },
     { type: C2S.RETURN_TO_LOBBY }
   ];
@@ -72,9 +77,17 @@ test('сообщения забега без matchId отклоняются', ()
   assert.ok(validateMessage({ type: C2S.RETURN_TO_LOBBY, matchId }).ok);
   assert.ok(validateMessage({ type: C2S.RESPAWN, matchId, checkpoint: 2 }).ok);
   const shape = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' };
-  assert.ok(validateMessage({ type: C2S.FINISH, matchId, state: shape, clientTime: 1000 }).ok);
+  assert.ok(validateMessage({ type: C2S.FINISH, matchId, sequence: 1, state: shape, clientTime: 1000 }).ok);
   // И без позиции финиш теперь неполон: сервер обязан проверять его по свежей точке.
   assert.equal(validateMessage({ type: C2S.FINISH, matchId, clientTime: 1000 }).ok, false);
+});
+
+test('состояние и финиш требуют порядковый номер', () => {
+  const matchId = 'a1b2c3d4e5f60718';
+  const state = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' };
+  assert.equal(validateMessage({ type: C2S.PLAYER_STATE, matchId, state }).ok, false);
+  assert.equal(validateMessage({ type: C2S.FINISH, matchId, state }).ok, false);
+  assert.ok(validateMessage({ type: C2S.PLAYER_STATE, matchId, sequence: 0, state }).ok);
 });
 
 test('валидатор отклоняет некорректные сообщения', () => {
@@ -86,12 +99,36 @@ test('валидатор отклоняет некорректные сообщ�
     [{ type: C2S.PLAYER_READY }, 'нет обязательного ready'],
     [{ type: C2S.PLAYER_READY, ready: 'да' }, 'ready не булево'],
     [{ type: C2S.JOIN_ROOM, code: 'X'.repeat(50) }, 'слишком длинный код'],
+    [{ type: C2S.JOIN_ROOM, code: '' }, 'пустой код'],
+    [{ type: C2S.JOIN_ROOM, code: '   ' }, 'код только из пробелов'],
     [{ type: C2S.JOIN_ROOM, code: 12345 }, 'код не строка'],
     [{ type: C2S.PING, at: -5 }, 'отрицательная отметка времени']
   ];
   for (const [message, why] of bad) {
     assert.equal(validateMessage(message).ok, false, `должно отклоняться: ${why}`);
   }
+});
+
+test('схемы закрыты для лишних полей на любом уровне', () => {
+  const matchId = 'a1b2c3d4e5f60718';
+  const state = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0 };
+
+  const extraTopLevel = validateMessage({
+    type: C2S.PLAYER_READY,
+    ready: true,
+    admin: true
+  });
+  assert.equal(extraTopLevel.ok, false);
+  assert.match(extraTopLevel.detail, /admin: неизвестное поле/);
+
+  const extraNested = validateMessage({
+    type: C2S.PLAYER_STATE,
+    matchId,
+    sequence: 0,
+    state: { ...state, teleport: true }
+  });
+  assert.equal(extraNested.ok, false);
+  assert.match(extraNested.detail, /state\.teleport: неизвестное поле/);
 });
 
 test('валидатор отсекает NaN и Infinity в координатах', () => {

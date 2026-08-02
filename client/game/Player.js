@@ -315,9 +315,18 @@ export class Player {
       z: +this.physics.z.toFixed(3),
       ry: +this.character.group.rotation.y.toFixed(3),
       vx: +this.velocity.x.toFixed(2),
+      vy: +this.velocity.y.toFixed(2),
       vz: +this.velocity.z.toFixed(2),
       checkpoint: this.checkpoint,
-      state: this.diveTimer > 0 ? 'dive' : this.grounded ? 'ground' : 'air'
+      state: this.downed
+        ? 'downed'
+        : this.slamming
+          ? 'slam'
+          : this.diveTimer > 0
+            ? 'dive'
+            : this.grounded
+              ? 'ground'
+              : 'air'
     };
   }
 
@@ -339,8 +348,8 @@ export class Player {
     this.character.animate(dt, {
       speed,
       grounded: state.state === 'ground',
-      vertical: 0,
-      diving: state.state === 'dive'
+      vertical: state.vy || 0,
+      diving: state.state === 'dive' || state.state === 'slam'
     });
     this.checkpoint = state.checkpoint || 0;
     this.target = state;

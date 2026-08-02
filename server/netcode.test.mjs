@@ -6,7 +6,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SnapshotBuffer, lerpAngle, RENDER_DELAY_MS } from '../client/net/SnapshotBuffer.js';
+import {
+  SnapshotBuffer,
+  lerpAngle,
+  MIN_RENDER_DELAY_MS,
+  MAX_RENDER_DELAY_MS
+} from '../client/net/SnapshotBuffer.js';
 import { ClockSync } from '../client/net/ClockSync.js';
 import { createCourseSpec, spawnFor } from '../shared/courseSpec.js';
 
@@ -52,6 +57,20 @@ test('буфер экстраполирует по скорости, когда 
   assert.ok(Math.abs(far.x - 4 * 0.25) < 1e-9);
 });
 
+test('буфер интерполирует vertical velocity и прогнозирует прыжок по баллистике', () => {
+  const buffer = new SnapshotBuffer();
+  buffer.push(1000, [{ id: 'a', x: 0, y: 2, z: 0, ry: 0, vx: 0, vy: 8, vz: 0, state: 'air' }]);
+  buffer.push(1100, [{ id: 'a', x: 0, y: 2.7, z: 0, ry: 0, vx: 0, vy: 6, vz: 0, state: 'air' }]);
+  assert.equal(buffer.sample('a', 1050).vy, 7);
+
+  const airborne = buffer.sample('a', 1200);
+  assert.ok(airborne.y > 2.7, 'прыгающий игрок продолжает подниматься между пакетами');
+
+  const grounded = new SnapshotBuffer();
+  grounded.push(1000, [{ id: 'b', x: 0, y: 1, z: 0, ry: 0, vx: 0, vy: 0, vz: 0, state: 'ground' }]);
+  assert.equal(grounded.sample('b', 1200).y, 1, 'стоящий игрок не проваливается под пол');
+});
+
 test('буфер удерживает историю ограниченного размера и знает активных игроков', () => {
   const buffer = new SnapshotBuffer();
   for (let i = 0; i < 100; i++) {
@@ -84,10 +103,27 @@ test('интерполяция угла идёт кратчайшим путём
   assert.ok(Math.abs(degrees - 0) < 1e-6 || Math.abs(degrees - 360) < 1e-6, `получено ${degrees}°`);
 });
 
-test('задержка отрисовки покрывает интервал рассылки снапшотов', () => {
-  // Сервер рассылает каждые 66 мс. Задержка должна быть больше, иначе для момента отрисовки
-  // регулярно не находилось бы двух соседних пакетов и интерполяция срывалась бы в экстраполяцию.
-  assert.ok(RENDER_DELAY_MS > 66);
+test('задержка отрисовки адаптируется к jitter и остаётся в безопасных пределах', () => {
+  const stable = new SnapshotBuffer();
+  for (let i = 0; i < 10; i++) stable.push(i * 66, [], i * 66);
+  assert.equal(stable.renderDelay, MIN_RENDER_DELAY_MS);
+
+  const mobile = new SnapshotBuffer();
+  let arrival = 0;
+  for (let i = 0; i < 10; i++) {
+    arrival += i % 2 ? 106 : 26;
+    mobile.push(i * 66, [], arrival);
+  }
+  assert.ok(mobile.renderDelay > stable.renderDelay);
+  assert.ok(mobile.renderDelay <= MAX_RENDER_DELAY_MS);
+
+  const extreme = new SnapshotBuffer();
+  let extremeArrival = 0;
+  for (let i = 0; i < 20; i++) {
+    extremeArrival += 1000;
+    extreme.push(i * 66, [], extremeArrival);
+  }
+  assert.equal(extreme.renderDelay, MAX_RENDER_DELAY_MS);
 });
 
 test('синхронизация часов выбирает замер с наименьшим RTT', () => {

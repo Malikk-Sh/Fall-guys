@@ -25,7 +25,7 @@ test('procedural course is deterministic for a shared seed', () => {
     b = new Course(new THREE.Scene(), courseSpec(123456, 'normal'), { quality: 'low' });
   assert.deepEqual(a.stageNames, b.stageNames);
   assert.equal(a.spec.checkpoints.length, 6);
-  assert.equal(a.stageNames.at(-1), 'VICTORY GATE');
+  assert.equal(a.stageNames.at(-1), 'ВОРОТА ПОБЕДЫ');
   a.dispose();
   b.dispose();
 });
@@ -51,6 +51,11 @@ test('player settles on a platform, runs camera-relative, and jumps with bufferi
   };
   player.step(FIXED_DT, jumping, 0, 1.4);
   assert.ok(player.velocity.y > 7);
+  const airborne = player.snapshot();
+  assert.ok(airborne.vy > 7);
+  assert.equal(airborne.state, 'air');
+  assert.equal(player.startSlam(), true);
+  assert.equal(player.snapshot().state, 'slam');
 
   player.dispose();
   course.dispose();

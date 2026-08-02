@@ -13,6 +13,8 @@
 // не «правда ли это», а «мог ли игрок это сделать»: разумное расстояние, ограниченная сила, не
 // чаще разумного. Проверок роли больше нет, потому что нет и ролей.
 
+const { chapterLayout } = require('../shared/coopChapters.js');
+
 // Максимальный модуль импульса подброса. Катапульты в главах используют силу 18–20; потолок с
 // запасом отсекает попытку зашвырнуть напарника за пределы карты, не мешая честной игре.
 const MAX_LAUNCH_SPEED = 32;
@@ -23,6 +25,12 @@ const REVIVE_RADIUS = 4.5;
 // Не чаще одного подброса раз в столько миллисекунд — от случайной серии ударов.
 const LAUNCH_COOLDOWN_MS = 900;
 
+// Геометрия обеих площадок совпадает с CoopCourse. Серверу не нужна вся Three.js-сцена:
+// координаты катапульты полностью выводятся из data-driven spec главы.
+const CATAPULT_SLAM_RADIUS = 3.2;
+const CATAPULT_SEAT_RADIUS = Math.sqrt(4.4);
+const CATAPULT_VECTOR_TOLERANCE = 0.75;
+
 // Сколько игрок лежит «пузырём», прежде чем подняться сам. Нужен именно потолок ожидания:
 // без него пара, где один отошёл от устройства, застревала бы в главе навсегда.
 const AUTO_REVIVE_MS = 12_000;
@@ -30,6 +38,29 @@ const AUTO_REVIVE_MS = 12_000;
 function distance(a, b) {
   if (!a || !b) return Infinity;
   return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+function findCatapult(spec, objectId) {
+  if (!objectId || !spec?.chapterId) return null;
+  for (const piece of chapterLayout(spec.chapterId).pieces) {
+    const prop = piece.props?.find(item => item.type === 'catapult' && item.id === objectId);
+    if (prop) {
+      return {
+        id: prop.id,
+        x: prop.x,
+        slamZ: piece.z + 3,
+        launchZ: piece.z - 3,
+        power: prop.power,
+        forward: prop.forward
+      };
+    }
+  }
+  return null;
+}
+
+function nearPad(position, catapult, z, radius, maxY = 3.5) {
+  if (!position || position.y > maxY) return false;
+  return Math.hypot(position.x - catapult.x, position.z - z) < radius;
 }
 
 // Проверка кооперативного события. Возвращает { ok, reason } либо { ok: true, relay } —
@@ -43,6 +74,14 @@ function validateCoopEvent(room, player, message, now = Date.now()) {
       // Импульс считает инициатор, поэтому здесь ограничивается его модуль: это единственное
       // место, где один игрок может изменить состояние другого.
       if (!partner) return { ok: false, reason: 'напарника нет в комнате' };
+      const catapult = findCatapult(room.spec, message.objectId);
+      if (!catapult) return { ok: false, reason: 'неизвестная катапульта' };
+      if (!nearPad(player.last, catapult, catapult.slamZ, CATAPULT_SLAM_RADIUS, 5)) {
+        return { ok: false, reason: 'инициатор не у катапульты' };
+      }
+      if (!nearPad(partner.last, catapult, catapult.launchZ, CATAPULT_SEAT_RADIUS)) {
+        return { ok: false, reason: 'напарник не на катапульте' };
+      }
       if (now - (player.lastLaunchAt || 0) < LAUNCH_COOLDOWN_MS) {
         return { ok: false, reason: 'слишком часто' };
       }
@@ -50,9 +89,9 @@ function validateCoopEvent(room, player, message, now = Date.now()) {
       if (!vector) return { ok: false, reason: 'нет вектора импульса' };
       const speed = Math.hypot(vector.x, vector.y, vector.z);
       if (speed > MAX_LAUNCH_SPEED) return { ok: false, reason: 'слишком сильный импульс' };
-      // Бить можно только по катапульте рядом с собой, а подбрасывает того, кто на ней стоит.
-      if (distance(player.last, partner.last) > 40) {
-        return { ok: false, reason: 'напарник слишком далеко' };
+      const expected = { x: 0, y: catapult.power, z: -catapult.power * catapult.forward };
+      if (distance(vector, expected) > CATAPULT_VECTOR_TOLERANCE) {
+        return { ok: false, reason: 'неверный импульс катапульты' };
       }
       player.lastLaunchAt = now;
       return {
@@ -62,7 +101,8 @@ function validateCoopEvent(room, player, message, now = Date.now()) {
           from: player.id,
           target: partner.id,
           objectId: message.objectId || null,
-          vector: { x: vector.x, y: vector.y, z: vector.z }
+          // Рассылаем значение из авторитетной спецификации, а не почти совпавшее клиентское.
+          vector: expected
         }
       };
     }
@@ -127,6 +167,7 @@ module.exports = {
   REVIVE_RADIUS,
   AUTO_REVIVE_MS,
   LAUNCH_COOLDOWN_MS,
+  findCatapult,
   validateCoopEvent,
   markDowned,
   autoRevive,

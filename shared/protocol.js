@@ -10,7 +10,7 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 5;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
@@ -148,10 +148,10 @@ export const MAX_MESSAGE_BYTES = 4096;
 // Схемы полей. Валидатор ходит по ним механически: тип, границы, длина.
 //
 // `num` — конечное число в диапазоне [min, max]; NaN и Infinity отклоняются.
-// `str` — строка не длиннее max; `enum` — значение из списка; `bool` — булево.
+// `str` — непустая строка в диапазоне длины; `enum` — значение из списка; `bool` — булево.
 // Поля, помеченные optional, могут отсутствовать, но если есть — проверяются.
 const num = (min, max) => ({ kind: 'num', min, max });
-const str = max => ({ kind: 'str', max });
+const str = (max, min = 1) => ({ kind: 'str', min, max });
 const bool = () => ({ kind: 'bool' });
 const oneOf = values => ({ kind: 'enum', values });
 const optional = schema => ({ ...schema, optional: true });
@@ -170,9 +170,10 @@ const PLAYER_STATE_SHAPE = {
     z: COORD,
     ry: num(-100, 100),
     vx: VELOCITY,
+    vy: optional(VELOCITY),
     vz: VELOCITY,
     checkpoint: optional(num(0, 64)),
-    state: optional(oneOf(['ground', 'air', 'dive']))
+    state: optional(oneOf(['ground', 'air', 'dive', 'slam', 'downed']))
   }
 };
 
@@ -207,6 +208,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // пакет прошлого матча без него проходил проверку и применялся к новому.
   [C2S.PLAYER_STATE]: {
     matchId: str(32),
+    sequence: num(0, Number.MAX_SAFE_INTEGER),
     state: PLAYER_STATE_SHAPE
   },
 
@@ -238,6 +240,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // в том же обработчике, без ограничения по частоте, — позиция и завершение стали одной операцией.
   [C2S.FINISH]: {
     matchId: str(32),
+    sequence: num(0, Number.MAX_SAFE_INTEGER),
     state: PLAYER_STATE_SHAPE,
     clientTime: optional(num(0, Number.MAX_SAFE_INTEGER))
   },

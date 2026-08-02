@@ -1,5 +1,5 @@
 import { ClockSync } from './ClockSync.js';
-import { SnapshotBuffer, RENDER_DELAY_MS } from './SnapshotBuffer.js';
+import { SnapshotBuffer } from './SnapshotBuffer.js';
 import { C2S, S2C, PROTOCOL_VERSION } from '/shared/protocol.js';
 
 // Интервал отправки своего состояния. Совпадает с частотой рассылки снапшотов на сервере (66 мс).
@@ -71,6 +71,14 @@ const ERROR_TEXT = {
 };
 
 export class NetworkManager {
+  static hasSavedSession() {
+    try {
+      return !!sessionStorage.getItem(SESSION_KEY);
+    } catch {
+      return false;
+    }
+  }
+
   constructor(ui) {
     this.ui = ui;
     this.handlers = new Map();
@@ -82,6 +90,9 @@ export class NetworkManager {
     this.lastPing = 0;
     this.pingCount = 0;
     this.lastState = 0;
+    // Монотонный номер состояния позволяет серверу отбрасывать запоздавшие и повторно
+    // доставленные пакеты. При resume сервер сообщает, с какого номера продолжить.
+    this.stateSequence = 0;
     this.intentionalClose = false;
     this.linkState = LINK_STATE.OFFLINE;
     this.away = false;
@@ -116,6 +127,8 @@ export class NetworkManager {
     this.rttSamples = [];
     this.jitter = 0;
     this.snapshotsReceived = 0;
+    this.lastSnapshotSequence = -1;
+    this.staleSnapshots = 0;
     this.lastSnapshotAt = 0;
     // Пропуски снапшотов хранятся отметками времени, а не счётчиком.
     //
@@ -158,7 +171,7 @@ export class NetworkManager {
   // Момент, который сейчас нужно отрисовать для удалённых игроков: намеренно в прошлом,
   // чтобы для него всегда нашлась пара соседних снапшотов. Подробности — в SnapshotBuffer.js.
   renderTime() {
-    return this.serverNow() - RENDER_DELAY_MS;
+    return this.serverNow() - this.snapshots.renderDelay;
   }
 
   get latency() {
@@ -310,23 +323,30 @@ export class NetworkManager {
 
       case S2C.MATCH_START:
         this.matchId = message.matchId || null;
+        this.stateSequence = message.resumed?.nextSequence ?? 0;
         // Новый забег — новое право на финиш.
         this.finishSentFor = null;
         // Новый забег — старая история позиций больше не имеет смысла.
         this.snapshots.clear();
+        this.lastSnapshotSequence = -1;
         this.gapTimes.length = 0;
         break;
 
       case S2C.SNAPSHOT: {
         // Снапшот прошлого забега применять нельзя: он дёрнул бы игроков в позиции из прошлой гонки.
         if (this.matchId && message.matchId && message.matchId !== this.matchId) return;
+        if (Number.isSafeInteger(message.sequence) && message.sequence <= this.lastSnapshotSequence) {
+          this.staleSnapshots++;
+          return;
+        }
+        if (Number.isSafeInteger(message.sequence)) this.lastSnapshotSequence = message.sequence;
         const now = performance.now();
         if (this.lastSnapshotAt && now - this.lastSnapshotAt > SNAPSHOT_GAP_MS) {
           this.gapTimes.push(now);
         }
         this.lastSnapshotAt = now;
         this.snapshotsReceived++;
-        this.snapshots.push(message.serverTime, message.players || []);
+        this.snapshots.push(message.serverTime, message.players || [], now);
         break;
       }
 
@@ -460,7 +480,11 @@ export class NetworkManager {
     const now = performance.now();
     if (!force && now - this.lastState < STATE_INTERVAL_MS) return false;
     this.lastState = now;
-    return this.send(C2S.PLAYER_STATE, { state, matchId: this.matchId });
+    return this.send(C2S.PLAYER_STATE, {
+      state,
+      matchId: this.matchId,
+      sequence: this.stateSequence++
+    });
   }
 
   // Финиш вместе с финальной позицией — одним пакетом.
@@ -472,7 +496,12 @@ export class NetworkManager {
   finish(state, clientTime) {
     if (!this.matchId || this.finishSentFor === this.matchId) return false;
     this.finishSentFor = this.matchId;
-    return this.send(C2S.FINISH, { matchId: this.matchId, state, clientTime });
+    return this.send(C2S.FINISH, {
+      matchId: this.matchId,
+      sequence: this.stateSequence++,
+      state,
+      clientTime
+    });
   }
 
   // Сервер финиш не принял: позиция ещё не за чертой. Разрешаем повторить — иначе игрок,

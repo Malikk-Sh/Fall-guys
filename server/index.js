@@ -158,12 +158,18 @@ const health = () => ({
   metrics
 });
 
+// Идёт ли выключение. Пока флаг снят, всё работает как обычно; после — сервер перестаёт брать
+// новую работу, но доигрывает начатое.
+let shuttingDown = false;
+
 app.get('/health', (_req, res) => res.json(health()));
 // Разделение live и ready (ТЗ 15.3): live отвечает, пока процесс жив, ready — пока сокет-сервер
 // действительно принимает подключения. Балансировщику нужны разные ответы на эти вопросы.
 app.get('/health/live', (_req, res) => res.json({ ok: true }));
 app.get('/health/ready', (_req, res) => {
-  const ready = !!wss && server.listening;
+  // Во время выключения — 503, хотя сокет ещё слушает. Это и есть смысл разделения live и ready:
+  // процесс жив и доигрывает начатое, но новых игроков сюда направлять уже не нужно.
+  const ready = !shuttingDown && !!wss && server.listening;
   res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
 });
 
@@ -244,7 +250,10 @@ const wss = new WebSocketServer({
   path: '/ws',
   maxPayload: MAX_MESSAGE_BYTES,
   perMessageDeflate: false,
-  verifyClient: ({ origin, req }) => originAllowed(origin, req.headers.host)
+  // Во время выключения новые подключения не принимаем: пускать игрока в комнату, которая через
+  // секунду перестанет существовать, — худший вариант из возможных. Отказ он увидит сразу и
+  // попробует ещё раз, когда служба поднимется.
+  verifyClient: ({ origin, req }) => !shuttingDown && originAllowed(origin, req.headers.host)
 });
 
 // Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.
@@ -1285,8 +1294,64 @@ const port = process.env.PORT || 3000;
 // не виден из интернета вовсе и попасть в игру можно только через прокси, где стоит TLS,
 // заголовки безопасности и ограничения.
 const host = process.env.HOST || '0.0.0.0';
+// Корректное завершение по сигналу от systemd или Docker.
+//
+// Без него `systemctl restart` рвал соединения посреди забега: игроки видели обычный обрыв связи
+// и уходили в переподключение — к серверу, которого ещё нет. Клиент честно ждал и повторял,
+// потому что отличить «сеть моргнула» от «сервер выключается» ему было нечем. Обновление игры
+// выглядело как поломка сети, и происходило это при каждом развёртывании.
+//
+// Порядок важен: сначала снимаем готовность и перестаём брать новых, потом предупреждаем тех,
+// кто уже играет, и только затем закрываем.
+const GOODBYE_MS = 300;
+
+function shutdown(signal, { exitProcess = true } = {}) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log('info', 'shutdown_started', { signal, rooms: rooms.size, sessions: sessions.size });
+
+  clearInterval(snapshotTimer);
+  clearInterval(heartbeatTimer);
+
+  // Предупреждение уходит ДО закрытия сокетов, иначе клиент увидит только обрыв. Состояние комнат
+  // живёт в памяти процесса и переживёт перезапуск: честно говорим, что комната потеряна, вместо
+  // того чтобы обещать восстановление, которого не будет.
+  for (const room of rooms.values()) {
+    broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+  }
+
+  // Небольшая пауза, чтобы предупреждение успело уйти в сеть. Закрывать сокет в том же тике —
+  // значит отправить сообщение в никуда: оно останется в буфере отправки.
+  setTimeout(() => {
+    for (const client of wss.clients) {
+      // 1001 — «going away», штатный код именно для выключения сервера.
+      try {
+        client.close(1001, 'Server restarting');
+      } catch {
+        // Сокет мог отвалиться сам, пока мы шли по списку. Это не мешает завершению.
+      }
+    }
+    wss.close();
+    server.close(() => {
+      log('info', 'shutdown_complete', {});
+      // exitProcess снимается в тестах: выход из процесса убил бы сам прогон. Проверять поведение
+      // выключения нужно, а единственная его часть, которую нельзя выполнить внутри теста, —
+      // как раз завершение процесса.
+      if (exitProcess) process.exit(0);
+    });
+    // Страховка: одно зависшее соединение не должно задерживать перезапуск навсегда. systemd
+    // всё равно добьёт процесс по своему таймауту, но лучше уйти самим и с нулевым кодом.
+    setTimeout(() => {
+      log('warn', 'shutdown_forced', {});
+      if (exitProcess) process.exit(0);
+    }, 3000).unref();
+  }, GOODBYE_MS).unref();
+}
+
 if (require.main === module) {
   server.listen(port, host, () => log('info', 'server_started', { port, host }));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 module.exports = {
@@ -1298,5 +1363,6 @@ module.exports = {
   leave,
   resetLobby,
   originAllowed,
-  setResultsTimeout
+  setResultsTimeout,
+  shutdown
 };

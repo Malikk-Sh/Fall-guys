@@ -128,6 +128,90 @@ test('вложенные объекты проверяются рекурсив�
   assert.equal(unknownAction.ok, false);
 });
 
+// Незнакомые поля раньше молча игнорировались. Выглядит безобиднее строгости, но именно так живут
+// опечатки в именах: отправитель уверен, что поле учтено, а оно не доезжает, и найти это можно
+// только чтением обеих сторон.
+test('поля, которых нет в схеме, отклоняются', () => {
+  const matchId = 'a1b2c3d4e5f60718';
+
+  const extraTop = validateMessage({ type: C2S.REMATCH_VOTE, matchId, force: true });
+  assert.equal(extraTop.ok, false, 'лишнее поле верхнего уровня');
+  assert.match(extraTop.detail, /force/);
+
+  const extraNested = validateMessage({
+    type: C2S.COOP_EVENT,
+    matchId,
+    action: 'launch',
+    vector: { x: 1, y: 8, z: 0, w: 99 }
+  });
+  assert.equal(extraNested.ok, false, 'лишнее поле внутри вложенного объекта');
+  assert.match(extraNested.detail, /vector\.w/);
+
+  // При разборе JSON `__proto__` становится обычным собственным полем и загрязнения прототипа не
+  // вызывает, но в схеме его нет — значит, отказ.
+  const polluted = JSON.parse(`{"type":"${C2S.PLAYER_READY}","ready":true,"__proto__":{"admin":1}}`);
+  assert.equal(validateMessage(polluted).ok, false, '__proto__ — тоже неизвестное поле');
+});
+
+test('пустые строки не проходят там, где значение обязано быть', () => {
+  assert.equal(validateMessage({ type: C2S.JOIN_ROOM, code: '' }).ok, false, 'пустой код комнаты');
+  assert.equal(validateMessage({ type: C2S.RESUME, token: '' }).ok, false, 'пустой токен сессии');
+  assert.equal(validateMessage({ type: C2S.REMATCH_VOTE, matchId: '' }).ok, false, 'пустой matchId');
+
+  // Имя — исключение: стереть его осмысленно, сервер подставит своё.
+  assert.equal(validateMessage({ type: C2S.CREATE_ROOM, name: '' }).ok, true, 'пустое имя допустимо');
+});
+
+// Валидатор стоит на границе доверия: всё, что приходит из сети, проходит через него. Исключение
+// здесь — это не отказ игроку, а падение обработчика сообщения.
+//
+// Генератор с фиксированным зерном: случайный тест, который падает раз в сто прогонов и не
+// воспроизводится, хуже отсутствующего.
+test('валидатор не падает ни на каком мусоре', () => {
+  let seed = 20260802;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const pick = list => list[Math.floor(rnd() * list.length)];
+
+  const atom = () =>
+    pick([
+      0,
+      -1,
+      NaN,
+      Infinity,
+      -Infinity,
+      Number.MAX_SAFE_INTEGER,
+      1e308,
+      '',
+      'ok',
+      ' \uD800',
+      '👾'.repeat(40),
+      true,
+      false,
+      null,
+      undefined
+    ]);
+
+  const value = depth =>
+    depth <= 0 || rnd() < 0.4
+      ? atom()
+      : rnd() < 0.5
+        ? Array.from({ length: Math.floor(rnd() * 4) }, () => value(depth - 1))
+        : Object.fromEntries(
+            Array.from({ length: Math.floor(rnd() * 5) }, () => [
+              pick(['type', 'matchId', 'state', 'vector', 'x', 'code', '__proto__', 'токен']),
+              value(depth - 1)
+            ])
+          );
+
+  const types = [...Object.keys(MESSAGE_SCHEMAS), 'нет-такого', ''];
+  for (let i = 0; i < 3000; i++) {
+    const message = rnd() < 0.15 ? value(4) : { type: pick(types), ...value(3) };
+    const result = validateMessage(message);
+    assert.equal(typeof result.ok, 'boolean', `итог должен быть решением, а не ${result?.ok}`);
+    if (!result.ok) assert.equal(typeof result.reason, 'string', 'у отказа обязана быть причина');
+  }
+});
+
 test('ограничитель частоты работает скользящим окном', () => {
   const limiter = new RateLimiter({ test: [3, 1000] });
   const now = 10_000;

@@ -151,7 +151,10 @@ export const MAX_MESSAGE_BYTES = 4096;
 // `str` — строка не длиннее max; `enum` — значение из списка; `bool` — булево.
 // Поля, помеченные optional, могут отсутствовать, но если есть — проверяются.
 const num = (min, max) => ({ kind: 'num', min, max });
-const str = max => ({ kind: 'str', max });
+// `min` по умолчанию 1: пустая строка проходила проверку и добиралась до логики, где означала
+// уже что-то другое — пустой код комнаты искал комнату с именем '', пустой токен шёл в поиск
+// сессии. Там, где пустое значение осмысленно (имя игрока стирают намеренно), min задаётся нулём.
+const str = (max, min = 1) => ({ kind: 'str', max, min });
 const bool = () => ({ kind: 'bool' });
 const oneOf = values => ({ kind: 'enum', values });
 const optional = schema => ({ ...schema, optional: true });
@@ -182,14 +185,14 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.RESUME]: { token: str(64) },
 
   [C2S.CREATE_ROOM]: {
-    name: optional(str(32)),
+    name: optional(str(32, 0)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
     protocolVersion: optional(num(0, 1000))
   },
 
   [C2S.JOIN_ROOM]: {
-    name: optional(str(32)),
+    name: optional(str(32, 0)),
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },

@@ -151,6 +151,8 @@ export const MAX_MESSAGE_BYTES = 4096;
 // `str` — непустая строка в диапазоне длины; `enum` — значение из списка; `bool` — булево.
 // Поля, помеченные optional, могут отсутствовать, но если есть — проверяются.
 const num = (min, max) => ({ kind: 'num', min, max });
+// `min` по умолчанию 1: пустая строка проходила проверку и добиралась до логики, где означала уже
+// что-то другое — пустой код комнаты искал комнату с именем '', пустой токен шёл в поиск сессии.
 const str = (max, min = 1) => ({ kind: 'str', min, max });
 const bool = () => ({ kind: 'bool' });
 const oneOf = values => ({ kind: 'enum', values });
@@ -183,14 +185,24 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.RESUME]: { token: str(64) },
 
   [C2S.CREATE_ROOM]: {
-    name: optional(str(32)),
+    // Ноль, а не общая единица: пустое имя сервер осмысленно заменяет на «Wobbler» (safeName), и
+    // отклонять из-за него всё сообщение значило бы спорить с собственной обработкой.
+    name: optional(str(32, 0)),
+    // Постоянный анонимный идентификатор игрока: живёт в localStorage, ничего о человеке не
+    // сообщает и нужен ровно для одного — чтобы в таблице рекордов у него была одна строка на
+    // трассу, а не по строке на каждый забег. Необязателен: старый клиент его не присылает.
+    //
+    // Это не средство от читерства. Придумать себе новый идентификатор ничего не стоит, но это
+    // ровно то же, что прийти новым игроком, — то есть защищаться тут не от чего.
+    playerId: optional(str(64)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
     protocolVersion: optional(num(0, 1000))
   },
 
   [C2S.JOIN_ROOM]: {
-    name: optional(str(32)),
+    name: optional(str(32, 0)), // ноль по той же причине, что и в CREATE_ROOM
+    playerId: optional(str(64)),
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },

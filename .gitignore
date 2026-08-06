@@ -5,3 +5,8 @@ npm-debug.log*
 .env
 .DS_Store
 *.log
+# База рекордов при локальном запуске с LEADERBOARD_DB внутри репозитория.
+# -wal и -shm — служебные файлы журнала SQLite, они появляются рядом с базой.
+*.db
+*.db-wal
+*.db-shm

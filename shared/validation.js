@@ -9,6 +9,11 @@
 
 import { MESSAGE_SCHEMAS, RATE_LIMITS, VIOLATION_WEIGHTS } from './protocol.js';
 
+// Отбор лишних полей идёт через Object.hasOwn, а не через оператор `in`. Разница здесь не
+// стилистическая: `in` ищет и по цепочке прототипов, поэтому `__proto__`, `toString`, `constructor`
+// и остальные члены Object.prototype считались бы описанными в схеме — то есть проверка пропускала
+// бы ровно те имена, ради которых её и заводили. Зафиксировано тестом на `__proto__`.
+
 function checkField(value, schema, path) {
   if (value === undefined || value === null) {
     if (schema.optional) return null;

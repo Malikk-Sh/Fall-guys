@@ -97,6 +97,16 @@ export function formatTime(ms) {
     centis = Math.floor(ms / 10) % 100;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centis).padStart(2, '0')}`;
 }
+// Отставание от соседа сверху. Формат отличается от formatTime намеренно: «+1.24» читается как
+// разрыв, а «00:01.24» — как ещё одно время, и в строке рядом с собственным результатом их легко
+// перепутать.
+export function formatGap(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  const seconds = ms / 1000;
+  return seconds >= 60
+    ? `+${Math.floor(seconds / 60)}:${String(Math.floor(seconds) % 60).padStart(2, '0')}`
+    : `+${seconds.toFixed(2)}`;
+}
 export function ordinal(value) {
   return String(Math.max(1, Math.floor(value)));
 }

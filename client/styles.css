@@ -477,18 +477,58 @@ canvas {
   overflow: auto;
 }
 .verified-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   margin: 4px 0 10px;
   padding: 7px 10px;
   border-radius: 9px;
   color: rgba(255, 255, 255, 0.58);
   background: rgba(72, 220, 218, 0.08);
+  text-align: left;
 }
-.verified-top strong {
-  color: var(--cyan);
+.verified-top-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.verified-top-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  /* Десять строк на маленьком экране вытесняли бы кнопку готовности за пределы видимого: список
+     прокручивается сам, а лобби остаётся целиком на месте. */
+  max-height: 168px;
+  overflow-y: auto;
+}
+.verified-row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  border-radius: 6px;
   font-size: 0.72rem;
+}
+.verified-row-self {
+  color: #fff;
+  background: rgba(72, 220, 218, 0.16);
+}
+.verified-place {
+  color: rgba(255, 255, 255, 0.4);
+  text-align: right;
+}
+.verified-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.verified-time {
+  color: var(--cyan);
+  font-variant-numeric: tabular-nums;
+}
+.verified-top-standing {
+  margin: 6px 0 0;
+  color: var(--cyan);
+  font-size: 0.68rem;
 }
 .player-row {
   display: grid;

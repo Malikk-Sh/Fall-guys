@@ -21,7 +21,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Use Node.js 20
+      # 22, а не 20: в проекте используется встроенный node:sqlite, он появился в 22.5.
+      # Подпись шага раньше говорила «Node.js 20», хотя ставилась 22, — расходилась с делом.
+      - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22

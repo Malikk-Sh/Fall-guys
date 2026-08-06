@@ -464,12 +464,18 @@ export class NetworkManager {
     return false;
   }
 
-  createRoom({ name, difficulty, mode }) {
-    this.send(C2S.CREATE_ROOM, { name, difficulty, mode, protocolVersion: PROTOCOL_VERSION });
+  createRoom({ name, playerId, difficulty, mode }) {
+    this.send(C2S.CREATE_ROOM, {
+      name,
+      playerId,
+      difficulty,
+      mode,
+      protocolVersion: PROTOCOL_VERSION
+    });
   }
 
-  joinRoom({ name, code }) {
-    this.send(C2S.JOIN_ROOM, { name, code, protocolVersion: PROTOCOL_VERSION });
+  joinRoom({ name, playerId, code }) {
+    this.send(C2S.JOIN_ROOM, { name, playerId, code, protocolVersion: PROTOCOL_VERSION });
   }
 
   sendState(state, { force = false } = {}) {

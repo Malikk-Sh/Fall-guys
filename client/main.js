@@ -247,11 +247,19 @@ class Game {
     click('#newCourse', () => this.startSingle(true));
     click('#create', () => {
       const net = this.ensureNetwork();
-      net.createRoom({ name: this.ui.playerName(), difficulty: $('#difficulty').value });
+      net.createRoom({
+        name: this.ui.playerName(),
+        playerId: this.ui.playerId(),
+        difficulty: $('#difficulty').value
+      });
     });
     click('#join', () => {
       const net = this.ensureNetwork();
-      net.joinRoom({ name: this.ui.playerName(), code: $('#code').value.trim().toUpperCase() });
+      net.joinRoom({
+        name: this.ui.playerName(),
+        playerId: this.ui.playerId(),
+        code: $('#code').value.trim().toUpperCase()
+      });
     });
     click('#ready', () => {
       this.ready = !this.ready;
@@ -352,13 +360,18 @@ class Game {
       const net = this.ensureNetwork();
       net.createRoom({
         name: this.ui.coopName(),
+        playerId: this.ui.playerId(),
         mode: GAME_MODE.COOP,
         difficulty: this.ui.coopChapter()
       });
     });
     click('#coopJoin', () => {
       const net = this.ensureNetwork();
-      net.joinRoom({ name: this.ui.coopName(), code: $('#coopCode').value.trim().toUpperCase() });
+      net.joinRoom({
+        name: this.ui.coopName(),
+        playerId: this.ui.playerId(),
+        code: $('#coopCode').value.trim().toUpperCase()
+      });
     });
 
     this.ui.bindAudioControls({

@@ -82,6 +82,30 @@ async function runToFinish(client, spec, matchId, { stopBefore = 0 } = {}) {
   return z;
 }
 
+// Забег, который проходит проверку на честность, а не только доезжает до финиша.
+//
+// runToFinish выше шлёт 3.2 единицы за 55 мс — это 58 единиц в секунду при потолке в 22. Коопу это
+// сходит с рук: его итоги в таблицу рекордов не идут, и ни один тест там отметку «проверено» не
+// смотрит. Гонке — нет, поэтому здесь шаг подобран под предел наблюдаемой скорости.
+//
+// Быстрее не сделать: честный забег упирается ровно в тот же потолок, что и живой игрок, и время
+// теста задаётся длиной трассы, а не тем, как часто мы шлём пакеты.
+const HONEST_STEP = 1;
+const HONEST_GAP_MS = 55;
+
+async function runHonestly(client, spec, matchId, { step = HONEST_STEP } = {}) {
+  let z = spec.start.z;
+  const target = spec.finishZ - 1;
+  const at = value => ({ x: 0, y: spec.start.y, z: value, ry: 0, vx: 0, vz: -8, state: 'ground' });
+  while (z > target) {
+    z = Math.max(target, z - step);
+    client.send('state', { matchId, state: at(z) });
+    await new Promise(resolve => setTimeout(resolve, HONEST_GAP_MS));
+  }
+  client.send('finish', { matchId, state: at(z), clientTime: 1000 });
+  return z;
+}
+
 // Ждём конца обратного отсчёта: до него сервер игнорирует состояния.
 const waitForStart = at => new Promise(resolve => setTimeout(resolve, Math.max(0, at - Date.now()) + 150));
 
@@ -755,6 +779,87 @@ test('финишировавший возвращается в ожидание,
   const restart = await back.wait('start', () => true, 3000);
   assert.equal(restart.resumed.finished, true, 'сервер обязан сказать, что игрок уже дошёл');
   void guest;
+});
+
+// Сквозная проверка таблицы рекордов: от honest-финиша в гонке до строки, которую увидит игрок в
+// лобби. По частям это покрыто модульными тестами, но между ними два стыка, где легко разойтись, —
+// анонимный идентификатор доходит от клиента до записи, а место и отставание считаются по той же
+// трассе, что и забег.
+test('честный забег попадает в таблицу рекордов вместе со своим местом', async t => {
+  await listen();
+  const port = server.address().port;
+  const url = `ws://127.0.0.1:${port}/ws`;
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  // Лёгкая трасса — самая короткая: честный забег нельзя ускорить, он упирается в тот же предел
+  // скорости, что и живой игрок, и каждый лишний сегмент добавляет к тесту по секунде.
+  host.send('create', { name: 'Хост', playerId: 'x'.repeat(32), mode: 'race', difficulty: 'easy' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Гость', playerId: 'y'.repeat(32), code: created.code });
+  await host.wait('lobby', m => m.players.length === 2);
+  host.send('ready', { ready: true });
+  guest.send('ready', { ready: true });
+  await host.wait('lobby', m => m.players.every(p => p.ready));
+  host.send('start');
+  const started = await host.wait('start');
+  await waitForStart(started.at);
+
+  // Оба бегут одновременно, как в настоящей гонке: последовательный прогон удвоил бы время теста
+  // без единой новой проверки.
+  await Promise.all([
+    runHonestly(host, started.spec, started.matchId),
+    runHonestly(guest, started.spec, started.matchId, { step: 0.9 })
+  ]);
+  const results = await host.wait('results', () => true, 5000);
+  assert.ok(
+    results.trusted,
+    `подготовка: оба забега должны пройти проверку (${results.unranked}, ${JSON.stringify(results.board.map(e => e.verificationReasons))})`
+  );
+
+  const seed = started.spec.seed;
+  const difficulty = started.spec.difficulty;
+  const ask = async playerId => {
+    const params = new URLSearchParams({ seed, difficulty, limit: '10' });
+    if (playerId) params.set('playerId', playerId);
+    const response = await fetch(`http://127.0.0.1:${port}/leaderboard?${params}`);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+
+  const anonymous = await ask(null);
+  assert.equal(anonymous.entries.length, 2, 'оба финиша попали в таблицу');
+  assert.equal(anonymous.standing, null, 'без идентификатора места нет');
+  assert.equal(anonymous.verificationVersion, 1, 'версия проверки отдаётся клиенту');
+  assert.ok(
+    anonymous.entries[0].time <= anonymous.entries[1].time,
+    'таблица отсортирована по времени'
+  );
+  // Ключ чужой строки не должен уезжать клиенту: иначе перезаписать её сможет любой, кто эту
+  // страницу открыл.
+  assert.ok(
+    anonymous.entries.every(entry => !('playerId' in entry)),
+    'идентификаторы игроков наружу не отдаются'
+  );
+
+  const mine = await ask('x'.repeat(32));
+  assert.equal(mine.entries.filter(entry => entry.self).length, 1, 'своя строка ровно одна');
+  assert.equal(mine.standing.total, 2);
+  assert.ok(mine.standing.place === 1 || mine.standing.place === 2);
+  assert.equal(
+    mine.standing.place === 1,
+    mine.standing.gap === null,
+    'отставание есть у всех, кроме первого'
+  );
+
+  const stranger = await ask('z'.repeat(32));
+  assert.equal(stranger.standing, null, 'у не пробегавшего трассу места нет');
 });
 
 // ВНИМАНИЕ: этот тест обязан оставаться ПОСЛЕДНИМ в файле.

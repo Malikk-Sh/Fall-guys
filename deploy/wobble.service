@@ -41,6 +41,13 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/wobble
+
+# Каталог для данных, которые обязаны пережить обновление игры: /var/lib/wobble.
+#
+# systemd создаёт его при запуске и назначает владельцем службу, так что права настраивать руками не
+# нужно. Внутри репозитория базе не место: /opt/wobble обновляется через git, и данные игроков не
+# должны зависеть от того, что там делает установщик.
+StateDirectory=wobble
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

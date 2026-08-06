@@ -17,6 +17,7 @@ const {
   positiveInt,
   capacityStatus,
   loadStatus,
+  rotateEventLoopWindow,
   createEventCounters,
   trackEvent
 } = require('./index');
@@ -268,6 +269,46 @@ test('состояние нагрузки показывает задержку 
   });
 
   assert.equal(loadStatus({ lagMs: 10_000, memory: process.memoryUsage() }).overloaded, true);
+});
+
+// Гистограмма monitorEventLoopDelay копит выборки с момента enable() и никогда не забывает. Без
+// сброса её перцентиль — это перцентиль по всему аптайму, и детектор перегрузки глохнет тем сильнее,
+// чем дольше работает сервер: замерено, что пять секунд устойчивой блокировки поднимают p95 до
+// 160 мс на свежем процессе и не двигают его вообще уже после тридцати секунд работы.
+//
+// Тест держится за наблюдаемое следствие, а не за внутренности: после окна с блокировкой задержка
+// видна, после следующего спокойного окна — нет. Без reset() второе не выполняется.
+test('задержка event loop измеряется окнами и забывает прошлую перегрузку', async () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 120));
+
+  await settle();
+  rotateEventLoopWindow(); // начинаем с чистого окна, что бы ни оставили прошлые тесты
+
+  // Нагрузка воспроизводится так же, как выглядит настоящая: серия блокировок с уступкой между
+  // ними. Одна длинная блокировка не годится — пока поток занят, монитор не записывает ничего, и в
+  // окне остаётся ровно одна задержанная выборка, то есть до 95-го перцентиля она не дотягивает.
+  //
+  // Настоящее число тоже подделывать нельзя: подставленное значение проверяло бы арифметику
+  // loadStatus, а не то, что гистограмма действительно очищается между окнами.
+  const busyUntil = Date.now() + 900;
+  while (Date.now() < busyUntil) {
+    const spin = Date.now() + 150;
+    while (Date.now() < spin) {
+      /* держим поток занятым */
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
+  const busy = rotateEventLoopWindow();
+  assert.ok(busy > 100, `окно с блокировкой обязано показать задержку, получено ${busy} мс`);
+
+  await settle();
+  const quiet = rotateEventLoopWindow();
+  assert.ok(
+    quiet < busy / 4,
+    `следующее окно обязано забыть прошлую перегрузку, получено ${quiet} мс после ${busy} мс`
+  );
+  assert.equal(loadStatus({ lagMs: quiet, memory: process.memoryUsage() }).overloaded, false);
 });
 
 test('анонимные продуктовые события ограничены фиксированным набором', () => {

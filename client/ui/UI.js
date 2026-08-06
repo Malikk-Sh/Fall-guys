@@ -212,7 +212,13 @@ export class UI {
     rule.classList.toggle('hidden', spec.challenge !== 'daily');
     if (spec.challenge === 'daily') {
       rule.querySelector('strong').textContent = spec.modifier.label;
-      rule.querySelector('span').textContent = `${spec.modifier.description} Цель: пройти без падений.`;
+      // Цель берётся из спеки, а не пишется здесь строкой: раньше подпись обещала «пройти без
+      // падений» независимо от того, что на самом деле проверяется, и разойтись им было нечему
+      // помешать.
+      const goal = spec.objectives?.[0];
+      rule.querySelector('span').textContent = goal
+        ? `${spec.modifier.description} Цель: ${goal.label.toLowerCase()}.`
+        : spec.modifier.description;
     }
   }
   profile(data) {
@@ -507,7 +513,7 @@ export class UI {
     this.toast('Финиш! Ждём напарника — глава засчитывается только вдвоём.', 'info', 8000);
   }
 
-  finishSolo({ time, respawns, spec, unranked = null }) {
+  finishSolo({ time, respawns, dashes = 0, hits = 0, spec, unranked = null }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
@@ -521,14 +527,16 @@ export class UI {
     $('#medal').textContent =
       medal === 'GOLD' ? '★' : medal === 'SILVER' ? '◆' : medal === 'BRONZE' ? '●' : '✓';
     $('#finishTime').textContent = formatTime(time);
-    const objectives = evaluateCourseObjectives(spec, { respawns });
-    const profile = recordSoloProfile(spec, { objectives, unranked });
+    const objectives = evaluateCourseObjectives(spec, { respawns, time, dashes, hits });
+    const profile = recordSoloProfile(spec, { objectives, unranked, respawns });
     this.profile(profile);
     $('#finishStats').innerHTML = [
       `<span>${courseName(seed)}</span>`,
       `<span>ВОЗВРАЩЕНИЙ: ${respawns}</span>`,
       `<span>${DIFFICULTIES[difficulty].label.toUpperCase()}</span>`,
-      ...objectives.map(goal => `<span>БЕЗ ПАДЕНИЙ ${goal.complete ? '✓' : '✗'}</span>`),
+      // Подпись берётся у самой цели. Раньше здесь стояло «БЕЗ ПАДЕНИЙ» для любой цели —
+      // с одной целью это было незаметно, с пулом стало бы прямой ложью.
+      ...objectives.map(goal => `<span>${goal.label} ${goal.complete ? '✓' : '✗'}</span>`),
       spec.challenge === 'daily' ? `<span>СЕРИЯ: ${profile.daily.streak}</span>` : ''
     ].join('');
     $('#board').replaceChildren();

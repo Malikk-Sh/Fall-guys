@@ -66,14 +66,23 @@ export function recordCoopProfile(
 
 export function recordSoloProfile(
   spec,
-  { objectives = [], unranked = null } = {},
+  { objectives = [], unranked = null, respawns = null } = {},
   storage = globalThis.localStorage
 ) {
   const profile = readProfile(storage);
   profile.completedRuns++;
   const completed = objectives.filter(goal => goal?.complete).length;
   profile.completedObjectives += completed;
-  if (objectives.some(goal => goal?.id === 'no-falls' && goal.complete)) profile.flawlessRuns++;
+
+  // Безупречный забег — это забег без единого возвращения, и только. Раньше он засчитывался по
+  // выполненной цели `no-falls`, а такая цель бывает лишь у испытания дня: обычный забег без
+  // падений в счётчик не попадал вовсе, а с пулом целей перестали бы попадать и те дни, когда
+  // задача дня другая. Считаем по факту, а не по формулировке задания.
+  if (respawns === null) {
+    if (objectives.some(goal => goal?.id === 'no-falls' && goal.complete)) profile.flawlessRuns++;
+  } else if (respawns === 0) {
+    profile.flawlessRuns++;
+  }
 
   if (spec?.challenge === 'daily' && spec.dayKey && !unranked && profile.daily.lastDay !== spec.dayKey) {
     profile.daily.streak = isPreviousDay(profile.daily.lastDay, spec.dayKey) ? profile.daily.streak + 1 : 1;

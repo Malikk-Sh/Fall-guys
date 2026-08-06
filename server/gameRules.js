@@ -25,7 +25,19 @@ function safeName(value) {
       .slice(0, 16) || 'Wobbler'
   );
 }
+// Сид трассы. В обычной работе случайный.
+//
+// WOBBLE_FIXED_SEED существует ради сквозных тестов: гонка выдаёт случайную трассу, а браузерный
+// тест, который проходит её до финиша, на случайной трассе означал бы разное каждый прогон — то
+// падал бы, то нет, и красный результат ничего не сообщал бы. Тест, который падает через раз и не
+// воспроизводится, хуже отсутствующего.
+//
+// Это не «режим отладки» и ничего не открывает: переменная задаётся только на сервере, влияет
+// исключительно на выбор трассы и никак не ослабляет проверку забега. В боевом окружении её просто
+// не задают — см. deploy/wobble.env.example, где её нет.
 function randomSeed() {
+  const fixed = Number.parseInt(process.env.WOBBLE_FIXED_SEED ?? '', 10);
+  if (Number.isSafeInteger(fixed) && fixed >= 0 && fixed <= 0xffffffff) return fixed >>> 0;
   return crypto.randomBytes(4).readUInt32LE(0);
 }
 function createCourseSpec(seed = randomSeed(), difficulty = 'normal') {
@@ -61,6 +73,39 @@ const MAX_REPORTED_HORIZONTAL_SPEED = 14;
 const MAX_OBSERVED_HORIZONTAL_SPEED = 22;
 const MAX_HORIZONTAL_ACCELERATION = 120;
 
+// Сколько одиночных отклонений по каждому признаку допустимо за матч.
+//
+// Проверка движения делится на два уровня, и это главное здесь.
+//
+// Жёсткий уровень — validateState: он ограничивает шаг между двумя положениями и НЕ ПРИМЕНЯЕТ
+// состояние, которое в него не уложилось. Телепорт через полтрассы отбивается там, сразу и без
+// оговорок.
+//
+// Мягкий уровень — эта функция. Она смотрит на признаки, которые у честного игрока тоже случаются:
+// препятствие задаёт скорость напрямую И выталкивает игрока из своей геометрии, то есть за один
+// пакет законно меняются и скорость, и положение. Сервер про расположение препятствий ничего не
+// знает — их геометрия рождается на клиенте из сида, — поэтому отличить удар бампера от подделки
+// по ОДНОМУ пакету он не может в принципе.
+//
+// Раньше хватало одного такого пакета, чтобы снять зачёт со всего забега. На практике это означало,
+// что честный забег с попаданием в бампер не попадал в таблицу рекордов почти никогда. Найдено
+// сквозным тестом: бот проходил трассу честно, а итог выходил без зачёта.
+//
+// Размеры взяты замерами на живых забегах, а не назначены. За полный забег на двоих:
+//   • ускорение выше потолка — 3 пакета на «легко», до 5 на «хаосе»;
+//   • наблюдаемая скорость выше потолка — 1 пакет из 557 (24.1 при потолке 22);
+//   • заявленная скорость выше потолка — ни разу (максимум 11.1 при потолке 14).
+// Пятнадцать на признак — заведомо выше честной игры и заведомо ниже клиента, который подделывает
+// движение систематически: такой исчерпает запас за секунду.
+//
+// Поднять сами потолки вместо этого нельзя. Для ускорения: при потолке заявленной скорости 14
+// максимальное изменение скорости равно 28, и порог, не срабатывающий на честных ударах, не
+// срабатывал бы уже вообще ни на чём.
+//
+// Это не окончательное решение, а честная граница возможного без знания геометрии. Настоящее —
+// серверная симуляция упрощённой физики по вводу игрока, и тогда препятствия станут известны.
+const MAX_MOVEMENT_ANOMALIES = 15;
+
 function verifyMovement(player, value, now = Date.now()) {
   const state = normalizeState(value);
   if (!state || !player.last || !player.lastAt) return [];
@@ -69,10 +114,18 @@ function verifyMovement(player, value, now = Date.now()) {
   const observedSpeed = Math.hypot(state.x - player.last.x, state.z - player.last.z) / dt;
   const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
   const accelerationLimit = ['dive', 'slam'].includes(state.state) ? 240 : MAX_HORIZONTAL_ACCELERATION;
+
   const findings = [];
-  if (reportedSpeed > MAX_REPORTED_HORIZONTAL_SPEED) findings.push('reported-speed');
-  if (observedSpeed > MAX_OBSERVED_HORIZONTAL_SPEED) findings.push('observed-speed');
-  if (acceleration > accelerationLimit) findings.push('horizontal-acceleration');
+  const anomalies = player.movementAnomalies || (player.movementAnomalies = {});
+  // Отклонение засчитывается всегда, а нарушением становится только по исчерпании запаса.
+  const note = reason => {
+    anomalies[reason] = (anomalies[reason] || 0) + 1;
+    if (anomalies[reason] > MAX_MOVEMENT_ANOMALIES) findings.push(reason);
+  };
+
+  if (reportedSpeed > MAX_REPORTED_HORIZONTAL_SPEED) note('reported-speed');
+  if (observedSpeed > MAX_OBSERVED_HORIZONTAL_SPEED) note('observed-speed');
+  if (acceleration > accelerationLimit) note('horizontal-acceleration');
   return findings;
 }
 
@@ -165,6 +218,7 @@ module.exports = {
   verifyMovement,
   MIN_CHECKPOINT_INTERVAL_MS,
   MAX_REPORTED_HORIZONTAL_SPEED,
+  MAX_MOVEMENT_ANOMALIES,
   validateState,
   canFinish,
   leaderboard

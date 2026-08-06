@@ -1,7 +1,19 @@
-import { DIFFICULTIES, courseName, evaluateCourseObjectives, formatTime, ordinal } from '../core/Config.js';
+import {
+  DIFFICULTIES,
+  courseName,
+  evaluateCourseObjectives,
+  formatGap,
+  formatTime,
+  ordinal
+} from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
-import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
+import {
+  readProfile,
+  recordCoopProfile,
+  recordSoloProfile,
+  playerId as readPlayerId
+} from '../core/profile.js';
 import { GAME_MODE } from '/shared/protocol.js';
 
 const $ = selector => document.querySelector(selector);
@@ -220,6 +232,9 @@ export class UI {
   playerName() {
     return ($('#name').value.trim() || 'Wobbler').slice(0, 16);
   }
+  playerId() {
+    return readPlayerId();
+  }
   lobby(data, selfId) {
     this.show('lobby');
     $('#roomCode').textContent = data.code;
@@ -260,19 +275,69 @@ export class UI {
     const key = `${seed}:${difficulty}`;
     if (this.verifiedTopKey === key) return;
     this.verifiedTopKey = key;
-    const value = $('#verifiedTopValue');
-    value.textContent = 'ЗАГРУЗКА…';
+    const list = $('#verifiedTopList');
+    const standing = $('#verifiedTopStanding');
+    const count = $('#verifiedTopCount');
+    list.replaceChildren();
+    count.textContent = '';
+    standing.textContent = 'ЗАГРУЗКА…';
     try {
-      const response = await fetch(
-        `/leaderboard?seed=${encodeURIComponent(seed)}&difficulty=${encodeURIComponent(difficulty)}&limit=1`
-      );
+      const params = new URLSearchParams({
+        seed,
+        difficulty,
+        limit: '10',
+        playerId: this.playerId()
+      });
+      const response = await fetch(`/leaderboard?${params}`);
       if (!response.ok) throw new Error('leaderboard unavailable');
-      const entry = (await response.json()).entries?.[0];
-      value.textContent = entry ? `${entry.name} · ${formatTime(entry.time)}` : 'ПОКА НЕТ РЕЗУЛЬТАТОВ';
+      const data = await response.json();
+      this.renderVerifiedTop(data);
     } catch {
-      value.textContent = 'НЕДОСТУПЕН';
+      standing.textContent = 'ТАБЛИЦА НЕДОСТУПНА';
+      // Ключ сбрасывается, чтобы следующий заход в лобби попробовал снова: иначе одна неудачная
+      // загрузка оставила бы игрока без таблицы до перезагрузки страницы.
       this.verifiedTopKey = null;
     }
+  }
+  renderVerifiedTop({ entries = [], standing = null }) {
+    const list = $('#verifiedTopList');
+    const line = $('#verifiedTopStanding');
+    const count = $('#verifiedTopCount');
+    list.replaceChildren();
+    count.textContent = standing?.total ? `ВСЕГО ${standing.total}` : '';
+
+    if (!entries.length) {
+      line.textContent = 'ПОКА НЕТ РЕЗУЛЬТАТОВ — ПЕРВОЕ МЕСТО СВОБОДНО';
+      return;
+    }
+
+    for (const entry of entries) {
+      const row = document.createElement('li');
+      row.className = 'verified-row';
+      if (entry.self) row.classList.add('verified-row-self');
+      const place = document.createElement('span');
+      place.className = 'verified-place';
+      place.textContent = entry.place;
+      const name = document.createElement('span');
+      name.className = 'verified-name';
+      name.textContent = entry.name;
+      const time = document.createElement('span');
+      time.className = 'verified-time';
+      time.textContent = formatTime(entry.time);
+      row.append(place, name, time);
+      list.append(row);
+    }
+
+    // Своя строка показывается отдельно, даже когда она есть в списке: игроку важнее видеть своё
+    // место и отставание одной фразой, чем выискивать подсвеченную строку глазами.
+    if (!standing) {
+      line.textContent = 'ВЫ ЭТУ ТРАССУ ЕЩЁ НЕ ПРОХОДИЛИ';
+      return;
+    }
+    line.textContent =
+      standing.gap === null
+        ? `ВЫ ПЕРВЫЙ · ${formatTime(standing.time)}`
+        : `ВЫ ${standing.place}-Й · ${formatTime(standing.time)} · ОТСТАВАНИЕ ${formatGap(standing.gap)}`;
   }
   hud(on, { multiplayer = false, touch = false, coop = false } = {}) {
     this.racing = on;

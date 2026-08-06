@@ -36,7 +36,7 @@ const {
 const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/validation.js');
 const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChapters.js');
 const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
-const { VerifiedLeaderboard } = require('./verifiedLeaderboard');
+const { VerifiedLeaderboard, VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -128,7 +128,15 @@ app.use(
 );
 
 const rooms = new Map();
-const verifiedLeaderboard = new VerifiedLeaderboard();
+
+// Путь к файлу базы. Без переменной окружения таблица живёт в памяти — так поднимаются тесты и
+// локальный запуск, где файл на диске только мешает. Боевой сервер путь задаёт: см. wobble.env.
+//
+// Пустое значение и ':memory:' здесь не одно и то же по смыслу, но одно и то же по поведению, и
+// это осознанно: сервер, у которого забыли настроить путь, должен работать, а не падать на старте.
+const verifiedLeaderboard = new VerifiedLeaderboard({
+  file: process.env.LEADERBOARD_DB || ':memory:'
+});
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
@@ -261,12 +269,20 @@ app.get('/leaderboard', (req, res) => {
   const difficulty = safeDifficulty(req.query.difficulty);
   if (!/^\d{1,10}$/.test(seedText) || !Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff)
     return res.status(400).json({ ok: false, error: 'invalid-seed' });
+  // Идентификатор нужен, чтобы посчитать место игрока и отставание. Он же помечает его строку в
+  // выдаче. Приходит параметром запроса, а не заголовком: страница лобби обновляет таблицу обычным
+  // fetch, и лишний слой тут ничего не даёт.
+  const playerId = typeof req.query.playerId === 'string' ? req.query.playerId.slice(0, 64) : null;
   res.setHeader('Cache-Control', 'no-store');
   return res.json({
     ok: true,
     seed: seed >>> 0,
     difficulty,
-    entries: verifiedLeaderboard.get(seed, difficulty, req.query.limit)
+    verificationVersion: VERIFICATION_VERSION,
+    entries: verifiedLeaderboard.get(seed, difficulty, req.query.limit, playerId),
+    // null, если игрок эту трассу ещё не проходил, — отдельно от entries, потому что его строка
+    // может быть далеко за пределами показанной десятки.
+    standing: verifiedLeaderboard.standing(seed, difficulty, playerId)
   });
 });
 
@@ -623,12 +639,15 @@ function handleDisconnect(ws) {
   emitLobby(room);
 }
 
-function addPlayer(room, ws, name) {
+function addPlayer(room, ws, name, playerId = null) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
   room.players.set(ws.id, {
     id: ws.id,
     name: safeName(name),
+    // Хранится на игроке, но не попадает ни в один рассылаемый пакет: это ключ чужой строки в
+    // таблице рекордов, и знать его соседям по комнате незачем.
+    anonymousId: typeof playerId === 'string' && playerId.trim() ? playerId.trim().slice(0, 64) : null,
     color,
     slot: 0,
     joinOrder: room.nextJoinOrder++,
@@ -917,7 +936,13 @@ function finishMatch(room) {
       matchId: room.matchId,
       seed: room.spec.seed,
       difficulty: room.spec.difficulty,
-      entries: board
+      // Анонимный идентификатор подставляется здесь, а не в leaderboard(): board уходит в рассылку
+      // всем игрокам комнаты, и чужой ключ в нём означал бы, что перезаписать чужую строку в
+      // таблице может любой, кто был с человеком в одном матче.
+      entries: board.map(entry => ({
+        ...entry,
+        playerId: room.players.get(entry.id)?.anonymousId || null
+      }))
     });
   }
   broadcast(room, room.results);
@@ -1092,7 +1117,7 @@ wss.on('connection', (ws, req) => {
       rooms.set(code, room);
       trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
-      return addPlayer(room, ws, message.name);
+      return addPlayer(room, ws, message.name, message.playerId);
     }
 
     if (message.type === C2S.JOIN_ROOM) {
@@ -1106,7 +1131,7 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
       trackEvent(productEvents, 'roomJoined');
-      return addPlayer(room, ws, message.name);
+      return addPlayer(room, ws, message.name, message.playerId);
     }
 
     const room = rooms.get(ws.room);
@@ -1533,6 +1558,13 @@ function shutdown(signal, { exitProcess = true } = {}) {
     }
     wss.close();
     server.close(() => {
+      // База закрывается до выхода: в режиме WAL это дописывает журнал в основной файл, и рекорды
+      // не зависят от того, успеет ли это сделать следующий запуск.
+      try {
+        verifiedLeaderboard.close();
+      } catch (error) {
+        log('warn', 'leaderboard_close_failed', { error: error.message });
+      }
       log('info', 'shutdown_complete', {});
       // exitProcess снимается в тестах: выход из процесса убил бы сам прогон. Проверять поведение
       // выключения нужно, а единственная его часть, которую нельзя выполнить внутри теста, —

@@ -188,6 +188,13 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     // Ноль, а не общая единица: пустое имя сервер осмысленно заменяет на «Wobbler» (safeName), и
     // отклонять из-за него всё сообщение значило бы спорить с собственной обработкой.
     name: optional(str(32, 0)),
+    // Постоянный анонимный идентификатор игрока: живёт в localStorage, ничего о человеке не
+    // сообщает и нужен ровно для одного — чтобы в таблице рекордов у него была одна строка на
+    // трассу, а не по строке на каждый забег. Необязателен: старый клиент его не присылает.
+    //
+    // Это не средство от читерства. Придумать себе новый идентификатор ничего не стоит, но это
+    // ровно то же, что прийти новым игроком, — то есть защищаться тут не от чего.
+    playerId: optional(str(64)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
     protocolVersion: optional(num(0, 1000))
@@ -195,6 +202,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
 
   [C2S.JOIN_ROOM]: {
     name: optional(str(32, 0)), // ноль по той же причине, что и в CREATE_ROOM
+    playerId: optional(str(64)),
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },

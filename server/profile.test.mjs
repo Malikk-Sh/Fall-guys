@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dailyCourseSpec } from '../client/core/Config.js';
-import { emptyProfile, readProfile, recordCoopProfile, recordSoloProfile } from '../client/core/profile.js';
+import {
+  emptyProfile,
+  readProfile,
+  recordCoopProfile,
+  recordSoloProfile,
+  playerId
+} from '../client/core/profile.js';
 
 function memoryStorage(initial = null) {
   let value = initial;
@@ -102,4 +108,27 @@ test('кооператив без зачёта считается пройден
   assert.equal(profile.coop.completedChapters, 1);
   assert.equal(profile.coop.totalRevives, 1);
   assert.equal(profile.coop.bestByChapter.ch1, undefined);
+});
+
+// Идентификатор нужен таблице рекордов: по нему у игрока одна строка на трассу вместо строки на
+// каждый забег. Значит, он обязан переживать и перезаход в игру, и запись прогресса поверх.
+test('анонимный идентификатор заводится один раз и больше не меняется', () => {
+  const storage = memoryStorage();
+  const first = playerId(storage);
+  assert.match(first, /^[a-f0-9]{32}$/, 'идентификатор — 128 случайных бит в шестнадцатеричном виде');
+  assert.equal(playerId(storage), first, 'повторный вызов возвращает тот же');
+
+  // Запись результата не должна его потерять: профиль перечитывается и пишется целиком.
+  recordSoloProfile({ challenge: null }, { objectives: [] }, storage);
+  assert.equal(playerId(storage), first, 'идентификатор пережил запись прогресса');
+  assert.equal(readProfile(storage).playerId, first);
+});
+
+test('два игрока получают разные идентификаторы', () => {
+  assert.notEqual(playerId(memoryStorage()), playerId(memoryStorage()));
+});
+
+test('испорченный идентификатор заменяется новым, а не тянется дальше', () => {
+  const storage = memoryStorage(JSON.stringify({ version: 1, playerId: 'не-идентификатор' }));
+  assert.match(playerId(storage), /^[a-f0-9]{32}$/);
 });

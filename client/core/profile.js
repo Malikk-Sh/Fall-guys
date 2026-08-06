@@ -3,6 +3,7 @@ const PROFILE_KEY = 'wobble-profile-v1';
 export function emptyProfile() {
   return {
     version: 1,
+    playerId: null,
     completedRuns: 0,
     completedObjectives: 0,
     flawlessRuns: 0,
@@ -18,6 +19,7 @@ export function readProfile(storage = globalThis.localStorage) {
     const base = emptyProfile();
     return {
       ...base,
+      playerId: safePlayerId(parsed.playerId),
       completedRuns: safeCount(parsed.completedRuns),
       completedObjectives: safeCount(parsed.completedObjectives),
       flawlessRuns: safeCount(parsed.flawlessRuns),
@@ -81,6 +83,35 @@ export function recordSoloProfile(
   }
   writeProfile(profile, storage);
   return profile;
+}
+
+// Постоянный анонимный идентификатор. Заводится при первом обращении и дальше живёт в localStorage.
+//
+// Нужен ровно для одного: чтобы в таблице рекордов у игрока была одна строка на трассу, а не по
+// строке на каждый забег. Раньше дедупликация шла по matchId, и человек, прошедший трассу пять раз,
+// занимал пять верхних мест — таблица показывала не самых быстрых, а самого настойчивого.
+//
+// Ни имени, ни устройства, ни чего-либо ещё о человеке в нём нет: это случайные 128 бит. Стёр
+// хранилище браузера — стал новым игроком, и это допустимо: идентификатор не средство от читерства.
+export function playerId(storage = globalThis.localStorage) {
+  const profile = readProfile(storage);
+  if (profile.playerId) return profile.playerId;
+  profile.playerId = randomId();
+  writeProfile(profile, storage);
+  return profile.playerId;
+}
+
+function randomId() {
+  const bytes = new Uint8Array(16);
+  // getRandomValues есть везде, где есть localStorage, но подстраховка ничего не стоит: без неё
+  // отсутствие crypto уронило бы вход в комнату целиком.
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function safePlayerId(value) {
+  return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : null;
 }
 
 function safeCount(value) {

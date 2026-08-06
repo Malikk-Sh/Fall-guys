@@ -203,7 +203,7 @@ test('пустые строки не проходят там, где значе�
 // воспроизводится, хуже отсутствующего.
 test('валидатор не падает ни на каком мусоре', () => {
   let seed = 20260802;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
   const pick = list => list[Math.floor(rnd() * list.length)];
 
   const atom = () =>

@@ -153,8 +153,38 @@ const MAX_ACTIVE_SOCKETS = positiveInt(process.env.MAX_ACTIVE_SOCKETS, 2000);
 const MAX_ACTIVE_MATCHES = positiveInt(process.env.MAX_ACTIVE_MATCHES, 300);
 const MAX_EVENT_LOOP_LAG_MS = positiveInt(process.env.MAX_EVENT_LOOP_LAG_MS, 120);
 
+// Задержка event loop измеряется КОРОТКИМИ ОКНАМИ, а не за всё время работы процесса.
+//
+// Гистограмма monitorEventLoopDelay копит выборки с момента enable() и никогда не забывает. Значит,
+// её перцентиль — это перцентиль по всему аптайму, и чем дольше сервер работает, тем меньше он
+// реагирует: чтобы сдвинуть 95-й перцентиль, перегрузка должна занять двадцатую часть всего времени
+// жизни процесса.
+//
+// Замерено: если гистограмму не сбрасывать, пять секунд устойчивой блокировки поднимают p95 до
+// 160 мс на свежем процессе — и не двигают его вообще уже после тридцати секунд аптайма. То есть
+// защита от перегрузки (отказ от новых комнат, снапшоты на 10 Гц) переставала срабатывать примерно
+// через полминуты после запуска и дальше не срабатывала никогда.
+//
+// Поэтому: раз в окно снимаем перцентиль, сохраняем его и сбрасываем гистограмму. Решение
+// принимается по последнему завершённому окну — оно и «устойчивая задержка», и восстановление
+// замечает за одно окно.
+const EVENT_LOOP_WINDOW_MS = 5000;
+
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelay.enable();
+
+let eventLoopWindowP95Ms = 0;
+
+// Возвращает задержку последнего завершённого окна и начинает новое.
+function rotateEventLoopWindow() {
+  const p95 = eventLoopDelay.percentile(95) / 1e6;
+  eventLoopWindowP95Ms = Number.isFinite(p95) ? p95 : 0;
+  eventLoopDelay.reset();
+  return eventLoopWindowP95Ms;
+}
+
+const eventLoopTimer = setInterval(rotateEventLoopWindow, EVENT_LOOP_WINDOW_MS);
+eventLoopTimer.unref();
 
 const PRODUCT_EVENT_NAMES = Object.freeze([
   'roomCreated',
@@ -179,7 +209,7 @@ function trackEvent(counters, name, amount = 1) {
 
 const productEvents = createEventCounters();
 
-function loadStatus({ lagMs = eventLoopDelay.percentile(95) / 1e6, memory = process.memoryUsage() } = {}) {
+function loadStatus({ lagMs = eventLoopWindowP95Ms, memory = process.memoryUsage() } = {}) {
   const normalizedLag = Number.isFinite(lagMs) ? Math.round(lagMs * 10) / 10 : 0;
   return {
     eventLoopP95Ms: normalizedLag,
@@ -1535,6 +1565,7 @@ function shutdown(signal, { exitProcess = true } = {}) {
   log('info', 'shutdown_started', { signal, rooms: rooms.size, sessions: sessions.size });
 
   clearInterval(snapshotTimer);
+  clearInterval(eventLoopTimer);
   eventLoopDelay.disable();
   clearInterval(heartbeatTimer);
 
@@ -1599,6 +1630,8 @@ module.exports = {
   positiveInt,
   capacityStatus,
   loadStatus,
+  rotateEventLoopWindow,
+  EVENT_LOOP_WINDOW_MS,
   createEventCounters,
   trackEvent,
   setResultsTimeout,

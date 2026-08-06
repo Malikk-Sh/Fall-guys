@@ -586,6 +586,9 @@ class Game {
       color: myColor,
       accent: COLORS.yellow,
       sfx: this.sfx,
+      // Модификатор дня меняет и мир, и управление. Мир его читает из spec сам, а игроку правило
+      // передаётся здесь — одним источником, чтобы описание в лобби и ощущение в забеге не разошлись.
+      modifier: this.course.spec.modifier || null,
       onCheckpoint: index => this.ui.checkpoint(index, this.course.spec.segmentCount),
       onRespawn: checkpoint => {
         if (mode !== 'single' && this.net?.matchId)
@@ -669,6 +672,8 @@ class Game {
       this.ui.finishSolo({
         time,
         respawns: this.player.respawns,
+        dashes: this.player.dashes,
+        hits: this.player.hits,
         spec: this.course.spec,
         unranked: this.session.unranked
       });

@@ -10,7 +10,10 @@ import {
   spawnFor
 } from '/shared/courseSpec.js';
 
+import { modifierForDay, objectiveForDay, materializeObjective, checkObjective } from './dailyModifiers.js';
+
 export { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, safeDifficulty, spawnFor };
+export { DAILY_MODIFIERS, DAILY_OBJECTIVES, modifierForDay, objectiveForDay } from './dailyModifiers.js';
 
 export const COLORS = {
   purple: 0x6546d8,
@@ -65,29 +68,42 @@ export function seededRandom(seed) {
 }
 export const courseSpec = createCourseSpec;
 
-export const DAILY_MODIFIER = Object.freeze({
-  id: 'rush-hour',
-  label: 'ЧАС ПИК',
-  description: 'Препятствия движутся на 18% быстрее.',
-  obstacleSpeed: 1.18
-});
+// Эталонное время трассы: по нему выдаются медали и от него считается цель «уложиться во время».
+export function coursePar(difficulty = 'normal') {
+  const tuning = DIFFICULTIES[safeDifficulty(difficulty)];
+  return tuning.parPerSegment * tuning.segments * 1000;
+}
 
-// Испытание дня использует общий UTC-сид, один явно показанный модификатор и дополнительную цель.
+// Испытание дня использует общий UTC-сид, модификатор и цель из пула, выбранные по номеру дня.
 // Всё записано в spec, поэтому повтор, превью и результат не могут разойтись в трактовке правил.
 export function dailyCourseSpec(difficulty = 'normal', date = new Date()) {
+  const dayKey = dailyDayKey(date);
+  const modifier = modifierForDay(dayKey);
+  const objective = materializeObjective(objectiveForDay(dayKey), coursePar(difficulty));
   return {
     ...createCourseSpec(dailySeed(date), difficulty),
     challenge: 'daily',
-    dayKey: dailyDayKey(date),
-    modifier: { ...DAILY_MODIFIER },
-    objectives: ['no-falls']
+    dayKey,
+    modifier: { ...modifier },
+    // Цель уже развёрнута: целевое время зависит от сложности, и считать его заново на экране
+    // результатов значило бы держать это правило в двух местах.
+    objectives: [
+      {
+        ...objective,
+        // Подпись с числом собирается здесь, где есть formatTime. Модуль пула о форматировании
+        // времени не знает и знать не должен.
+        label:
+          objective.id === 'under-time' ? `УЛОЖИТЬСЯ В ${formatTime(objective.targetMs)}` : objective.label
+      }
+    ]
   };
 }
 
-export function evaluateCourseObjectives(spec, { respawns = 0 } = {}) {
-  return (spec?.objectives || []).map(id => ({
-    id,
-    complete: id === 'no-falls' ? respawns === 0 : false
+export function evaluateCourseObjectives(spec, progress = {}) {
+  return (spec?.objectives || []).map(objective => ({
+    id: objective.id,
+    label: objective.label,
+    complete: checkObjective(objective, progress)
   }));
 }
 export function formatTime(ms) {

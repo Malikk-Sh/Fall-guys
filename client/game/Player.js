@@ -27,6 +27,26 @@ const SLAM_SPEED = 26;
 // теперь ею пользуются все, и она стала частью базового управления, а не привилегией.
 const GLIDE_GRAVITY = 0.55;
 
+// Модификатор дня описывает мир и управление в одних и тех же терминах, а Player из него берёт
+// только своё. Значения по умолчанию собраны здесь, чтобы обычная игра шла ровно тем же кодом, что
+// и изменённая, — отдельной ветки «без модификатора» нет и разойтись им негде.
+export function playerTuning(modifier = null) {
+  return {
+    gravity: positive(modifier?.gravity, 1),
+    jump: positive(modifier?.jump, 1),
+    dash: positive(modifier?.dash, 1),
+    dashCooldown: positive(modifier?.dashCooldown, 1),
+    groundGrip: positive(modifier?.groundGrip, 1),
+    // Единственное булево: планирование либо есть, либо нет. Множитель тут был бы враньём —
+    // «планирование на 40%» игрок не различит.
+    glide: modifier?.glide !== false
+  };
+}
+
+function positive(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 export class Player {
   constructor(scene, course, effects, options = {}) {
     this.course = course;
@@ -55,8 +75,14 @@ export class Player {
     this.diveCooldown = 0;
     this.finished = false;
     this.respawns = 0;
+    // Счётчики для целей испытания дня. Ведутся всегда, а не только в дни соответствующей цели:
+    // условная запись «только когда нужно» разошлась бы с правилом при первой же его смене.
+    this.dashes = 0;
+    this.hits = 0;
     this.hitTimes = new Map();
     this.lastLandVelocity = 0;
+    // Настройка управления под модификатор дня. Пустой объект — обычная игра.
+    this.tuning = playerTuning(options.modifier);
     // Сила удара, полученного за шаг. Препятствия пишут сюда, игра читает и превращает в тряску
     // камеры. Так препятствия не зависят ни от камеры, ни от сцены — их можно гонять ботами.
     this.impact = 0;
@@ -118,7 +144,7 @@ export class Player {
     this.diveTimer = Math.max(0, this.diveTimer - dt);
 
     if (this.jumpBuffer > 0 && this.coyote > 0 && this.diveTimer <= 0) {
-      this.velocity.y = JUMP_SPEED;
+      this.velocity.y = JUMP_SPEED * this.tuning.jump;
       this.grounded = false;
       this.coyote = 0;
       this.jumpBuffer = 0;
@@ -135,32 +161,38 @@ export class Player {
               0,
               -Math.cos(this.character.group.rotation.y)
             );
-      this.velocity.x = direction.x * DIVE_SPEED;
-      this.velocity.z = direction.z * DIVE_SPEED;
+      const diveSpeed = DIVE_SPEED * this.tuning.dash;
+      this.velocity.x = direction.x * diveSpeed;
+      this.velocity.z = direction.z * diveSpeed;
       this.velocity.y = Math.max(this.velocity.y, 3.25);
       this.diveTimer = 0.58;
-      this.diveCooldown = 0.9;
+      this.diveCooldown = 0.9 * this.tuning.dashCooldown;
       this.grounded = false;
+      this.dashes++;
       this.effects.burst(this.physics, COLORS.yellow, 12, 1);
       this.sfx?.dive();
     }
 
-    const maxSpeed = this.diveTimer > 0 ? DIVE_SPEED : RUN_SPEED;
-    const accel = this.grounded ? ACCEL_GROUND : ACCEL_AIR;
+    const maxSpeed = this.diveTimer > 0 ? DIVE_SPEED * this.tuning.dash : RUN_SPEED;
+    // Сцепление с землёй меняет только наземное ускорение: в воздухе держаться не за что, и
+    // «скользкий воздух» был бы не правилом, а поломкой управления.
+    const accel = this.grounded ? ACCEL_GROUND * this.tuning.groundGrip : ACCEL_AIR;
     // Во время рывка управление почти отключается — это делает рывок осмысленным решением,
     // а не просто способом двигаться быстрее.
     const control = this.diveTimer > 0 ? 0.28 : 1;
     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, desired.x * maxSpeed, accel * control, dt);
     this.velocity.z = THREE.MathUtils.damp(this.velocity.z, desired.z * maxSpeed, accel * control, dt);
     if (move.magnitude < 0.05 && this.grounded) {
-      this.velocity.x = THREE.MathUtils.damp(this.velocity.x, 0, 12, dt);
-      this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, 12, dt);
+      const stop = 12 * this.tuning.groundGrip;
+      this.velocity.x = THREE.MathUtils.damp(this.velocity.x, 0, stop, dt);
+      this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, stop, dt);
     }
 
     // Планирование: удержание прыжка в воздухе на пути вниз ослабляет гравитацию. Доступно всем.
-    this.gliding = !this.grounded && this.velocity.y < 0 && input.isHeld?.('jump') === true;
+    this.gliding =
+      this.tuning.glide && !this.grounded && this.velocity.y < 0 && input.isHeld?.('jump') === true;
     const gravityScale = this.slamming ? 1.8 : this.gliding ? GLIDE_GRAVITY : 1;
-    this.velocity.y -= GRAVITY * gravityScale * dt;
+    this.velocity.y -= GRAVITY * this.tuning.gravity * gravityScale * dt;
     const previousY = this.physics.y;
     this.physics.addScaledVector(this.velocity, dt);
 

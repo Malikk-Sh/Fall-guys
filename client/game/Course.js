@@ -93,7 +93,13 @@ export class Course extends CourseBuilder {
     const { type, variant = 0 } = segment;
     const mirror = variant === 1 ? -1 : 1;
     const color = palette[(index + this.spec.seed) % palette.length],
-      speed = DIFFICULTIES[this.spec.difficulty].speed * (this.spec.modifier?.obstacleSpeed || 1);
+      // Направление входит множителем в ту же скорость, что и темп: отрицательная скорость
+      // разворачивает и вращение вертушек, и качание молотов, и ход подвижных платформ — то есть
+      // ровно всё, что от неё зависит, без отдельной ветки на каждый тип препятствия.
+      speed =
+        DIFFICULTIES[this.spec.difficulty].speed *
+        (this.spec.modifier?.obstacleSpeed || 1) *
+        (this.spec.modifier?.obstacleDirection || 1);
     this.stageNames.push(
       {
         sweepers: 'ПЛОЩАДЬ ВРАЩЕНИЯ',
@@ -443,7 +449,10 @@ export class Course extends CourseBuilder {
   // так что записанное в неё было бы немедленно затёрто.
   interact(player, now, effects, sfx = null) {
     const pos = player.position,
-      radius = 0.42;
+      radius = 0.42,
+      // Пружина сюда не входит: она не бьёт, а помогает, и цель «без попаданий» не должна
+      // запрещать пользоваться трамплином.
+      knockback = this.spec.modifier?.knockback || 1;
     for (const o of this.obstacles) {
       const key = o.mesh.uuid,
         last = player.hitTimes.get(key) || 0;
@@ -476,11 +485,12 @@ export class Course extends CourseBuilder {
             nz = dz / dist;
           pos.x = o.mesh.position.x + nx * min;
           pos.z = o.mesh.position.z + nz * min;
-          player.velocity.x = nx * 10;
-          player.velocity.z = nz * 10;
-          player.velocity.y = Math.max(6.2, player.velocity.y);
+          player.velocity.x = nx * 10 * knockback;
+          player.velocity.z = nz * 10 * knockback;
+          player.velocity.y = Math.max(6.2 * knockback, player.velocity.y);
           player.grounded = false;
           player.hitTimes.set(key, now);
+          player.hits++;
           effects.burst(pos, o.mesh.material.color.getHex(), 16, 1.15);
           sfx?.bumper();
           player.impact = Math.max(player.impact, 0.4);
@@ -506,11 +516,12 @@ export class Course extends CourseBuilder {
           pos.x += nx * (o.width / 2 + radius - Math.abs(cross) + 0.04);
           pos.z += nz * (o.width / 2 + radius - Math.abs(cross) + 0.04);
           const tangential = Math.min(12, Math.abs(o.speed) * Math.abs(along) * 0.72 + 5.5);
-          player.velocity.x = nx * tangential + o.speed * dz * 0.22;
-          player.velocity.z = nz * tangential - o.speed * dx * 0.22;
-          player.velocity.y = Math.max(4.6, player.velocity.y);
+          player.velocity.x = (nx * tangential + o.speed * dz * 0.22) * knockback;
+          player.velocity.z = (nz * tangential - o.speed * dx * 0.22) * knockback;
+          player.velocity.y = Math.max(4.6 * knockback, player.velocity.y);
           player.grounded = false;
           player.hitTimes.set(key, now);
+          player.hits++;
           effects.burst(pos, COLORS.yellow, 12, 1);
           sfx?.spinner();
           player.impact = Math.max(player.impact, 0.5);
@@ -528,11 +539,12 @@ export class Course extends CourseBuilder {
         ) {
           const dir = Math.sign(dx) || Math.sign(Math.cos(now * o.speed + o.phase)) || 1;
           pos.x += dir * (o.w / 2 + radius - Math.abs(dx) + 0.05);
-          player.velocity.x = dir * 10.5;
-          player.velocity.z -= 3;
-          player.velocity.y = Math.max(4.2, player.velocity.y);
+          player.velocity.x = dir * 10.5 * knockback;
+          player.velocity.z -= 3 * knockback;
+          player.velocity.y = Math.max(4.2 * knockback, player.velocity.y);
           player.grounded = false;
           player.hitTimes.set(key, now);
+          player.hits++;
           effects.burst(pos, COLORS.pink, 12, 1);
           sfx?.puncher();
           player.impact = Math.max(player.impact, 0.55);

@@ -230,3 +230,112 @@ test('кооп-кадрирование камеры удерживает обо
   player.dispose();
   course.dispose();
 });
+
+// Модификаторы дня проверяются здесь, а не только по таблице настроек: между «правило описано» и
+// «правило действует» помещается вся физика, и разойтись им ничто не мешает.
+//
+// Каждая проверка сравнивает два прогона — обычный и изменённый — на одной трассе и с одним вводом.
+// Абсолютные числа тут были бы привязкой к текущему балансу; сравнение переживёт его правку.
+test('модификаторы дня действительно меняют физику, а не только описание', () => {
+  const holdJump = {
+    movement: () => ({ x: 0, forward: 0, magnitude: 0 }),
+    consume: () => false,
+    isHeld: action => action === 'jump'
+  };
+
+  // Планирование: удержание прыжка в падении замедляет снижение. С «БЕЗ КРЫЛЬЕВ» — не должно.
+  const fallHeight = modifier => {
+    const scene = new THREE.Scene(),
+      effects = new Effects(scene, 'low'),
+      course = new Course(scene, courseSpec(99, 'easy'), { quality: 'low' }),
+      player = new Player(scene, course, effects, { modifier });
+    // Роняем с высоты, чтобы падение шло без опоры под ногами.
+    player.teleport(new THREE.Vector3(40, 30, -6));
+    simulate(player, course, holdJump, 60);
+    const y = player.position.y;
+    player.dispose();
+    course.dispose();
+    return y;
+  };
+
+  const glided = fallHeight(null);
+  const dropped = fallHeight({ id: 'no-wings', glide: false });
+  assert.ok(dropped < glided, `без планирования падение обязано быть быстрее: ${dropped} ≥ ${glided}`);
+
+  const moon = fallHeight({ id: 'moon-walk', gravity: 0.72 });
+  assert.ok(moon > glided, `при слабой гравитации падение медленнее: ${moon} ≤ ${glided}`);
+
+  // Рывок: сильнее — значит дальше за то же время. Заодно считается счётчик рывков для цели «БЕЗ РЫВКА».
+  const dashDistance = modifier => {
+    const scene = new THREE.Scene(),
+      effects = new Effects(scene, 'low'),
+      course = new Course(scene, courseSpec(99, 'easy'), { quality: 'low' }),
+      player = new Player(scene, course, effects, { modifier });
+    simulate(player, course, idleInput(), 30);
+    const from = player.position.z;
+    let fired = false;
+    const dash = {
+      movement: () => ({ x: 0, forward: 1, magnitude: 1 }),
+      consume: action => (action === 'dive' && !fired ? ((fired = true), true) : false)
+    };
+    simulate(player, course, dash, 20, 0.5);
+    const travelled = from - player.position.z;
+    const dashes = player.dashes;
+    player.dispose();
+    course.dispose();
+    return { travelled, dashes };
+  };
+
+  const normalDash = dashDistance(null);
+  const turboDash = dashDistance({ id: 'turbo-dash', dash: 1.4, dashCooldown: 0.5 });
+  assert.equal(normalDash.dashes, 1, 'рывок обязан считаться — на нём держится цель «БЕЗ РЫВКА»');
+  assert.ok(
+    turboDash.travelled > normalDash.travelled,
+    `усиленный рывок обязан уносить дальше: ${turboDash.travelled} ≤ ${normalDash.travelled}`
+  );
+});
+
+// Направление входит множителем в ту же скорость, что и темп, поэтому разворачивается всё, что от
+// неё зависит: вертушки, молоты и подвижные платформы.
+//
+// Проверяется точное свойство, а не «стало иначе»: обратный ход — это тот же мир, проигранный
+// назад, то есть состояние в момент +T обычной трассы совпадает с состоянием в момент −T обратной.
+//
+// Зеркальности по значению («молот там же, но с другим знаком») здесь нет и быть не может: у
+// каждого препятствия своя фаза, и sin(−t·s + φ) не равен −sin(t·s + φ). Первая версия теста
+// требовала именно этого и падала — на неверном ожидании, а не на коде.
+test('обратный ход проигрывает движение препятствий назад', () => {
+  const sampleAt = (modifier, elapsed) => {
+    const scene = new THREE.Scene(),
+      course = new Course(scene, { ...courseSpec(2024, 'chaos'), modifier }, { quality: 'low' });
+    course.update(1 / 60, elapsed);
+    const spinner = course.obstacles.find(o => o.type === 'spinner');
+    const puncher = course.obstacles.find(o => o.type === 'puncher');
+    const moving = course.dynamic.find(platform => platform.motion);
+    const sample = {
+      spinner: spinner ? spinner.angle : null,
+      puncher: puncher ? puncher.mesh.position.x : null,
+      platform: moving ? moving.mesh.position[moving.motion.axis] : null
+    };
+    course.dispose();
+    return sample;
+  };
+
+  const T = 1.4;
+  const forward = sampleAt(null, T);
+  const reverse = sampleAt({ id: 'reverse', obstacleDirection: -1 }, -T);
+  const alsoForward = sampleAt({ id: 'reverse', obstacleDirection: -1 }, T);
+
+  const moved = Object.entries(forward).filter(([, value]) => value !== null);
+  assert.ok(moved.length > 0, 'подготовка: на трассе должно быть хоть одно подвижное препятствие');
+
+  for (const [what, value] of moved) {
+    assert.ok(
+      Math.abs(reverse[what] - value) < 1e-9,
+      `${what}: обратный ход в −T обязан совпасть с обычным в +T (${reverse[what]} против ${value})`
+    );
+    // И при этом в тот же момент времени положение обязано отличаться — иначе «обратный ход»
+    // ничего не менял бы, а тест выше проходил бы и на пустой правке.
+    assert.notEqual(alsoForward[what], value, `${what}: в тот же момент ход обязан отличаться`);
+  }
+});

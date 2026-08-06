@@ -7,9 +7,11 @@ class TestClient {
   constructor(url) {
     this.messages = [];
     this.waiters = [];
+    this.sequence = 0;
     this.ws = new WebSocket(url);
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
+      if (message.type === 'start') this.sequence = message.resumed?.nextSequence ?? 0;
       this.messages.push(message);
       for (const waiter of [...this.waiters])
         if (waiter.match(message)) {
@@ -34,6 +36,9 @@ class TestClient {
     });
   }
   send(type, data = {}) {
+    if ((type === 'state' || type === 'finish') && data.sequence === undefined) {
+      data = { ...data, sequence: this.sequence++ };
+    }
     this.ws.send(JSON.stringify({ type, ...data }));
   }
   close() {
@@ -195,6 +200,10 @@ test('two players share lobby configuration and deterministic start spec', async
   assert.deepEqual(hostStart.spec, guestStart.spec);
   assert.equal(hostStart.spec.segmentCount, 7);
   assert.ok(hostStart.at > Date.now());
+  const firstSnapshot = await host.wait('snapshot', message => message.sequence === 0);
+  const secondSnapshot = await host.wait('snapshot', message => message.sequence === 1);
+  assert.equal(firstSnapshot.matchId, hostStart.matchId);
+  assert.ok(secondSnapshot.serverTime >= firstSnapshot.serverTime);
 });
 
 // Свёрнутая игра и неподвижный персонаж выглядят одинаково, а значат разное: в первом случае

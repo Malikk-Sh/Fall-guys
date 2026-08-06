@@ -59,7 +59,13 @@ function makeNet({ storage = fakeStorage() } = {}) {
 
 // Обычное подключение: сервер поздоровался, матч начался.
 function bringOnline(net, { matchId = 'm1', id = 'me' } = {}) {
-  net.handleMessage({ type: S2C.WELCOME, id, token: 'token-1', serverTime: Date.now(), protocolVersion: PROTOCOL_VERSION });
+  net.handleMessage({
+    type: S2C.WELCOME,
+    id,
+    token: 'token-1',
+    serverTime: Date.now(),
+    protocolVersion: PROTOCOL_VERSION
+  });
   net.handleMessage({ type: S2C.MATCH_START, matchId, at: Date.now(), spec: {} });
   net.sent.length = 0;
   return net;
@@ -151,8 +157,45 @@ test('финиш несёт финальную позицию внутри се�
   const [packet] = net.sent;
   assert.equal(packet.type, C2S.FINISH);
   assert.equal(packet.matchId, 'm1');
+  assert.equal(packet.sequence, 0);
   assert.equal(packet.clientTime, 42_000);
   assert.deepEqual(packet.state, SNAPSHOT, 'позиция обязана ехать вместе с финишем');
+});
+
+test('состояния нумеруются, а resume продолжает серверную последовательность', () => {
+  const net = bringOnline(makeNet());
+  net.sendState(SNAPSHOT, { force: true });
+  net.sendState(SNAPSHOT, { force: true });
+  assert.deepEqual(
+    net.sent.map(packet => packet.sequence),
+    [0, 1]
+  );
+
+  net.handleMessage({
+    type: S2C.MATCH_START,
+    matchId: 'm1',
+    at: Date.now(),
+    spec: {},
+    resumed: { nextSequence: 42 }
+  });
+  net.sent.length = 0;
+  net.sendState(SNAPSHOT, { force: true });
+  assert.equal(net.sent[0].sequence, 42);
+});
+
+test('клиент отбрасывает повторные и запоздавшие серверные snapshots', () => {
+  const net = bringOnline(makeNet());
+  net.handleMessage({ type: S2C.SNAPSHOT, matchId: 'm1', sequence: 5, serverTime: 1000, players: [] });
+  net.handleMessage({ type: S2C.SNAPSHOT, matchId: 'm1', sequence: 5, serverTime: 1001, players: [] });
+  net.handleMessage({ type: S2C.SNAPSHOT, matchId: 'm1', sequence: 4, serverTime: 999, players: [] });
+
+  assert.equal(net.snapshotsReceived, 1);
+  assert.equal(net.staleSnapshots, 2);
+  assert.equal(net.snapshots.latest.time, 1000);
+
+  net.handleMessage({ type: S2C.MATCH_START, matchId: 'm2', at: Date.now(), spec: {} });
+  net.handleMessage({ type: S2C.SNAPSHOT, matchId: 'm2', sequence: 0, serverTime: 2000, players: [] });
+  assert.equal(net.snapshotsReceived, 2, 'новый матч начинает свою последовательность заново');
 });
 
 test('после финиша состояние больше не отправляется', () => {

@@ -10,7 +10,7 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 5;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
@@ -148,13 +148,12 @@ export const MAX_MESSAGE_BYTES = 4096;
 // Схемы полей. Валидатор ходит по ним механически: тип, границы, длина.
 //
 // `num` — конечное число в диапазоне [min, max]; NaN и Infinity отклоняются.
-// `str` — строка не длиннее max; `enum` — значение из списка; `bool` — булево.
+// `str` — непустая строка в диапазоне длины; `enum` — значение из списка; `bool` — булево.
 // Поля, помеченные optional, могут отсутствовать, но если есть — проверяются.
 const num = (min, max) => ({ kind: 'num', min, max });
-// `min` по умолчанию 1: пустая строка проходила проверку и добиралась до логики, где означала
-// уже что-то другое — пустой код комнаты искал комнату с именем '', пустой токен шёл в поиск
-// сессии. Там, где пустое значение осмысленно (имя игрока стирают намеренно), min задаётся нулём.
-const str = (max, min = 1) => ({ kind: 'str', max, min });
+// `min` по умолчанию 1: пустая строка проходила проверку и добиралась до логики, где означала уже
+// что-то другое — пустой код комнаты искал комнату с именем '', пустой токен шёл в поиск сессии.
+const str = (max, min = 1) => ({ kind: 'str', min, max });
 const bool = () => ({ kind: 'bool' });
 const oneOf = values => ({ kind: 'enum', values });
 const optional = schema => ({ ...schema, optional: true });
@@ -173,9 +172,10 @@ const PLAYER_STATE_SHAPE = {
     z: COORD,
     ry: num(-100, 100),
     vx: VELOCITY,
+    vy: optional(VELOCITY),
     vz: VELOCITY,
     checkpoint: optional(num(0, 64)),
-    state: optional(oneOf(['ground', 'air', 'dive']))
+    state: optional(oneOf(['ground', 'air', 'dive', 'slam', 'downed']))
   }
 };
 
@@ -185,6 +185,8 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.RESUME]: { token: str(64) },
 
   [C2S.CREATE_ROOM]: {
+    // Ноль, а не общая единица: пустое имя сервер осмысленно заменяет на «Wobbler» (safeName), и
+    // отклонять из-за него всё сообщение значило бы спорить с собственной обработкой.
     name: optional(str(32, 0)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
@@ -192,7 +194,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   },
 
   [C2S.JOIN_ROOM]: {
-    name: optional(str(32, 0)),
+    name: optional(str(32, 0)), // ноль по той же причине, что и в CREATE_ROOM
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },
@@ -210,6 +212,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // пакет прошлого матча без него проходил проверку и применялся к новому.
   [C2S.PLAYER_STATE]: {
     matchId: str(32),
+    sequence: num(0, Number.MAX_SAFE_INTEGER),
     state: PLAYER_STATE_SHAPE
   },
 
@@ -241,6 +244,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   // в том же обработчике, без ограничения по частоте, — позиция и завершение стали одной операцией.
   [C2S.FINISH]: {
     matchId: str(32),
+    sequence: num(0, Number.MAX_SAFE_INTEGER),
     state: PLAYER_STATE_SHAPE,
     clientTime: optional(num(0, Number.MAX_SAFE_INTEGER))
   },

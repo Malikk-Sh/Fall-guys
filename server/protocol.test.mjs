@@ -44,6 +44,7 @@ test('валидатор принимает корректные сообщен�
     validateMessage({
       type: C2S.PLAYER_STATE,
       matchId: 'a1b2c3d4e5f60718',
+      sequence: 0,
       state: { x: 1, y: 2, z: -3, ry: 0.5, vx: 1, vz: -1, state: 'ground' }
     }).ok
   );
@@ -57,7 +58,11 @@ test('сообщения забега без matchId отклоняются', ()
     { type: C2S.PLAYER_STATE, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
     { type: C2S.COOP_EVENT, action: 'plate' },
     { type: C2S.RESPAWN, checkpoint: 2 },
-    { type: C2S.FINISH, clientTime: 1000, state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' } },
+    {
+      type: C2S.FINISH,
+      clientTime: 1000,
+      state: { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' }
+    },
     { type: C2S.REMATCH_VOTE },
     { type: C2S.RETURN_TO_LOBBY }
   ];
@@ -72,9 +77,17 @@ test('сообщения забега без matchId отклоняются', ()
   assert.ok(validateMessage({ type: C2S.RETURN_TO_LOBBY, matchId }).ok);
   assert.ok(validateMessage({ type: C2S.RESPAWN, matchId, checkpoint: 2 }).ok);
   const shape = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' };
-  assert.ok(validateMessage({ type: C2S.FINISH, matchId, state: shape, clientTime: 1000 }).ok);
+  assert.ok(validateMessage({ type: C2S.FINISH, matchId, sequence: 1, state: shape, clientTime: 1000 }).ok);
   // И без позиции финиш теперь неполон: сервер обязан проверять его по свежей точке.
   assert.equal(validateMessage({ type: C2S.FINISH, matchId, clientTime: 1000 }).ok, false);
+});
+
+test('состояние и финиш требуют порядковый номер', () => {
+  const matchId = 'a1b2c3d4e5f60718';
+  const state = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0, state: 'ground' };
+  assert.equal(validateMessage({ type: C2S.PLAYER_STATE, matchId, state }).ok, false);
+  assert.equal(validateMessage({ type: C2S.FINISH, matchId, state }).ok, false);
+  assert.ok(validateMessage({ type: C2S.PLAYER_STATE, matchId, sequence: 0, state }).ok);
 });
 
 test('валидатор отклоняет некорректные сообщения', () => {
@@ -86,12 +99,36 @@ test('валидатор отклоняет некорректные сообщ�
     [{ type: C2S.PLAYER_READY }, 'нет обязательного ready'],
     [{ type: C2S.PLAYER_READY, ready: 'да' }, 'ready не булево'],
     [{ type: C2S.JOIN_ROOM, code: 'X'.repeat(50) }, 'слишком длинный код'],
+    [{ type: C2S.JOIN_ROOM, code: '' }, 'пустой код'],
+    [{ type: C2S.JOIN_ROOM, code: '   ' }, 'код только из пробелов'],
     [{ type: C2S.JOIN_ROOM, code: 12345 }, 'код не строка'],
     [{ type: C2S.PING, at: -5 }, 'отрицательная отметка времени']
   ];
   for (const [message, why] of bad) {
     assert.equal(validateMessage(message).ok, false, `должно отклоняться: ${why}`);
   }
+});
+
+test('схемы закрыты для лишних полей на любом уровне', () => {
+  const matchId = 'a1b2c3d4e5f60718';
+  const state = { x: 0, y: 1, z: -3, ry: 0, vx: 0, vz: 0 };
+
+  const extraTopLevel = validateMessage({
+    type: C2S.PLAYER_READY,
+    ready: true,
+    admin: true
+  });
+  assert.equal(extraTopLevel.ok, false);
+  assert.match(extraTopLevel.detail, /admin: неизвестное поле/);
+
+  const extraNested = validateMessage({
+    type: C2S.PLAYER_STATE,
+    matchId,
+    sequence: 0,
+    state: { ...state, teleport: true }
+  });
+  assert.equal(extraNested.ok, false);
+  assert.match(extraNested.detail, /state\.teleport: неизвестное поле/);
 });
 
 test('валидатор отсекает NaN и Infinity в координатах', () => {
@@ -128,38 +165,35 @@ test('вложенные объекты проверяются рекурсив�
   assert.equal(unknownAction.ok, false);
 });
 
-// Незнакомые поля раньше молча игнорировались. Выглядит безобиднее строгости, но именно так живут
-// опечатки в именах: отправитель уверен, что поле учтено, а оно не доезжает, и найти это можно
-// только чтением обеих сторон.
-test('поля, которых нет в схеме, отклоняются', () => {
-  const matchId = 'a1b2c3d4e5f60718';
-
-  const extraTop = validateMessage({ type: C2S.REMATCH_VOTE, matchId, force: true });
-  assert.equal(extraTop.ok, false, 'лишнее поле верхнего уровня');
-  assert.match(extraTop.detail, /force/);
-
-  const extraNested = validateMessage({
-    type: C2S.COOP_EVENT,
-    matchId,
-    action: 'launch',
-    vector: { x: 1, y: 8, z: 0, w: 99 }
-  });
-  assert.equal(extraNested.ok, false, 'лишнее поле внутри вложенного объекта');
-  assert.match(extraNested.detail, /vector\.w/);
-
+// Отдельно от проверки выше: там лишнее поле — обычное имя, здесь — имя из Object.prototype.
+//
+// Разница существенная. Если отбор лишних полей написан через оператор `in`, а не через
+// Object.hasOwn, то `__proto__`, `toString` и `constructor` считаются описанными в схеме, и
+// проверка пропускает ровно те имена, ради которых её и заводили. Обычным полем эту ошибку не
+// поймать — тест обязан идти именно по цепочке прототипов.
+test('поля из Object.prototype не считаются описанными в схеме', () => {
   // При разборе JSON `__proto__` становится обычным собственным полем и загрязнения прототипа не
   // вызывает, но в схеме его нет — значит, отказ.
   const polluted = JSON.parse(`{"type":"${C2S.PLAYER_READY}","ready":true,"__proto__":{"admin":1}}`);
   assert.equal(validateMessage(polluted).ok, false, '__proto__ — тоже неизвестное поле');
+
+  for (const name of ['toString', 'constructor', 'hasOwnProperty', 'valueOf']) {
+    const message = { type: C2S.PLAYER_READY, ready: true, [name]: 1 };
+    assert.equal(validateMessage(message).ok, false, `${name} — не поле схемы`);
+  }
 });
 
 test('пустые строки не проходят там, где значение обязано быть', () => {
-  assert.equal(validateMessage({ type: C2S.JOIN_ROOM, code: '' }).ok, false, 'пустой код комнаты');
+  // Код комнаты проверен в тесте выше; здесь — остальные строковые поля, где пустое значение
+  // добиралось до логики и означало уже другое: пустой токен шёл в поиск сессии, пустой matchId
+  // сравнивался с идентификатором текущего матча.
   assert.equal(validateMessage({ type: C2S.RESUME, token: '' }).ok, false, 'пустой токен сессии');
   assert.equal(validateMessage({ type: C2S.REMATCH_VOTE, matchId: '' }).ok, false, 'пустой matchId');
 
-  // Имя — исключение: стереть его осмысленно, сервер подставит своё.
-  assert.equal(validateMessage({ type: C2S.CREATE_ROOM, name: '' }).ok, true, 'пустое имя допустимо');
+  // Имя — сознательное исключение: safeName на сервере заменяет пустое значение на «Wobbler»,
+  // поэтому отказ всему сообщению из-за пустого имени противоречил бы обработке.
+  assert.ok(validateMessage({ type: C2S.CREATE_ROOM }).ok, 'имя можно не присылать вовсе');
+  assert.ok(validateMessage({ type: C2S.CREATE_ROOM, name: '' }).ok, 'и можно прислать пустым');
 });
 
 // Валидатор стоит на границе доверия: всё, что приходит из сети, проходит через него. Исключение

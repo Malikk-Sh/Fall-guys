@@ -56,23 +56,11 @@ export class Course extends CourseBuilder {
   }
   build() {
     this.addStart();
-    const templates = this.pickTemplates();
     for (let i = 0; i < this.spec.segmentCount; i++)
-      this.addSegment(templates[i], i, FIRST_SEGMENT_CENTER - i * SEGMENT_LENGTH);
+      this.addSegment(this.spec.segments[i], i, FIRST_SEGMENT_CENTER - i * SEGMENT_LENGTH);
     this.addFinish();
     this.addCheckpointArches();
     this.addScenery();
-  }
-  pickTemplates() {
-    const base = ['sweepers', 'movers', 'bumpers', 'bridge', 'punchers', 'bounce', 'crosswind'];
-    for (let i = base.length - 1; i > 0; i--) {
-      const j = Math.floor(this.rng() * (i + 1));
-      [base[i], base[j]] = [base[j], base[i]];
-    }
-    if (base[0] === 'bridge') [base[0], base[2]] = [base[2], base[0]];
-    while (base.length < this.spec.segmentCount)
-      base.push(['sweepers', 'movers', 'bumpers', 'bounce'][Math.floor(this.rng() * 4)]);
-    return base.slice(0, this.spec.segmentCount);
   }
   addStart() {
     this.box({ x: 0, y: 0, z: 5, w: 14, h: 1, d: 14, color: COLORS.purple, bevel: true });
@@ -101,18 +89,20 @@ export class Course extends CourseBuilder {
       pad.scale.z = 0.68;
     }
   }
-  addSegment(type, index, z) {
+  addSegment(segment, index, z) {
+    const { type, variant = 0 } = segment;
+    const mirror = variant === 1 ? -1 : 1;
     const color = palette[(index + this.spec.seed) % palette.length],
-      speed = DIFFICULTIES[this.spec.difficulty].speed;
+      speed = DIFFICULTIES[this.spec.difficulty].speed * (this.spec.modifier?.obstacleSpeed || 1);
     this.stageNames.push(
       {
-        sweepers: 'SPIN PLAZA',
-        movers: 'SKY STEPS',
-        bumpers: 'BUMPER BOULEVARD',
-        bridge: 'TIGHTROPE TURN',
-        punchers: 'PUNCH PARADE',
-        bounce: 'BOUNCE GARDEN',
-        crosswind: 'WINDMILL WAY'
+        sweepers: 'ПЛОЩАДЬ ВРАЩЕНИЯ',
+        movers: 'НЕБЕСНЫЕ СТУПЕНИ',
+        bumpers: 'БУЛЬВАР БАМПЕРОВ',
+        bridge: 'УЗКИЙ ПОВОРОТ',
+        punchers: 'ПАРАД МОЛОТОВ',
+        bounce: 'САД ПРЫЖКОВ',
+        crosswind: 'ДОРОГА ВЕТРОВ'
       }[type]
     );
     if (type === 'sweepers') {
@@ -129,7 +119,7 @@ export class Course extends CourseBuilder {
           z + offset,
           10.4,
           0.42,
-          speed * (1.35 + this.rng() * 0.45) * direction,
+          speed * (1.35 + this.rng() * 0.45) * direction * (variant === 2 ? -1 : 1),
           index * 0.8 + offset
         );
     }
@@ -138,7 +128,7 @@ export class Course extends CourseBuilder {
       this.box({ x: 0, y: 0, z: z - 7, w: 11, h: 1, d: 4, color, bevel: true });
       for (let j = 0; j < 3; j++) {
         const platform = this.box({
-          x: 0,
+          x: variant === 2 ? (j - 1) * 0.55 : 0,
           y: 0.15 + j * 0.12,
           z: z + 3.5 - j * 3.5,
           w: 3.8,
@@ -149,10 +139,10 @@ export class Course extends CourseBuilder {
         });
         platform.motion = {
           axis: 'x',
-          origin: 0,
-          range: 3.8,
+          origin: variant === 2 ? (j - 1) * 0.55 : 0,
+          range: variant === 2 ? 3.2 : 3.8,
           speed: speed * (0.82 + j * 0.13),
-          phase: j * 2.15
+          phase: j * 2.15 + variant * 0.7
         };
         this.dynamic.push(platform);
       }
@@ -166,7 +156,8 @@ export class Course extends CourseBuilder {
         [2.7, 1],
         [-2.6, -3],
         [2.4, -6]
-      ];
+      ].map(([x, oz]) => [x * mirror, oz]);
+      if (variant === 2) points[1][0] = 0;
       for (let j = 0; j < points.length; j++)
         this.addBumper(points[j][0], 1.25, z + points[j][1], 0.86, palette[(index + j + 3) % palette.length]);
     }
@@ -174,7 +165,7 @@ export class Course extends CourseBuilder {
       this.box({ x: 0, y: 0, z, w: 3.4, h: 1, d: 18, color, bevel: true });
       this.addRail(-1.55, z, 16);
       this.addRail(1.55, z, 16);
-      this.addSpinner(0, 1, z, 7, 0.38, speed * 1.08, index * 0.55);
+      this.addSpinner(0, 1, z, 7, 0.38, speed * 1.08 * (variant === 1 ? -1 : 1), index * 0.55);
       for (const side of [-1, 1])
         for (let j = -1; j <= 1; j++)
           this.box({
@@ -194,7 +185,7 @@ export class Course extends CourseBuilder {
       this.addRail(5.1, z, 16);
       for (let j = 0; j < 3; j++) {
         const p = this.box({
-          x: j % 2 ? 3.7 : -3.7,
+          x: (j % 2 ? 3.7 : -3.7) * mirror,
           y: 1,
           z: z + 5 - j * 5,
           w: 2.7,
@@ -210,7 +201,7 @@ export class Course extends CourseBuilder {
           originX: p.position.x,
           range: 5.8,
           speed: speed * (1.4 + j * 0.14),
-          phase: j * 2.2,
+          phase: j * 2.2 + variant * 0.6,
           w: 2.7,
           d: 1.2,
           radius: 1.7
@@ -228,7 +219,7 @@ export class Course extends CourseBuilder {
         [0, -2],
         [-2.7, -5.5]
       ])
-        this.addSpring(x, 0.68, z + oz, 1.15);
+        this.addSpring(x * mirror, 0.68, z + (variant === 2 ? -oz : oz), 1.15);
     }
     if (type === 'crosswind') {
       this.box({ x: 0, y: 0, z, w: 9, h: 1, d: 18, color, bevel: true });
@@ -240,12 +231,12 @@ export class Course extends CourseBuilder {
         [2, -5]
       ])
         this.addSpinner(
-          j % 2 ? 2.2 : -2.2,
+          (j % 2 ? 2.2 : -2.2) * mirror,
           1.1,
           z + oz,
           7.2,
           0.34,
-          speed * (1.55 + j * 0.14) * (j % 2 ? -1 : 1),
+          speed * (1.55 + j * 0.14) * (j % 2 ? -1 : 1) * (variant === 2 ? -1 : 1),
           j
         );
     }
@@ -353,7 +344,7 @@ export class Course extends CourseBuilder {
       emissive: COLORS.pink,
       emissiveIntensity: 2.2
     });
-    this.stageNames.push('VICTORY GATE');
+    this.stageNames.push('ВОРОТА ПОБЕДЫ');
   }
   addCheckpointArches() {
     for (let i = 0; i < this.spec.checkpoints.length; i++) {

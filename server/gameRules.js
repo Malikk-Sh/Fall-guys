@@ -40,8 +40,9 @@ function normalizeState(value) {
     z: +n.z,
     ry: +n.ry,
     vx: +n.vx,
+    vy: Number.isFinite(n.vy) ? +n.vy : 0,
     vz: +n.vz,
-    state: ['ground', 'air', 'dive'].includes(n.state) ? n.state : 'air'
+    state: ['ground', 'air', 'dive', 'slam', 'downed'].includes(n.state) ? n.state : 'air'
   };
 }
 // Потолок интервала между двумя состояниями, по которому считается допустимый шаг.
@@ -55,6 +56,36 @@ function normalizeState(value) {
 // свободного падения при гравитации 22.5 даёт около 13 единиц по вертикали плюс бег по
 // горизонтали; при 0.8 с потолок выходит 17.6 и такой игрок проходит, а телепорт — нет.
 const MAX_STEP_DT = 0.8;
+const MIN_CHECKPOINT_INTERVAL_MS = 300;
+const MAX_REPORTED_HORIZONTAL_SPEED = 14;
+const MAX_OBSERVED_HORIZONTAL_SPEED = 22;
+const MAX_HORIZONTAL_ACCELERATION = 120;
+
+function verifyMovement(player, value, now = Date.now()) {
+  const state = normalizeState(value);
+  if (!state || !player.last || !player.lastAt) return [];
+  const dt = Math.max(0.04, (now - player.lastAt) / 1000);
+  const reportedSpeed = Math.hypot(state.vx, state.vz);
+  const observedSpeed = Math.hypot(state.x - player.last.x, state.z - player.last.z) / dt;
+  const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
+  const accelerationLimit = ['dive', 'slam'].includes(state.state) ? 240 : MAX_HORIZONTAL_ACCELERATION;
+  const findings = [];
+  if (reportedSpeed > MAX_REPORTED_HORIZONTAL_SPEED) findings.push('reported-speed');
+  if (observedSpeed > MAX_OBSERVED_HORIZONTAL_SPEED) findings.push('observed-speed');
+  if (acceleration > accelerationLimit) findings.push('horizontal-acceleration');
+  return findings;
+}
+
+function verifyCheckpointTime(player, checkpoint, now = Date.now()) {
+  if (checkpoint <= (player.checkpoint || 0)) return null;
+  const previousAt = player.checkpointAt || player.matchStartedAt || now;
+  const elapsed = now - previousAt;
+  player.checkpointAt = now;
+  if (elapsed < MIN_CHECKPOINT_INTERVAL_MS) {
+    return { reason: 'segment-too-fast', checkpoint, elapsed, minimum: MIN_CHECKPOINT_INTERVAL_MS };
+  }
+  return null;
+}
 
 function validateState(player, value, spec, now = Date.now()) {
   const state = normalizeState(value);
@@ -103,7 +134,22 @@ function leaderboard(room) {
   return [...room.players.values()]
     .filter(player => player.finished)
     .sort((a, b) => a.time - b.time)
-    .map(({ id, name, time, color }) => ({ id, name, time, color }));
+    .map(({ id, name, time, color, verificationReasons, unverifiedReason }) => {
+      const reasons = verificationReasons?.length
+        ? [...verificationReasons]
+        : unverifiedReason
+          ? [unverifiedReason]
+          : [];
+      return {
+        id,
+        name,
+        time,
+        color,
+        verified: reasons.length === 0,
+        verificationReason: reasons[0] || null,
+        verificationReasons: reasons
+      };
+    });
 }
 
 module.exports = {
@@ -115,6 +161,10 @@ module.exports = {
   createCourseSpec,
   spawnFor,
   normalizeState,
+  verifyCheckpointTime,
+  verifyMovement,
+  MIN_CHECKPOINT_INTERVAL_MS,
+  MAX_REPORTED_HORIZONTAL_SPEED,
   validateState,
   canFinish,
   leaderboard

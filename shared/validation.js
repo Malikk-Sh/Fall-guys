@@ -9,25 +9,10 @@
 
 import { MESSAGE_SCHEMAS, RATE_LIMITS, VIOLATION_WEIGHTS } from './protocol.js';
 
-// Поля, которых нет в схеме, отклоняются, а не игнорируются.
-//
-// Молчаливое игнорирование выглядит безобиднее, но оно скрывает расхождение: клиент, отправляющий
-// поле, которого сервер не ждёт, уверен, что оно учтено. Так живут опечатки в именах — сообщение
-// «работает», а половина данных не доезжает, и найти это можно только чтением обеих сторон.
-//
-// Здесь же закрывается и подсовывание лишнего в объектах: `__proto__` при разборе JSON становится
-// обычным собственным полем и попадает в этот же отказ.
-function unknownField(value, fields, path) {
-  for (const key of Object.keys(value)) {
-    // Именно hasOwnProperty, а не `in`. Оператор `in` ищет и по цепочке прототипов, поэтому
-    // `__proto__`, `toString`, `constructor` и остальные члены Object.prototype считались бы
-    // описанными в схеме — то есть проверка пропускала бы ровно те имена, ради которых её и
-    // добавляли. Поймано тестом на `__proto__`.
-    if (Object.prototype.hasOwnProperty.call(fields, key)) continue;
-    return `${path ? `${path}.` : ''}${key}: неизвестное поле`;
-  }
-  return null;
-}
+// Отбор лишних полей идёт через Object.hasOwn, а не через оператор `in`. Разница здесь не
+// стилистическая: `in` ищет и по цепочке прототипов, поэтому `__proto__`, `toString`, `constructor`
+// и остальные члены Object.prototype считались бы описанными в схеме — то есть проверка пропускала
+// бы ровно те имена, ради которых её и заводили. Зафиксировано тестом на `__proto__`.
 
 function checkField(value, schema, path) {
   if (value === undefined || value === null) {
@@ -47,11 +32,11 @@ function checkField(value, schema, path) {
 
     case 'str':
       if (typeof value !== 'string') return `${path}: ожидалась строка`;
+      // Пробелы по краям допустимы (код комнаты затем нормализуется), но строка только из
+      // пробелов не считается содержимым. Проверяем длину нормализованного пользовательского
+      // ввода, чтобы `"   "` не обходило обязательность поля.
+      if (value.trim().length < schema.min) return `${path}: короче ${schema.min} символов`;
       if (value.length > schema.max) return `${path}: длиннее ${schema.max} символов`;
-      // Минимум важнее, чем кажется. Пустая строка формально проходила проверку и добиралась до
-      // логики, где означала уже другое: пустой код искал комнату с именем '', пустой токен шёл
-      // в поиск сессии. Отказ на границе понятнее, чем неудача в середине.
-      if (value.length < (schema.min ?? 0)) return `${path}: короче ${schema.min} символов`;
       return null;
 
     case 'bool':
@@ -64,8 +49,8 @@ function checkField(value, schema, path) {
 
     case 'object': {
       if (typeof value !== 'object' || Array.isArray(value)) return `${path}: ожидался объект`;
-      const extra = unknownField(value, schema.fields, path);
-      if (extra) return extra;
+      const unknown = Object.keys(value).find(key => !Object.hasOwn(schema.fields, key));
+      if (unknown) return `${path}.${unknown}: неизвестное поле`;
       for (const [key, fieldSchema] of Object.entries(schema.fields)) {
         const error = checkField(value[key], fieldSchema, `${path}.${key}`);
         if (error) return error;
@@ -92,9 +77,13 @@ export function validateMessage(message) {
     return { ok: false, reason: 'UNKNOWN_TYPE', detail: `неизвестный тип «${message.type}»` };
   }
 
-  // `type` в схеме полей не описан — он и есть выбор схемы, поэтому разрешается отдельно.
-  const extra = unknownField(message, { ...schema, type: true }, '');
-  if (extra) return { ok: false, reason: 'INVALID_SCHEMA', detail: extra };
+  // Схемы протокола закрытые: лишнее поле чаще означает рассинхрон версий или попытку протащить
+  // данные, которые обработчик не собирался принимать. `type` — единственное общее поле вне
+  // конкретной схемы сообщения.
+  const unknown = Object.keys(message).find(key => key !== 'type' && !Object.hasOwn(schema, key));
+  if (unknown) {
+    return { ok: false, reason: 'INVALID_SCHEMA', detail: `${unknown}: неизвестное поле` };
+  }
 
   for (const [key, fieldSchema] of Object.entries(schema)) {
     const error = checkField(message[key], fieldSchema, key);

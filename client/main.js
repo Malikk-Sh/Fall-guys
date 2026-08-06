@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, courseName, courseSpec, dailySeed, randomSeed } from './core/Config.js';
+import { COLORS, courseName, courseSpec, dailyCourseSpec, dailySeed, randomSeed } from './core/Config.js';
 import { InputManager } from './core/InputManager.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { Sfx } from './audio/sfx.js';
@@ -16,6 +16,10 @@ import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
 import { Perf } from './core/Perf.js';
 import { UI } from './ui/UI.js';
+import { APP_STATE, createAppStates } from './core/AppStates.js';
+import { StateRouter } from './core/StateRouter.js';
+import { RaceSession } from './game/RaceSession.js';
+import { CoopSession } from './game/CoopSession.js';
 
 // Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
 // достаточно редко, чтобы на слабых устройствах хватало времени на отрисовку.
@@ -36,6 +40,9 @@ class Game {
     this.canvas = document.querySelector('#game');
     this.input = new InputManager(this.canvas);
     this.input.enabled = false;
+    this.state = new StateRouter(this, createAppStates());
+    this.session = new RaceSession();
+    this.coop = new CoopSession();
 
     this.clockLast = performance.now();
     this.accumulator = 0;
@@ -65,24 +72,27 @@ class Game {
     this.installAudioUnlock();
     this.installLifecycle();
 
-    this.previewSpec = courseSpec(dailySeed(), 'normal');
+    this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);
     this.handleInvite();
+    // После полной перезагрузки в URL уже нет invite-параметров, но sessionStorage хранит токен.
+    // Подключаем сеть без нового клика, иначе клиент так и останется в меню и не отправит resume.
+    if (NetworkManager.hasSavedSession()) this.ensureNetwork();
     this.resize();
     requestAnimationFrame(time => this.loop(time));
-    this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+    this.ui.preview(this.previewSpec);
     this.ui.setLoading(true);
   }
 
-  // Игрок пришёл по ссылке вида ?room=ABCDE — сразу открываем кооп и подставляем код,
+  // Игрок пришёл по ссылке вида ?room=ABCDE&mode=race — открываем нужный режим и подставляем код,
   // чтобы от нажатия на ссылку до игры оставалось одно действие.
   handleInvite() {
-    const code = UI.invitedCode();
-    if (!code) return;
-    this.ui.selectMode('coop');
-    document.querySelector('#coopCode').value = code;
-    document.querySelector('#code').value = code;
-    this.ui.toast(`Приглашение в комнату ${code} — введите имя и войдите.`);
+    const invite = UI.invitedRoom();
+    if (!invite) return;
+    this.ui.selectMode(invite.mode === GAME_MODE.COOP ? 'coop' : 'multi');
+    document.querySelector('#coopCode').value = invite.code;
+    document.querySelector('#code').value = invite.code;
+    this.ui.toast(`Приглашение в комнату ${invite.code} — введите имя и войдите.`);
     // Убираем параметр из адреса: перезагрузка страницы не должна пытаться войти повторно.
     history.replaceState(null, '', location.pathname);
   }
@@ -264,12 +274,15 @@ class Game {
       this.net.send('returnLobby', { matchId: this.net.matchId });
     });
     $('#copyInvite').addEventListener('click', async () => {
-      const link = this.ui.inviteLink($('#roomCode').textContent.trim());
+      const mode = this.room?.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
+      const link = this.ui.inviteLink($('#roomCode').textContent.trim(), mode);
       try {
         // На телефоне системное «Поделиться» удобнее буфера обмена: ссылка сразу уходит в
         // мессенджер, а не требует переключения приложений вручную.
-        if (navigator.share) await navigator.share({ title: 'Wobble Rush — кооп', url: link });
-        else await navigator.clipboard.writeText(link);
+        if (navigator.share) {
+          const title = mode === GAME_MODE.COOP ? 'Wobble Rush — кооп' : 'Wobble Rush — гонка';
+          await navigator.share({ title, url: link });
+        } else await navigator.clipboard.writeText(link);
         this.ui.toast('Ссылка-приглашение готова!');
       } catch {
         this.ui.toast(link);
@@ -292,11 +305,11 @@ class Game {
 
     const refreshPreview = () => {
       const settings = this.ui.singleSettings();
-      this.previewSpec = courseSpec(
-        settings.type === 'daily' ? dailySeed() : this.menuRandomSeed,
-        settings.difficulty
-      );
-      this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+      this.previewSpec =
+        settings.type === 'daily'
+          ? dailyCourseSpec(settings.difficulty)
+          : courseSpec(this.menuRandomSeed, settings.difficulty);
+      this.ui.preview(this.previewSpec);
       if (!this.running && this.mode === 'preview') this.buildPreview(this.previewSpec);
     };
     $('#runType').addEventListener('change', e => {
@@ -325,9 +338,7 @@ class Game {
     addEventListener('camera-mode-change', event => {
       const free = event.detail === 'free';
       this.ui.toast(
-        free
-          ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.'
-          : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
+        free ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.' : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
       );
       $('#cameraMode').classList.toggle('camera-free', free);
     });
@@ -371,7 +382,7 @@ class Game {
       this.room = message;
       // Список игроков — авторитетный источник: событие присутствия могло прийти до того, как
       // напарник вообще появился в комнате, или потеряться при переподключении.
-      this.partnerAway = message.players.some(p => p.id !== this.net.id && p.away);
+      this.coop.setPartnerAway(message.players.some(p => p.id !== this.net.id && p.away));
       this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
 
       if (message.state === ROOM_STATE.RESULTS)
@@ -379,6 +390,7 @@ class Game {
       // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
       if (message.state !== ROOM_STATE.LOBBY) return;
 
+      this.state.transition(APP_STATE.LOBBY, message);
       document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
       this.ui.resetResultButtons();
       this.ui.lobby(message, this.net.id);
@@ -388,6 +400,7 @@ class Game {
     // игрока туда, где сервер его видит, — иначе он навсегда останется в «Подтверждаем результат…».
     this.net.on('finishRejected', message => {
       this.net.allowFinishRetry();
+      this.session.reopenFinish();
       this.player.finished = false;
       this.running = true;
       this.input.enabled = true;
@@ -432,7 +445,7 @@ class Game {
     });
     this.net.on('presence', message => {
       if (message.id === this.net.id) return;
-      this.partnerAway = message.away;
+      this.coop.setPartnerAway(message.away);
       if (this.mode === 'coop') {
         this.ui.toast(message.away ? 'Напарник свернул игру — подождите.' : 'Напарник вернулся в игру.');
       }
@@ -493,7 +506,11 @@ class Game {
     const seed =
       settings.type === 'daily' && !forceNew ? dailySeed() : forceNew ? randomSeed() : this.menuRandomSeed;
     if (settings.type === 'random') this.menuRandomSeed = seed;
-    this.startRace('single', courseSpec(seed, settings.difficulty));
+    const spec =
+      settings.type === 'daily' && !forceNew
+        ? dailyCourseSpec(settings.difficulty)
+        : courseSpec(seed, settings.difficulty);
+    this.startRace('single', spec);
   }
 
   clearActors() {
@@ -517,8 +534,6 @@ class Game {
 
   buildPreview(spec) {
     this.mode = 'preview';
-    this.running = false;
-    this.input.enabled = false;
     this.buildCourse(spec);
     this.player = new Player(this.scene, this.course, this.effects, {
       remote: true,
@@ -528,28 +543,32 @@ class Game {
     this.player.teleport(this.course.spawnFor(0));
     this.camera.position.set(10, 7, 17);
     this.camera.lookAt(0, 1, -7);
+    this.state.transition(APP_STATE.MENU);
   }
 
   async startRace(mode, spec, startAt = Date.now() + 1900, slots = null) {
     const token = ++this.startToken;
     this.mode = mode;
     // Ролей нет; «место» определяет только точку появления, чтобы игроки не стояли в одной точке.
-    this.slots = slots || {};
-    this.mySlot = this.slots[this.net?.id] ?? 0;
-    this.partnerDown = false;
-    this.partnerAway = this.room?.players.some(p => p.id !== this.net?.id && p.away) || false;
+    if (mode === 'coop') {
+      this.coop.start({
+        selfId: this.net?.id,
+        slots,
+        partnerAway: this.room?.players.some(p => p.id !== this.net?.id && p.away)
+      });
+    } else {
+      this.coop.reset();
+    }
     // Времена кадров меню ничего не говорят о трассе: там пустая сцена и один персонаж.
     this.perf.reset();
     this.running = false;
-    this.raceComplete = false;
-    this.finalTime = 0;
-    // Пока связь цела, забег идёт в зачёт. Сюда попадает причина, по которой он перестал.
-    this.unranked = null;
     this.accumulator = 0;
     this.buildCourse(spec);
+    // Пока связь цела, забег идёт в зачёт. Сессия хранит причину, по которой он перестал.
+    this.session.start({ mode, spec: this.course.spec, startedAt: startAt });
 
     // Цвет персонажа зависит от роли: игрок должен узнавать себя и напарника мгновенно.
-    const myColor = mode === 'coop' ? (this.mySlot === 1 ? COLORS.orange : COLORS.cyan) : COLORS.pink;
+    const myColor = mode === 'coop' ? (this.coop.mySlot === 1 ? COLORS.orange : COLORS.cyan) : COLORS.pink;
     this.player = new Player(this.scene, this.course, this.effects, {
       color: myColor,
       accent: COLORS.yellow,
@@ -563,13 +582,12 @@ class Game {
     });
 
     if (mode === 'coop') {
-      const start = coopSpawnFor(this.course.spec, 0, this.mySlot);
+      const start = coopSpawnFor(this.course.spec, 0, this.coop.mySlot);
       this.player.teleport(new THREE.Vector3(start.x, start.y, start.z));
       this.ui.coopIntro(this.course.spec);
     }
     this.cameraController.reset(this.player, true);
-    this.ui.show();
-    this.ui.hud(true, {
+    this.state.transition(APP_STATE.COUNTDOWN, {
       multiplayer: mode !== 'single',
       coop: mode === 'coop',
       touch: this.input.activeMethod === 'touch'
@@ -579,20 +597,17 @@ class Game {
 
     // Момент старта приходит в СЕРВЕРНОМ времени. Сравнивать его с локальными часами нельзя —
     // именно из-за этого фаза препятствий раньше расходилась у разных игроков.
-    this.startedAt = startAt;
-
     this.audio.unlock();
     this.music.start();
     this.music.setIntensity(0);
 
     await this.ui.countdown(startAt, {
       now: () => this.raceNow(),
-      onTick: value => this.sfx.countdown(value === 'GO!')
+      onTick: value => this.sfx.countdown(value === 'ВПЕРЁД!')
     });
     if (token !== this.startToken) return;
 
-    this.running = true;
-    this.input.enabled = true;
+    this.state.transition(APP_STATE.RACE);
     this.ui.toast(`${courseName(this.course.spec.seed)} — ВПЕРЁД!`);
   }
 
@@ -633,19 +648,16 @@ class Game {
   }
 
   localFinish() {
-    const time = Math.max(0, this.raceNow() - this.startedAt);
-    this.finalTime = time;
+    const time = this.session.finish(this.raceNow());
     this.postFX.pulse(1);
     if (this.mode === 'single') {
-      this.running = false;
-      this.input.enabled = false;
+      this.state.transition(APP_STATE.RESULTS);
       this.music.setIntensity(0);
       this.ui.finishSolo({
         time,
         respawns: this.player.respawns,
-        seed: this.course.spec.seed,
-        difficulty: this.course.spec.difficulty,
-        unranked: this.unranked
+        spec: this.course.spec,
+        unranked: this.session.unranked
       });
     } else {
       this.input.enabled = false;
@@ -671,7 +683,7 @@ class Game {
           remote: true,
           color:
             this.mode === 'coop'
-              ? this.slots?.[id] === 1
+              ? this.coop.slotFor(id) === 1
                 ? COLORS.orange
                 : COLORS.cyan
               : info?.color || COLORS.cyan,
@@ -718,8 +730,7 @@ class Game {
   // Забег перестал идти в зачёт. Причина запоминается до конца матча: восстановленная связь
   // рекорд не возвращает — половину главы всё равно прошли не вдвоём.
   markUnranked(reason) {
-    if (this.unranked) return;
-    this.unranked = reason;
+    if (!this.session.markUnranked(reason)) return;
     this.ui.toast(
       reason === 'left'
         ? 'Напарник вышел — забег больше не идёт в зачёт.'
@@ -735,8 +746,8 @@ class Game {
         this.ui.updateBoard(this.latestBoard, this.net.id);
       return;
     }
-    this.running = false;
-    this.input.enabled = false;
+    this.session.confirmFinish(message.time);
+    this.state.transition(APP_STATE.RESULTS);
     this.music.setIntensity(0);
     // В коопе свой финиш — ещё не конец главы: она засчитывается, только когда дошли оба.
     // Карточку показывает `results`, а до тех пор игрок ждёт напарника, а не смотрит на итоги.
@@ -745,10 +756,10 @@ class Game {
       return;
     }
     this.ui.finishMulti({
-      time: message.time ?? this.finalTime,
+      time: message.time ?? this.session.finalTime,
       board: this.latestBoard,
       selfId: this.net.id,
-      unranked: this.unranked
+      unranked: this.session.unranked
     });
   }
 
@@ -762,15 +773,16 @@ class Game {
         this.ui.updateBoard(this.latestBoard, this.net.id);
       return;
     }
-    this.running = false;
-    this.input.enabled = false;
+    this.state.transition(APP_STATE.RESULTS);
     this.music.setIntensity(0);
     this.ui.finishCoop({
-      time: message.coopTime ?? this.finalTime,
+      time: message.coopTime ?? this.session.finalTime,
       chapter: this.course?.spec || null,
       board: this.latestBoard,
       selfId: this.net?.id,
-      unranked: this.unranked
+      revives: this.coop.revives,
+      matchId: this.net?.matchId,
+      unranked: this.session.unranked
     });
   }
 
@@ -786,9 +798,9 @@ class Game {
     // Гонка доигрывается в одиночку — но именно доигрывается, а не превращается в честный
     // одиночный забег: время без соперников в личные рекорды не идёт.
     this.markUnranked('connection');
-    const elapsed = Math.max(0, this.raceNow() - this.startedAt);
+    const serverNow = this.raceNow();
     this.mode = 'single';
-    this.startedAt = Date.now() - elapsed;
+    this.session.switchClock(serverNow, Date.now());
     for (const remote of this.remotes.values()) remote.dispose();
     this.remotes.clear();
     this.ui.hud(true, { multiplayer: false, touch: this.input.activeMethod === 'touch' });
@@ -810,13 +822,12 @@ class Game {
     this.ui.elements.hud.classList.add('hidden');
     this.ui.elements.touch.classList.add('hidden');
     this.ui.linkOverlay(null);
-    this.ui.show('menu');
     const settings = this.ui.singleSettings();
-    this.previewSpec = courseSpec(
-      settings.type === 'daily' ? dailySeed() : this.menuRandomSeed,
-      settings.difficulty
-    );
-    this.ui.preview(this.previewSpec.seed, this.previewSpec.difficulty);
+    this.previewSpec =
+      settings.type === 'daily'
+        ? dailyCourseSpec(settings.difficulty)
+        : courseSpec(this.menuRandomSeed, settings.difficulty);
+    this.ui.preview(this.previewSpec);
     this.buildPreview(this.previewSpec);
   }
 
@@ -851,7 +862,7 @@ class Game {
 
     // Пока вкладка была скрыта, кадры не шли. В одиночном режиме сдвигаем момент старта, чтобы
     // таймер не насчитал время простоя. В сетевом этого делать нельзя — там время серверное.
-    if (this.mode === 'single' && this.running) this.startedAt += hiddenMs;
+    if (this.mode === 'single' && this.running) this.session.shiftStart(hiddenMs);
 
     // Накопленное время выбрасываем целиком. Иначе первый же кадр после возвращения потратит все
     // разрешённые подшаги на симуляцию простоя — игрок увидит, как персонаж дёргается вперёд.
@@ -889,7 +900,7 @@ class Game {
   // Время с начала забега, по которому считается фаза всех препятствий.
   courseElapsed() {
     if (this.mode === 'preview') return performance.now() / 1000;
-    return Math.max(0, (this.raceNow() - this.startedAt) / 1000);
+    return this.session.elapsed(this.raceNow()) / 1000;
   }
 
   // Один шаг симуляции. Всегда с постоянным dt.
@@ -947,34 +958,37 @@ class Game {
 
   receiveCoopEvent(message) {
     if (!this.course || this.mode !== 'coop') return;
-    if (message.action === 'launch' && message.target === this.net?.id) {
-      this.player?.applyLaunch(message.vector);
+    const effect = this.coop.applyEvent(message);
+    if (effect?.type === 'launch-self') {
+      this.player?.applyLaunch(effect.vector);
       this.sfx.catapult();
       this.cameraController.addShake(0.5);
       return;
     }
-    if (message.action === 'downed') {
-      if (message.target === this.net?.id) this.player?.goDown(this.player.position);
-      else this.partnerDown = true;
+    if (effect?.type === 'down-self') {
+      this.player?.goDown(this.player.position);
       return;
     }
-    if (message.action === 'revive') {
-      if (message.target === this.net?.id) {
-        this.player?.revive();
-        this.sfx.revive();
-      } else {
-        this.partnerDown = false;
-        this.sfx.revive(this.remotes.values().next().value?.visualPosition);
-      }
+    if (effect?.type === 'revive-self') {
+      this.player?.revive();
+      this.sfx.revive();
+    } else if (effect?.type === 'revive-partner') {
+      this.sfx.revive(this.remotes.values().next().value?.visualPosition);
     }
   }
 
   // Оживление напарника прикосновением. Проверка простая: подошёл достаточно близко.
   tryRevivePartner() {
-    if (this.mode !== 'coop' || !this.partnerDown || this.player?.downed) return;
+    if (this.mode !== 'coop') return;
     const partner = this.remotes.values().next().value;
     if (!partner) return;
-    if (this.player.position.distanceTo(partner.position) > 3.5) return;
+    if (
+      !this.coop.canRevive({
+        localDowned: this.player?.downed,
+        distance: this.player.position.distanceTo(partner.position)
+      })
+    )
+      return;
     this.net?.sendCoopEvent('revive');
   }
 
@@ -1043,6 +1057,7 @@ class Game {
 
     this.effects.update(frameDt);
     this.postFX.update(frameDt);
+    this.state.update(frameDt);
 
     if (this.mode === 'preview' && this.player) {
       this.player.character.animate(frameDt, { speed: 0, grounded: true });
@@ -1067,10 +1082,7 @@ class Game {
       this.updateAudioScene();
       if (this.mode === 'coop') this.updatePartnerMarker();
 
-      const elapsed =
-        this.finalTime && this.player.finished
-          ? this.finalTime
-          : Math.max(0, this.raceNow() - this.startedAt);
+      const elapsed = this.session.elapsed(this.raceNow());
       this.ui.updateHud({
         time: elapsed,
         checkpoint: this.player.checkpoint,
@@ -1083,6 +1095,7 @@ class Game {
     }
 
     this.postFX.render();
+    this.state.render(alpha);
     this.updateAdaptiveQuality(time);
     this.perf.paint(time, this.renderer, {
       качество: this.qualityChoice === 'auto' ? `авто (${this.autoQuality})` : this.qualityChoice,
@@ -1111,8 +1124,8 @@ class Game {
       screen: { x, y },
       visible: onScreen,
       distance: this.player.visualPosition.distanceTo(partner.visualPosition),
-      down: this.partnerDown,
-      away: this.partnerAway
+      down: this.coop.partnerDown,
+      away: this.coop.partnerAway
     });
   }
 

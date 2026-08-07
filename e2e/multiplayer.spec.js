@@ -1,5 +1,17 @@
 import { test, expect } from '@playwright/test';
 
+// Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
+// окно аккаунта, вводим имя, сохраняем.
+async function setPlayerName(page, name) {
+  // Ждём, пока аккаунт войдёт: до этого переименовывать нечего, и попытка молча ничего не сделает.
+  await expect(page.locator('#accountName')).not.toHaveText('…', { timeout: 20_000 });
+  await page.locator('#accountChip').click();
+  await page.locator('#accountRename').fill(name);
+  await page.locator('#accountSave').click();
+  await expect(page.locator('#accountName')).toHaveText(name, { timeout: 10_000 });
+  await page.locator('#accountClose').click();
+}
+
 test('два браузера входят в кооп-комнату по режимной ссылке и готовы к старту', async ({
   browser
 }, testInfo) => {
@@ -17,8 +29,8 @@ test('два браузера входят в кооп-комнату по ре�
   if (testInfo.project.name === 'mobile-chromium') {
     expect(await host.evaluate(() => navigator.maxTouchPoints)).toBeGreaterThan(0);
   }
+  await setPlayerName(host, 'Хост E2E');
   await host.locator('[data-mode="coop"]').click();
-  await host.locator('#coopName').fill('Хост E2E');
   await host.locator('#coopCreate').click();
   await expect(host.locator('#lobby')).toBeVisible();
   const code = (await host.locator('#roomCode').textContent()).trim();
@@ -27,7 +39,7 @@ test('два браузера входят в кооп-комнату по ре�
   await guest.goto(`/?room=${code}&mode=coop`);
   await expect(guest.locator('[data-mode="coop"]')).toHaveClass(/active/);
   await expect(guest.locator('#coopCode')).toHaveValue(code);
-  await guest.locator('#coopName').fill('Гость E2E');
+  await setPlayerName(guest, 'Гость E2E');
   await guest.locator('#coopJoin').click();
 
   await expect(host.locator('#players .player-row')).toHaveCount(2);

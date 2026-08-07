@@ -21,14 +21,26 @@ import { test, expect } from '@playwright/test';
 // подшагами на кадр, то есть при низком FPS забег растягивается во времени пропорционально.
 const RUN_BUDGET_MS = 150_000;
 
+// Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
+// окно аккаунта, вводим имя, сохраняем.
+async function setPlayerName(page, name) {
+  // Ждём, пока аккаунт войдёт: до этого переименовывать нечего, и попытка молча ничего не сделает.
+  await expect(page.locator('#accountName')).not.toHaveText('…', { timeout: 20_000 });
+  await page.locator('#accountChip').click();
+  await page.locator('#accountRename').fill(name);
+  await page.locator('#accountSave').click();
+  await expect(page.locator('#accountName')).toHaveText(name, { timeout: 10_000 });
+  await page.locator('#accountClose').click();
+}
+
 async function createRoom(page, name) {
   await page.goto('/');
+  await setPlayerName(page, name);
   // Сложность выбирается ДО переключения вкладки: выпадающий список живёт в панели одиночной игры,
   // а комнату гонки создают уже на соседней вкладке — при этом читается всё тот же список.
   // Лёгкая трасса выбрана намеренно: она самая короткая, а тест идёт настоящее время.
   await page.locator('#difficulty').selectOption('easy');
   await page.locator('[data-mode="multi"]').click();
-  await page.locator('#name').fill(name);
   await page.locator('#create').click();
   await expect(page.locator('#lobby')).toBeVisible();
   return (await page.locator('#roomCode').textContent()).trim();
@@ -36,8 +48,8 @@ async function createRoom(page, name) {
 
 async function joinRoom(page, name, code) {
   await page.goto('/');
+  await setPlayerName(page, name);
   await page.locator('[data-mode="multi"]').click();
-  await page.locator('#name').fill(name);
   await page.locator('#code').fill(code);
   await page.locator('#join').click();
   await expect(page.locator('#lobby')).toBeVisible();

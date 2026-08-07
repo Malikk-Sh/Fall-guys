@@ -20,6 +20,17 @@ import { APP_STATE, createAppStates } from './core/AppStates.js';
 import { StateRouter } from './core/StateRouter.js';
 import { RaceSession } from './game/RaceSession.js';
 import { CoopSession } from './game/CoopSession.js';
+import {
+  ensureAccount,
+  listAccounts,
+  currentAccount as accountForRecords,
+  createAccount,
+  loginAccount,
+  renameAccount,
+  rememberAccount,
+  switchAccount,
+  submitRecord
+} from './core/account.js';
 
 // Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
 // достаточно редко, чтобы на слабых устройствах хватало времени на отрисовку.
@@ -71,6 +82,14 @@ class Game {
     this.bindUI();
     this.installAudioUnlock();
     this.installLifecycle();
+
+    // Вход в аккаунт не блокирует запуск игры: сеть может отвечать долго или не отвечать вовсе,
+    // а меню должно появиться сразу. Имя и рекорды подставятся, когда ответ придёт.
+    //
+    // Обещание сохраняем: вход в комнату его дожидается. Иначе игрок, нажавший «создать комнату» в
+    // первые мгновения после загрузки, попадал бы туда без личности — и его результат не привязался
+    // бы к аккаунту.
+    this.accountReady = this.signIn();
 
     this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);
@@ -234,7 +253,93 @@ class Game {
     addEventListener('keydown', unlock);
   }
 
+  // --- аккаунт --------------------------------------------------------------------------------
+
+  // Автовход в последний аккаунт. При первом заходе аккаунт заводится сам: игрок не должен
+  // регистрироваться, чтобы просто побегать.
+  async signIn() {
+    const { account, records, online } = await ensureAccount({});
+    this.applyAccount(account, { online, records });
+    if (!online) this.ui.accountStatus('Сервер не ответил — рекорды сохранятся только на этом устройстве.');
+  }
+
+  // `records` не передают, когда менялось только имя: рекорды при этом те же, и пересобирать их
+  // из уже разобранной карты было бы лишним кругом.
+  applyAccount(account, { online = true, records = null } = {}) {
+    if (records) {
+      this.serverRecords = new Map(
+        records.map(record => [`${record.mode}:${record.courseKey}`, record.time])
+      );
+    }
+    this.ui.setAccount(account, { online });
+    this.ui.setAccountList(listAccounts());
+    // Меню показывает рекорд текущей трассы, а он у каждого аккаунта свой.
+    if (this.previewSpec) this.ui.preview(this.previewSpec, this.serverRecordFor('solo', this.previewSpec));
+  }
+
+  serverRecordFor(mode, spec) {
+    if (!spec) return null;
+    const key = mode === 'coop' ? spec.chapterId || spec.id : `${spec.seed}:${spec.difficulty}`;
+    return this.serverRecords?.get(`${mode}:${key}`) ?? null;
+  }
+
+  // Личный рекорд уходит на сервер после любого режима.
+  //
+  // Соло и кооп сервер проверить не может — он просто верит присланному времени, поэтому эти
+  // результаты остаются личными и в общую таблицу не попадают. Общий топ по-прежнему только у
+  // гонки, где каждое положение игрока проверено.
+  async saveServerRecord(mode, spec, time) {
+    const account = accountForRecords();
+    if (!account || !Number.isFinite(time) || time <= 0) return;
+    const courseKey = mode === 'coop' ? spec.chapterId || spec.id : `${spec.seed}:${spec.difficulty}`;
+    try {
+      const saved = await submitRecord({ secret: account.secret, mode, courseKey, timeMs: Math.round(time) });
+      if (saved?.best) this.serverRecords?.set(`${mode}:${courseKey}`, saved.best);
+    } catch {
+      // Рекорд не уехал — забег от этого не перестаёт быть пройденным, а локальная запись уже есть.
+    }
+  }
+
+  async handleAccountAction(action, value) {
+    const ui = this.ui;
+    try {
+      if (action === 'switch') {
+        switchAccount(value);
+        ui.accountStatus('Переключаюсь…');
+        return this.signIn();
+      }
+      if (action === 'create') {
+        const created = await createAccount('Wobbler');
+        if (!created) return ui.accountStatus('Не вышло создать аккаунт — сервер не ответил.');
+        rememberAccount(created);
+        this.applyAccount(created, { records: created.records });
+        return ui.accountStatus('Новый аккаунт готов. Загляните в «МОЙ КОД», чтобы не потерять его.');
+      }
+      if (action === 'login') {
+        const entered = await loginAccount(value);
+        if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
+        // Код сохраняем ровно тот, что ввёл игрок: сервер его обратно не присылает.
+        rememberAccount({ ...entered, secret: value });
+        this.applyAccount({ ...entered, secret: value }, { records: entered.records });
+        return ui.accountStatus(`Вошли как ${entered.name}.`);
+      }
+      if (action === 'rename') {
+        const account = accountForRecords();
+        if (!account) return ui.accountStatus('Сначала нужен аккаунт.');
+        const renamed = await renameAccount(account.secret, value);
+        if (!renamed) return ui.accountStatus('Переименовать не вышло — сервер не ответил.');
+        rememberAccount({ ...renamed, secret: account.secret });
+        this.applyAccount({ ...renamed, secret: account.secret });
+        return ui.accountStatus('Имя изменено.');
+      }
+    } catch {
+      ui.accountStatus('Не получилось — попробуйте ещё раз.');
+    }
+    return undefined;
+  }
+
   bindUI() {
+    this.ui.onAccountAction = (action, value) => this.handleAccountAction(action, value);
     const $ = s => document.querySelector(s);
     const click = (selector, handler) =>
       $(selector).addEventListener('click', event => {
@@ -245,7 +350,8 @@ class Game {
     click('#play', () => this.startSingle(false));
     click('#again', () => this.startRace('single', this.lastSpec));
     click('#newCourse', () => this.startSingle(true));
-    click('#create', () => {
+    click('#create', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.createRoom({
         name: this.ui.playerName(),
@@ -253,7 +359,8 @@ class Game {
         difficulty: $('#difficulty').value
       });
     });
-    click('#join', () => {
+    click('#join', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.joinRoom({
         name: this.ui.playerName(),
@@ -356,7 +463,8 @@ class Game {
     this.ui.fillChapters(COOP_CHAPTERS, chapter => {
       this.coopChapterId = chapter.id;
     });
-    click('#coopCreate', () => {
+    click('#coopCreate', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.createRoom({
         name: this.ui.coopName(),
@@ -365,7 +473,8 @@ class Game {
         difficulty: this.ui.coopChapter()
       });
     });
-    click('#coopJoin', () => {
+    click('#coopJoin', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.joinRoom({
         name: this.ui.coopName(),
@@ -675,8 +784,11 @@ class Game {
         dashes: this.player.dashes,
         hits: this.player.hits,
         spec: this.course.spec,
-        unranked: this.session.unranked
+        unranked: this.session.unranked,
+        serverBest: this.serverRecordFor('solo', this.course.spec)
       });
+      // Забег без зачёта рекордом не считается — ни локально, ни на сервере.
+      if (!this.session.unranked) this.saveServerRecord('solo', this.course.spec, time);
     } else {
       this.input.enabled = false;
       // Финиш вместе с последним состоянием — одной операцией. Отдельная отправка позиции
@@ -773,12 +885,14 @@ class Game {
       this.ui.awaitPartnerFinish();
       return;
     }
+    const raceTime = message.time ?? this.session.finalTime;
     this.ui.finishMulti({
-      time: message.time ?? this.session.finalTime,
+      time: raceTime,
       board: this.latestBoard,
       selfId: this.net.id,
       unranked: this.session.unranked
     });
+    if (!this.session.unranked) this.saveServerRecord('race', this.course?.spec, raceTime);
   }
 
   // Итоги матча. В гонке карточка уже показана по своему финишу, здесь только доска обновляется;
@@ -793,14 +907,17 @@ class Game {
     }
     this.state.transition(APP_STATE.RESULTS);
     this.music.setIntensity(0);
+    const coopTime = message.coopTime ?? this.session.finalTime;
+    if (!this.session.unranked) this.saveServerRecord('coop', this.course?.spec, coopTime);
     this.ui.finishCoop({
-      time: message.coopTime ?? this.session.finalTime,
+      time: coopTime,
       chapter: this.course?.spec || null,
       board: this.latestBoard,
       selfId: this.net?.id,
       revives: this.coop.revives,
       matchId: this.net?.matchId,
-      unranked: this.session.unranked
+      unranked: this.session.unranked,
+      serverBest: this.serverRecordFor('coop', this.course?.spec)
     });
   }
 

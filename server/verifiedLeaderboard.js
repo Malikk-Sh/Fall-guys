@@ -9,7 +9,7 @@
 // сервере, ни новой зависимости в package.json. Для одного процесса на одном VPS этого достаточно;
 // PostgreSQL или Redis понадобятся, только когда экземпляров станет несколько.
 
-const { DatabaseSync } = require('node:sqlite');
+const { openDatabase } = require('./db');
 
 // Версия алгоритма проверки забега. Хранится вместе с рекордом.
 //
@@ -56,8 +56,12 @@ class VerifiedLeaderboard {
   // `file` по умолчанию ':memory:' — так тесты гоняют ровно тот же SQL, что и боевой сервер, но без
   // файла на диске. Отдельной реализации «в памяти» нет намеренно: две ветки кода разошлись бы, и
   // проверенным оказался бы не тот путь, который работает у игроков.
+  // `db` передаётся, когда соединение общее с аккаунтами: таблицы живут в одном файле, и открывать
+  // его вторым соединением значило бы получать редкие «database is locked» на ровном месте.
+  // Без него открывается своё — так работают тесты, где нужна только эта таблица.
   constructor({
     file = ':memory:',
+    db = null,
     limit = DEFAULT_LIMIT,
     storedPerCourse = STORED_PER_COURSE,
     maxCourses = MAX_COURSES,
@@ -67,13 +71,8 @@ class VerifiedLeaderboard {
     this.storedPerCourse = storedPerCourse;
     this.maxCourses = maxCourses;
     this.verificationVersion = verificationVersion;
-    this.db = new DatabaseSync(file);
-    // WAL переживает падение процесса без потери уже записанных строк, а NORMAL убирает fsync на
-    // каждой вставке: рекорды пишутся редко, но терять их из-за одного жёсткого выключения обидно.
-    if (file !== ':memory:') {
-      this.db.exec('PRAGMA journal_mode = WAL');
-      this.db.exec('PRAGMA synchronous = NORMAL');
-    }
+    this.ownsDb = !db;
+    this.db = db || openDatabase(file);
     this.db.exec(SCHEMA);
     this.statements = prepare(this.db);
   }
@@ -160,8 +159,10 @@ class VerifiedLeaderboard {
     this.db.exec('DELETE FROM recorded_matches');
   }
 
+  // Закрываем только своё соединение. Общее принадлежит вызывающему, и закрыть его отсюда значило
+  // бы утащить за собой аккаунты.
   close() {
-    this.db.close();
+    if (this.ownsDb) this.db.close();
   }
 }
 

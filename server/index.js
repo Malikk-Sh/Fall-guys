@@ -37,6 +37,8 @@ const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/va
 const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChapters.js');
 const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
 const { VerifiedLeaderboard, VERIFICATION_VERSION } = require('./verifiedLeaderboard');
+const { openDatabase } = require('./db');
+const { Accounts } = require('./accounts');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -134,9 +136,10 @@ const rooms = new Map();
 //
 // Пустое значение и ':memory:' здесь не одно и то же по смыслу, но одно и то же по поведению, и
 // это осознанно: сервер, у которого забыли настроить путь, должен работать, а не падать на старте.
-const verifiedLeaderboard = new VerifiedLeaderboard({
-  file: process.env.LEADERBOARD_DB || ':memory:'
-});
+// Одно соединение на весь процесс: таблица рекордов и аккаунты лежат в одном файле.
+const gameDb = openDatabase(process.env.LEADERBOARD_DB || ':memory:');
+const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
+const accounts = new Accounts({ db: gameDb });
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
@@ -316,6 +319,93 @@ app.get('/leaderboard', (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// Аккаунты.
+//
+// Разговор идёт по HTTP, а не по WebSocket, сознательно: одиночный забег сокет вообще не открывает,
+// а рекорд после него сохранить надо. Заводить ради этого соединение значило бы держать его ради
+// одного сообщения.
+//
+// Код восстановления присылается с каждым запросом вместо серверной сессии. Отдельная таблица
+// сессий здесь ничего не добавила бы: код и так хранится у игрока, живёт долго и передаётся по тому
+// же TLS, что и любая сессия.
+
+// Разбор тела с жёстким потолком: тут ждут короткий JSON, и принимать мегабайты незачем.
+const accountJson = express.json({ limit: '2kb' });
+
+// Ограничители по адресу, отдельные от комнатных.
+//
+// У создания аккаунта и у входа разные опасности: первое спамят, второе перебирают. Общий счётчик
+// означал бы, что спам создания закрывает вход честному игроку с того же адреса — а за NAT это
+// целый дом.
+const HTTP_WINDOW_MS = 10 * 60 * 1000;
+const httpLimits = { create: [20, new Map()], login: [40, new Map()], record: [200, new Map()] };
+
+function httpRateLimited(kind, ip) {
+  if (!ip) return false;
+  const [max, hits] = httpLimits[kind];
+  const now = Date.now();
+  const entry = hits.get(ip);
+  if (!entry || now - entry.start > HTTP_WINDOW_MS) {
+    hits.set(ip, { start: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  return entry.count > max;
+}
+
+// Личные рекорды отдаются вместе с аккаунтом: клиенту они нужны сразу после входа, чтобы показать
+// рекорд трассы в меню, и отдельный запрос за ними был бы лишним кругом.
+const accountPayload = account => ({
+  ok: true,
+  account: { id: account.id, name: account.name },
+  records: accounts.records(account.id)
+});
+
+app.post('/account', accountJson, (req, res) => {
+  if (httpRateLimited('create', clientIp(req))) {
+    return res.status(429).json({ ok: false, error: 'rate-limited' });
+  }
+  const account = accounts.create(req.body?.name);
+  log('info', 'account_created', { accountId: account.id });
+  // Код возвращается ровно здесь и больше нигде: на сервере остаётся только его хеш.
+  return res.status(201).json({ ...accountPayload(account), secret: account.secret });
+});
+
+app.post('/account/login', accountJson, (req, res) => {
+  if (httpRateLimited('login', clientIp(req))) {
+    return res.status(429).json({ ok: false, error: 'rate-limited' });
+  }
+  const account = accounts.login(req.body?.secret);
+  // 404, а не 403: «такого аккаунта нет» и «код неверный» — для игрока одно и то же событие, и
+  // различать их вслух значило бы подсказывать перебирающему, что он угадал половину.
+  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  return res.json(accountPayload(account));
+});
+
+app.post('/account/name', accountJson, (req, res) => {
+  const account = accounts.login(req.body?.secret);
+  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  const name = accounts.rename(account.id, req.body?.name);
+  return res.json({ ok: true, account: { id: account.id, name } });
+});
+
+app.post('/account/record', accountJson, (req, res) => {
+  if (httpRateLimited('record', clientIp(req))) {
+    return res.status(429).json({ ok: false, error: 'rate-limited' });
+  }
+  const account = accounts.login(req.body?.secret);
+  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  const saved = accounts.saveRecord({
+    accountId: account.id,
+    mode: req.body?.mode,
+    courseKey: req.body?.courseKey,
+    timeMs: Number(req.body?.timeMs)
+  });
+  if (saved.reason) return res.status(400).json({ ok: false, error: saved.reason });
+  return res.json({ ok: true, ...saved });
+});
+
 // Отдаём index.html только для навигационных запросов. Раньше сюда попадали и запросы к
 // несуществующим ассетам — браузер получал HTML вместо 404 и молча ломался на разборе.
 app.get('*', (req, res, next) => {
@@ -346,6 +436,26 @@ const setResultsTimeout = ms => {
 // Сколько держим слот игрока после обрыва связи, прежде чем выкинуть его из комнаты.
 const RECONNECT_GRACE_MS = 30 * 1000;
 const SESSION_TTL_MS = 60 * 1000;
+
+// Уборка просроченных сессий — и продление живых.
+//
+// Продление здесь принципиально. Срок ставился при входе и обновлялся только на обрыве и на
+// возвращении, но НЕ во время игры. То есть у любого, кто играет дольше минуты, сессия тихо
+// протухала прямо посреди матча, и перезагрузка страницы уводила его в главное меню вместо своей
+// комнаты — место в матче терялось на ровном месте.
+//
+// Смысл срока — «сколько ждём того, о ком ничего не слышно». Пока сокет игрока жив, ждать не нужно,
+// поэтому таким сессиям срок сдвигается вперёд.
+function expireSessions(now = Date.now()) {
+  for (const [token, session] of sessions) {
+    const player = rooms.get(session.roomCode)?.players.get(session.playerId);
+    if (player && !player.disconnectedAt && player.ws?.readyState === WebSocket.OPEN) {
+      session.expiresAt = now + SESSION_TTL_MS;
+      continue;
+    }
+    if (now > session.expiresAt) sessions.delete(token);
+  }
+}
 
 // Ограничение операций с комнатами по адресу — поверх ограничения по типам сообщений,
 // которое действует на каждое соединение отдельно.
@@ -1533,7 +1643,7 @@ const heartbeatTimer = setInterval(() => {
     if (room.state === ROOM_STATE.PLAYING) checkMatchEnd(room);
   }
 
-  for (const [token, session] of sessions) if (now > session.expiresAt) sessions.delete(token);
+  expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
   for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
 }, 15000);
@@ -1592,9 +1702,9 @@ function shutdown(signal, { exitProcess = true } = {}) {
       // База закрывается до выхода: в режиме WAL это дописывает журнал в основной файл, и рекорды
       // не зависят от того, успеет ли это сделать следующий запуск.
       try {
-        verifiedLeaderboard.close();
+        gameDb.close();
       } catch (error) {
-        log('warn', 'leaderboard_close_failed', { error: error.message });
+        log('warn', 'database_close_failed', { error: error.message });
       }
       log('info', 'shutdown_complete', {});
       // exitProcess снимается в тестах: выход из процесса убил бы сам прогон. Проверять поведение
@@ -1624,6 +1734,7 @@ module.exports = {
   sessions,
   metrics,
   verifiedLeaderboard,
+  accounts,
   leave,
   resetLobby,
   originAllowed,
@@ -1635,5 +1746,7 @@ module.exports = {
   createEventCounters,
   trackEvent,
   setResultsTimeout,
+  expireSessions,
+  SESSION_TTL_MS,
   shutdown
 };

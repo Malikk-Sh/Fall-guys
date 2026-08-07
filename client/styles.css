@@ -574,12 +574,35 @@ canvas {
   left: calc(12px + var(--safe-left));
   right: calc(12px + var(--safe-right));
   display: grid;
-  grid-template-columns: auto minmax(180px, 460px) auto auto;
+  grid-template-columns: auto auto minmax(180px, 460px) auto auto;
   gap: 8px;
   align-items: start;
   justify-content: center;
   pointer-events: none;
 }
+/* Выход из матча. Намеренно тише остального HUD: он нужен редко, а нажать его случайно на телефоне
+   — потерять забег. По той же причине выход подтверждается вторым нажатием, см. main.js. */
+.hud-leave {
+  pointer-events: auto;
+  align-self: stretch;
+  padding: 0 12px;
+  border: 1px solid #ffffff5c;
+  border-radius: 13px;
+  background: #2d1c7480;
+  color: #ffffffc4;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  backdrop-filter: blur(9px);
+  cursor: pointer;
+}
+.hud-leave.armed {
+  border-color: var(--pink);
+  background: #6b1f4bcc;
+  color: #fff;
+}
+
 .hud-card,
 .hud-progress {
   border: 1px solid #ffffff9c;
@@ -1066,7 +1089,7 @@ canvas {
     top: calc(8px + var(--safe-top));
     left: calc(8px + var(--safe-left));
     right: calc(8px + var(--safe-right));
-    grid-template-columns: auto 1fr auto;
+    grid-template-columns: auto auto 1fr auto;
     gap: 5px;
   }
   .hud-card {

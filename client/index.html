@@ -249,6 +249,10 @@
     </section>
 
     <header id="hud" class="hud hidden">
+      <!-- Выход из идущего матча. Раньше его не было вовсе: из забега выходили только через финиш,
+           а в кооперативе, где напарник мог уйти посреди главы, оставшийся запирался навсегда —
+           перезагрузка страницы возвращает в тот же матч. -->
+      <button id="leaveMatch" class="hud-leave" type="button">ВЫЙТИ</button>
       <div class="hud-card"><small>ВРЕМЯ</small><strong id="timer">00:00.00</strong></div>
       <div class="hud-progress">
         <div class="hud-progress-label">

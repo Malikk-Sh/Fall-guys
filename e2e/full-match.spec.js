@@ -204,6 +204,19 @@ test.describe('полный матч на двоих', () => {
     await expect(guest.locator('#menu')).toBeHidden();
     expect(await guest.evaluate(() => sessionStorage.getItem('wobble-session'))).toBe(token);
 
+    // Выход из идущего матча. Кнопки не было вовсе: из забега выходили только через финиш, а в
+    // кооперативе, где напарник может уйти посреди главы, оставшийся запирался навсегда —
+    // перезагрузка страницы возвращает в тот же матч.
+    //
+    // Подтверждение вторым нажатием проверяется отдельно: первое нажатие обязано только
+    // предупредить, иначе случайное касание на телефоне стоило бы забега.
+    await host.locator('#leaveMatch').click();
+    await expect(host.locator('#leaveMatch')).toHaveText('ТОЧНО?');
+    await expect(host.locator('#hud')).toBeVisible();
+    await host.locator('#leaveMatch').click();
+    await expect(host.locator('#menu')).toBeVisible({ timeout: 10_000 });
+    await expect(host.locator('#hud')).toBeHidden();
+
     await hostContext.close();
     await guestContext.close();
   });

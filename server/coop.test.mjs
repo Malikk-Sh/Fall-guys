@@ -18,6 +18,7 @@ import {
   getChapter
 } from '../shared/coopChapters.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
+import { World } from './bots.mjs';
 import { RUN_SPEED } from '../client/game/Player.js';
 import { PLAYER_FOOT } from '../client/game/CourseBuilder.js';
 
@@ -280,6 +281,151 @@ test('у каждого светового моста есть фиксатор 
 // Обучение — тоже данные, и портится оно так же тихо, как геометрия: достаточно переименовать
 // пролёт или удлинить отрезок, и подсказка либо начнёт ссылаться в пустоту, либо появится не там.
 // Ни то, ни другое не уронит игру — она просто перестанет учить.
+// Конвейер обязан ТЯНУТЬ, а не изображать движение.
+//
+// Он не работал вовсе, и заметить это по коду было нельзя: сила прибавлялась к скорости, а
+// торможение управления в Player.step стягивает скорость к желаемой каждый кадр с коэффициентом 18.
+// В равновесии от силы оставалось около четырёх процентов — при силе 3.2 стоящего игрока сносило на
+// 0.08 единицы в секунду. Полосы на полу при этом бегут независимо от физики, поэтому уровень
+// выглядел исправным.
+//
+// Ровно та же ошибка была у вентилятора и там уже исправлена; лента её пережила, потому что её
+// никто не мерил. Этот тест меряет: бот стоит на ленте, не трогая управление, и обязан уехать.
+function beltPieces() {
+  const found = [];
+  for (const chapter of COOP_CHAPTERS) {
+    const { pieces } = chapterLayout(chapter.id);
+    for (const piece of pieces) {
+      const belt = (piece.props || []).find(prop => prop.type === 'conveyor');
+      if (belt) found.push({ chapter: chapter.id, piece, force: belt.force });
+    }
+  }
+  return found;
+}
+
+// Ставит бота на ленту у того края, от которого она тянет, и возвращает снос за секунду.
+function beltDrift(entry, { airborne = false } = {}) {
+  const world = new World(coopSpec(entry.chapter));
+  const bot = world.spark;
+  const { piece, force } = entry;
+  const z = force > 0 ? piece.z - piece.length / 2 + 2 : piece.z + piece.length / 2 - 2;
+  bot.player.teleport(new THREE.Vector3(0, airborne ? 6 : 1.4, z));
+  const idle = () => {
+    bot.input.moveX = 0;
+    bot.input.moveForward = 0;
+  };
+  for (let i = 0; i < 30; i++) {
+    idle();
+    if (airborne) bot.player.velocity.y = 0.4;
+    world.step();
+  }
+  const grounded = bot.player.grounded;
+  const startZ = bot.position.z;
+  for (let i = 0; i < 60; i++) {
+    idle();
+    if (airborne) bot.player.velocity.y = 0.4;
+    world.step();
+  }
+  const drift = bot.position.z - startZ;
+  world.dispose();
+  return { drift, grounded };
+}
+
+test('лента уносит стоящего игрока со своей силой', () => {
+  const belts = beltPieces();
+  assert.ok(belts.length >= 3, 'подготовка: лента должна встречаться хотя бы в трёх главах');
+  for (const entry of belts) {
+    const { drift, grounded } = beltDrift(entry);
+    assert.equal(grounded, true, `${entry.chapter}: подготовка — бот обязан стоять на ленте`);
+    // Допуск в четверть: сверху добавка к скорости ради наклона персонажа, снизу — трение о
+    // геометрию. Важно не точное число, а порядок: раньше здесь было 2.6 % от силы.
+    assert.ok(
+      Math.abs(drift - entry.force) < Math.abs(entry.force) * 0.25,
+      `${entry.chapter}: сила ${entry.force}, а снесло ${drift.toFixed(3)}`
+    );
+    assert.equal(Math.sign(drift), Math.sign(entry.force), `${entry.chapter}: лента тянет не в ту сторону`);
+  }
+});
+
+test('в прыжке над лентой не тянет', () => {
+  const entry = beltPieces()[0];
+  const { drift, grounded } = beltDrift(entry, { airborne: true });
+  assert.equal(grounded, false, 'подготовка: бот обязан быть в воздухе');
+  assert.ok(
+    Math.abs(drift) < Math.abs(entry.force) * 0.15,
+    `над лентой снесло ${drift.toFixed(3)} при силе ${entry.force}`
+  );
+});
+
+// Оставшийся без напарника обязан суметь закончить главу.
+//
+// Раньше он запирался намертво. Кооперативный мост держится, только пока кто-то стоит на плите, а
+// половина плит стоит ЗА пропастью — одному до них не добраться ни при какой фиксации. Выйти из
+// идущего матча было нечем (кнопки не существовало), перезагрузка страницы возвращает в тот же
+// матч по токену сессии, а сервер ждал финиша и не завершал забег. Игрок оставался в главе навсегда.
+//
+// Проверяется именно ИГРОВОЕ свойство, а не флаг: бот идёт через пропасть, которую в одиночку не
+// перепрыгнуть, и обязан оказаться на той стороне живым.
+function crossAlone(chapterId, spanId, { solo }) {
+  const { pieces } = chapterLayout(chapterId);
+  const piece = pieces.find(item => item.id === spanId);
+  const near = piece.z + piece.length / 2;
+  const far = piece.z - piece.length / 2;
+
+  const world = new World(coopSpec(chapterId));
+  world.course.solo = solo;
+  const walker = world.spark;
+  // Напарника нет: второй бот стоит на старте и ничего не нажимает.
+  walker.player.teleport(new THREE.Vector3(0, 1.4, near + 4));
+
+  const crossed = world.run(
+    18,
+    () => {
+      walker.input.holding.jump = true;
+      walker.lookAt(0, far - 20);
+      walker.steerTo(0, far - 4);
+      if (walker.player.grounded) walker.input.jumpQueued = true;
+      world.anchor.input.moveX = 0;
+      world.anchor.input.moveForward = 0;
+    },
+    () => walker.position.z < far - 1 && walker.player.grounded
+  );
+  world.dispose();
+  return crossed;
+}
+
+test('в одиночку кооперативные ворота не пройти', () => {
+  assert.equal(
+    crossAlone('ch1', 'g1', { solo: false }),
+    false,
+    'пока напарник в комнате, мост обязан требовать плиту'
+  );
+});
+
+test('когда напарник ушёл, преграды открываются и главу можно закончить', () => {
+  assert.equal(crossAlone('ch1', 'g1', { solo: true }), true, 'оставшийся один обязан пройти ворота');
+});
+
+test('в одиночку открываются и ворота синхронности — их вдвоём-то проходят с трудом', () => {
+  const chapter = COOP_CHAPTERS.map(item => item.id).find(id =>
+    chapterLayout(id).pieces.some(piece => piece.kind === 'syncSpan')
+  );
+  assert.ok(chapter, 'подготовка: где-то должны быть ворота синхронности');
+  const spanId = chapterLayout(chapter).pieces.find(piece => piece.kind === 'syncSpan').id;
+  assert.equal(crossAlone(chapter, spanId, { solo: false }), false);
+  assert.equal(crossAlone(chapter, spanId, { solo: true }), true);
+});
+
+// Переключатель обязан быть именно переключателем: вернулся напарник — вернулись и правила.
+test('одиночный режим включается и выключается, но сообщает об этом один раз', () => {
+  const course = build('ch1');
+  assert.equal(course.solo, false, 'по умолчанию глава кооперативная');
+  assert.equal(course.setSolo(true), true, 'первое включение — изменение');
+  assert.equal(course.setSolo(true), false, 'повторное включение изменением не считается');
+  assert.equal(course.setSolo(false), true);
+  course.dispose();
+});
+
 test('уроки ссылаются на существующие объекты своей главы и стоят в правильном порядке', () => {
   for (const chapter of COOP_CHAPTERS) {
     const spec = coopSpec(chapter.id);
@@ -634,11 +780,7 @@ test('пресс проходит три такта и озвучивает ка
   }
 
   // Убивает только в такте удара.
-  assert.equal(
-    dangerous.some(Boolean),
-    true,
-    'окно опасности должно существовать, иначе пресс безобиден'
-  );
+  assert.equal(dangerous.some(Boolean), true, 'окно опасности должно существовать, иначе пресс безобиден');
   assert.ok(
     dangerous.filter(Boolean).length < dangerous.length * 0.6,
     'опасное окно не должно занимать большую часть цикла — это уже не препятствие, а стена'
@@ -815,10 +957,7 @@ test('попутный ветер помогает, но не разгоняет
     for (const fan of course.fans) {
       const along = Math.sign(fan.force);
       const speed = Math.abs(runAcross(course, fan, along));
-      assert.ok(
-        speed > RUN_SPEED,
-        `${id}: попутный ветер вовсе не ощущается (${speed.toFixed(2)})`
-      );
+      assert.ok(speed > RUN_SPEED, `${id}: попутный ветер вовсе не ощущается (${speed.toFixed(2)})`);
       assert.ok(
         speed < RUN_SPEED * 1.4,
         `${id}: по ветру разгоняет до ${speed.toFixed(2)} при беге ${RUN_SPEED} — это снаряд`

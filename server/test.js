@@ -10,7 +10,8 @@ const {
   leaderboard,
   verifyCheckpointTime,
   verifyMovement,
-  MIN_CHECKPOINT_INTERVAL_MS
+  MIN_CHECKPOINT_INTERVAL_MS,
+  MAX_MOVEMENT_ANOMALIES
 } = require('./gameRules');
 const {
   originAllowed,
@@ -164,21 +165,99 @@ test('проверка движения отличает честный бег, 
     []
   );
 
+  // Отклонения считаются с первого же пакета, но нарушением становятся только по исчерпании
+  // запаса — см. следующий тест. Здесь проверяется, что признак вообще замечен.
   const speedhack = verifyMovement(
     player,
     { x: 0, y: 1, z: -4, ry: 0, vx: 0, vy: 0, vz: -30, state: 'ground' },
     1100
   );
-  assert.ok(speedhack.includes('reported-speed'));
-  assert.ok(speedhack.includes('observed-speed'));
-  assert.ok(speedhack.includes('horizontal-acceleration'));
+  assert.deepEqual(speedhack, [], 'один пакет запас не исчерпывает');
+  assert.equal(player.movementAnomalies['reported-speed'], 1, 'заявленная скорость замечена');
+  assert.equal(player.movementAnomalies['observed-speed'], 1, 'наблюдаемая скорость замечена');
 
-  const dive = verifyMovement(
-    player,
-    { x: 0, y: 2, z: -1, ry: 0, vx: 0, vy: 3, vz: -10.8, state: 'dive' },
-    1050
+  const diver = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -8 }, lastAt: 1000 };
+  verifyMovement(diver, { x: 0, y: 2, z: -1, ry: 0, vx: 0, vy: 3, vz: -10.8, state: 'dive' }, 1050);
+  assert.equal(
+    diver.movementAnomalies?.['horizontal-acceleration'],
+    undefined,
+    'штатный dive получает больший лимит и отклонением не считается'
   );
-  assert.equal(dive.includes('horizontal-acceleration'), false, 'штатный dive получает больший лимит');
+});
+
+// Единичный всплеск ускорения — это удар бампера, а не читерство: препятствие задаёт скорость
+// напрямую, и между соседними пакетами она меняется на всю величину отброса. Сервер про
+// расположение препятствий не знает — их геометрия рождается на клиенте из сида.
+//
+// Раньше одного такого пакета хватало, чтобы снять зачёт со всего забега, то есть почти любой
+// честный забег с попаданием в бампер в таблицу рекордов не попадал никогда. Поймано сквозным
+// тестом: бот проходил трассу честно, а итог выходил без зачёта.
+test('удары препятствий не отменяют забег, а систематическая подделка — отменяет', () => {
+  // Удар: скорость меняется рывком с бега на отброс. Ровно то, что делает бампер в Course.interact.
+  const knock = (player, at) =>
+    verifyMovement(player, { x: 0, y: 1, z: 0, ry: 0, vx: 10, vy: 0, vz: 0, state: 'air' }, at);
+  const settle = (player, at) =>
+    verifyMovement(player, { x: 0, y: 1, z: 0, ry: 0, vx: 0, vy: 0, vz: -7, state: 'ground' }, at);
+
+  // Отсчёт не с нуля: lastAt === 0 — ложное значение, и verifyMovement на таком игроке выходит
+  // сразу, то есть первый удар в цикле не проверялся бы вовсе.
+  const honest = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -7 }, lastAt: 1000 };
+  let at = 1000;
+  // Пять ударов за забег — столько дал замер на «хаосе», самой жёсткой трассе.
+  for (let i = 0; i < 5; i++) {
+    at += 50;
+    assert.deepEqual(knock(honest, at), [], `удар ${i + 1} не должен отменять забег`);
+    honest.last = { x: 0, y: 1, z: 0, vx: 10, vz: 0 };
+    honest.lastAt = at;
+    at += 50;
+    settle(honest, at);
+    honest.last = { x: 0, y: 1, z: 0, vx: 0, vz: -7 };
+    honest.lastAt = at;
+  }
+
+  // Клиент, подделывающий ускорение на каждом пакете, запас исчерпывает и попадается.
+  const cheat = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -7 }, lastAt: 1000 };
+  let caught = false;
+  for (let i = 1; i <= MAX_MOVEMENT_ANOMALIES + 1; i++) {
+    const at = 1000 + i * 50;
+    const findings = verifyMovement(
+      cheat,
+      { x: 0, y: 1, z: 0, ry: 0, vx: i % 2 ? 12 : -12, vy: 0, vz: 0, state: 'ground' },
+      at
+    );
+    if (findings.includes('horizontal-acceleration')) caught = true;
+    cheat.last = { x: 0, y: 1, z: 0, vx: i % 2 ? 12 : -12, vz: 0 };
+    cheat.lastAt = at;
+  }
+  assert.ok(caught, 'систематическая подделка ускорения обязана попадаться');
+  assert.ok(
+    cheat.movementAnomalies['horizontal-acceleration'] > MAX_MOVEMENT_ANOMALIES,
+    'запас считается по игроку, а не глобально'
+  );
+
+  // Заявленная скорость устроена так же: единичный выброс — это отброс вертушкой, а постоянный —
+  // speedhack. Замер на живых забегах: заявленная выше потолка не встретилась ни разу, наблюдаемая
+  // — один пакет из 557, поэтому запас в пятнадцать честную игру не задевает.
+  const speeder = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -7 }, lastAt: 1000 };
+  let speedCaught = false;
+  for (let i = 1; i <= MAX_MOVEMENT_ANOMALIES + 1; i++) {
+    const at = 1000 + i * 50;
+    const findings = verifyMovement(
+      speeder,
+      { x: 0, y: 1, z: -i * 2, ry: 0, vx: 0, vy: 0, vz: -30, state: 'ground' },
+      at
+    );
+    if (findings.includes('reported-speed')) speedCaught = true;
+    speeder.last = { x: 0, y: 1, z: -i * 2, vx: 0, vz: -30 };
+    speeder.lastAt = at;
+  }
+  assert.ok(speedCaught, 'постоянный speedhack обязан попадаться');
+
+  // Запасы независимы: исчерпание одного признака не отменяет зачёт по другому и наоборот.
+  const mixed = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -7 }, lastAt: 1000 };
+  verifyMovement(mixed, { x: 0, y: 1, z: 0, ry: 0, vx: 0, vy: 0, vz: -30, state: 'ground' }, 1050);
+  assert.equal(mixed.movementAnomalies['reported-speed'], 1);
+  assert.equal(mixed.movementAnomalies['observed-speed'], undefined, 'признаки считаются раздельно');
 });
 
 test('катапульта проверяется по авторитетной геометрии главы', () => {

@@ -16,7 +16,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Сквозной тест полного матча идёт настоящее время: забег нельзя ускорить, сервер проверяет
+    # скорость так же, как у живого игрока. Два таких сценария — около двух минут сверх прежнего.
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v4

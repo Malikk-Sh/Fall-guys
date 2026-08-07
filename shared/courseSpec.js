@@ -37,6 +37,80 @@ export const SEGMENT_TYPES = Object.freeze([
 
 const SEGMENT_VARIANTS = 3;
 
+// Ширина опоры сегмента по типу — единственное место, где она задана.
+//
+// Клиент по этим числам кладёт пол, сервер по ним же понимает, где пола нет. Раньше сервер о
+// геометрии не знал вовсе и мог отличить бег по трассе от бега рядом с ней только по скорости.
+export const SEGMENT_WIDTH = Object.freeze({
+  sweepers: 12,
+  movers: 11,
+  bumpers: 12,
+  bridge: 3.4,
+  punchers: 11,
+  bounce: 12,
+  crosswind: 9
+});
+
+// «Небесные ступени» — единственный тип, где опора уезжает за край посадочных площадок: сами
+// площадки шириной 11, но подвижные платформы ходят по X на ±3.8 и при полуширине 1.9 достают
+// до 5.7. Коридор считается по дальней точке, иначе игрок на краю платформы выглядел бы стоящим
+// в пустоте.
+const MOVER_REACH = 5.7;
+
+// Стартовая площадка: клиент строит её по этим же числам.
+export const START_PLATFORM = Object.freeze({ z: 5, width: 14, depth: 14 });
+
+// Финишный выкат: ступени и тумба ворот. Самая широкая часть — тумба шириной 11.
+const FINISH_HALF_WIDTH = 5.5;
+const FINISH_RUNOUT = 3;
+
+// Высота, на которой игрок оказывается, стоя на опоре. Все опоры трассы лежат в узкой полосе: пол
+// сегментов даёт 0.98, подвижные платформы — от 0.9, финишная тумба — 1.85. Замер по шестидесяти
+// честным прогонам: 0.80 … 1.85.
+export const GROUND_Y_MIN = 0.4;
+export const GROUND_Y_MAX = 2.4;
+
+// Выше этой отметки не достаёт ни одно препятствие: самый высокий удар — бампер, и тот работает
+// лишь до 2.8. Всё, что происходит выше, обязано подчиняться одной гравитации.
+export const OBSTACLE_REACH_Y = 3;
+
+// Насколько игрок может выйти за расчётный край опоры. В самой геометрии допуск края 0.12 (см.
+// EDGE_TOLERANCE в CourseBuilder), остальное — запас на округление координат до трёх знаков.
+export const CORRIDOR_MARGIN = 0.5;
+
+// Зоны трассы: отрезок по Z и допустимое удаление от оси внутри него. Соседние зоны стыкуются
+// вплотную, поэтому на границе берётся более широкая из двух — иначе игрок, стоящий на краю
+// предыдущего сегмента, считался бы вышедшим за пределы следующего.
+export function corridorZones(spec) {
+  const zones = [
+    {
+      min: START_PLATFORM.z - START_PLATFORM.depth / 2,
+      max: START_PLATFORM.z + START_PLATFORM.depth / 2,
+      half: START_PLATFORM.width / 2
+    }
+  ];
+  for (let i = 0; i < spec.segmentCount; i++) {
+    const center = FIRST_SEGMENT_CENTER - SEGMENT_LENGTH * i;
+    const type = spec.segments[i]?.type;
+    const half = type === 'movers' ? MOVER_REACH : (SEGMENT_WIDTH[type] || 12) / 2;
+    zones.push({ min: center - SEGMENT_LENGTH / 2, max: center + SEGMENT_LENGTH / 2, half });
+  }
+  zones.push({
+    min: spec.finishZ - FINISH_RUNOUT,
+    max: -SEGMENT_LENGTH * spec.segmentCount,
+    half: FINISH_HALF_WIDTH
+  });
+  return zones;
+}
+
+// Максимальное удаление от оси, на котором в этой точке трассы вообще есть опора.
+// Вне известных зон ограничения нет: там работает общая проверка границ мира.
+export function corridorHalfWidth(zones, z) {
+  let half = 0;
+  for (const zone of zones) if (z >= zone.min - 0.3 && z <= zone.max + 0.3) half = Math.max(half, zone.half);
+  return half || Infinity;
+}
+
 export const SEGMENT_ROLE = Object.freeze({
   WARMUP: 'warmup',
   SKILL: 'skill',

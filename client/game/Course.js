@@ -5,6 +5,8 @@ import {
   DIFFICULTIES,
   FIRST_SEGMENT_CENTER,
   SEGMENT_LENGTH,
+  SEGMENT_WIDTH,
+  START_PLATFORM,
   courseName,
   courseSpec,
   seededRandom
@@ -63,7 +65,16 @@ export class Course extends CourseBuilder {
     this.addScenery();
   }
   addStart() {
-    this.box({ x: 0, y: 0, z: 5, w: 14, h: 1, d: 14, color: COLORS.purple, bevel: true });
+    this.box({
+      x: 0,
+      y: 0,
+      z: START_PLATFORM.z,
+      w: START_PLATFORM.width,
+      h: 1,
+      d: START_PLATFORM.depth,
+      color: COLORS.purple,
+      bevel: true
+    });
     for (const x of [-6.4, 6.4]) this.addRail(x, 5, 12);
     this.box({
       x: 0,
@@ -112,7 +123,7 @@ export class Course extends CourseBuilder {
       }[type]
     );
     if (type === 'sweepers') {
-      this.box({ x: 0, y: 0, z, w: 12, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.sweepers, h: 1, d: 18, color, bevel: true });
       this.addRail(-5.6, z, 16);
       this.addRail(5.6, z, 16);
       for (const [offset, direction] of [
@@ -130,8 +141,8 @@ export class Course extends CourseBuilder {
         );
     }
     if (type === 'movers') {
-      this.box({ x: 0, y: 0, z: z + 7, w: 11, h: 1, d: 4, color, bevel: true });
-      this.box({ x: 0, y: 0, z: z - 7, w: 11, h: 1, d: 4, color, bevel: true });
+      this.box({ x: 0, y: 0, z: z + 7, w: SEGMENT_WIDTH.movers, h: 1, d: 4, color, bevel: true });
+      this.box({ x: 0, y: 0, z: z - 7, w: SEGMENT_WIDTH.movers, h: 1, d: 4, color, bevel: true });
       for (let j = 0; j < 3; j++) {
         const platform = this.box({
           x: variant === 2 ? (j - 1) * 0.55 : 0,
@@ -154,7 +165,7 @@ export class Course extends CourseBuilder {
       }
     }
     if (type === 'bumpers') {
-      this.box({ x: 0, y: 0, z, w: 12, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bumpers, h: 1, d: 18, color, bevel: true });
       this.addRail(-5.6, z, 16);
       this.addRail(5.6, z, 16);
       const points = [
@@ -168,7 +179,7 @@ export class Course extends CourseBuilder {
         this.addBumper(points[j][0], 1.25, z + points[j][1], 0.86, palette[(index + j + 3) % palette.length]);
     }
     if (type === 'bridge') {
-      this.box({ x: 0, y: 0, z, w: 3.4, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bridge, h: 1, d: 18, color, bevel: true });
       this.addRail(-1.55, z, 16);
       this.addRail(1.55, z, 16);
       this.addSpinner(0, 1, z, 7, 0.38, speed * 1.08 * (variant === 1 ? -1 : 1), index * 0.55);
@@ -186,7 +197,7 @@ export class Course extends CourseBuilder {
           }).mesh.rotation.y = j * 0.4;
     }
     if (type === 'punchers') {
-      this.box({ x: 0, y: 0, z, w: 11, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.punchers, h: 1, d: 18, color, bevel: true });
       this.addRail(-5.1, z, 16);
       this.addRail(5.1, z, 16);
       for (let j = 0; j < 3; j++) {
@@ -216,7 +227,7 @@ export class Course extends CourseBuilder {
       }
     }
     if (type === 'bounce') {
-      this.box({ x: 0, y: 0, z, w: 12, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bounce, h: 1, d: 18, color, bevel: true });
       this.addRail(-5.6, z, 16);
       this.addRail(5.6, z, 16);
       for (const [x, oz] of [
@@ -228,7 +239,7 @@ export class Course extends CourseBuilder {
         this.addSpring(x * mirror, 0.68, z + (variant === 2 ? -oz : oz), 1.15);
     }
     if (type === 'crosswind') {
-      this.box({ x: 0, y: 0, z, w: 9, h: 1, d: 18, color, bevel: true });
+      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.crosswind, h: 1, d: 18, color, bevel: true });
       this.addRail(-4.1, z, 16);
       this.addRail(4.1, z, 16);
       for (const [j, oz] of [

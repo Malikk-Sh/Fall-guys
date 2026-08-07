@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { Player } from '../client/game/Player.js';
+import { Course } from '../client/game/Course.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
 import { updateRoleActions } from '../client/game/CoopActions.js';
 
@@ -404,5 +405,75 @@ export class Runner {
 
   dispose() {
     this.world.dispose();
+  }
+}
+
+// Бот, проходящий трассу ГОНКИ. Нужен там, где проверяется не проходимость, а серверные правила:
+// честный забег обязан доходить до финиша, не собрав ни одного признака подделки движения.
+//
+// Порогов в правилах много, и каждый из них — обещание не задеть живого игрока. Проверить это
+// можно единственным способом: сыграть настоящей физикой и посмотреть, что скажет сервер. Числа в
+// movementAudit.js получены этим же ботом.
+export class RaceRun {
+  constructor(spec, { wander = 0 } = {}) {
+    this.scene = new THREE.Scene();
+    this.spec = spec;
+    this.course = new Course(this.scene, spec, { quality: 'low' });
+    this.player = new Player(this.scene, this.course, NO_EFFECTS);
+    this.input = new BotInput();
+    this.elapsed = 0;
+    this.frame = 0;
+    this.wander = wander;
+    // Возрождение: клиент в этот момент шлёт серверу отдельное сообщение, и тест обязан поступить
+    // так же — иначе прыжок на чекпоинт выглядел бы телепортом.
+    this.respawned = false;
+  }
+
+  get finished() {
+    return this.player.finished;
+  }
+
+  get position() {
+    return this.player.position;
+  }
+
+  // Один шаг физики — тот же порядок и тот же шаг, что в Game.fixedStep.
+  step() {
+    this.elapsed += FIXED_DT;
+    this.frame++;
+    const player = this.player;
+    // Держимся середины трассы; wander заставляет бота гулять по краям, как живой игрок.
+    // Цель — точка на шесть единиц впереди, на выбранной полосе.
+    const lane = this.wander ? Math.sin(this.elapsed * this.wander) * 9 : 0;
+    const dx = lane - player.position.x;
+    const dz = -6;
+    const length = Math.hypot(dx, dz);
+    this.input.moveX = dx / length;
+    this.input.moveForward = -(dz / length);
+
+    // Прыжок перед пропастью и ритмично поверх препятствий — без этого бот застревает на первом же
+    // разрыве и «честный забег» превращается в честное стояние.
+    const probe = player.position.clone();
+    probe.z -= 2;
+    if (player.grounded && (!this.course.surfaceAt(probe, probe.y + 0.1, -0.1) || this.frame % 42 === 0))
+      this.input.jumpQueued = true;
+    // Планирование при снижении: так же играет человек, и так же растягивается время в воздухе.
+    this.input.holding.jump = !player.grounded && player.velocity.y < 0;
+    if (player.grounded && this.frame % 90 === 0) this.input.diveQueued = true;
+
+    const beforeY = player.position.y;
+    this.course.update(FIXED_DT, this.elapsed);
+    player.step(FIXED_DT, this.input, 0, this.elapsed);
+    this.respawned = Math.abs(player.position.y - beforeY) > 4;
+    return this.respawned;
+  }
+
+  snapshot() {
+    return this.player.snapshot();
+  }
+
+  dispose() {
+    this.player.dispose();
+    this.course.dispose();
   }
 }

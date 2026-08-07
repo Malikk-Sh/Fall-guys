@@ -1530,14 +1530,32 @@ canvas {
 .account-chip.offline .account-dot {
   background: var(--orange, #ff914d);
 }
-.account-panel {
+.account-card {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  width: min(430px, calc(100vw - 32px));
+  max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px);
+  overflow: auto;
+  border-radius: 27px;
+  padding: 24px;
+  text-align: left;
+}
+.account-section {
   display: grid;
   gap: 8px;
-  margin-bottom: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: #ffffff0e;
-  text-align: left;
+  padding-top: 12px;
+  border-top: 1px solid #ffffff17;
+}
+.account-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.account-legend {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  color: #b8b3df;
+  font-weight: 900;
 }
 .account-row {
   display: flex;

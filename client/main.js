@@ -85,7 +85,11 @@ class Game {
 
     // Вход в аккаунт не блокирует запуск игры: сеть может отвечать долго или не отвечать вовсе,
     // а меню должно появиться сразу. Имя и рекорды подставятся, когда ответ придёт.
-    this.signIn();
+    //
+    // Обещание сохраняем: вход в комнату его дожидается. Иначе игрок, нажавший «создать комнату» в
+    // первые мгновения после загрузки, попадал бы туда без личности — и его результат не привязался
+    // бы к аккаунту.
+    this.accountReady = this.signIn();
 
     this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);
@@ -346,7 +350,8 @@ class Game {
     click('#play', () => this.startSingle(false));
     click('#again', () => this.startRace('single', this.lastSpec));
     click('#newCourse', () => this.startSingle(true));
-    click('#create', () => {
+    click('#create', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.createRoom({
         name: this.ui.playerName(),
@@ -354,7 +359,8 @@ class Game {
         difficulty: $('#difficulty').value
       });
     });
-    click('#join', () => {
+    click('#join', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.joinRoom({
         name: this.ui.playerName(),
@@ -457,7 +463,8 @@ class Game {
     this.ui.fillChapters(COOP_CHAPTERS, chapter => {
       this.coopChapterId = chapter.id;
     });
-    click('#coopCreate', () => {
+    click('#coopCreate', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.createRoom({
         name: this.ui.coopName(),
@@ -466,7 +473,8 @@ class Game {
         difficulty: this.ui.coopChapter()
       });
     });
-    click('#coopJoin', () => {
+    click('#coopJoin', async () => {
+      await this.accountReady;
       const net = this.ensureNetwork();
       net.joinRoom({
         name: this.ui.coopName(),

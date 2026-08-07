@@ -54,13 +54,23 @@ export class UI {
   // не понимал, почему в другом остался прежним.
 
   bindAccountPanel() {
-    const panel = $('#accountPanel');
+    const screen = $('#account');
     const toggle = show => {
-      panel.classList.toggle('hidden', !show);
+      screen.classList.toggle('hidden', !show);
       $('#accountChip').setAttribute('aria-expanded', String(show));
       if (show) this.renderAccountPanel();
+      else $('#accountCode').classList.add('hidden');
     };
-    $('#accountChip').addEventListener('click', () => toggle(panel.classList.contains('hidden')));
+    this.toggleAccountScreen = toggle;
+    $('#accountChip').addEventListener('click', () => toggle(true));
+    $('#accountClose').addEventListener('click', () => toggle(false));
+    // Клик по затемнению и Escape закрывают окно — так же, как в любом другом диалоге.
+    screen.addEventListener('click', event => {
+      if (event.target === screen) toggle(false);
+    });
+    addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !screen.classList.contains('hidden')) toggle(false);
+    });
     $('#accountSave').addEventListener('click', () =>
       this.onAccountAction?.('rename', $('#accountRename').value)
     );
@@ -96,16 +106,11 @@ export class UI {
     this.account = account || null;
     $('#accountName').textContent = account?.name || 'без аккаунта';
     $('#accountChip').classList.toggle('offline', !online);
-    // Имена в комнатах берутся отсюда же — источник один.
-    if (account?.name) {
-      $('#name').value = account.name;
-      $('#coopName').value = account.name;
-    }
     this.renderAccountPanel();
   }
 
   renderAccountPanel() {
-    if ($('#accountPanel').classList.contains('hidden')) return;
+    if ($('#account').classList.contains('hidden')) return;
     $('#accountRename').value = this.account?.name || '';
     const list = $('#accountList');
     list.replaceChildren();
@@ -168,8 +173,13 @@ export class UI {
     return readInvite(location.href);
   }
 
+  // Имя игрока одно на всю игру и берётся из аккаунта.
+  //
+  // Раньше его печатали дважды — отдельным полем в гонке и отдельным в коопе, — и каждое хранилось
+  // само по себе: игрок переименовывался в одном месте и не понимал, почему в другом остался
+  // прежним. Заодно это два лишних поля на главном экране.
   coopName() {
-    return ($('#coopName').value.trim() || 'Wobbler').slice(0, 16);
+    return this.playerName();
   }
 
   coopChapter() {
@@ -316,7 +326,7 @@ export class UI {
     return { type: $('#runType').value, difficulty: $('#difficulty').value };
   }
   playerName() {
-    return ($('#name').value.trim() || 'Wobbler').slice(0, 16);
+    return (this.account?.name || 'Wobbler').slice(0, 16);
   }
   // Личность игрока — это его аккаунт. Прежний анонимный идентификатор из профиля не переживал
   // очистку данных браузера и не переносился на другое устройство: рекорд, поставленный на телефоне,

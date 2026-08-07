@@ -437,6 +437,26 @@ const setResultsTimeout = ms => {
 const RECONNECT_GRACE_MS = 30 * 1000;
 const SESSION_TTL_MS = 60 * 1000;
 
+// Уборка просроченных сессий — и продление живых.
+//
+// Продление здесь принципиально. Срок ставился при входе и обновлялся только на обрыве и на
+// возвращении, но НЕ во время игры. То есть у любого, кто играет дольше минуты, сессия тихо
+// протухала прямо посреди матча, и перезагрузка страницы уводила его в главное меню вместо своей
+// комнаты — место в матче терялось на ровном месте.
+//
+// Смысл срока — «сколько ждём того, о ком ничего не слышно». Пока сокет игрока жив, ждать не нужно,
+// поэтому таким сессиям срок сдвигается вперёд.
+function expireSessions(now = Date.now()) {
+  for (const [token, session] of sessions) {
+    const player = rooms.get(session.roomCode)?.players.get(session.playerId);
+    if (player && !player.disconnectedAt && player.ws?.readyState === WebSocket.OPEN) {
+      session.expiresAt = now + SESSION_TTL_MS;
+      continue;
+    }
+    if (now > session.expiresAt) sessions.delete(token);
+  }
+}
+
 // Ограничение операций с комнатами по адресу — поверх ограничения по типам сообщений,
 // которое действует на каждое соединение отдельно.
 const IP_WINDOW_MS = 60 * 1000;
@@ -1623,7 +1643,7 @@ const heartbeatTimer = setInterval(() => {
     if (room.state === ROOM_STATE.PLAYING) checkMatchEnd(room);
   }
 
-  for (const [token, session] of sessions) if (now > session.expiresAt) sessions.delete(token);
+  expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
   for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
 }, 15000);
@@ -1726,5 +1746,7 @@ module.exports = {
   createEventCounters,
   trackEvent,
   setResultsTimeout,
+  expireSessions,
+  SESSION_TTL_MS,
   shutdown
 };

@@ -1,7 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
-const { server, setResultsTimeout, shutdown: shutdownServer } = require('./index');
+const {
+  server,
+  setResultsTimeout,
+  expireSessions,
+  SESSION_TTL_MS,
+  shutdown: shutdownServer
+} = require('./index');
 
 class TestClient {
   constructor(url) {
@@ -406,7 +412,15 @@ test('повторный finish идемпотентен', async t => {
 
   host.send('finish', {
     matchId: started.matchId,
-    state: { x: 0, y: started.spec.start.y, z: started.spec.finishZ - 1, ry: 0, vx: 0, vz: -8, state: 'ground' },
+    state: {
+      x: 0,
+      y: started.spec.start.y,
+      z: started.spec.finishZ - 1,
+      ry: 0,
+      vx: 0,
+      vz: -8,
+      state: 'ground'
+    },
     clientTime: 1000
   });
   await new Promise(resolve => setTimeout(resolve, 300));
@@ -415,7 +429,11 @@ test('повторный finish идемпотентен', async t => {
     finishesAfterFirst,
     'второй финиш не должен порождать новых сообщений'
   );
-  assert.deepEqual(host.messages.filter(m => m.type === 'error'), [], 'и не должен быть нарушением');
+  assert.deepEqual(
+    host.messages.filter(m => m.type === 'error'),
+    [],
+    'и не должен быть нарушением'
+  );
   void guest;
 });
 
@@ -438,17 +456,9 @@ test('первый голос за реванш не закрывает экра
 
   // Голосует хост — тот, кто раньше мог решать за всех.
   host.send('rematch', { matchId: started.matchId });
-  const afterFirst = await guest.wait(
-    'lobby',
-    m => m.players.some(p => p.choice === 'rematch'),
-    3000
-  );
+  const afterFirst = await guest.wait('lobby', m => m.players.some(p => p.choice === 'rematch'), 3000);
   assert.equal(afterFirst.state, 'RESULTS', 'комната обязана остаться на результатах');
-  assert.equal(
-    afterFirst.players.filter(p => p.choice === 'rematch').length,
-    1,
-    'засчитан ровно один голос'
-  );
+  assert.equal(afterFirst.players.filter(p => p.choice === 'rematch').length, 1, 'засчитан ровно один голос');
   assert.ok(afterFirst.resultsDeadline, 'клиенту нужен срок, чтобы показать отсчёт');
 
   // И только второй голос запускает забег. Именно ЗАБЕГ, а не возврат в лобби: иначе кнопка
@@ -487,7 +497,11 @@ test('разные голоса на результатах не вешают к
   // Несогласие разрешается в пользу лобби: заставлять играть ещё раз того, кто уже уходит, нельзя.
   const lobby = await guest.wait('lobby', m => m.state === 'LOBBY', 3000);
   assert.equal(lobby.matchId, null, 'новый забег начинать не за что');
-  assert.equal(lobby.players.every(p => !p.choice), true, 'выборы сброшены');
+  assert.equal(
+    lobby.players.every(p => !p.choice),
+    true,
+    'выборы сброшены'
+  );
 });
 
 // Пара, где один просто отложил телефон, запирала второго на карточке итогов навсегда: ни одна
@@ -516,7 +530,11 @@ test('истечение срока на результатах уводит к�
 
   const lobby = await host.wait('lobby', m => m.state === 'LOBBY', 6000);
   assert.equal(lobby.matchId, null, 'по таймауту уходим в лобби, а не в новый забег');
-  assert.equal(lobby.players.every(p => !p.choice), true, 'выборы сброшены');
+  assert.equal(
+    lobby.players.every(p => !p.choice),
+    true,
+    'выборы сброшены'
+  );
 });
 
 // Передумать — нормальное поведение. Запрет на смену выбора и был причиной тупика.
@@ -695,11 +713,7 @@ test('обрыв второго игрока после голоса не под
 
   // Голосует только хост.
   host.send('rematch', { matchId: started.matchId });
-  await host.wait(
-    'lobby',
-    m => m.state === 'RESULTS' && m.players.some(p => p.choice === 'rematch'),
-    3000
-  );
+  await host.wait('lobby', m => m.state === 'RESULTS' && m.players.some(p => p.choice === 'rematch'), 3000);
 
   // Второй обрывается, так и не проголосовав.
   //
@@ -837,10 +851,7 @@ test('честный забег попадает в таблицу рекорд�
   assert.equal(anonymous.entries.length, 2, 'оба финиша попали в таблицу');
   assert.equal(anonymous.standing, null, 'без идентификатора места нет');
   assert.equal(anonymous.verificationVersion, 1, 'версия проверки отдаётся клиенту');
-  assert.ok(
-    anonymous.entries[0].time <= anonymous.entries[1].time,
-    'таблица отсортирована по времени'
-  );
+  assert.ok(anonymous.entries[0].time <= anonymous.entries[1].time, 'таблица отсортирована по времени');
   // Ключ чужой строки не должен уезжать клиенту: иначе перезаписать её сможет любой, кто эту
   // страницу открыл.
   assert.ok(
@@ -860,6 +871,40 @@ test('честный забег попадает в таблицу рекорд�
 
   const stranger = await ask('z'.repeat(32));
   assert.equal(stranger.standing, null, 'у не пробегавшего трассу места нет');
+});
+
+// Сессия для переподключения не должна протухать под играющим человеком.
+//
+// Срок ставился при входе и обновлялся только на обрыве и на возвращении, но НЕ во время игры. У
+// любого, кто играет дольше минуты, сессия тихо протухала посреди матча, и перезагрузка страницы
+// уводила его в главное меню вместо своей комнаты. Поймано браузерным тестом: он перезагружает
+// страницу гостя как раз около этой границы и падал через раз.
+test('сессия не протухает, пока игрок на связи', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest } = await startedRoom(url, 'coop');
+  let back = null;
+
+  // Все клиенты закрываются в ОДНОМ хуке и до shutdown: server.close ждёт, пока закроются
+  // соединения, и живой сокет в отдельном хуке подвесил бы весь прогон.
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close(), back ? back.close() : Promise.resolve()]);
+    await shutdown();
+  });
+
+  const token = host.messages.find(m => m.type === 'hello').token;
+  assert.ok(token, 'подготовка: сервер обязан выдать токен');
+
+  // Проматываем время далеко за срок жизни сессии — так же, как это сделал бы сервер через час игры.
+  expireSessions(Date.now() + SESSION_TTL_MS * 10);
+
+  // Возвращаемся по тому же токену: сессия обязана быть на месте.
+  host.ws.terminate();
+  back = new TestClient(url);
+  await back.wait('hello');
+  back.send('resume', { token });
+  const resumed = await back.wait('resumed', () => true, 3000);
+  assert.ok(resumed, 'игрок обязан вернуться в свою комнату');
 });
 
 // ВНИМАНИЕ: этот тест обязан оставаться ПОСЛЕДНИМ в файле.

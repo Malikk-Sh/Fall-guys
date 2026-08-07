@@ -10,7 +10,9 @@ const {
   leaderboard,
   verifyCheckpointTime,
   verifyMovement,
-  MIN_CHECKPOINT_INTERVAL_MS,
+  verifyFinishTime,
+  minSegmentSeconds,
+  budgetFor,
   MAX_MOVEMENT_ANOMALIES
 } = require('./gameRules');
 const {
@@ -118,16 +120,31 @@ test('finish requires every server checkpoint and the finish plane', () => {
   assert.equal(canFinish(player, spec), false);
 });
 
+// Минимальное время сегмента считается по его типу, а не одним числом на всю трассу. Прежние 300 мс
+// на восемнадцать единиц длины разрешали шестьдесят единиц в секунду — вшестеро выше беговой
+// скорости, то есть не запрещали ничего.
 test('слишком быстро пройденный сегмент помечается как неподтверждённый', () => {
+  const spec = createCourseSpec(9, 'easy');
+  const first = minSegmentSeconds(spec, 1) * 1000;
+  const second = minSegmentSeconds(spec, 2) * 1000;
+
+  // Первый участок длиннее: от старта до первой арки 25 единиц вместо 18, и порог у него выше.
+  assert.ok(first > second, 'участок от старта до первой арки длиннее сегмента');
+
   const player = { checkpoint: 0, checkpointAt: 1000 };
-  const suspicious = verifyCheckpointTime(player, 1, 1000 + MIN_CHECKPOINT_INTERVAL_MS - 1);
+  const suspicious = verifyCheckpointTime(player, 1, 1000 + first - 1, spec);
   assert.equal(suspicious.reason, 'segment-too-fast');
   assert.equal(suspicious.checkpoint, 1);
+  assert.equal(suspicious.minimum, Math.round(first));
 
   player.checkpoint = 1;
-  const honest = verifyCheckpointTime(player, 2, player.checkpointAt + MIN_CHECKPOINT_INTERVAL_MS);
+  const honest = verifyCheckpointTime(player, 2, player.checkpointAt + second, spec);
   assert.equal(honest, null);
-  assert.equal(player.checkpointAt, 1000 + MIN_CHECKPOINT_INTERVAL_MS * 2 - 1);
+
+  // Финишный выкат считается отдельно: до этой проверки время последнего отрезка не смотрел никто.
+  const rusher = { checkpointAt: 5000 };
+  assert.equal(verifyFinishTime(rusher, 5100).reason, 'segment-too-fast');
+  assert.equal(verifyFinishTime({ checkpointAt: 5000 }, 7000), null);
 });
 
 test('таблица результатов отделяет подтверждённые времена', () => {
@@ -217,8 +234,9 @@ test('удары препятствий не отменяют забег, а с�
 
   // Клиент, подделывающий ускорение на каждом пакете, запас исчерпывает и попадается.
   const cheat = { last: { x: 0, y: 1, z: 0, vx: 0, vz: -7 }, lastAt: 1000 };
+  const accelerationBudget = budgetFor('horizontal-acceleration');
   let caught = false;
-  for (let i = 1; i <= MAX_MOVEMENT_ANOMALIES + 1; i++) {
+  for (let i = 1; i <= accelerationBudget + 1; i++) {
     const at = 1000 + i * 50;
     const findings = verifyMovement(
       cheat,
@@ -231,7 +249,7 @@ test('удары препятствий не отменяют забег, а с�
   }
   assert.ok(caught, 'систематическая подделка ускорения обязана попадаться');
   assert.ok(
-    cheat.movementAnomalies['horizontal-acceleration'] > MAX_MOVEMENT_ANOMALIES,
+    cheat.movementAnomalies['horizontal-acceleration'] > accelerationBudget,
     'запас считается по игроку, а не глобально'
   );
 

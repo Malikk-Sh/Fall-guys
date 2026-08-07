@@ -4,6 +4,8 @@
 import {
   SEGMENT_LENGTH,
   FIRST_SEGMENT_CENTER,
+  SEGMENT_WIDTH,
+  START_PLATFORM,
   DIFFICULTY_SEGMENTS,
   createCourseSpec,
   safeDifficulty,
@@ -12,7 +14,7 @@ import {
 
 import { modifierForDay, objectiveForDay, materializeObjective, checkObjective } from './dailyModifiers.js';
 
-export { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, safeDifficulty, spawnFor };
+export { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, SEGMENT_WIDTH, START_PLATFORM, safeDifficulty, spawnFor };
 export { DAILY_MODIFIERS, DAILY_OBJECTIVES, modifierForDay, objectiveForDay } from './dailyModifiers.js';
 
 export const COLORS = {

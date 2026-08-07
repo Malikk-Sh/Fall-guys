@@ -9,6 +9,15 @@ const {
   spawnFor
 } = require('../shared/courseSpec.js');
 
+const {
+  auditMovement,
+  budgetFor,
+  minSegmentSeconds,
+  resetHistory,
+  FINISH_TAIL_SECONDS,
+  DEFAULT_ANOMALY_BUDGET
+} = require('./movementAudit.js');
+
 const DIFFICULTIES = DIFFICULTY_SEGMENTS;
 const PLAYER_COLORS = [
   0xff4f91, 0x48dcda, 0xffd94b, 0x55a7ff, 0x58ebb8, 0xff914d, 0x9b6cff, 0xf46b5f, 0x43c5ff, 0xc7ef50,
@@ -68,75 +77,69 @@ function normalizeState(value) {
 // свободного падения при гравитации 22.5 даёт около 13 единиц по вертикали плюс бег по
 // горизонтали; при 0.8 с потолок выходит 17.6 и такой игрок проходит, а телепорт — нет.
 const MAX_STEP_DT = 0.8;
-const MIN_CHECKPOINT_INTERVAL_MS = 300;
-const MAX_REPORTED_HORIZONTAL_SPEED = 14;
-const MAX_OBSERVED_HORIZONTAL_SPEED = 22;
 const MAX_HORIZONTAL_ACCELERATION = 120;
 
-// Сколько одиночных отклонений по каждому признаку допустимо за матч.
-//
 // Проверка движения делится на два уровня, и это главное здесь.
 //
 // Жёсткий уровень — validateState: он ограничивает шаг между двумя положениями и НЕ ПРИМЕНЯЕТ
 // состояние, которое в него не уложилось. Телепорт через полтрассы отбивается там, сразу и без
 // оговорок.
 //
-// Мягкий уровень — эта функция. Она смотрит на признаки, которые у честного игрока тоже случаются:
-// препятствие задаёт скорость напрямую И выталкивает игрока из своей геометрии, то есть за один
-// пакет законно меняются и скорость, и положение. Сервер про расположение препятствий ничего не
-// знает — их геометрия рождается на клиенте из сида, — поэтому отличить удар бампера от подделки
-// по ОДНОМУ пакету он не может в принципе.
+// Мягкий уровень — verifyMovement. Он смотрит на признаки, которые у честного игрока тоже
+// случаются: препятствие задаёт скорость напрямую И выталкивает игрока из своей геометрии, то есть
+// за один пакет законно меняются и скорость, и положение. Раньше хватало одного такого пакета,
+// чтобы снять зачёт со всего забега, — честный забег с попаданием в бампер не попадал в таблицу
+// рекордов почти никогда. Поэтому у каждого признака есть запас отклонений за матч.
 //
-// Раньше хватало одного такого пакета, чтобы снять зачёт со всего забега. На практике это означало,
-// что честный забег с попаданием в бампер не попадал в таблицу рекордов почти никогда. Найдено
-// сквозным тестом: бот проходил трассу честно, а итог выходил без зачёта.
+// Сам разбор живёт в movementAudit.js: там же лежат пороги, история пакетов и знание геометрии
+// трассы. Здесь остаётся только ускорение — единственный признак, который считается по паре
+// соседних пакетов и ни от чего больше не зависит.
 //
-// Размеры взяты замерами на живых забегах, а не назначены. За полный забег на двоих:
-//   • ускорение выше потолка — 3 пакета на «легко», до 5 на «хаосе»;
-//   • наблюдаемая скорость выше потолка — 1 пакет из 557 (24.1 при потолке 22);
-//   • заявленная скорость выше потолка — ни разу (максимум 11.1 при потолке 14).
-// Пятнадцать на признак — заведомо выше честной игры и заведомо ниже клиента, который подделывает
-// движение систематически: такой исчерпает запас за секунду.
-//
-// Поднять сами потолки вместо этого нельзя. Для ускорения: при потолке заявленной скорости 14
-// максимальное изменение скорости равно 28, и порог, не срабатывающий на честных ударах, не
-// срабатывал бы уже вообще ни на чём.
-//
-// Это не окончательное решение, а честная граница возможного без знания геометрии. Настоящее —
-// серверная симуляция упрощённой физики по вводу игрока, и тогда препятствия станут известны.
-const MAX_MOVEMENT_ANOMALIES = 15;
+// Запас ускорения взят замером: за полный забег на двоих — 3 пакета выше потолка на «легко» и до 5
+// на «хаосе». Поднять сам потолок вместо запаса нельзя: при заявленной скорости до 17 предельное
+// изменение равно 34, и порог, не срабатывающий на честных ударах, не срабатывал бы ни на чём.
+const MAX_MOVEMENT_ANOMALIES = DEFAULT_ANOMALY_BUDGET;
 
-function verifyMovement(player, value, now = Date.now()) {
+function verifyMovement(player, value, now = Date.now(), spec = null) {
   const state = normalizeState(value);
   if (!state || !player.last || !player.lastAt) return [];
   const dt = Math.max(0.04, (now - player.lastAt) / 1000);
-  const reportedSpeed = Math.hypot(state.vx, state.vz);
-  const observedSpeed = Math.hypot(state.x - player.last.x, state.z - player.last.z) / dt;
   const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
   const accelerationLimit = ['dive', 'slam'].includes(state.state) ? 240 : MAX_HORIZONTAL_ACCELERATION;
 
-  const findings = [];
-  const anomalies = player.movementAnomalies || (player.movementAnomalies = {});
-  // Отклонение засчитывается всегда, а нарушением становится только по исчерпании запаса.
-  const note = reason => {
-    anomalies[reason] = (anomalies[reason] || 0) + 1;
-    if (anomalies[reason] > MAX_MOVEMENT_ANOMALIES) findings.push(reason);
-  };
-
-  if (reportedSpeed > MAX_REPORTED_HORIZONTAL_SPEED) note('reported-speed');
-  if (observedSpeed > MAX_OBSERVED_HORIZONTAL_SPEED) note('observed-speed');
-  if (acceleration > accelerationLimit) note('horizontal-acceleration');
+  const findings = auditMovement(player, state, spec, now, dt);
+  if (acceleration > accelerationLimit) {
+    const anomalies = player.movementAnomalies || (player.movementAnomalies = {});
+    anomalies['horizontal-acceleration'] = (anomalies['horizontal-acceleration'] || 0) + 1;
+    if (anomalies['horizontal-acceleration'] > budgetFor('horizontal-acceleration'))
+      findings.push('horizontal-acceleration');
+  }
   return findings;
 }
 
-function verifyCheckpointTime(player, checkpoint, now = Date.now()) {
+// Минимальное время участка. В отличие от verifyMovement это ЖЁСТКИЙ признак без запаса: пройти
+// сегмент быстрее физического предела нельзя ни разу, и единичного случая достаточно.
+function verifyCheckpointTime(player, checkpoint, now = Date.now(), spec = null) {
   if (checkpoint <= (player.checkpoint || 0)) return null;
   const previousAt = player.checkpointAt || player.matchStartedAt || now;
   const elapsed = now - previousAt;
   player.checkpointAt = now;
-  if (elapsed < MIN_CHECKPOINT_INTERVAL_MS) {
-    return { reason: 'segment-too-fast', checkpoint, elapsed, minimum: MIN_CHECKPOINT_INTERVAL_MS };
+  const minimum = Math.round(minSegmentSeconds(spec, checkpoint) * 1000);
+  if (elapsed < minimum) {
+    return { reason: 'segment-too-fast', checkpoint, elapsed, minimum };
   }
+  return null;
+}
+
+// Тот же счёт для последнего отрезка: от последней арки до ленты 13 единиц, и мгновенно они не
+// проходятся. Без этой проверки финиш был последним участком трассы, время которого не проверял
+// никто: паузы хватало, чтобы одним допустимым шагом дотянуться от арки до ленты.
+function verifyFinishTime(player, now = Date.now()) {
+  const previousAt = player.checkpointAt || player.matchStartedAt;
+  if (!previousAt) return null;
+  const elapsed = now - previousAt;
+  const minimum = Math.round(FINISH_TAIL_SECONDS * 1000);
+  if (elapsed < minimum) return { reason: 'segment-too-fast', checkpoint: 'finish', elapsed, minimum };
   return null;
 }
 
@@ -215,9 +218,11 @@ module.exports = {
   spawnFor,
   normalizeState,
   verifyCheckpointTime,
+  verifyFinishTime,
   verifyMovement,
-  MIN_CHECKPOINT_INTERVAL_MS,
-  MAX_REPORTED_HORIZONTAL_SPEED,
+  resetHistory,
+  minSegmentSeconds,
+  budgetFor,
   MAX_MOVEMENT_ANOMALIES,
   validateState,
   canFinish,

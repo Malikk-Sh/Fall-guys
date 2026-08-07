@@ -14,7 +14,9 @@ const {
   spawnFor,
   validateState,
   verifyCheckpointTime,
+  verifyFinishTime,
   verifyMovement,
+  resetHistory,
   canFinish,
   leaderboard
 } = require('./gameRules');
@@ -930,9 +932,15 @@ function addVerificationFindings(room, player, findings, details = {}) {
   return added;
 }
 
+// Геометрия трассы известна серверу только в гонке: кооперативная глава — рукотворная разметка с
+// другими опорами, и мерить её теми же коридорами нельзя.
+function raceSpec(room) {
+  return room.mode === GAME_MODE.RACE ? room.spec : null;
+}
+
 function verifyPlayerProgress(room, player, checkpoint, now) {
   if (room.mode !== GAME_MODE.RACE) return null;
-  const verification = verifyCheckpointTime(player, checkpoint, now);
+  const verification = verifyCheckpointTime(player, checkpoint, now, room.spec);
   if (!verification) return null;
   addVerificationFindings(room, player, [verification.reason], verification);
   return verification;
@@ -982,6 +990,12 @@ function beginCountdown(room) {
       matchStartedAt: room.startedAt,
       unverifiedReason: null,
       verificationReasons: [],
+      // Отклонения и история движения принадлежат ЗАБЕГУ, а не игроку. Раньше они не сбрасывались
+      // и копились через реванши: честный игрок, оставшийся в комнате на четвёртый забег, приносил
+      // в него запас, израсходованный в первых трёх, и терял зачёт ни за что.
+      movementAnomalies: {},
+      movementHistory: [],
+      freeFallSince: null,
       // Готовность снимается: следующий выход в лобби не должен начинаться с чужого «готов»
       // прошлого забега. На реванш это не влияет — он идёт мимо лобби.
       ready: false,
@@ -1385,7 +1399,7 @@ wss.on('connection', (ws, req) => {
         }
         return;
       }
-      addVerificationFindings(room, player, verifyMovement(player, result.state, now));
+      addVerificationFindings(room, player, verifyMovement(player, result.state, now, raceSpec(room)));
       player.last = { ...result.state, id: player.id };
       player.lastAt = now;
       player.lastSequence = message.sequence;
@@ -1429,6 +1443,7 @@ wss.on('connection', (ws, req) => {
         // чекпоинта, но остаётся «упавшим», пока его не поднимут.
         if (markDowned(player, now)) trackEvent(productEvents, 'playerDowned');
         const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
+        resetHistory(player);
         player.last = {
           ...point,
           ry: 0,
@@ -1448,6 +1463,9 @@ wss.on('connection', (ws, req) => {
         return send(ws, { type: S2C.CORRECTION, position: point, reason: 'respawn' });
       }
       const position = spawnFor(room.spec, player.checkpoint);
+      // Возрождение переносит игрока на чекпоинт. История движения до падения к новому месту
+      // отношения не имеет, и окно свободного падения обязано начаться заново.
+      resetHistory(player);
       player.last = {
         ...position,
         ry: 0,
@@ -1478,7 +1496,7 @@ wss.on('connection', (ws, req) => {
       const now = Date.now();
       const result = validateState(player, message.state, room.spec, now);
       if (result.ok) {
-        addVerificationFindings(room, player, verifyMovement(player, result.state, now));
+        addVerificationFindings(room, player, verifyMovement(player, result.state, now, raceSpec(room)));
         player.last = { ...result.state, id: player.id };
         player.lastAt = now;
         player.receivedAt = now;
@@ -1486,6 +1504,12 @@ wss.on('connection', (ws, req) => {
         if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
         player.checkpoint = result.checkpoint;
         player.lastSequence = message.sequence;
+      }
+
+      // Последний отрезок — от арки до ленты — до сих пор не проверял никто.
+      if (room.mode === GAME_MODE.RACE) {
+        const tail = verifyFinishTime(player, now);
+        if (tail) addVerificationFindings(room, player, [tail.reason], tail);
       }
 
       if (!canFinish(player, room.spec)) {

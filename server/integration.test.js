@@ -1,8 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
+const { VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const {
   server,
+  rooms,
   setResultsTimeout,
   expireSessions,
   SESSION_TTL_MS,
@@ -90,19 +92,34 @@ async function runToFinish(client, spec, matchId, { stopBefore = 0 } = {}) {
 
 // Забег, который проходит проверку на честность, а не только доезжает до финиша.
 //
-// runToFinish выше шлёт 3.2 единицы за 55 мс — это 58 единиц в секунду при потолке в 22. Коопу это
-// сходит с рук: его итоги в таблицу рекордов не идут, и ни один тест там отметку «проверено» не
-// смотрит. Гонке — нет, поэтому здесь шаг подобран под предел наблюдаемой скорости.
+// runToFinish выше шлёт 3.2 единицы за 55 мс — это 58 единиц в секунду. Коопу это сходит с рук: его
+// итоги в таблицу рекордов не идут, и ни один тест там отметку «проверено» не смотрит. Гонке — нет.
 //
-// Быстрее не сделать: честный забег упирается ровно в тот же потолок, что и живой игрок, и время
+// Темп здесь равен беговой скорости персонажа: RUN_SPEED = 7.7, шлём 8. Раньше стояло 18 единиц в
+// секунду при заявленных восьми — то есть забег, который сервер считал честным, шёл вдвое быстрее
+// бега и втрое расходился с собственными словами о скорости. Пройти его тогда было можно только
+// потому, что потолок наблюдаемой скорости приходилось держать на 22: сервер не знал состояния
+// персонажа и один потолок обслуживал и бег, и отброс бампером. Теперь у «на земле» свой потолок,
+// и подделка на этом месте не проходит — что и обнаружилось этим тестом.
+//
+// Быстрее не сделать: честный забег упирается ровно в тот же предел, что и живой игрок, и время
 // теста задаётся длиной трассы, а не тем, как часто мы шлём пакеты.
-const HONEST_STEP = 1;
-const HONEST_GAP_MS = 55;
+const HONEST_SPEED = 8;
+const HONEST_GAP_MS = 66;
+const HONEST_STEP = (HONEST_SPEED * HONEST_GAP_MS) / 1000;
 
 async function runHonestly(client, spec, matchId, { step = HONEST_STEP } = {}) {
   let z = spec.start.z;
   const target = spec.finishZ - 1;
-  const at = value => ({ x: 0, y: spec.start.y, z: value, ry: 0, vx: 0, vz: -8, state: 'ground' });
+  const at = value => ({
+    x: 0,
+    y: spec.start.y,
+    z: value,
+    ry: 0,
+    vx: 0,
+    vz: -HONEST_SPEED,
+    state: 'ground'
+  });
   while (z > target) {
     z = Math.max(target, z - step);
     client.send('state', { matchId, state: at(z) });
@@ -795,6 +812,44 @@ test('финишировавший возвращается в ожидание,
   void guest;
 });
 
+// Запас отклонений принадлежит ЗАБЕГУ, а не игроку.
+//
+// Он не сбрасывался при старте матча и копился через реванши. Отклонения — это удары препятствий,
+// три-пять за забег; на четвёртом подряд забеге в той же комнате честный игрок приносил с собой
+// израсходованный запас и терял зачёт ни за что. Найдено чтением кода: сброс полей игрока в
+// beginCountdown перечислял всё, кроме этого.
+//
+// Проверяется на кооперативе, потому что там до реванша можно дойти быстро. Сам сброс от режима не
+// зависит: это один и тот же beginCountdown.
+test('запас отклонений сбрасывается при старте нового забега', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started, code } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, 5000);
+  await runToFinish(guest, started.spec, started.matchId);
+  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+
+  const player = [...rooms.get(code).players.values()][0];
+  assert.ok(
+    Object.values(player.movementAnomalies || {}).some(count => count > 0),
+    'подготовка: забег обязан оставить отклонения'
+  );
+
+  host.send('rematch', { matchId: started.matchId });
+  guest.send('rematch', { matchId: started.matchId });
+  await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+
+  assert.deepEqual(player.movementAnomalies, {}, 'новый забег обязан начинаться с полным запасом');
+  assert.deepEqual(player.movementHistory, [], 'история движения прошлого забега к новому не относится');
+});
+
 // Сквозная проверка таблицы рекордов: от honest-финиша в гонке до строки, которую увидит игрок в
 // лобби. По частям это покрыто модульными тестами, но между ними два стыка, где легко разойтись, —
 // анонимный идентификатор доходит от клиента до записи, а место и отставание считаются по той же
@@ -829,7 +884,7 @@ test('честный забег попадает в таблицу рекорд�
   // без единой новой проверки.
   await Promise.all([
     runHonestly(host, started.spec, started.matchId),
-    runHonestly(guest, started.spec, started.matchId, { step: 0.9 })
+    runHonestly(guest, started.spec, started.matchId, { step: HONEST_STEP * 0.9 })
   ]);
   const results = await host.wait('results', () => true, 5000);
   assert.ok(
@@ -850,7 +905,7 @@ test('честный забег попадает в таблицу рекорд�
   const anonymous = await ask(null);
   assert.equal(anonymous.entries.length, 2, 'оба финиша попали в таблицу');
   assert.equal(anonymous.standing, null, 'без идентификатора места нет');
-  assert.equal(anonymous.verificationVersion, 1, 'версия проверки отдаётся клиенту');
+  assert.equal(anonymous.verificationVersion, VERIFICATION_VERSION, 'версия проверки отдаётся клиенту');
   assert.ok(anonymous.entries[0].time <= anonymous.entries[1].time, 'таблица отсортирована по времени');
   // Ключ чужой строки не должен уезжать клиенту: иначе перезаписать её сможет любой, кто эту
   // страницу открыл.

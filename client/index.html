@@ -45,6 +45,46 @@
       </div>
 
       <section class="menu-card glass">
+        <div class="account-bar">
+          <button id="accountChip" class="account-chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="account-dot" aria-hidden="true"></span>
+            <b id="accountName">…</b>
+            <small>сменить</small>
+          </button>
+        </div>
+
+        <div id="accountPanel" class="account-panel hidden" role="dialog" aria-label="Аккаунт">
+          <div class="account-row">
+            <label class="field"
+              ><span>Имя игрока</span><input id="accountRename" maxlength="16" autocomplete="nickname"
+            /></label>
+            <button id="accountSave" class="button button-secondary">СОХРАНИТЬ</button>
+          </div>
+
+          <div id="accountList" class="account-list" aria-label="Мои аккаунты"></div>
+
+          <div class="account-row">
+            <button id="accountNew" class="button button-secondary">НОВЫЙ АККАУНТ</button>
+            <button id="accountShowCode" class="button button-secondary">МОЙ КОД</button>
+          </div>
+
+          <div id="accountCode" class="account-code hidden">
+            <small>Код входа — им можно войти на другом устройстве. Никому его не показывайте.</small>
+            <code id="accountCodeValue"></code>
+            <button id="accountCopy" class="button button-secondary">СКОПИРОВАТЬ</button>
+          </div>
+
+          <div class="account-row">
+            <label class="field"
+              ><span>Войти по коду</span
+              ><input id="accountCodeInput" placeholder="WOBBLE-…" autocomplete="off"
+            /></label>
+            <button id="accountEnter" class="button button-primary">ВОЙТИ</button>
+          </div>
+
+          <p id="accountStatus" class="status-line" role="status"></p>
+        </div>
+
         <div class="mode-tabs" role="tablist" aria-label="Режим игры">
           <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">
             ОДИНОЧНАЯ

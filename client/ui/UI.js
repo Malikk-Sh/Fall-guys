@@ -8,13 +8,15 @@ import {
 } from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
-import {
-  readProfile,
-  recordCoopProfile,
-  recordSoloProfile,
-  playerId as readPlayerId
-} from '../core/profile.js';
+import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
 import { GAME_MODE } from '/shared/protocol.js';
+
+// Лучшее из двух рекордов. Серверный и локальный могут разойтись: играли без связи, играли с
+// другого устройства, сбрасывали данные браузера. Показывать надо лучший — он и есть рекорд.
+function bestOf(...times) {
+  const valid = times.filter(time => Number.isFinite(time) && time > 0);
+  return valid.length ? Math.min(...valid) : null;
+}
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -42,10 +44,86 @@ export class UI {
         (matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0 ? 'touch' : 'keyboard')
     );
     addEventListener('inputmethodchange', e => this.setInputMethod(e.detail));
-    $('#name').value = localStorage.getItem('wobble-name') || 'Wobbler';
-    $('#name').addEventListener('change', () =>
-      localStorage.setItem('wobble-name', $('#name').value.trim().slice(0, 16))
+    this.bindAccountPanel();
+  }
+
+  // --- аккаунт --------------------------------------------------------------------------------
+  //
+  // Имя игрока теперь одно на всю игру и живёт в аккаунте. Раньше их было два независимых поля —
+  // в гонке и в коопе, — и каждое хранилось само по себе: игрок переименовывался в одном месте и
+  // не понимал, почему в другом остался прежним.
+
+  bindAccountPanel() {
+    const panel = $('#accountPanel');
+    const toggle = show => {
+      panel.classList.toggle('hidden', !show);
+      $('#accountChip').setAttribute('aria-expanded', String(show));
+      if (show) this.renderAccountPanel();
+    };
+    $('#accountChip').addEventListener('click', () => toggle(panel.classList.contains('hidden')));
+    $('#accountSave').addEventListener('click', () =>
+      this.onAccountAction?.('rename', $('#accountRename').value)
     );
+    $('#accountNew').addEventListener('click', () => this.onAccountAction?.('create'));
+    $('#accountEnter').addEventListener('click', () =>
+      this.onAccountAction?.('login', $('#accountCodeInput').value)
+    );
+    $('#accountShowCode').addEventListener('click', () => {
+      const box = $('#accountCode');
+      const show = box.classList.contains('hidden');
+      box.classList.toggle('hidden', !show);
+      // Код показывается только по явной просьбе: он лежал бы на экране у всех, кто заглянет через
+      // плечо, а восстановить его после утечки нечем — он и есть ключ от аккаунта.
+      $('#accountCodeValue').textContent = show ? this.account?.secret || '—' : '';
+    });
+    $('#accountCopy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(this.account?.secret || '');
+        this.accountStatus('Код скопирован.');
+      } catch {
+        this.accountStatus('Скопировать не вышло — выделите код вручную.');
+      }
+    });
+  }
+
+  accountStatus(text) {
+    $('#accountStatus').textContent = text || '';
+  }
+
+  // Показывает текущий аккаунт. `online: false` — сервер не ответил: аккаунт остаётся рабочим для
+  // игры, но рекорды никуда не уедут, и говорить об этом надо вслух.
+  setAccount(account, { online = true } = {}) {
+    this.account = account || null;
+    $('#accountName').textContent = account?.name || 'без аккаунта';
+    $('#accountChip').classList.toggle('offline', !online);
+    // Имена в комнатах берутся отсюда же — источник один.
+    if (account?.name) {
+      $('#name').value = account.name;
+      $('#coopName').value = account.name;
+    }
+    this.renderAccountPanel();
+  }
+
+  renderAccountPanel() {
+    if ($('#accountPanel').classList.contains('hidden')) return;
+    $('#accountRename').value = this.account?.name || '';
+    const list = $('#accountList');
+    list.replaceChildren();
+    for (const account of this.accountList || []) {
+      const row = document.createElement('button');
+      row.className = 'account-item';
+      row.classList.toggle('account-item-current', account.current);
+      row.textContent = account.name || 'Без имени';
+      if (account.current)
+        row.append(Object.assign(document.createElement('small'), { textContent: 'сейчас' }));
+      else row.addEventListener('click', () => this.onAccountAction?.('switch', account.id));
+      list.append(row);
+    }
+  }
+
+  setAccountList(accounts) {
+    this.accountList = accounts;
+    this.renderAccountPanel();
   }
   selectMode(mode) {
     this.mode = mode;
@@ -204,9 +282,11 @@ export class UI {
   status(message) {
     $('#connectStatus').textContent = message;
   }
-  preview(spec) {
+  // `serverBest` — рекорд из аккаунта. Он важнее локального: локальный принадлежит браузеру, а
+  // серверный — игроку, и переезжает вместе с ним на другое устройство.
+  preview(spec, serverBest = null) {
     $('#courseName').textContent = courseName(spec.seed);
-    const best = readBest(soloKey(spec.seed, spec.difficulty));
+    const best = bestOf(serverBest, readBest(soloKey(spec.seed, spec.difficulty)));
     $('#bestTime').textContent = best ? `РЕКОРД ${formatTime(best)}` : 'РЕКОРД —:—';
     const rule = $('#challengeRule');
     rule.classList.toggle('hidden', spec.challenge !== 'daily');
@@ -238,8 +318,11 @@ export class UI {
   playerName() {
     return ($('#name').value.trim() || 'Wobbler').slice(0, 16);
   }
+  // Личность игрока — это его аккаунт. Прежний анонимный идентификатор из профиля не переживал
+  // очистку данных браузера и не переносился на другое устройство: рекорд, поставленный на телефоне,
+  // на компьютере просто не существовал.
   playerId() {
-    return readPlayerId();
+    return this.account?.id || null;
   }
   lobby(data, selfId) {
     this.show('lobby');
@@ -520,7 +603,7 @@ export class UI {
     this.toast('Финиш! Ждём напарника — глава засчитывается только вдвоём.', 'info', 8000);
   }
 
-  finishSolo({ time, respawns, dashes = 0, hits = 0, spec, unranked = null }) {
+  finishSolo({ time, respawns, dashes = 0, hits = 0, spec, unranked = null, serverBest = null }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
@@ -553,12 +636,26 @@ export class UI {
     $('#returnLobby').classList.add('hidden');
     // Забег без зачёта рекорд не переписывает — правило и его причина живут в core/records.js.
     const saved = saveBest(soloKey(seed, difficulty), time, { unranked });
-    if (saved.improved) this.toast(saved.first ? 'Первое время сохранено!' : 'Новый личный рекорд!');
+    // Поздравляем только за настоящее улучшение. Серверный рекорд может быть лучше локального —
+    // например, поставлен с телефона, — и тогда «новый рекорд» на экране был бы неправдой.
+    const previous = bestOf(serverBest, saved.improved ? null : saved.best);
+    if (saved.improved && (!previous || time < previous)) {
+      this.toast(saved.first && !serverBest ? 'Первое время сохранено!' : 'Новый личный рекорд!');
+    }
   }
 
   // Итоги кооп-главы. Мест здесь нет: команда либо прошла главу, либо нет, и время у неё общее —
   // по последнему дошедшему.
-  finishCoop({ time, chapter, board, selfId, revives = 0, matchId = null, unranked = null }) {
+  finishCoop({
+    time,
+    chapter,
+    board,
+    selfId,
+    revives = 0,
+    matchId = null,
+    unranked = null,
+    serverBest = null
+  }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
@@ -566,7 +663,10 @@ export class UI {
     $('#finishTitle').textContent = 'ГЛАВА ПРОЙДЕНА!';
     $('#medal').textContent = '✦';
     $('#finishTime').textContent = formatTime(time);
-    const best = chapter ? this.recordChapterBest(chapter.chapterId, time, unranked) : null;
+    const best = bestOf(
+      serverBest,
+      chapter ? this.recordChapterBest(chapter.chapterId, time, unranked) : null
+    );
     const profile = recordCoopProfile(chapter, { time, revives, matchId, unranked });
     this.coopProfile(chapter?.chapterId, profile);
     $('#finishStats').innerHTML = [

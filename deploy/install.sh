@@ -25,6 +25,9 @@ set -euo pipefail
 APP_DIR=/opt/wobble
 APP_USER=wobble
 NODE_MAJOR=22
+# Минимальная пригодная версия целиком, а не только старший номер: node:sqlite появился в 22.5,
+# и на 22.4 служба упадёт на первом же require. Должно совпадать с engines в package.json.
+NODE_MIN=22.5
 
 # Настройки прошлого удачного развёртывания.
 #
@@ -74,19 +77,42 @@ apt-get update -qq
 apt-get install -y -qq ca-certificates curl gnupg git nginx ufw
 
 say "Node.js ${NODE_MAJOR}"
-# Проверяем не только наличие node, но и версию: в репозиториях Debian она обычно слишком старая,
-# а игре нужен минимум 20.19.
-current_major="$(node -v 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/' || echo 0)"
-if [ "${current_major:-0}" -lt 20 ]; then
+# Сравниваем ПОЛНУЮ версию с требуемой, а не старший номер с зашитой цифрой.
+#
+# Раньше здесь стояло «меньше 20 — ставим», и это тихо ломало обновление: на сервере, где Node 20
+# уже стоял, шаг пропускался целиком. Пока игре хватало 20.19, это было незаметно. Потом таблица
+# рекордов переехала на встроенный node:sqlite (появился в 22.5) — и установщик стал молча
+# оставлять непригодную версию: сборка проходила, служба падала на первом require, а наружу это
+# выглядело как «сервер не отвечает», без единого намёка на настоящую причину.
+#
+# Сравнение через sort -V, потому что нужны и минорные: 22.4 не подходит, 22.5 подходит.
+node_ok() {
+  local current
+  current="$(node -v 2>/dev/null | sed 's/^v//')"
+  [ -n "$current" ] || return 1
+  [ "$(printf '%s\n%s\n' "$NODE_MIN" "$current" | sort -V | head -n1)" = "$NODE_MIN" ]
+}
+
+if ! node_ok; then
   install -d -m 0755 /etc/apt/keyrings
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
     gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
   echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
     >/etc/apt/sources.list.d/nodesource.list
   apt-get update -qq
+  # Именно install, а не «install только если нет»: apt обновит уже стоявший nodejs до версии из
+  # репозитория NodeSource.
   apt-get install -y -qq nodejs
 fi
 node -v
+
+# Останавливаемся здесь, а не через полминуты на неотвечающем сервере. Раньше установка шла дальше
+# и падала в самом конце проверкой доступности — причину приходилось искать в journalctl.
+if ! node_ok; then
+  echo "!! Node $(node -v 2>/dev/null || echo 'не установлен') — игре нужен минимум v${NODE_MIN}." >&2
+  echo "!! Таблица рекордов работает на встроенном node:sqlite, он появился в 22.5." >&2
+  exit 1
+fi
 
 say "Пользователь ${APP_USER}"
 # Системный пользователь без оболочки: игре незачем уметь логиниться.
@@ -162,6 +188,24 @@ if [ ! -f /etc/wobble.env ]; then
   echo "создан /etc/wobble.env"
 else
   echo "/etc/wobble.env уже есть — не трогаю"
+  # Но о новых настройках предупреждаем.
+  #
+  # Файл сознательно не переписывается: там боевые значения, и затирать их обновлением нельзя.
+  # Обратная сторона — новые настройки на давно работающий сервер не попадают никогда, а замечается
+  # это не сразу: LEADERBOARD_DB, например, при отсутствии просто оставляет таблицу рекордов в
+  # памяти, и она исчезает при каждом перезапуске. Сервер при этом работает, поэтому пропущенную
+  # строку легко не заметить.
+  missing=""
+  while IFS='=' read -r key _; do
+    case "$key" in
+      '' | \#*) continue ;;
+    esac
+    grep -q "^[[:space:]]*${key}=" /etc/wobble.env || missing="${missing} ${key}"
+  done <"$APP_DIR/deploy/wobble.env.example"
+  if [ -n "$missing" ]; then
+    warn "в /etc/wobble.env нет настроек, появившихся позже:${missing}"
+    warn "сверьтесь с ${APP_DIR}/deploy/wobble.env.example и допишите нужные вручную"
+  fi
 fi
 
 say "Служба"

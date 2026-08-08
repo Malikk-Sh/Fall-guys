@@ -7,30 +7,23 @@ import { Music } from './audio/Music.js';
 import { Effects } from './game/Effects.js';
 import { Course } from './game/Course.js';
 import { CoopCourse } from './game/CoopCourse.js';
-import { updateRoleActions } from './game/CoopActions.js';
-import { COOP_CHAPTERS, coopSpawnFor } from '/shared/coopChapters.js';
-import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
+import { coopSpawnFor } from '/shared/coopChapters.js';
+import { GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
+import { bindNetwork } from './net/networkBindings.js';
 import { Perf } from './core/Perf.js';
+import { Quality } from './core/Quality.js';
 import { UI } from './ui/UI.js';
+import { bindMenu } from './ui/menuBindings.js';
 import { APP_STATE, createAppStates } from './core/AppStates.js';
 import { StateRouter } from './core/StateRouter.js';
 import { RaceSession } from './game/RaceSession.js';
 import { CoopSession } from './game/CoopSession.js';
-import {
-  ensureAccount,
-  listAccounts,
-  currentAccount as accountForRecords,
-  createAccount,
-  loginAccount,
-  renameAccount,
-  rememberAccount,
-  switchAccount,
-  submitRecord
-} from './core/account.js';
+import { CoopController } from './game/CoopController.js';
+import { AccountFlow } from './core/AccountFlow.js';
 
 // Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
 // достаточно редко, чтобы на слабых устройствах хватало времени на отрисовку.
@@ -54,6 +47,8 @@ class Game {
     this.state = new StateRouter(this, createAppStates());
     this.session = new RaceSession();
     this.coop = new CoopSession();
+    this.coopControl = new CoopController(this);
+    this.account = new AccountFlow(this);
 
     this.clockLast = performance.now();
     this.accumulator = 0;
@@ -62,11 +57,7 @@ class Game {
     this.remotes = new Map();
     this.startToken = 0;
     this.menuRandomSeed = randomSeed();
-    this.qualityChoice = 'auto';
-    // Догадка по железу — только начальное приближение. Дальше качество ведёт измерение кадров.
-    this.autoQuality = this.guessQuality();
-    this.quality = this.autoQuality;
-    this.raisedAt = 0;
+    this.quality = new Quality();
     this.perf = new Perf({ enabled: new URL(location.href).searchParams.has('perf') });
 
     this.audio = new AudioEngine();
@@ -76,10 +67,10 @@ class Game {
     this.createRenderer();
     this.createScene();
     this.cameraController = new CameraController(this.camera);
-    this.postFX = new PostFX(this.renderer, this.scene, this.camera, this.quality);
-    this.effects = new Effects(this.scene, this.quality);
+    this.postFX = new PostFX(this.renderer, this.scene, this.camera, this.detectQuality());
+    this.effects = new Effects(this.scene, this.detectQuality());
 
-    this.bindUI();
+    bindMenu(this);
     this.installAudioUnlock();
     this.installLifecycle();
 
@@ -89,7 +80,7 @@ class Game {
     // Обещание сохраняем: вход в комнату его дожидается. Иначе игрок, нажавший «создать комнату» в
     // первые мгновения после загрузки, попадал бы туда без личности — и его результат не привязался
     // бы к аккаунту.
-    this.accountReady = this.signIn();
+    this.accountReady = this.account.signIn();
 
     this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);
@@ -116,50 +107,37 @@ class Game {
     history.replaceState(null, '', location.pathname);
   }
 
-  // Действующее качество. В режиме «auto» это результат измерения (`autoQuality`), а не догадки:
-  // догадка по числу ядер и памяти работает грубо — слабый телефон с восемью ядрами получал
-  // высокое качество и играл в двадцать кадров.
-  detectQuality() {
-    if (this.qualityChoice !== 'auto') return this.qualityChoice;
-    return this.autoQuality || this.guessQuality();
-  }
-
-  // Начальное приближение по характеристикам устройства. Нужно только чтобы первые секунды
-  // не оказались заведомо провальными: дальше решение принимает Perf по времени кадров.
-  guessQuality() {
-    const constrained =
-      (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
-      (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4) ||
-      (matchMedia('(pointer:coarse)').matches && devicePixelRatio > 2.5);
-    return constrained ? 'low' : 'high';
-  }
-
   // Автоподстройка качества по бюджету кадра.
   //
-  // Работает только в режиме «auto»: если игрок выбрал качество руками, менять его за него нельзя —
-  // это его решение, даже если оно стоит кадров.
+
+  // Рамка теней следует за игроком.
+  //
+
+  // Действующее качество: выбор игрока, а в режиме «auto» — результат измерения.
+  detectQuality() {
+    return this.quality.effective();
+  }
+
+  // Применить действующее качество к тому, что его использует. Решение принимает Quality, здесь
+  // только последствия: плотность пикселей, тени, постобработка, лимит частиц.
+  applyRendererQuality() {
+    const level = this.detectQuality();
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, level === 'low' ? 1 : 1.65));
+    this.renderer.shadowMap.enabled = level === 'high';
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.postFX?.setQuality(level);
+    // Частицы создаются с лимитом под качество и раньше не пересоздавались при его смене:
+    // переключение на высокое качество не давало эффекта до перезагрузки страницы.
+    if (this.effects && this.effects.quality !== level) this.effects.setQuality(level);
+  }
+
+  // Автоподстройка по бюджету кадра. Решение и сообщение игроку — разные вещи: первое считает
+  // Quality по замерам Perf, второе делает игра, потому что тостами занимается она.
   updateAdaptiveQuality(now) {
-    if (this.qualityChoice !== 'auto' || !this.running) return;
-    const verdict = this.perf.verdict(now);
-    if (!verdict) return;
-
-    if (verdict < 0) {
-      if (this.autoQuality === 'low') return;
-      // Понижение сразу после попытки возврата означает, что возврат был ошибкой.
-      if (this.raisedAt && now - this.raisedAt < 60_000) this.perf.raiseFailed();
-      this.autoQuality = 'low';
-      this.applyRendererQuality();
-      this.perf.reset();
-      this.ui.toast('Качество снижено — держим плавность.');
-      return;
-    }
-
-    if (this.autoQuality === 'high') return;
-    this.autoQuality = 'high';
-    this.raisedAt = now;
+    const changed = this.quality.adapt(now, { running: this.running, perf: this.perf });
+    if (!changed) return;
     this.applyRendererQuality();
-    this.perf.reset();
-    this.ui.toast('Качество повышено.');
+    this.ui.toast(changed === 'low' ? 'Качество снижено — держим плавность.' : 'Качество повышено.');
   }
 
   createRenderer() {
@@ -175,18 +153,6 @@ class Game {
     this.renderer.toneMappingExposure = 1.08;
     this.applyRendererQuality();
   }
-
-  applyRendererQuality() {
-    this.quality = this.detectQuality();
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.quality === 'low' ? 1 : 1.65));
-    this.renderer.shadowMap.enabled = this.quality === 'high';
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.postFX?.setQuality(this.quality);
-    // Частицы создаются с лимитом под качество и раньше не пересоздавались при его смене:
-    // переключение на высокое качество не давало эффекта до перезагрузки страницы.
-    if (this.effects && this.effects.quality !== this.quality) this.effects.setQuality(this.quality);
-  }
-
   createScene() {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x83dff0);
@@ -220,11 +186,7 @@ class Game {
     this._shadowFocus = new THREE.Vector3();
     this._previewTarget = new THREE.Vector3();
     this._forward = new THREE.Vector3();
-    this._marker = new THREE.Vector3();
   }
-
-  // Рамка теней следует за игроком.
-  //
   // Раньше ортографическая камера тени была прибита к началу координат с рамкой примерно 44×42, а
   // трасса уходит по Z до -139. То есть теней не было нигде дальше второго сегмента — персонаж
   // просто переставал отбрасывать тень, и глубина сцены разваливалась.
@@ -239,6 +201,15 @@ class Game {
     this.sun.target.position.copy(this._shadowFocus);
     this.sun.target.updateMatrixWorld();
     this.sun.position.set(snappedX + 18, 28, snappedZ + 15);
+  }
+  resize() {
+    const width = Math.max(1, innerWidth);
+    const height = Math.max(1, innerHeight);
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(width, height, false);
+    this.postFX?.setSize(width, height);
+    this.applyRendererQuality();
   }
 
   // Браузер не позволяет запустить звук до первого действия пользователя. Слушаем первое
@@ -255,358 +226,10 @@ class Game {
 
   // --- аккаунт --------------------------------------------------------------------------------
 
-  // Автовход в последний аккаунт. При первом заходе аккаунт заводится сам: игрок не должен
-  // регистрироваться, чтобы просто побегать.
-  async signIn() {
-    const { account, records, online } = await ensureAccount({});
-    this.applyAccount(account, { online, records });
-    if (!online) this.ui.accountStatus('Сервер не ответил — рекорды сохранятся только на этом устройстве.');
-  }
-
-  // `records` не передают, когда менялось только имя: рекорды при этом те же, и пересобирать их
-  // из уже разобранной карты было бы лишним кругом.
-  applyAccount(account, { online = true, records = null } = {}) {
-    if (records) {
-      this.serverRecords = new Map(
-        records.map(record => [`${record.mode}:${record.courseKey}`, record.time])
-      );
-    }
-    this.ui.setAccount(account, { online });
-    this.ui.setAccountList(listAccounts());
-    // Меню показывает рекорд текущей трассы, а он у каждого аккаунта свой.
-    if (this.previewSpec) this.ui.preview(this.previewSpec, this.serverRecordFor('solo', this.previewSpec));
-  }
-
-  serverRecordFor(mode, spec) {
-    if (!spec) return null;
-    const key = mode === 'coop' ? spec.chapterId || spec.id : `${spec.seed}:${spec.difficulty}`;
-    return this.serverRecords?.get(`${mode}:${key}`) ?? null;
-  }
-
-  // Личный рекорд уходит на сервер после любого режима.
-  //
-  // Соло и кооп сервер проверить не может — он просто верит присланному времени, поэтому эти
-  // результаты остаются личными и в общую таблицу не попадают. Общий топ по-прежнему только у
-  // гонки, где каждое положение игрока проверено.
-  async saveServerRecord(mode, spec, time) {
-    const account = accountForRecords();
-    if (!account || !Number.isFinite(time) || time <= 0) return;
-    const courseKey = mode === 'coop' ? spec.chapterId || spec.id : `${spec.seed}:${spec.difficulty}`;
-    try {
-      const saved = await submitRecord({ secret: account.secret, mode, courseKey, timeMs: Math.round(time) });
-      if (saved?.best) this.serverRecords?.set(`${mode}:${courseKey}`, saved.best);
-    } catch {
-      // Рекорд не уехал — забег от этого не перестаёт быть пройденным, а локальная запись уже есть.
-    }
-  }
-
-  async handleAccountAction(action, value) {
-    const ui = this.ui;
-    try {
-      if (action === 'switch') {
-        switchAccount(value);
-        ui.accountStatus('Переключаюсь…');
-        return this.signIn();
-      }
-      if (action === 'create') {
-        const created = await createAccount('Wobbler');
-        if (!created) return ui.accountStatus('Не вышло создать аккаунт — сервер не ответил.');
-        rememberAccount(created);
-        this.applyAccount(created, { records: created.records });
-        return ui.accountStatus('Новый аккаунт готов. Загляните в «МОЙ КОД», чтобы не потерять его.');
-      }
-      if (action === 'login') {
-        const entered = await loginAccount(value);
-        if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
-        // Код сохраняем ровно тот, что ввёл игрок: сервер его обратно не присылает.
-        rememberAccount({ ...entered, secret: value });
-        this.applyAccount({ ...entered, secret: value }, { records: entered.records });
-        return ui.accountStatus(`Вошли как ${entered.name}.`);
-      }
-      if (action === 'rename') {
-        const account = accountForRecords();
-        if (!account) return ui.accountStatus('Сначала нужен аккаунт.');
-        const renamed = await renameAccount(account.secret, value);
-        if (!renamed) return ui.accountStatus('Переименовать не вышло — сервер не ответил.');
-        rememberAccount({ ...renamed, secret: account.secret });
-        this.applyAccount({ ...renamed, secret: account.secret });
-        return ui.accountStatus('Имя изменено.');
-      }
-    } catch {
-      ui.accountStatus('Не получилось — попробуйте ещё раз.');
-    }
-    return undefined;
-  }
-
-  bindUI() {
-    this.ui.onAccountAction = (action, value) => this.handleAccountAction(action, value);
-    const $ = s => document.querySelector(s);
-    const click = (selector, handler) =>
-      $(selector).addEventListener('click', event => {
-        this.sfx.uiClick();
-        handler(event);
-      });
-
-    click('#play', () => this.startSingle(false));
-    click('#again', () => this.startRace('single', this.lastSpec));
-    click('#newCourse', () => this.startSingle(true));
-    click('#create', async () => {
-      await this.accountReady;
-      const net = this.ensureNetwork();
-      net.createRoom({
-        name: this.ui.playerName(),
-        playerId: this.ui.playerId(),
-        difficulty: $('#difficulty').value
-      });
-    });
-    click('#join', async () => {
-      await this.accountReady;
-      const net = this.ensureNetwork();
-      net.joinRoom({
-        name: this.ui.playerName(),
-        playerId: this.ui.playerId(),
-        code: $('#code').value.trim().toUpperCase()
-      });
-    });
-    click('#ready', () => {
-      this.ready = !this.ready;
-      this.net?.send('ready', { ready: this.ready });
-      $('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
-    });
-    click('#start', () => this.net?.send('start'));
-    $('#lobbyDifficulty').addEventListener('change', e =>
-      this.net?.send('configure', { difficulty: e.target.value })
-    );
-    // Голоса на экране результатов. Кнопки НЕ гасим: выбор можно менять, пока комната не решила.
-    // Раньше нажатая кнопка гасла навсегда, и разошедшиеся голоса запирали обоих без выхода.
-    // Экран переключит авторитетное состояние комнаты, а не локальная догадка.
-    click('#rematch', () => {
-      if (!this.net?.matchId) return;
-      this.net.send('rematch', { matchId: this.net.matchId });
-    });
-    click('#returnLobby', () => {
-      if (!this.net?.matchId) return;
-      this.net.send('returnLobby', { matchId: this.net.matchId });
-    });
-    $('#copyInvite').addEventListener('click', async () => {
-      const mode = this.room?.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
-      const link = this.ui.inviteLink($('#roomCode').textContent.trim(), mode);
-      try {
-        // На телефоне системное «Поделиться» удобнее буфера обмена: ссылка сразу уходит в
-        // мессенджер, а не требует переключения приложений вручную.
-        if (navigator.share) {
-          const title = mode === GAME_MODE.COOP ? 'Wobble Rush — кооп' : 'Wobble Rush — гонка';
-          await navigator.share({ title, url: link });
-        } else await navigator.clipboard.writeText(link);
-        this.ui.toast('Ссылка-приглашение готова!');
-      } catch {
-        this.ui.toast(link);
-      }
-    });
-    $('#copyCode').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText($('#roomCode').textContent);
-        this.ui.toast('Код комнаты скопирован!');
-      } catch {
-        this.ui.toast('Выделите код и скопируйте вручную.');
-      }
-    });
-    document.querySelectorAll('.back').forEach(button =>
-      button.addEventListener('click', () => {
-        this.sfx.uiClick();
-        this.goHome();
-      })
-    );
-
-    this.bindLeaveMatch();
-
-    const refreshPreview = () => {
-      const settings = this.ui.singleSettings();
-      this.previewSpec =
-        settings.type === 'daily'
-          ? dailyCourseSpec(settings.difficulty)
-          : courseSpec(this.menuRandomSeed, settings.difficulty);
-      this.ui.preview(this.previewSpec);
-      if (!this.running && this.mode === 'preview') this.buildPreview(this.previewSpec);
-    };
-    $('#runType').addEventListener('change', e => {
-      if (e.target.value === 'random') this.menuRandomSeed = randomSeed();
-      refreshPreview();
-    });
-    $('#difficulty').addEventListener('change', refreshPreview);
-
-    click('#quality', () => {
-      const values = ['auto', 'low', 'high'];
-      const next = values[(values.indexOf(this.qualityChoice) + 1) % values.length];
-      this.qualityChoice = next;
-      // Возврат в «auto» начинает подбор заново: прошлые измерения относились к другой картинке.
-      if (next === 'auto') {
-        this.autoQuality = this.guessQuality();
-        this.perf.reset();
-      }
-      this.ui.setQuality(next);
-      this.applyRendererQuality();
-      this.ui.toast(`Качество графики: ${next.toUpperCase()}.`);
-      if (this.mode === 'preview') this.buildPreview(this.previewSpec);
-    });
-
-    // Режим камеры переключается внутри контроллера (клавиша C или кнопка на экране), а показать
-    // это должен интерфейс. Событие вместо прямого вызова — чтобы контроллер камеры не знал про UI.
-    addEventListener('camera-mode-change', event => {
-      const free = event.detail === 'free';
-      this.ui.toast(
-        free ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.' : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
-      );
-      $('#cameraMode').classList.toggle('camera-free', free);
-    });
-    $('#cameraMode').classList.toggle('camera-free', this.cameraController.mode === 'free');
-
-    // Кооператив: выбор главы и вход в комнату.
-    this.ui.fillChapters(COOP_CHAPTERS, chapter => {
-      this.coopChapterId = chapter.id;
-    });
-    click('#coopCreate', async () => {
-      await this.accountReady;
-      const net = this.ensureNetwork();
-      net.createRoom({
-        name: this.ui.coopName(),
-        playerId: this.ui.playerId(),
-        mode: GAME_MODE.COOP,
-        difficulty: this.ui.coopChapter()
-      });
-    });
-    click('#coopJoin', async () => {
-      await this.accountReady;
-      const net = this.ensureNetwork();
-      net.joinRoom({
-        name: this.ui.coopName(),
-        playerId: this.ui.playerId(),
-        code: $('#coopCode').value.trim().toUpperCase()
-      });
-    });
-
-    this.ui.bindAudioControls({
-      volumes: this.audio.volumes,
-      onChange: (bus, value) => {
-        this.audio.unlock();
-        this.audio.setVolume(bus, value);
-      }
-    });
-  }
-
   ensureNetwork() {
     if (this.net) return this.net;
     this.net = new NetworkManager(this.ui);
-
-    // Состояние комнаты приходит одним и тем же типом сообщения в любом состоянии — и в лобби,
-    // и на экране результатов. Раньше обработчик этого не различал и на каждое обновление открывал
-    // лобби. Из-за этого первый же чужой голос за реванш закрывал карточку результатов: сервер
-    // просто разослал новый состав комнаты, а клиент понял это как «матч окончен, все в лобби».
-    this.net.on('lobby', message => {
-      this.room = message;
-      // Список игроков — авторитетный источник: событие присутствия могло прийти до того, как
-      // напарник вообще появился в комнате, или потеряться при переподключении.
-      this.coop.setPartnerAway(message.players.some(p => p.id !== this.net.id && p.away));
-      this.refreshCoopSolo();
-      this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
-
-      if (message.state === ROOM_STATE.RESULTS)
-        return this.ui.updateResultRoom(message, this.net.id, this.net.serverNow());
-      // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
-      if (message.state !== ROOM_STATE.LOBBY) return;
-
-      this.state.transition(APP_STATE.LOBBY, message);
-      document.querySelector('#ready').textContent = this.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
-      this.ui.resetResultButtons();
-      this.ui.lobby(message, this.net.id);
-    });
-
-    // Сервер не принял финиш: по его данным черта ещё не пересечена. Разрешаем повтор и ставим
-    // игрока туда, где сервер его видит, — иначе он навсегда останется в «Подтверждаем результат…».
-    this.net.on('finishRejected', message => {
-      this.net.allowFinishRetry();
-      this.session.reopenFinish();
-      this.player.finished = false;
-      this.running = true;
-      this.input.enabled = true;
-      if (message.position) {
-        this.player.respawn(
-          new THREE.Vector3(message.position.x, message.position.y, message.position.z),
-          false
-        );
-      }
-      this.ui.toast('Финиш не засчитан — добегите до ленты ещё раз.');
-    });
-
-    // Клиент старее сервера. Всплывающая подсказка тут не годится: она исчезнет через пять секунд,
-    // а игра останется нерабочей. Нужен постоянный оверлей с единственным действием.
-    this.net.on('versionMismatch', () => {
-      this.running = false;
-      this.input.enabled = false;
-      this.ui.linkOverlay('failed', {
-        title: 'Версия игры устарела',
-        detail: 'Сервер обновился. Обновите страницу, чтобы продолжить играть по сети.',
-        action: { label: 'ОБНОВИТЬ СТРАНИЦУ', onClick: () => location.reload() }
-      });
-    });
-
-    // Вернуться в комнату не удалось: её уже нет или истёк срок. Это не «сеть лежит», а «идти
-    // некуда», и вести себя надо иначе — увести в меню, а не крутить переподключение.
-    this.net.on('sessionExpired', () => {
-      this.ui.error('Комната больше не существует. Возвращаемся в меню.');
-      this.goHome();
-    });
-
-    // `start` приходит и в начале забега, и при возвращении в уже идущий. Различает их поле
-    // `resumed`: если оно есть, забег продолжается с того места, где сервер видел игрока.
-    this.net.on('start', async message => {
-      await this.startRace(
-        message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
-        message.spec,
-        message.at,
-        message.slots
-      );
-      if (message.resumed) this.restoreRun(message.resumed);
-    });
-    this.net.on('presence', message => {
-      if (message.id === this.net.id) return;
-      this.coop.setPartnerAway(message.away);
-      if (this.mode === 'coop') {
-        this.ui.toast(message.away ? 'Напарник свернул игру — подождите.' : 'Напарник вернулся в игру.');
-      }
-    });
-    this.net.on('coopEvent', message => this.receiveCoopEvent(message));
-    this.net.on('finish', message => this.receiveFinish(message));
-    this.net.on('results', message => this.receiveResults(message));
-
-    // Сервер снял зачёт: кто-то оборвался или вышел. Говорим об этом сразу, а не на финише —
-    // игрок вправе знать, что бежит уже не за рекорд, до того как добежит.
-    this.net.on('unranked', message => {
-      if (message.matchId && this.net.matchId && message.matchId !== this.net.matchId) return;
-      this.markUnranked(message.reason || 'disconnect');
-    });
-
-    this.net.on('correction', message => {
-      if (this.player && message.position) {
-        this.player.checkpoint = Math.max(this.player.checkpoint, message.position.checkpoint || 0);
-        this.player.respawn(
-          new THREE.Vector3(message.position.x, message.position.y, message.position.z),
-          false
-        );
-        if (message.reason === 'movement') this.ui.toast('Сервер поправил рассинхрон движения.');
-      }
-    });
-
-    // Обрыв связи больше не означает конец сетевой игры: NetworkManager сам пробует переподключиться
-    // и отдаёт 'disconnect' только когда все попытки исчерпаны.
-    this.net.on('linkState', ({ state }) => this.showLinkState(state));
-    this.net.on('connectionLost', () => this.showLinkState('reconnecting'));
-    this.net.on('disconnect', () => {
-      this.showLinkState('failed');
-      this.fallbackToSolo();
-    });
-    this.net.on('resumed', () => this.showLinkState('online'));
-
+    bindNetwork(this);
     this.net.connect();
     return this.net;
   }
@@ -652,8 +275,8 @@ class Game {
     // Спека кооперативной главы отличается наличием chapterId: уровень собирается из данных,
     // а не генерируется из сида.
     this.course = spec.chapterId
-      ? new CoopCourse(this.scene, spec, { quality: this.quality })
-      : new Course(this.scene, spec, { quality: this.quality });
+      ? new CoopCourse(this.scene, spec, { quality: this.detectQuality() })
+      : new Course(this.scene, spec, { quality: this.detectQuality() });
     this.lastSpec = this.course.spec;
   }
 
@@ -692,7 +315,7 @@ class Game {
     // Состав комнаты мог прийти РАНЬШЕ, чем построен уровень: так бывает при возвращении в идущий
     // матч, где напарник уже ушёл. Тогда обновление состава ушло в пустоту, и глава начиналась бы
     // с закрытыми преградами, которые открыть некому.
-    this.refreshCoopSolo();
+    this.coopControl.refreshSolo();
     // Пока связь цела, забег идёт в зачёт. Сессия хранит причину, по которой он перестал.
     this.session.start({ mode, spec: this.course.spec, startedAt: startAt });
 
@@ -792,10 +415,10 @@ class Game {
         hits: this.player.hits,
         spec: this.course.spec,
         unranked: this.session.unranked,
-        serverBest: this.serverRecordFor('solo', this.course.spec)
+        serverBest: this.account.recordFor('solo', this.course.spec)
       });
       // Забег без зачёта рекордом не считается — ни локально, ни на сервере.
-      if (!this.session.unranked) this.saveServerRecord('solo', this.course.spec, time);
+      if (!this.session.unranked) this.account.save('solo', this.course.spec, time);
     } else {
       this.input.enabled = false;
       // Финиш вместе с последним состоянием — одной операцией. Отдельная отправка позиции
@@ -899,7 +522,7 @@ class Game {
       selfId: this.net.id,
       unranked: this.session.unranked
     });
-    if (!this.session.unranked) this.saveServerRecord('race', this.course?.spec, raceTime);
+    if (!this.session.unranked) this.account.save('race', this.course?.spec, raceTime);
   }
 
   // Итоги матча. В гонке карточка уже показана по своему финишу, здесь только доска обновляется;
@@ -915,7 +538,7 @@ class Game {
     this.state.transition(APP_STATE.RESULTS);
     this.music.setIntensity(0);
     const coopTime = message.coopTime ?? this.session.finalTime;
-    if (!this.session.unranked) this.saveServerRecord('coop', this.course?.spec, coopTime);
+    if (!this.session.unranked) this.account.save('coop', this.course?.spec, coopTime);
     this.ui.finishCoop({
       time: coopTime,
       chapter: this.course?.spec || null,
@@ -924,7 +547,7 @@ class Game {
       revives: this.coop.revives,
       matchId: this.net?.matchId,
       unranked: this.session.unranked,
-      serverBest: this.serverRecordFor('coop', this.course?.spec)
+      serverBest: this.account.recordFor('coop', this.course?.spec)
     });
   }
 
@@ -985,22 +608,6 @@ class Game {
 
   // Кооператив в одиночку: напарник ушёл насовсем.
   //
-  // Считается по составу комнаты, а не по буферу снапшотов: буфер пустеет и от секундной паузы в
-  // сети, а состав знает, кто в комнате остался. Оборвавшийся игрок держит своё место 30 секунд и
-  // всё это время в составе есть — значит короткий обрыв связи главу не упрощает, а вот выход
-  // напарника открывает преграды сразу.
-  refreshCoopSolo() {
-    if (this.mode !== 'coop' || typeof this.course?.setSolo !== 'function') return;
-    const solo = CoopSession.soloFromRoster(this.room?.players, this.net?.id);
-    if (solo === null || !this.course.setSolo(solo)) return;
-    if (this.course.solo) {
-      this.ui.toast(
-        'Напарник вышел. Кооперативные преграды открыты — главу можно закончить одному.',
-        'info',
-        5200
-      );
-    }
-  }
 
   goHome() {
     this.startToken++;
@@ -1071,16 +678,6 @@ class Game {
     this.net.resyncClock();
   }
 
-  resize() {
-    const width = Math.max(1, innerWidth);
-    const height = Math.max(1, innerHeight);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height, false);
-    this.postFX?.setSize(width, height);
-    this.applyRendererQuality();
-  }
-
   placement() {
     const selfId = this.net?.id || 'self';
     const racers = [{ id: selfId, checkpoint: this.player.checkpoint, z: this.player.position.z }];
@@ -1097,95 +694,6 @@ class Game {
     return this.session.elapsed(this.raceNow()) / 1000;
   }
 
-  // Один шаг симуляции. Всегда с постоянным dt.
-  // Состояние кооп-объектов выводится из позиций обоих игроков — обе у нас уже есть.
-  coopActors() {
-    const actors = [];
-    if (this.player && this.net) {
-      actors.push({
-        id: this.net.id,
-        position: this.player.position,
-        velocity: this.player.velocity,
-        grounded: this.player.grounded,
-        downed: this.player.downed
-      });
-    }
-    for (const [id, remote] of this.remotes) {
-      actors.push({
-        id,
-        position: remote.position,
-        velocity: remote.velocity,
-        grounded: false,
-        downed: remote.downed
-      });
-    }
-    return actors;
-  }
-
-  // Кооперативные действия. Удар сверху повешен на ту же кнопку, что и рывок: на телефоне нельзя
-  // множить кнопки, а на земле и в воздухе смысл нажатия и так разный.
-  updateRoleActions() {
-    if (this.mode !== 'coop' || !this.player) return;
-    updateRoleActions(this.player, this.course, this.input, this.cameraController.yaw, {
-      onSlam: () => {
-        this.sfx.slam();
-        this.cameraController.addShake(0.3);
-      },
-      onCatapult: id => this.triggerCatapult(id)
-    });
-  }
-
-  triggerCatapult(catapultId) {
-    const { actor, catapult } = this.course.launchCandidate(catapultId, this.coopActors());
-    this.course.triggerCatapultVisual(catapultId);
-    this.cameraController.addShake(0.6);
-    this.sfx.catapult(this.player.visualPosition);
-    this.effects.burst(this.player.position, COLORS.yellow, 20, 1.3);
-    if (!actor || actor.id === this.net.id) return;
-    // Импульс считает инициатор, применяет — цель. Сервер ограничивает модуль и ретранслирует:
-    // это единственное место, где один игрок меняет состояние другого.
-    this.net?.sendCoopEvent('launch', {
-      objectId: catapultId,
-      vector: { x: 0, y: catapult.power, z: -catapult.power * catapult.forward }
-    });
-  }
-
-  receiveCoopEvent(message) {
-    if (!this.course || this.mode !== 'coop') return;
-    const effect = this.coop.applyEvent(message);
-    if (effect?.type === 'launch-self') {
-      this.player?.applyLaunch(effect.vector);
-      this.sfx.catapult();
-      this.cameraController.addShake(0.5);
-      return;
-    }
-    if (effect?.type === 'down-self') {
-      this.player?.goDown(this.player.position);
-      return;
-    }
-    if (effect?.type === 'revive-self') {
-      this.player?.revive();
-      this.sfx.revive();
-    } else if (effect?.type === 'revive-partner') {
-      this.sfx.revive(this.remotes.values().next().value?.visualPosition);
-    }
-  }
-
-  // Оживление напарника прикосновением. Проверка простая: подошёл достаточно близко.
-  tryRevivePartner() {
-    if (this.mode !== 'coop') return;
-    const partner = this.remotes.values().next().value;
-    if (!partner) return;
-    if (
-      !this.coop.canRevive({
-        localDowned: this.player?.downed,
-        distance: this.player.position.distanceTo(partner.position)
-      })
-    )
-      return;
-    this.net?.sendCoopEvent('revive');
-  }
-
   fixedStep(dt) {
     const elapsed = this.courseElapsed();
     // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
@@ -1194,11 +702,11 @@ class Game {
     if (!this.running || !this.player || this.mode === 'preview') return;
     this.input.update();
     if (this.mode === 'coop') {
-      const actors = this.coopActors();
+      const actors = this.coopControl.actors();
       // Пересчёт до шага игрока: пролёт должен появиться раньше, чем по нему пойдут.
       this.course.updateCoop(actors, this.raceNow(), this.sfx);
-      this.updateRoleActions();
-      this.tryRevivePartner();
+      this.coopControl.updateRoleActions();
+      this.coopControl.tryRevivePartner();
       // Подсказка обучения — после пересчёта состояния: решённая задача должна убрать её
       // в том же кадре, а не в следующем.
       const lesson = this.course.activeLesson(actors);
@@ -1271,10 +779,16 @@ class Game {
       }
       this.updateRemotes(frameDt);
 
-      this.cameraController.update(frameDt, this.player, this.input, this.course, this.partnerPosition());
+      this.cameraController.update(
+        frameDt,
+        this.player,
+        this.input,
+        this.course,
+        this.coopControl.partnerPosition()
+      );
       this.updateShadow(this.player.visualPosition);
       this.updateAudioScene();
-      if (this.mode === 'coop') this.updatePartnerMarker();
+      if (this.mode === 'coop') this.coopControl.updatePartnerMarker();
 
       const elapsed = this.session.elapsed(this.raceNow());
       this.ui.updateHud({
@@ -1292,43 +806,10 @@ class Game {
     this.state.render(alpha);
     this.updateAdaptiveQuality(time);
     this.perf.paint(time, this.renderer, {
-      качество: this.qualityChoice === 'auto' ? `авто (${this.autoQuality})` : this.qualityChoice,
+      качество: this.quality.label(),
       напарников: this.remotes.size
     });
     requestAnimationFrame(next => this.loop(next));
-  }
-
-  // Экранное положение напарника для указателя. Пока он в кадре, указатель скрыт: лишняя
-  // стрелка поверх видимого персонажа только загромождает экран.
-  updatePartnerMarker() {
-    const partner = this.remotes.values().next().value;
-    if (!partner || !this.player) {
-      this.ui.updatePartnerMarker({ screen: null });
-      return;
-    }
-    const world = this._marker.copy(partner.visualPosition).setY(partner.visualPosition.y + 1.6);
-    const projected = world.project(this.camera);
-    // z > 1 означает, что точка позади камеры — проекция там зеркалится, и стрелку надо развернуть.
-    const behind = projected.z > 1;
-    const x = ((behind ? -projected.x : projected.x) * 0.5 + 0.5) * innerWidth;
-    const y = ((behind ? -projected.y : -projected.y) * 0.5 + 0.5) * innerHeight;
-    const onScreen =
-      !behind && projected.x > -0.92 && projected.x < 0.92 && projected.y > -0.92 && projected.y < 0.92;
-    this.ui.updatePartnerMarker({
-      screen: { x, y },
-      visible: onScreen,
-      distance: this.player.visualPosition.distanceTo(partner.visualPosition),
-      down: this.coop.partnerDown,
-      away: this.coop.partnerAway
-    });
-  }
-
-  // Позиция напарника для кооп-кадрирования камеры. В гонке возвращает null: подстраивать кадр
-  // под произвольного соперника не нужно, это только мешало бы целиться в прыжок.
-  partnerPosition() {
-    if (this.mode !== 'coop') return null;
-    const partner = this.remotes.values().next().value;
-    return partner ? partner.visualPosition : null;
   }
 
   updateAudioScene() {

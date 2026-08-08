@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CourseBuilder, PLAYER_FOOT } from './CourseBuilder.js';
+import { buildSegment } from './segments.js';
 import {
   COLORS,
   DIFFICULTIES,
@@ -102,7 +103,6 @@ export class Course extends CourseBuilder {
   }
   addSegment(segment, index, z) {
     const { type, variant = 0 } = segment;
-    const mirror = variant === 1 ? -1 : 1;
     const color = palette[(index + this.spec.seed) % palette.length],
       // Направление входит множителем в ту же скорость, что и темп: отрицательная скорость
       // разворачивает и вращение вертушек, и качание молотов, и ход подвижных платформ — то есть
@@ -122,141 +122,21 @@ export class Course extends CourseBuilder {
         crosswind: 'ДОРОГА ВЕТРОВ'
       }[type]
     );
-    if (type === 'sweepers') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.sweepers, h: 1, d: 18, color, bevel: true });
-      this.addRail(-5.6, z, 16);
-      this.addRail(5.6, z, 16);
-      for (const [offset, direction] of [
-        [4, 1],
-        [-4, -1]
-      ])
-        this.addSpinner(
-          0,
-          0.95,
-          z + offset,
-          10.4,
-          0.42,
-          speed * (1.35 + this.rng() * 0.45) * direction * (variant === 2 ? -1 : 1),
-          index * 0.8 + offset
-        );
-    }
-    if (type === 'movers') {
-      this.box({ x: 0, y: 0, z: z + 7, w: SEGMENT_WIDTH.movers, h: 1, d: 4, color, bevel: true });
-      this.box({ x: 0, y: 0, z: z - 7, w: SEGMENT_WIDTH.movers, h: 1, d: 4, color, bevel: true });
-      for (let j = 0; j < 3; j++) {
-        const platform = this.box({
-          x: variant === 2 ? (j - 1) * 0.55 : 0,
-          y: 0.15 + j * 0.12,
-          z: z + 3.5 - j * 3.5,
-          w: 3.8,
-          h: 0.55,
-          d: 3,
-          color: palette[(index + j + 2) % palette.length],
-          bevel: true
-        });
-        platform.motion = {
-          axis: 'x',
-          origin: variant === 2 ? (j - 1) * 0.55 : 0,
-          range: variant === 2 ? 3.2 : 3.8,
-          speed: speed * (0.82 + j * 0.13),
-          phase: j * 2.15 + variant * 0.7
-        };
-        this.dynamic.push(platform);
-      }
-    }
-    if (type === 'bumpers') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bumpers, h: 1, d: 18, color, bevel: true });
-      this.addRail(-5.6, z, 16);
-      this.addRail(5.6, z, 16);
-      const points = [
-        [-3, 5],
-        [2.7, 1],
-        [-2.6, -3],
-        [2.4, -6]
-      ].map(([x, oz]) => [x * mirror, oz]);
-      if (variant === 2) points[1][0] = 0;
-      for (let j = 0; j < points.length; j++)
-        this.addBumper(points[j][0], 1.25, z + points[j][1], 0.86, palette[(index + j + 3) % palette.length]);
-    }
-    if (type === 'bridge') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bridge, h: 1, d: 18, color, bevel: true });
-      this.addRail(-1.55, z, 16);
-      this.addRail(1.55, z, 16);
-      this.addSpinner(0, 1, z, 7, 0.38, speed * 1.08 * (variant === 1 ? -1 : 1), index * 0.55);
-      for (const side of [-1, 1])
-        for (let j = -1; j <= 1; j++)
-          this.box({
-            x: side * 3.4,
-            y: -0.25,
-            z: z + j * 5.2,
-            w: 2.3,
-            h: 0.45,
-            d: 2.3,
-            color: COLORS.cyan,
-            collider: false
-          }).mesh.rotation.y = j * 0.4;
-    }
-    if (type === 'punchers') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.punchers, h: 1, d: 18, color, bevel: true });
-      this.addRail(-5.1, z, 16);
-      this.addRail(5.1, z, 16);
-      for (let j = 0; j < 3; j++) {
-        const p = this.box({
-          x: (j % 2 ? 3.7 : -3.7) * mirror,
-          y: 1,
-          z: z + 5 - j * 5,
-          w: 2.7,
-          h: 2.1,
-          d: 1.2,
-          color: COLORS.pink,
-          collider: false
-        }).mesh;
-        p.scale.z = 0.86;
-        const obstacle = {
-          type: 'puncher',
-          mesh: p,
-          originX: p.position.x,
-          range: 5.8,
-          speed: speed * (1.4 + j * 0.14),
-          phase: j * 2.2 + variant * 0.6,
-          w: 2.7,
-          d: 1.2,
-          radius: 1.7
-        };
-        this.obstacles.push(obstacle);
-      }
-    }
-    if (type === 'bounce') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.bounce, h: 1, d: 18, color, bevel: true });
-      this.addRail(-5.6, z, 16);
-      this.addRail(5.6, z, 16);
-      for (const [x, oz] of [
-        [-3, 5],
-        [2.5, 2],
-        [0, -2],
-        [-2.7, -5.5]
-      ])
-        this.addSpring(x * mirror, 0.68, z + (variant === 2 ? -oz : oz), 1.15);
-    }
-    if (type === 'crosswind') {
-      this.box({ x: 0, y: 0, z, w: SEGMENT_WIDTH.crosswind, h: 1, d: 18, color, bevel: true });
-      this.addRail(-4.1, z, 16);
-      this.addRail(4.1, z, 16);
-      for (const [j, oz] of [
-        [0, 4.8],
-        [1, -0.2],
-        [2, -5]
-      ])
-        this.addSpinner(
-          (j % 2 ? 2.2 : -2.2) * mirror,
-          1.1,
-          z + oz,
-          7.2,
-          0.34,
-          speed * (1.55 + j * 0.14) * (j % 2 ? -1 : 1) * (variant === 2 ? -1 : 1),
-          j
-        );
-    }
+    // Сама расстановка живёт в segments.js: там у каждого типа несколько структурно разных
+    // вариантов, и добавление нового не требует трогать ни Course, ни генератор плана.
+    //
+    // Зеркало оставлено как множитель для тех вариантов, где оно осмысленно: несимметричную
+    // расстановку оно честно отражает, а симметричную не трогает.
+    buildSegment(this, type, variant, {
+      z,
+      index,
+      speed,
+      color,
+      palette,
+      rng: this.rng,
+      width: SEGMENT_WIDTH[type],
+      mirror: variant % 2 === 1 ? -1 : 1
+    });
     const endZ = -18 * (index + 1);
     this.box({
       x: 0,

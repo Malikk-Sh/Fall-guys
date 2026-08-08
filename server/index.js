@@ -1751,9 +1751,18 @@ if (require.main === module) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
+// Сброс счётчиков по адресу. Нужен тестам: они ходят с одного 127.0.0.1 и за минуту создают
+// комнат больше, чем позволено живому человеку. Без сброса набор разваливался непредсказуемо —
+// падал тот тест, который случайно пересёк границу окна.
+function resetRateLimits() {
+  ipRoomOps.clear();
+  ipConnections.clear();
+}
+
 module.exports = {
   app,
   server,
+  resetRateLimits,
   rooms,
   sessions,
   metrics,

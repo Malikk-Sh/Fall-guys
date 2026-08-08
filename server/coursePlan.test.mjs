@@ -5,8 +5,12 @@ import {
   createSegmentPlan,
   createSegmentRoles,
   SEGMENT_ROLE,
-  SEGMENT_TYPES
+  SEGMENT_TYPES,
+  SEGMENT_VARIANTS
 } from '../shared/courseSpec.js';
+import { SEGMENT_LENGTH, FINISH_TAIL, START } from '../shared/courseSpec.js';
+import { variantCount } from '../client/game/segments.js';
+import { RaceRun } from './bots.mjs';
 
 test('план сегментов детерминирован и входит в общую спецификацию трассы', () => {
   const first = createCourseSpec(123456, 'chaos');
@@ -19,21 +23,24 @@ test('план сегментов детерминирован и входит �
   assert.equal(first.segments.at(-1).role, SEGMENT_ROLE.FINALE);
 });
 
-test('каждый элемент плана содержит известный тип и один из трёх микровариантов', () => {
+test('каждый элемент плана содержит известный тип и один из объявленных вариантов', () => {
   const seenVariants = new Set();
   const seenTypes = new Set();
   for (let seed = 1; seed <= 200; seed++) {
     for (const segment of createCourseSpec(seed, 'chaos').segments) {
       assert.ok(SEGMENT_TYPES.includes(segment.type));
       assert.ok(Number.isInteger(segment.variant));
-      assert.ok(segment.variant >= 0 && segment.variant < 3);
+      assert.ok(segment.variant >= 0 && segment.variant < SEGMENT_VARIANTS);
       assert.ok(Object.values(SEGMENT_ROLE).includes(segment.role));
       seenTypes.add(segment.type);
       seenVariants.add(segment.variant);
     }
   }
   assert.deepEqual([...seenTypes].sort(), [...SEGMENT_TYPES].sort());
-  assert.deepEqual([...seenVariants].sort(), [0, 1, 2]);
+  assert.deepEqual(
+    [...seenVariants].sort((a, b) => a - b),
+    Array.from({ length: SEGMENT_VARIANTS }, (_, i) => i)
+  );
 });
 
 test('грамматика чередует нагрузку и ставит восстановление перед финалом', () => {
@@ -65,4 +72,62 @@ test('разные сиды дают разные планы, сохраняя �
   assert.notDeepEqual(a, b);
   assert.equal(new Set(a.map(segment => segment.type)).size, 7);
   assert.equal(new Set(b.map(segment => segment.type)).size, 7);
+});
+
+// Каждый тип в каждом варианте обязан проходиться.
+//
+// Вариант — это не украшение, а расстановка препятствий, и ошибиться в ней легко: балка чуть
+// длиннее, платформа чуть дальше — и участок становится непроходимым. Глазами это не ловится, а
+// игрок упрётся в него посреди забега.
+//
+// Поэтому проверка играет: односегментная трасса нужного типа и варианта, живая физика, бот бежит
+// до финиша. Прошёл — вариант проходим. Тест не про красоту расстановки, а про то, что она вообще
+// решаема.
+test('каждый тип сегмента проходится ботом в каждом варианте', () => {
+  const soloSpec = (type, variant, seed) => ({
+    seed,
+    difficulty: 'normal',
+    segmentCount: 1,
+    segments: [{ type, role: SEGMENT_ROLE.SKILL, variant }],
+    checkpoints: [-SEGMENT_LENGTH],
+    finishZ: -SEGMENT_LENGTH - FINISH_TAIL,
+    start: { ...START }
+  });
+
+  const finishes = (type, variant, seed) => {
+    const run = new RaceRun(soloSpec(type, variant, seed));
+    // Сорок пять секунд на один сегмент: замер по всем сочетаниям дал максимум 19.4 с («встречные
+    // ступени»), запас взят двойной с лишним на случай неудачной фазы препятствий.
+    const limit = Math.round(45 * 60);
+    for (let step = 0; step < limit && !run.finished; step++) run.step();
+    const finished = run.finished;
+    run.dispose();
+    return finished;
+  };
+
+  for (const type of SEGMENT_TYPES) {
+    for (let variant = 0; variant < SEGMENT_VARIANTS; variant++) {
+      // Несколько сидов: часть расстановки зависит от собственного генератора уровня, и вариант,
+      // проходимый при одном сиде, обязан проходиться при любом.
+      for (const seed of [7, 1000003, 55]) {
+        assert.ok(
+          finishes(type, variant, seed),
+          `${type} вариант ${variant} (сид ${seed}): бот не смог дойти до финиша`
+        );
+      }
+    }
+  }
+});
+
+// Объявленное число вариантов и число написанных расстановок обязаны совпадать. Разойдись они —
+// генератор плана выдал бы номер, которого нет, и сегмент строился бы по остатку от деления, то
+// есть повторял бы чужой вариант молча.
+test('у каждого типа есть столько расстановок, сколько объявлено', () => {
+  for (const type of SEGMENT_TYPES) {
+    assert.equal(
+      variantCount(type),
+      SEGMENT_VARIANTS,
+      `${type}: расстановок ${variantCount(type)}, а план раздаёт ${SEGMENT_VARIANTS}`
+    );
+  }
 });

@@ -1,10 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
+
+// Сколько ждать ответа сервера. Ни один тест здесь не проверяет скорость ответа — только то, что он
+// приходит и какой, — поэтому срок один на всех и с запасом.
+const WAIT_MS = 10_000;
 const { VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const {
   server,
   rooms,
+  resetRateLimits,
   setResultsTimeout,
   expireSessions,
   SESSION_TTL_MS,
@@ -20,6 +25,9 @@ class TestClient {
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
       if (message.type === 'start') this.sequence = message.resumed?.nextSequence ?? 0;
+      // Поправка: сервер не принял присланное положение и говорит, где видит игрока в последний
+      // раз. Настоящий клиент продолжает движение отсюда — см. takeCorrection.
+      if (message.type === 'correction') this.correction = message.position;
       this.messages.push(message);
       for (const waiter of [...this.waiters])
         if (waiter.match(message)) {
@@ -28,11 +36,29 @@ class TestClient {
         }
     });
   }
-  wait(type, predicate = () => true, timeout = 2500) {
+  // Забрать поправку, если она приходила. Одноразово: повторно применять одно и то же положение
+  // значило бы топтаться на месте.
+  takeCorrection() {
+    const correction = this.correction;
+    this.correction = null;
+    return correction;
+  }
+
+  wait(type, predicate = () => true, timeout = WAIT_MS) {
     const existing = this.messages.find(message => message.type === type && predicate(message));
     if (existing) return Promise.resolve(existing);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${type}`)), timeout);
+      // В сообщении об ошибке — вся переписка клиента. Без неё «Timed out waiting for lobby»
+      // означает лишь «чего-то не пришло», и разбираться приходится вслепую.
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `Timed out waiting for ${type}; получено: ${JSON.stringify(this.messages.map(m => m.type))}`
+            )
+          ),
+        timeout
+      );
       this.waiters.push({
         match: message => {
           if (message.type !== type || !predicate(message)) return false;
@@ -66,6 +92,11 @@ class TestClient {
 }
 
 // Сервер — модульный синглтон, поэтому тесты поднимают и гасят его по очереди, а не параллельно.
+// Ограничение «не больше сорока комнатных операций с адреса за минуту» защищает живой сервер, но
+// весь набор ходит с одного 127.0.0.1 и за минуту создаёт комнат больше. Перешагнув порог, тест
+// получал отказ вместо лобби и ждал сообщения, которого уже не будет.
+test.beforeEach(() => resetRateLimits());
+
 const listen = () => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const shutdown = () => new Promise(resolve => server.close(resolve));
 
@@ -75,14 +106,26 @@ const shutdown = () => new Promise(resolve => server.close(resolve));
 const STATE_STEP = 3.2;
 const STATE_GAP_MS = 55;
 
-async function runToFinish(client, spec, matchId, { stopBefore = 0 } = {}) {
-  let z = spec.start.z;
+// Шаг сделан заведомо меньше серверного разрешения (3.2 + dt*18 за пакет), но одного этого мало.
+//
+// Пакеты изредка слипаются: два setTimeout(55) на занятой машине срабатывают в пределах 32 мс, и
+// второй сервер отбрасывает как слишком частый. Следующий шаг оказывается вдвое длиннее
+// разрешённого, сервер его не принимает и присылает поправку — а прогонщик, поправку
+// игнорирующий, продолжает считать от своего z. Разрыв растёт с каждым пакетом, забег встаёт
+// навсегда, и тест ждёт результатов, которых уже не будет.
+//
+// Отсюда была вся неустойчивость набора: падал не какой-то один тест, а тот, которому не повезло
+// со слипанием, — на разных прогонах разный.
+async function runToFinish(client, spec, matchId, { stopBefore = 0, from = spec.start.z } = {}) {
+  let z = from;
   const target = spec.finishZ - 1;
   const at = value => ({ x: 0, y: spec.start.y, z: value, ry: 0, vx: 0, vz: -8, state: 'ground' });
   while (z > target) {
     z = Math.max(target, z - STATE_STEP);
     client.send('state', { matchId, state: at(z) });
     await new Promise(resolve => setTimeout(resolve, STATE_GAP_MS));
+    const correction = client.takeCorrection();
+    if (correction) z = correction.z;
   }
   if (stopBefore) return z;
   // Финальная позиция едет ВНУТРИ finish — именно так её теперь отправляет клиент.
@@ -124,6 +167,8 @@ async function runHonestly(client, spec, matchId, { step = HONEST_STEP } = {}) {
     z = Math.max(target, z - step);
     client.send('state', { matchId, state: at(z) });
     await new Promise(resolve => setTimeout(resolve, HONEST_GAP_MS));
+    const correction = client.takeCorrection();
+    if (correction) z = correction.z;
   }
   client.send('finish', { matchId, state: at(z), clientTime: 1000 });
   return z;
@@ -185,10 +230,14 @@ test('игрок возвращается в свою комнату после 
   await host.wait('hello');
   host.send('resume', { token: hostHello.token });
 
-  const resumed = await host.wait('resumed', () => true, 3000);
+  const resumed = await host.wait('resumed', () => true, WAIT_MS);
   assert.equal(resumed.id, hostHello.id, 'после возврата идентификатор игрока должен сохраниться');
 
-  const back = await guest.wait('lobby', m => m.players.length === 2 && m.players.every(p => p.online), 3000);
+  const back = await guest.wait(
+    'lobby',
+    m => m.players.length === 2 && m.players.every(p => p.online),
+    WAIT_MS
+  );
   assert.equal(back.code, created.code, 'игрок вернулся именно в свою комнату');
   assert.equal(back.host, hostHello.id, 'права хоста остались за вернувшимся игроком');
 });
@@ -323,7 +372,7 @@ test('обрыв связи снимает зачёт с забега', async t 
   );
 
   guest.ws.terminate();
-  const notice = await host.wait('unranked', () => true, 3000);
+  const notice = await host.wait('unranked', () => true, WAIT_MS);
   assert.equal(notice.reason, 'disconnect', 'причина должна доезжать до игрока');
   assert.equal(notice.matchId, started.matchId, 'отметка относится к текущему забегу');
 
@@ -351,12 +400,12 @@ test('итоги матча несут отметку «без зачёта»', 
 
   // Гость выходит сам — это тоже снимает зачёт, но с другой причиной.
   guest.send('leave');
-  const notice = await host.wait('unranked', () => true, 3000);
+  const notice = await host.wait('unranked', () => true, WAIT_MS);
   assert.equal(notice.reason, 'left', 'добровольный выход отличается от обрыва');
 
   // Оставшийся доходит до финиша по-настоящему: телепорт сервер бы не принял.
   await runToFinish(host, started.spec, started.matchId);
-  const results = await host.wait('results', () => true, 5000);
+  const results = await host.wait('results', () => true, WAIT_MS);
   assert.equal(results.unranked, 'left', 'итоги обязаны нести отметку и её причину');
 });
 
@@ -380,7 +429,7 @@ test('хвостовой state после финиша второго игрок
 
   // Оба идут до конца; в коопе глава засчитывается, только когда дошли оба.
   const lastZ = await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', m => m.id === host.messages.find(x => x.type === 'hello').id, 5000);
+  await host.wait('finish', m => m.id === host.messages.find(x => x.type === 'hello').id, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
 
   // И сразу вдогонку — то самое опоздавшее состояние.
@@ -390,8 +439,8 @@ test('хвостовой state после финиша второго игрок
   });
 
   const results = await Promise.all([
-    host.wait('results', () => true, 5000),
-    guest.wait('results', () => true, 5000)
+    host.wait('results', () => true, WAIT_MS),
+    guest.wait('results', () => true, WAIT_MS)
   ]);
   assert.equal(results.length, 2, 'итоги должны прийти обоим');
 
@@ -424,7 +473,7 @@ test('повторный finish идемпотентен', async t => {
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   const finishesAfterFirst = host.messages.filter(m => m.type === 'finish').length;
 
   host.send('finish', {
@@ -467,13 +516,13 @@ test('первый голос за реванш не закрывает экра
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+  await Promise.all([host.wait('results', () => true, WAIT_MS), guest.wait('results', () => true, WAIT_MS)]);
 
   // Голосует хост — тот, кто раньше мог решать за всех.
   host.send('rematch', { matchId: started.matchId });
-  const afterFirst = await guest.wait('lobby', m => m.players.some(p => p.choice === 'rematch'), 3000);
+  const afterFirst = await guest.wait('lobby', m => m.players.some(p => p.choice === 'rematch'), WAIT_MS);
   assert.equal(afterFirst.state, 'RESULTS', 'комната обязана остаться на результатах');
   assert.equal(afterFirst.players.filter(p => p.choice === 'rematch').length, 1, 'засчитан ровно один голос');
   assert.ok(afterFirst.resultsDeadline, 'клиенту нужен срок, чтобы показать отсчёт');
@@ -483,7 +532,7 @@ test('первый голос за реванш не закрывает экра
   guest.send('rematch', { matchId: started.matchId });
   // Предикат обязан отсекать матч, который уже был: в истории клиента лежит `start` первого
   // забега, и ожидание «любого start» нашло бы его, ничего на самом деле не проверив.
-  const restart = await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+  const restart = await guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS);
   assert.notEqual(restart.matchId, started.matchId, 'у реванша свой matchId');
   assert.equal(restart.spec.seed, started.spec.seed, 'реванш идёт по той же трассе');
 });
@@ -501,9 +550,9 @@ test('разные голоса на результатах не вешают к
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+  await Promise.all([host.wait('results', () => true, WAIT_MS), guest.wait('results', () => true, WAIT_MS)]);
 
   // Историю чистим намеренно: в ней уже лежат состояния LOBBY, полученные до старта забега,
   // и ожидание нашло бы их, ничего на самом деле не проверив.
@@ -512,7 +561,7 @@ test('разные голоса на результатах не вешают к
   guest.send('returnLobby', { matchId: started.matchId });
 
   // Несогласие разрешается в пользу лобби: заставлять играть ещё раз того, кто уже уходит, нельзя.
-  const lobby = await guest.wait('lobby', m => m.state === 'LOBBY', 3000);
+  const lobby = await guest.wait('lobby', m => m.state === 'LOBBY', WAIT_MS);
   assert.equal(lobby.matchId, null, 'новый забег начинать не за что');
   assert.equal(
     lobby.players.every(p => !p.choice),
@@ -537,9 +586,9 @@ test('истечение срока на результатах уводит к�
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+  await Promise.all([host.wait('results', () => true, WAIT_MS), guest.wait('results', () => true, WAIT_MS)]);
 
   // Голосует только один, второй молчит. Молчание не должно толковаться как согласие на реванш.
   host.messages.length = 0;
@@ -566,19 +615,19 @@ test('выбор на результатах можно поменять', async
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+  await Promise.all([host.wait('results', () => true, WAIT_MS), guest.wait('results', () => true, WAIT_MS)]);
 
   // Хост сначала за лобби, потом передумал.
   host.send('returnLobby', { matchId: started.matchId });
-  await guest.wait('lobby', m => m.players.some(p => p.choice === 'lobby'), 3000);
+  await guest.wait('lobby', m => m.players.some(p => p.choice === 'lobby'), WAIT_MS);
   host.send('rematch', { matchId: started.matchId });
   guest.send('rematch', { matchId: started.matchId });
 
   // Предикат обязан отсекать матч, который уже был: в истории клиента лежит `start` первого
   // забега, и ожидание «любого start» нашло бы его, ничего на самом деле не проверив.
-  const restart = await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+  const restart = await guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS);
   assert.notEqual(restart.matchId, started.matchId, 'смена выбора привела к реваншу');
 });
 
@@ -629,7 +678,7 @@ test('закрытие старого сокета после resume не отк
   host = new TestClient(url);
   await host.wait('hello');
   host.send('resume', { token: hostHello.token });
-  const resumed = await host.wait('resumed', () => true, 3000);
+  const resumed = await host.wait('resumed', () => true, WAIT_MS);
   assert.equal(resumed.id, hostHello.id, 'идентификатор должен сохраниться');
   assert.ok(resumed.token, 'токен обязан вернуться клиенту, иначе следующий обрыв не восстановится');
 
@@ -637,13 +686,13 @@ test('закрытие старого сокета после resume не отк
   oldWs.terminate();
   await new Promise(resolve => setTimeout(resolve, 400));
 
-  const lobby = await guest.wait('lobby', m => m.players.every(p => p.online), 3000);
+  const lobby = await guest.wait('lobby', m => m.players.every(p => p.online), WAIT_MS);
   assert.equal(lobby.players.length, 2, 'оба игрока на месте');
   assert.equal(host.ws.readyState, WebSocket.OPEN, 'новое соединение должно остаться живым');
 
   // И новое соединение продолжает работать.
   host.send('ready', { ready: true });
-  await guest.wait('lobby', m => m.players.some(p => p.id === hostHello.id && p.ready), 3000);
+  await guest.wait('lobby', m => m.players.some(p => p.id === hostHello.id && p.ready), WAIT_MS);
 });
 
 // Вернувшийся на экран результатов должен получить сами результаты, а не пустую комнату.
@@ -660,17 +709,17 @@ test('переподключение на экране результатов в
 
   const guestHello = guest.messages.find(m => m.type === 'hello');
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  const original = await guest.wait('results', () => true, 5000);
+  const original = await guest.wait('results', () => true, WAIT_MS);
 
   guest.ws.terminate();
   back = new TestClient(url);
   await back.wait('hello');
   back.send('resume', { token: guestHello.token });
-  await back.wait('resumed', () => true, 3000);
+  await back.wait('resumed', () => true, WAIT_MS);
 
-  const restored = await back.wait('results', () => true, 3000);
+  const restored = await back.wait('results', () => true, WAIT_MS);
   assert.equal(restored.matchId, original.matchId, 'итоги должны быть те же самые');
   assert.deepEqual(restored.board, original.board, 'и с тем же составом доски');
 });
@@ -724,13 +773,17 @@ test('обрыв второго игрока после голоса не под
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await host.wait('results', () => true, 5000);
+  await host.wait('results', () => true, WAIT_MS);
 
   // Голосует только хост.
   host.send('rematch', { matchId: started.matchId });
-  await host.wait('lobby', m => m.state === 'RESULTS' && m.players.some(p => p.choice === 'rematch'), 3000);
+  await host.wait(
+    'lobby',
+    m => m.state === 'RESULTS' && m.players.some(p => p.choice === 'rematch'),
+    WAIT_MS
+  );
 
   // Второй обрывается, так и не проголосовав.
   //
@@ -771,9 +824,9 @@ test('возвращение в идущий забег отдаёт позиц�
   back = new TestClient(url);
   await back.wait('hello');
   back.send('resume', { token: hostHello.token });
-  await back.wait('resumed', () => true, 3000);
+  await back.wait('resumed', () => true, WAIT_MS);
 
-  const restart = await back.wait('start', () => true, 3000);
+  const restart = await back.wait('start', () => true, WAIT_MS);
   assert.ok(restart.resumed, 'возвращение обязано нести состояние игрока');
   assert.ok(
     restart.resumed.position.z < started.spec.start.z - 5,
@@ -799,15 +852,15 @@ test('финишировавший возвращается в ожидание,
 
   const hostHello = host.messages.find(m => m.type === 'hello');
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
 
   host.ws.terminate();
   back = new TestClient(url);
   await back.wait('hello');
   back.send('resume', { token: hostHello.token });
-  await back.wait('resumed', () => true, 3000);
+  await back.wait('resumed', () => true, WAIT_MS);
 
-  const restart = await back.wait('start', () => true, 3000);
+  const restart = await back.wait('start', () => true, WAIT_MS);
   assert.equal(restart.resumed.finished, true, 'сервер обязан сказать, что игрок уже дошёл');
   void guest;
 });
@@ -832,9 +885,9 @@ test('запас отклонений сбрасывается при старт
   });
 
   await runToFinish(host, started.spec, started.matchId);
-  await host.wait('finish', () => true, 5000);
+  await host.wait('finish', () => true, WAIT_MS);
   await runToFinish(guest, started.spec, started.matchId);
-  await Promise.all([host.wait('results', () => true, 5000), guest.wait('results', () => true, 5000)]);
+  await Promise.all([host.wait('results', () => true, WAIT_MS), guest.wait('results', () => true, WAIT_MS)]);
 
   const player = [...rooms.get(code).players.values()][0];
   assert.ok(
@@ -844,10 +897,50 @@ test('запас отклонений сбрасывается при старт
 
   host.send('rematch', { matchId: started.matchId });
   guest.send('rematch', { matchId: started.matchId });
-  await guest.wait('start', m => m.matchId !== started.matchId, 3000);
+  await guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS);
 
   assert.deepEqual(player.movementAnomalies, {}, 'новый забег обязан начинаться с полным запасом');
   assert.deepEqual(player.movementHistory, [], 'история движения прошлого забега к новому не относится');
+});
+
+// Потерянный пакет не должен останавливать забег насовсем.
+//
+// Сервер отбрасывает состояния, приходящие чаще раза в 32 мс, и не принимает шаг длиннее
+// разрешённого. Вместе это ловушка: два слипшихся пакета — второй отброшен — следующий шаг вдвое
+// длиннее — не принят — и дальше не принимается ни один, потому что сервер по-прежнему видит
+// игрока там, где видел до слипания. Забег встаёт навсегда.
+//
+// Выход из ловушки — поправка: сервер сообщает последнее признанное положение, и продолжать надо
+// от него. Здесь слипание устраивается намеренно, а забег обязан дойти до финиша, продолжая с той
+// точки, где споткнулся, — не начиная сначала, иначе проверялось бы не то.
+test('забег продолжается после отброшенного пакета, если следовать поправке', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const start = started.spec.start.z;
+  const at = z => ({ x: 0, y: started.spec.start.y, z, ry: 0, vx: 0, vz: -8, state: 'ground' });
+  // Два пакета подряд без паузы: второй сервер обязан отбросить как слишком частый.
+  host.send('state', { matchId: started.matchId, state: at(start - 3.2) });
+  host.send('state', { matchId: started.matchId, state: at(start - 6.4) });
+  await new Promise(resolve => setTimeout(resolve, 120));
+  // Шаг от положения, которого сервер не видел, — он его не примет и пришлёт поправку.
+  host.send('state', { matchId: started.matchId, state: at(start - 9.6) });
+  const correction = await host.wait('correction', () => true, WAIT_MS);
+  assert.equal(correction.reason, 'movement', 'сервер обязан сказать, где он видит игрока');
+  assert.ok(correction.position.z > start - 6.4, 'поправка указывает на последнее принятое место');
+
+  // Продолжаем с того места, где споткнулись. Без учёта поправки отсюда не выбраться.
+  await runToFinish(host, started.spec, started.matchId, { from: start - 9.6 });
+  await host.wait('finish', () => true, WAIT_MS);
+  await runToFinish(guest, started.spec, started.matchId);
+  const results = await host.wait('results', () => true, WAIT_MS);
+  assert.equal(results.board.length, 2, 'оба обязаны дойти, несмотря на потерянный пакет');
 });
 
 // Ушедший напарник не должен запирать оставшегося.
@@ -867,10 +960,10 @@ test('оставшийся один доигрывает кооп-главу и 
 
   // Напарник выходит посреди главы — именно выходит, а не теряет связь: слот освобождается сразу.
   guest.send('leave', {});
-  await host.wait('lobby', m => m.players.length === 1, 3000);
+  await host.wait('lobby', m => m.players.length === 1, WAIT_MS);
 
   await runToFinish(host, started.spec, started.matchId);
-  const results = await host.wait('results', () => true, 5000);
+  const results = await host.wait('results', () => true, WAIT_MS);
   assert.equal(results.mode, 'coop');
   assert.equal(results.board.length, 1, 'в итогах остаётся один дошедший');
   assert.equal(results.unranked, 'left', 'глава, доигранная в одиночку, рекордом не считается');
@@ -912,7 +1005,7 @@ test('честный забег попадает в таблицу рекорд�
     runHonestly(host, started.spec, started.matchId),
     runHonestly(guest, started.spec, started.matchId, { step: HONEST_STEP * 0.9 })
   ]);
-  const results = await host.wait('results', () => true, 5000);
+  const results = await host.wait('results', () => true, WAIT_MS);
   assert.ok(
     results.trusted,
     `подготовка: оба забега должны пройти проверку (${results.unranked}, ${JSON.stringify(results.board.map(e => e.verificationReasons))})`
@@ -984,7 +1077,7 @@ test('сессия не протухает, пока игрок на связи'
   back = new TestClient(url);
   await back.wait('hello');
   back.send('resume', { token });
-  const resumed = await back.wait('resumed', () => true, 3000);
+  const resumed = await back.wait('resumed', () => true, WAIT_MS);
   assert.ok(resumed, 'игрок обязан вернуться в свою комнату');
 });
 
@@ -1007,8 +1100,8 @@ test('выключение сервера предупреждает игрок�
   });
 
   const warned = Promise.all([
-    host.wait('shutdown', () => true, 3000),
-    guest.wait('shutdown', () => true, 3000)
+    host.wait('shutdown', () => true, WAIT_MS),
+    guest.wait('shutdown', () => true, WAIT_MS)
   ]);
   const closed = new Promise(resolve => guest.ws.once('close', (code, reason) => resolve({ code, reason })));
 

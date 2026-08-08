@@ -6,8 +6,10 @@ const WebSocket = require('ws');
 // приходит и какой, — поэтому срок один на всех и с запасом.
 const WAIT_MS = 10_000;
 const { VERIFICATION_VERSION } = require('./verifiedLeaderboard');
+const { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER } = require('../shared/courseSpec.js');
 const {
   server,
+  gameplay,
   rooms,
   resetRateLimits,
   setResultsTimeout,
@@ -116,9 +118,9 @@ const STATE_GAP_MS = 55;
 //
 // Отсюда была вся неустойчивость набора: падал не какой-то один тест, а тот, которому не повезло
 // со слипанием, — на разных прогонах разный.
-async function runToFinish(client, spec, matchId, { stopBefore = 0, from = spec.start.z } = {}) {
+async function runToFinish(client, spec, matchId, { stopBefore = 0, from = spec.start.z, to = null } = {}) {
   let z = from;
-  const target = spec.finishZ - 1;
+  const target = to ?? spec.finishZ - 1;
   const at = value => ({ x: 0, y: spec.start.y, z: value, ry: 0, vx: 0, vz: -8, state: 'ground' });
   while (z > target) {
     z = Math.max(target, z - STATE_STEP);
@@ -1045,6 +1047,16 @@ test('честный забег попадает в таблицу рекорд�
 
   const stranger = await ask('z'.repeat(32));
   assert.equal(stranger.standing, null, 'у не пробегавшего трассу места нет');
+
+  // Время забега попадает и в метрики — с отметкой, можно ли ему верить. Без этого измерения
+  // одно жульничество на три секунды утащило бы за собой среднее по всей трассе.
+  const times = gameplay
+    .summary({ days: 1, limit: 1000 })
+    .rows.filter(row => row.metric === 'finish_time' && row.course === difficulty);
+  const verified = times.find(row => row.detail === 'verified');
+  assert.ok(verified, 'проверенное время записано отдельной строкой');
+  assert.ok(verified.samples >= 2, 'оба честных финиша учтены');
+  assert.ok(verified.average > 0, 'у времени есть среднее — в отличие от простого счётчика');
 });
 
 // Сессия для переподключения не должна протухать под играющим человеком.
@@ -1079,6 +1091,71 @@ test('сессия не протухает, пока игрок на связи'
   back.send('resume', { token });
   const resumed = await back.wait('resumed', () => true, WAIT_MS);
   assert.ok(resumed, 'игрок обязан вернуться в свою комнату');
+});
+
+// Ради этого метрики и заводились: «падений 4312» не отвечает ни на один вопрос, а «падают на
+// мосту вдвое чаще, чем на пружинах» — отвечает.
+//
+// Проверяется поэтому не то, что счётчик увеличился, а что событие связано с ПРАВИЛЬНЫМ местом.
+// Счётчик, который считает верно, но всё сваливает в одну кучу, выглядит рабочим и врёт.
+test('падение записывается на том препятствии, где случилось', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'race');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const spec = started.spec;
+  const centerOf = index => FIRST_SEGMENT_CENTER - SEGMENT_LENGTH * index;
+  // Набор общий на весь процесс, и падения бывали в других тестах: считаем прирост, а не итог.
+  const fallsAt = detail =>
+    gameplay
+      .summary({ days: 1, limit: 1000 })
+      .rows.filter(row => row.metric === 'fall' && row.detail === detail)
+      .reduce((sum, row) => sum + row.samples, 0);
+
+  const first = 1;
+  const second = 4;
+  assert.ok(second < spec.segmentCount, 'подготовка: на трассе должно хватать сегментов');
+  const firstType = spec.segments[first].type;
+  const secondType = spec.segments[second].type;
+  assert.notEqual(firstType, secondType, 'подготовка: генератор не повторяет типы, иначе замер слеп');
+
+  const beforeFirst = fallsAt(firstType);
+  const beforeSecond = fallsAt(secondType);
+
+  // Возрождений за забег несколько, и они отличаются только порядком: предикат по одному лишь
+  // reason нашёл бы предыдущее сообщение и вернулся, не дождавшись нового.
+  const respawns = () => host.messages.filter(m => m.type === 'correction' && m.reason === 'respawn').length;
+  async function fallHere() {
+    const seen = respawns();
+    host.send('respawn', { matchId: started.matchId });
+    await host.wait('correction', m => m.reason === 'respawn' && respawns() > seen);
+    return host.takeCorrection();
+  }
+
+  await runToFinish(host, spec, started.matchId, { stopBefore: 1, to: centerOf(first) });
+  const from = await fallHere();
+
+  assert.equal(fallsAt(firstType) - beforeFirst, 1, `падение засчитано типу «${firstType}»`);
+  assert.equal(fallsAt(secondType) - beforeSecond, 0, 'и не засчитано соседнему');
+
+  // Второе падение — дальше по трассе. Возрождение вернуло игрока на чекпоинт, оттуда и бежим.
+  await runToFinish(host, spec, started.matchId, { stopBefore: 1, from: from.z, to: centerOf(second) });
+  await fallHere();
+
+  assert.equal(fallsAt(secondType) - beforeSecond, 1, `второе падение засчитано типу «${secondType}»`);
+  assert.equal(fallsAt(firstType) - beforeFirst, 1, 'первое от этого не удвоилось');
+
+  const row = gameplay
+    .summary({ days: 1, limit: 1000 })
+    .rows.find(item => item.metric === 'fall' && item.detail === secondType);
+  assert.equal(row.mode, 'race');
+  assert.equal(row.course, spec.difficulty, 'сложность — отдельное измерение: на «хаосе» падают иначе');
+  assert.equal(row.device, 'desktop', 'устройство определено, а не оставлено пустым');
 });
 
 // ВНИМАНИЕ: этот тест обязан оставаться ПОСЛЕДНИМ в файле.

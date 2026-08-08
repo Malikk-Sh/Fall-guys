@@ -206,6 +206,31 @@ export function createCourseSpec(seed, difficulty = 'normal') {
   };
 }
 
+// В каком сегменте находится точка. Нужно, чтобы связать событие с местом: упал — на каком
+// препятствии, бросил забег — где именно.
+//
+// Сегменты стыкуются вплотную, поэтому граница относится к дальнему из двух: игрок, пересёкший
+// её, уже вошёл в следующий.
+export function segmentIndexAt(spec, z) {
+  const index = Math.floor(
+    (-z - SEGMENT_LENGTH / 2 + FIRST_SEGMENT_CENTER + SEGMENT_LENGTH) / SEGMENT_LENGTH
+  );
+  if (index < 0) return -1;
+  return Math.min(index, spec.segmentCount - 1);
+}
+
+// Тип сегмента в точке. До первого сегмента — старт, после последнего — финиш: и то и другое
+// осмысленные места, где может случиться событие.
+//
+// Граница финиша — последняя арка, а не геометрический край последнего сегмента: пол заходит за
+// арку ещё на две единицы. Так же считает и corridorZones, где финишный выкат начинается ровно
+// от арки, — и расходиться с ней здесь было бы хуже, чем потерять эти две единицы.
+export function segmentTypeAt(spec, z) {
+  if (z > FIRST_SEGMENT_CENTER + SEGMENT_LENGTH / 2) return 'start';
+  if (z < -SEGMENT_LENGTH * spec.segmentCount) return 'finish';
+  return spec.segments[segmentIndexAt(spec, z)]?.type || 'start';
+}
+
 // Точка возрождения для заданного чекпоинта. Смещение 3.1 ставит игрока сразу за аркой,
 // чтобы он не пересекал её повторно и не «перепроходил» чекпоинт.
 export function spawnFor(spec, checkpoint = 0) {

@@ -12,6 +12,7 @@ const {
   randomSeed,
   createCourseSpec,
   spawnFor,
+  segmentTypeAt,
   validateState,
   verifyCheckpointTime,
   verifyFinishTime,
@@ -41,6 +42,7 @@ const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./c
 const { VerifiedLeaderboard, VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const { openDatabase } = require('./db');
 const { Accounts } = require('./accounts');
+const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -142,6 +144,7 @@ const rooms = new Map();
 const gameDb = openDatabase(process.env.LEADERBOARD_DB || ':memory:');
 const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
 const accounts = new Accounts({ db: gameDb });
+const gameplay = new GameplayMetrics({ db: gameDb });
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
@@ -286,6 +289,20 @@ const health = () => ({
 let shuttingDown = false;
 
 app.get('/health', (_req, res) => res.json(health()));
+
+// Сводка по игре: где падают, где бросают, сколько бегут. Данные обезличены — это счётчики по
+// типам препятствий и сложностям, ни одного игрока по ним не найти.
+//
+// Сам процесс отдаёт её без пароля, как и /health: приложение не знает, кто перед ним, и городить
+// в нём отдельную авторизацию ради счётчиков незачем. Наружу адрес не выпускается — в
+// deploy/nginx-locations.conf у /metrics/ тот же запрет, что у /health, и по той же причине:
+// запрос считает агрегат по базе, а такой адрес без ограничения работает как способ нагрузить
+// сервер бесплатно.
+app.get('/metrics/gameplay', (req, res) =>
+  res.json(
+    gameplay.summary({ days: positiveInt(req.query.days, 7), limit: positiveInt(req.query.limit, 200) })
+  )
+);
 // Разделение live и ready (ТЗ 15.3): live отвечает, пока процесс жив, ready — пока сокет-сервер
 // действительно принимает подключения. Балансировщику нужны разные ответы на эти вопросы.
 app.get('/health/live', (_req, res) => res.json({ ok: true }));
@@ -724,6 +741,10 @@ function leave(ws) {
       room.abandonTracked = true;
       trackEvent(productEvents, 'matchAbandoned');
     }
+    // Где именно бросили — самое ценное в этом событии: чекпоинт называет участок, дальше
+    // которого не пошли.
+    const leaver = room.players.get(ws.id);
+    gameplay.count('match_abandoned', dims(room, leaver, `cp${leaver?.checkpoint ?? 0}`));
     markUnranked(room, 'left');
   }
   if (ws.token) {
@@ -803,6 +824,9 @@ function addPlayer(room, ws, name, playerId = null) {
     lastSequence: -1,
     disconnectedAt: null,
     away: false,
+    // Тип устройства нужен метрикам: телефон и компьютер играют по-разному, и мерить их вместе
+    // значит не увидеть ни того, ни другого.
+    device: ws.device || 'desktop',
     ws
   });
   sessions.set(ws.token, {
@@ -932,6 +956,18 @@ function addVerificationFindings(room, player, findings, details = {}) {
   return added;
 }
 
+// Измерения события: что за режим, какая трасса и с чего играют. Устройство берётся у игрока —
+// в одной комнате могут быть и телефон, и компьютер, и усреднять их значило бы потерять главное
+// различие.
+function dims(room, player, detail) {
+  return {
+    mode: room.mode,
+    course: room.mode === GAME_MODE.COOP ? room.chapterId || room.spec.chapterId : room.spec.difficulty,
+    detail,
+    device: player?.device || 'desktop'
+  };
+}
+
 // Геометрия трассы известна серверу только в гонке: кооперативная глава — рукотворная разметка с
 // другими опорами, и мерить её теми же коридорами нельзя.
 function raceSpec(room) {
@@ -967,6 +1003,7 @@ function beginCountdown(room) {
   room.abandonTracked = false;
   metrics.matchesStarted++;
   trackEvent(productEvents, 'matchStarted');
+  for (const item of room.players.values()) gameplay.count('match_started', dims(room, item));
   assignSlots(room);
 
   for (const item of room.players.values())
@@ -1071,6 +1108,22 @@ function finishMatch(room) {
   // что-то изменит.
   room.resultsDeadline = Date.now() + RESULTS_TIMEOUT_MS;
   const board = leaderboard(room);
+  for (const entry of board) {
+    const player = room.players.get(entry.id);
+    gameplay.count('match_finished', dims(room, player));
+    // Время забега — единственная величина, которую стоит усреднять: по ней видно, стала ли
+    // трасса проходиться быстрее после правки, и на каком устройстве она даётся тяжелее.
+    //
+    // Отметка проверки идёт отдельным измерением, а не фильтром. Выбросить непроверенные времена
+    // значило бы потерять и те, где виноват не игрок: в кооперативе движение вообще не проверяется,
+    // а в гонке зачёт снимает и чужой обрыв связи. Смешать их с проверенными — испортить среднее
+    // одним забегом на три секунды. Разными строками читаются и те и другие.
+    gameplay.observe(
+      'finish_time',
+      entry.time,
+      dims(room, player, entry.verified ? 'verified' : 'unverified')
+    );
+  }
   const verificationFailed = board.some(entry => !entry.verified);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
   // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
@@ -1143,6 +1196,8 @@ wss.on('connection', (ws, req) => {
   ws.ip = ip;
   ws.isAlive = true;
   ws.limiter = new RateLimiter();
+  // По User-Agent, один раз при подключении: игрок его в середине матча не меняет.
+  ws.device = deviceFromUserAgent(req.headers['user-agent']);
   ws.violations = new ViolationTracker({
     threshold: VIOLATION_DISCONNECT_THRESHOLD,
     decayPerMinute: VIOLATION_DECAY_PER_MINUTE
@@ -1441,7 +1496,12 @@ wss.on('connection', (ws, req) => {
       if (room.mode === GAME_MODE.COOP) {
         // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
         // чекпоинта, но остаётся «упавшим», пока его не поднимут.
-        if (markDowned(player, now)) trackEvent(productEvents, 'playerDowned');
+        if (markDowned(player, now)) {
+          trackEvent(productEvents, 'playerDowned');
+          // В кооперативе трасса рукотворная, и «тип сегмента» к ней неприменим. Место
+          // обозначается пройденным чекпоинтом: этого хватает, чтобы найти участок в разметке.
+          gameplay.count('fall', dims(room, player, `cp${player.checkpoint}`));
+        }
         const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
         resetHistory(player);
         player.last = {
@@ -1463,6 +1523,9 @@ wss.on('connection', (ws, req) => {
         return send(ws, { type: S2C.CORRECTION, position: point, reason: 'respawn' });
       }
       const position = spawnFor(room.spec, player.checkpoint);
+      // Главный вопрос про падения — не «сколько», а «где». Место берётся по последнему
+      // положению, которое сервер успел принять: именно оттуда игрок и полетел вниз.
+      gameplay.count('fall', dims(room, player, segmentTypeAt(room.spec, player.last?.z ?? 0)));
       // Возрождение переносит игрока на чекпоинт. История движения до падения к новому месту
       // отношения не имеет, и окно свободного падения обязано начаться заново.
       resetHistory(player);
@@ -1667,6 +1730,9 @@ const heartbeatTimer = setInterval(() => {
     if (room.state === ROOM_STATE.PLAYING) checkMatchEnd(room);
   }
 
+  // Сброс раз в пятнадцать секунд, вместе с прочей уборкой: копить дольше незачем, а писать
+  // чаще — значит платить обращением к диску за каждое падение в пропасть.
+  gameplay.flush();
   expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
   for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
@@ -1726,6 +1792,9 @@ function shutdown(signal, { exitProcess = true } = {}) {
       // База закрывается до выхода: в режиме WAL это дописывает журнал в основной файл, и рекорды
       // не зависят от того, успеет ли это сделать следующий запуск.
       try {
+        // Накопленное с последнего сброса — тоже данные. Пятнадцать секунд статистики теряются
+        // при каждом развёртывании, а развёртываний бывает много.
+        gameplay.flush();
         gameDb.close();
       } catch (error) {
         log('warn', 'database_close_failed', { error: error.message });
@@ -1768,6 +1837,7 @@ module.exports = {
   metrics,
   verifiedLeaderboard,
   accounts,
+  gameplay,
   leave,
   resetLobby,
   originAllowed,

@@ -6,9 +6,11 @@ import {
   createSegmentRoles,
   SEGMENT_ROLE,
   SEGMENT_TYPES,
-  SEGMENT_VARIANTS
+  SEGMENT_VARIANTS,
+  segmentIndexAt,
+  segmentTypeAt
 } from '../shared/courseSpec.js';
-import { SEGMENT_LENGTH, FINISH_TAIL, START } from '../shared/courseSpec.js';
+import { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, FINISH_TAIL, START } from '../shared/courseSpec.js';
 import { variantCount } from '../client/game/segments.js';
 import { RaceRun } from './bots.mjs';
 
@@ -130,4 +132,30 @@ test('у каждого типа есть столько расстановок,
       `${type}: расстановок ${variantCount(type)}, а план раздаёт ${SEGMENT_VARIANTS}`
     );
   }
+});
+
+// Точка → сегмент. По этому переводу метрики отвечают на вопрос «где упали», и ошибка на границе
+// означала бы, что падения приписываются соседнему препятствию — счётчик при этом выглядит
+// исправным.
+test('точка трассы переводится в свой сегмент, включая границы', () => {
+  const spec = createCourseSpec(8, 'normal');
+  const at = z => segmentTypeAt(spec, z);
+  const center = index => FIRST_SEGMENT_CENTER - SEGMENT_LENGTH * index;
+
+  assert.equal(at(START.z), 'start', 'стартовая площадка — не препятствие');
+  for (let i = 0; i < spec.segmentCount; i++) {
+    assert.equal(at(center(i)), spec.segments[i].type, `середина сегмента ${i}`);
+    assert.equal(segmentIndexAt(spec, center(i)), i);
+  }
+
+  // Сегменты стыкуются вплотную, и на самой границе точка обязана относиться к дальнему из двух:
+  // игрок, пересёкший её, уже вошёл в следующий сегмент.
+  const seam = center(0) - SEGMENT_LENGTH / 2;
+  assert.equal(at(seam + 0.01), spec.segments[0].type, 'перед швом — предыдущий сегмент');
+  assert.equal(at(seam), spec.segments[1].type, 'ровно на шве — уже следующий');
+
+  const lastGate = -SEGMENT_LENGTH * spec.segmentCount;
+  assert.equal(at(lastGate), spec.segments[spec.segmentCount - 1].type, 'на последней арке ещё трасса');
+  assert.equal(at(lastGate - 0.01), 'finish', 'за ней — финишный выкат');
+  assert.equal(at(spec.finishZ), 'finish');
 });

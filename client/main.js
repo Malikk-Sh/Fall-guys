@@ -418,6 +418,8 @@ class Game {
       })
     );
 
+    this.bindLeaveMatch();
+
     const refreshPreview = () => {
       const settings = this.ui.singleSettings();
       this.previewSpec =
@@ -505,6 +507,7 @@ class Game {
       // Список игроков — авторитетный источник: событие присутствия могло прийти до того, как
       // напарник вообще появился в комнате, или потеряться при переподключении.
       this.coop.setPartnerAway(message.players.some(p => p.id !== this.net.id && p.away));
+      this.refreshCoopSolo();
       this.ready = message.players.find(p => p.id === this.net.id)?.ready || false;
 
       if (message.state === ROOM_STATE.RESULTS)
@@ -686,6 +689,10 @@ class Game {
     this.running = false;
     this.accumulator = 0;
     this.buildCourse(spec);
+    // Состав комнаты мог прийти РАНЬШЕ, чем построен уровень: так бывает при возвращении в идущий
+    // матч, где напарник уже ушёл. Тогда обновление состава ушло в пустоту, и глава начиналась бы
+    // с закрытыми преградами, которые открыть некому.
+    this.refreshCoopSolo();
     // Пока связь цела, забег идёт в зачёт. Сессия хранит причину, по которой он перестал.
     this.session.start({ mode, spec: this.course.spec, startedAt: startAt });
 
@@ -941,6 +948,58 @@ class Game {
     this.ui.hud(true, { multiplayer: false, touch: this.input.activeMethod === 'touch' });
     this.ui.error('Связь потеряна — забег продолжается в одиночном режиме.');
     this.net = null;
+  }
+
+  // Выход из идущего матча.
+  //
+  // Подтверждение вторым нажатием, а не окном с двумя кнопками. Причина в телефоне: кнопка живёт
+  // в HUD рядом с таймером, задеть её большим пальцем легко, и одно случайное касание не должно
+  // стоить забега. Отдельное модальное окно решило бы то же самое, но посреди игры оно перекрывает
+  // трассу — а игрок в этот момент бежит.
+  bindLeaveMatch() {
+    const button = document.querySelector('#leaveMatch');
+    if (!button) return;
+    const CONFIRM_MS = 3500;
+    let armedUntil = 0;
+    let timer = null;
+    const disarm = () => {
+      armedUntil = 0;
+      clearTimeout(timer);
+      button.textContent = 'ВЫЙТИ';
+      button.classList.remove('armed');
+    };
+    button.addEventListener('click', () => {
+      this.sfx.uiClick();
+      if (Date.now() > armedUntil) {
+        armedUntil = Date.now() + CONFIRM_MS;
+        button.textContent = 'ТОЧНО?';
+        button.classList.add('armed');
+        clearTimeout(timer);
+        timer = setTimeout(disarm, CONFIRM_MS);
+        return;
+      }
+      disarm();
+      this.goHome();
+    });
+  }
+
+  // Кооператив в одиночку: напарник ушёл насовсем.
+  //
+  // Считается по составу комнаты, а не по буферу снапшотов: буфер пустеет и от секундной паузы в
+  // сети, а состав знает, кто в комнате остался. Оборвавшийся игрок держит своё место 30 секунд и
+  // всё это время в составе есть — значит короткий обрыв связи главу не упрощает, а вот выход
+  // напарника открывает преграды сразу.
+  refreshCoopSolo() {
+    if (this.mode !== 'coop' || typeof this.course?.setSolo !== 'function') return;
+    const solo = CoopSession.soloFromRoster(this.room?.players, this.net?.id);
+    if (solo === null || !this.course.setSolo(solo)) return;
+    if (this.course.solo) {
+      this.ui.toast(
+        'Напарник вышел. Кооперативные преграды открыты — главу можно закончить одному.',
+        'info',
+        5200
+      );
+    }
   }
 
   goHome() {

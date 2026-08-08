@@ -49,3 +49,20 @@ test('CoopSession отличает события локального игро�
   session.reset();
   assert.equal(session.applyEvent({ action: 'downed', target: 'partner' }), null);
 });
+
+// Остался ли игрок один. Правило короткое, но каждая из трёх веток стоит дорого, если ошибиться.
+test('одиночество считается по составу комнаты, а не по молчанию напарника', () => {
+  const me = 'a';
+  assert.equal(
+    CoopSession.soloFromRoster(undefined, me),
+    null,
+    'состава нет — это «неизвестно», а не «никого нет»'
+  );
+  assert.equal(CoopSession.soloFromRoster([{ id: me }, { id: 'b' }], me), false);
+  assert.equal(
+    CoopSession.soloFromRoster([{ id: me }, { id: 'b', online: false }], me),
+    false,
+    'оборвавшийся напарник держит слот 30 секунд — короткий обрыв главу не упрощает'
+  );
+  assert.equal(CoopSession.soloFromRoster([{ id: me }], me), true, 'напарника в составе нет — один');
+});

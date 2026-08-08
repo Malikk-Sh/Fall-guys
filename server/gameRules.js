@@ -6,7 +6,8 @@ const {
   DIFFICULTY_SEGMENTS,
   safeDifficulty,
   createCourseSpec: buildCourseSpec,
-  spawnFor
+  spawnFor,
+  segmentTypeAt
 } = require('../shared/courseSpec.js');
 
 const {
@@ -216,6 +217,7 @@ module.exports = {
   randomSeed,
   createCourseSpec,
   spawnFor,
+  segmentTypeAt,
   normalizeState,
   verifyCheckpointTime,
   verifyFinishTime,

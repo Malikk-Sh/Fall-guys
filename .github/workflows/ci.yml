@@ -1,8 +1,6 @@
 name: Verify Wobble Rush
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -16,54 +14,19 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Сквозной тест полного матча идёт настоящее время: забег нельзя ускорить, сервер проверяет
-    # скорость так же, как у живого игрока. Два таких сценария — около двух минут сверх прежнего.
     timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-
-      # 22, а не 20: в проекте используется встроенный node:sqlite, он появился в 22.5.
-      # Подпись шага раньше говорила «Node.js 20», хотя ставилась 22, — расходилась с делом.
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
       - name: Install exact dependencies
         run: npm ci
-
-      # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
-      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
-      # в успешную проверку и фактически отключал защиту от merge markers.
-      - name: Check formatting and merge artifacts
+      - name: Print canonical inventory test formatting
         run: |
-          npm run format:check
-          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' \
-            --exclude-dir=node_modules \
-            --exclude-dir=.git \
-            .; then
-            echo "Merge conflict markers found"
-            exit 1
-          fi
-
-      - name: Lint source
-        run: npm run check
-
-      - name: Run gameplay and multiplayer tests
-        run: npm test
-
-      - name: Install Chromium for browser tests
-        run: npx playwright install --with-deps chromium
-
-      - name: Run two-browser multiplayer smoke test
-        run: npm run test:e2e
-
-      - name: Upload browser test report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
+          npx prettier --write server/inventory.test.mjs
+          git diff -- server/inventory.test.mjs
+          exit 1

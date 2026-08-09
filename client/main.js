@@ -10,6 +10,7 @@ import { CoopCourse } from './game/CoopCourse.js';
 import { coopSpawnFor } from '/shared/coopChapters.js';
 import { GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
+import { resolvePlayerCrowd } from './game/PlayerCollisions.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
@@ -724,6 +725,11 @@ class Game {
     }
     // Упавший ждёт напарника и не управляется.
     if (!this.player.downed) this.player.step(dt, this.input, this.cameraController.yaw, elapsed);
+    // Удалённые игроки остаются интерполированными «мягкими телами». Толпа мешает занять одну
+    // точку и слегка передаёт импульс, но не может жёстко исправлять локальную физику.
+    if (this.mode === 'multi' && !this.player.downed) {
+      resolvePlayerCrowd(this.player, this.remotes.entries(), dt, this.net?.id);
+    }
 
     // Удары, накопленные препятствиями за шаг, уходят в тряску камеры. Препятствия про камеру
     // не знают — они только помечают силу удара на игроке, и это единственная причина, по которой

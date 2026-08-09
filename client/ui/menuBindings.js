@@ -129,6 +129,26 @@ export function bindMenu(game) {
   game.ui.fillChapters(COOP_CHAPTERS, chapter => {
     game.coopChapterId = chapter.id;
   });
+  click('#coopFind', async () => {
+    await game.accountReady;
+    const button = $('#coopFind');
+    const net = game.ensureNetwork();
+    if (button.dataset.searching === 'true') {
+      net.cancelMatchmaking();
+      button.dataset.searching = 'false';
+      button.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+      game.ui.status('Поиск отменён. Можно создать приватную комнату.');
+      return;
+    }
+    button.dataset.searching = 'true';
+    button.querySelector('span').textContent = 'ОТМЕНИТЬ ПОИСК';
+    game.ui.status('Ищем напарника для выбранной главы…');
+    net.findCoop({
+      name: game.ui.coopName(),
+      playerId: game.ui.playerId(),
+      chapterId: $('#coopAnyChapter').checked ? '' : game.ui.coopChapter()
+    });
+  });
   click('#coopCreate', async () => {
     await game.accountReady;
     const net = game.ensureNetwork();

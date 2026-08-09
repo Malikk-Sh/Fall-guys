@@ -108,6 +108,34 @@ const shutdown = () => new Promise(resolve => server.close(resolve));
 const STATE_STEP = 3.2;
 const STATE_GAP_MS = 55;
 
+test('matchmaking соединяет двух старейших совместимых игроков и сразу запускает кооп', async t => {
+  await listen();
+  t.after(async () => {
+    for (const room of rooms.values()) for (const player of room.players.values()) player.ws?.terminate();
+    rooms.clear();
+    await shutdown();
+  });
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const first = new TestClient(url);
+  const second = new TestClient(url);
+  await Promise.all([first.wait('hello'), second.wait('hello')]);
+
+  first.send('findCoop', { name: 'Первый', chapterId: 'ch9', protocolVersion: 6 });
+  await first.wait('matchmakingWaiting');
+  second.send('findCoop', { name: 'Второй', chapterId: 'ch9', protocolVersion: 6 });
+
+  const [firstStart, secondStart] = await Promise.all([first.wait('start'), second.wait('start')]);
+  assert.equal(firstStart.mode, 'coop');
+  assert.equal(firstStart.spec.chapterId, 'ch9');
+  assert.equal(firstStart.matchId, secondStart.matchId);
+  const room = [...rooms.values()].find(item => item.matchId === firstStart.matchId);
+  assert.equal(room.players.size, 2);
+  assert.deepEqual(
+    [...room.players.values()].map(player => player.name),
+    ['Первый', 'Второй']
+  );
+});
+
 // Шаг сделан заведомо меньше серверного разрешения (3.2 + dt*18 за пакет), но одного этого мало.
 //
 // Пакеты изредка слипаются: два setTimeout(55) на занятой машине срабатывают в пределах 32 мс, и

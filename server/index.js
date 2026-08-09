@@ -467,6 +467,9 @@ const server = http.createServer(app);
 
 // Вместимость зависит от режима: кооп — строго на двоих, гонка — до шестнадцати.
 const MAX_PLAYERS = { [GAME_MODE.RACE]: 16, [GAME_MODE.COOP]: 2 };
+// Простая FIFO-очередь для одного процесса. Запись живёт только пока открыт сокет и игрок не
+// находится в комнате; регионы и MMR здесь намеренно отсутствуют.
+const coopMatchmaking = [];
 const ROOM_TTL = 45 * 60 * 1000;
 const COUNTDOWN_MS = 2800;
 
@@ -763,6 +766,8 @@ function dropPlayer(room, playerId) {
 }
 
 function leave(ws) {
+  const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
+  if (queued !== -1) coopMatchmaking.splice(queued, 1);
   if (!ws.room) return;
   const room = rooms.get(ws.room);
   ws.room = null;
@@ -801,7 +806,11 @@ function handleDisconnect(ws) {
     else ipConnections.delete(ip);
   }
 
-  if (!ws.room) return;
+  if (!ws.room) {
+    const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
+    if (queued !== -1) coopMatchmaking.splice(queued, 1);
+    return;
+  }
   const room = rooms.get(ws.room);
   if (!room) return;
   const player = room.players.get(ws.id);
@@ -867,6 +876,65 @@ function addPlayer(room, ws, name, playerId = null) {
   room.updatedAt = Date.now();
   assignSlots(room);
   emitLobby(room);
+}
+
+function createCoopRoom(chapterId, hostId) {
+  const selected = COOP_CHAPTER_IDS.includes(chapterId) ? chapterId : COOP_CHAPTER_IDS[0];
+  const code = roomCode();
+  const room = {
+    code,
+    host: hostId,
+    state: ROOM_STATE.LOBBY,
+    mode: GAME_MODE.COOP,
+    chapterId: selected,
+    matchId: null,
+    snapshotSequence: 0,
+    startedAt: null,
+    firstFinishAt: null,
+    spec: coopSpec(selected),
+    players: new Map(),
+    nextJoinOrder: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  rooms.set(code, room);
+  return room;
+}
+
+function enqueueCoop(ws, message) {
+  leave(ws);
+  const requested = COOP_CHAPTER_IDS.includes(message.chapterId) ? message.chapterId : null;
+  const now = Date.now();
+  const partnerIndex = coopMatchmaking.findIndex(entry => {
+    if (entry.ws.readyState !== 1 || entry.ws === ws) return false;
+    return !requested || !entry.chapterId || entry.chapterId === requested;
+  });
+  if (partnerIndex === -1) {
+    coopMatchmaking.push({
+      ws,
+      name: message.name,
+      playerId: message.playerId,
+      chapterId: requested,
+      queuedAt: now
+    });
+    trackEvent(productEvents, 'matchmakingStarted');
+    return send(ws, { type: S2C.MATCHMAKING_WAITING, waitedMs: 0 });
+  }
+
+  const [partner] = coopMatchmaking.splice(partnerIndex, 1);
+  const chapterId = requested || partner.chapterId || COOP_CHAPTER_IDS[0];
+  const room = createCoopRoom(chapterId, partner.ws.id);
+  addPlayer(room, partner.ws, partner.name, partner.playerId);
+  addPlayer(room, ws, message.name, message.playerId);
+  for (const player of room.players.values()) player.ready = true;
+  gameplay.observe(
+    'matchmaking_wait_ms',
+    now - partner.queuedAt,
+    dims(room, room.players.get(partner.ws.id))
+  );
+  trackEvent(productEvents, 'matchmakingMatched');
+  log('info', 'matchmaking_matched', { roomId: room.code, chapterId, waitedMs: now - partner.queuedAt });
+  beginCountdown(room);
 }
 
 // Возврат в комнату по токену прошлой сессии.
@@ -1316,13 +1384,31 @@ wss.on('connection', (ws, req) => {
       return send(ws, { type: S2C.RESUME_FAILED, code: ERROR_CODES.RECONNECT_EXPIRED });
     }
 
-    if (message.type === C2S.CREATE_ROOM || message.type === C2S.JOIN_ROOM) {
+    if (
+      message.type === C2S.CREATE_ROOM ||
+      message.type === C2S.JOIN_ROOM ||
+      message.type === C2S.FIND_COOP
+    ) {
       if (message.protocolVersion !== undefined && message.protocolVersion !== PROTOCOL_VERSION) {
         return sendError(ws, ERROR_CODES.VERSION_MISMATCH, 'Версия игры устарела. Обновите страницу.', false);
       }
       if (ipRateLimited(ws.ip)) {
         return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком много запросов. Подождите минуту.');
       }
+    }
+
+    if (message.type === C2S.CANCEL_MATCHMAKING) {
+      const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
+      if (index !== -1) coopMatchmaking.splice(index, 1);
+      return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, waitedMs: 0 });
+    }
+
+    if (message.type === C2S.FIND_COOP) {
+      if (loadStatus().overloaded || rooms.size >= MAX_ROOMS) {
+        metrics.capacityRejected++;
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      }
+      return enqueueCoop(ws, message);
     }
 
     if (message.type === C2S.CREATE_ROOM) {

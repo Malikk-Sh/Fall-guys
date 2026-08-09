@@ -8,24 +8,28 @@ const { migrateDatabase } = require('./migrations');
 
 test('миграции поднимают чистую базу по порядку и повторно ничего не делают', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2]);
+  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3]);
   const applied = db
     .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version')
     .all()
     .map(row => ({ ...row }));
   assert.deepEqual(applied, [
     { version: 1, applied_at: 123 },
-    { version: 2, applied_at: 123 }
+    { version: 2, applied_at: 123 },
+    { version: 3, applied_at: 123 }
   ]);
   assert.deepEqual(migrateDatabase(db, { now: 999 }), []);
-  assert.equal(
-    db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'chapter_progress'").get().count,
-    1
-  );
+  for (const table of ['chapter_progress', 'account_identities', 'account_sessions']) {
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM sqlite_master WHERE name = ?').get(table).count,
+      1,
+      `${table} создана миграциями`
+    );
+  }
   db.close();
 });
 
-test('миграция прогресса сохраняет старые аккаунты и создаёт им статистику', () => {
+test('миграция прогресса и Auth V2 сохраняет старые аккаунты и рекорды', () => {
   const db = openDatabase(':memory:');
   db.exec(`
     CREATE TABLE accounts (
@@ -54,6 +58,8 @@ test('миграция прогресса сохраняет старые акк
       .coop_matches_completed,
     0
   );
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM account_sessions').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM account_identities').get().count, 0);
   db.close();
 });
 

@@ -14,10 +14,11 @@ module.exports = {
 
     CREATE TABLE IF NOT EXISTS account_loadout (
       account_id TEXT PRIMARY KEY,
-      body TEXT NOT NULL DEFAULT 'body-mint',
-      head TEXT NOT NULL DEFAULT 'none',
-      trail TEXT NOT NULL DEFAULT 'none',
-      finish TEXT NOT NULL DEFAULT 'none',
+      body TEXT NOT NULL DEFAULT 'classic',
+      visor TEXT,
+      antenna TEXT,
+      trail TEXT,
+      finish TEXT,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
     );

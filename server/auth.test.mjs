@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openDatabase } from './db.js';
-import accountsModule from './accounts.js';
-import authModule from './auth.js';
+import { createRequire } from 'node:module';
 
-const { Accounts } = accountsModule;
-const { AuthService, hashToken, SOCKET_TICKET_TTL_MS } = authModule;
+const require = createRequire(import.meta.url);
+const { openDatabase } = require('./db');
+const { Accounts } = require('./accounts');
+const { AuthService, hashToken, SOCKET_TICKET_TTL_MS } = require('./auth');
 
 function setup(options = {}) {
   const db = openDatabase(':memory:');

@@ -34,6 +34,7 @@ test('CoopSession сводит downed/revive к состоянию напарн�
   assert.equal(session.revives, 1);
   session.applyEvent({ action: 'revive', target: 'self' });
   assert.equal(session.revives, 1);
+  assert.equal(session.receivedRevives, 1);
 });
 
 test('CoopSession отличает события локального игрока от событий напарника', () => {
@@ -44,6 +45,7 @@ test('CoopSession отличает события локального игро�
     vector
   });
   assert.deepEqual(session.applyEvent({ action: 'downed', target: 'self' }), { type: 'down-self' });
+  assert.equal(session.downs, 1);
   assert.deepEqual(session.applyEvent({ action: 'revive', target: 'self' }), { type: 'revive-self' });
   assert.equal(session.applyEvent({ action: 'launch', target: 'partner', vector }), null);
   session.reset();

@@ -14,10 +14,21 @@ import { COLORS } from '../core/Config.js';
 import { updateRoleActions as updateRoleActionsFor } from './CoopActions.js';
 import { CoopSession } from './CoopSession.js';
 
+export const COOP_PING_LABELS = Object.freeze({
+  here: 'СЮДА',
+  wait: 'ЖДИ',
+  go: 'ИДИ',
+  help: 'ПОМОГИ',
+  ready: 'ГОТОВ',
+  thanks: '👍'
+});
+
 export class CoopController {
   constructor(game) {
     this.game = game;
     this._marker = new THREE.Vector3();
+    this.ping = null;
+    this.tetherLine = null;
   }
 
   // Кооператив в одиночку: напарник ушёл насовсем.
@@ -118,6 +129,40 @@ export class CoopController {
     }
   }
 
+  sendPing(command) {
+    if (this.game.mode !== 'coop' || !COOP_PING_LABELS[command] || !this.game.net?.matchId) return false;
+    return this.game.net.send('coopPing', { matchId: this.game.net.matchId, command });
+  }
+
+  receivePing(message) {
+    if (message.matchId !== this.game.net?.matchId || !COOP_PING_LABELS[message.command]) return;
+    this.ping = { id: message.id, command: message.command, until: performance.now() + 1800 };
+    const actor = message.id === this.game.net.id ? this.game.player : this.game.remotes.get(message.id);
+    this.game.sfx.ping(actor?.visualPosition);
+    this.game.settings.vibrate(0.3);
+  }
+
+  updatePingMarker() {
+    if (!this.ping || performance.now() >= this.ping.until) {
+      this.ping = null;
+      this.game.ui.updateCoopPing(null);
+      return;
+    }
+    const actor = this.ping.id === this.game.net?.id ? this.game.player : this.game.remotes.get(this.ping.id);
+    if (!actor) return this.game.ui.updateCoopPing(null);
+    const projected = this._marker
+      .copy(actor.visualPosition)
+      .setY(actor.visualPosition.y + 2.5)
+      .project(this.game.camera);
+    const visible = projected.z < 1;
+    this.game.ui.updateCoopPing(
+      COOP_PING_LABELS[this.ping.command],
+      visible
+        ? { x: (projected.x * 0.5 + 0.5) * innerWidth, y: (-projected.y * 0.5 + 0.5) * innerHeight }
+        : null
+    );
+  }
+
   // Оживление напарника прикосновением. Проверка простая: подошёл достаточно близко.
   tryRevivePartner() {
     if (this.game.mode !== 'coop') return;
@@ -136,7 +181,9 @@ export class CoopController {
   // Экранное положение напарника для указателя. Пока он в кадре, указатель скрыт: лишняя
   // стрелка поверх видимого персонажа только загромождает экран.
   updatePartnerMarker() {
+    this.updatePingMarker();
     const partner = this.game.remotes.values().next().value;
+    this.updateTetherVisual(partner);
     if (!partner || !this.game.player) {
       this.game.ui.updatePartnerMarker({ screen: null });
       return;
@@ -156,6 +203,30 @@ export class CoopController {
       down: this.game.coop.partnerDown,
       away: this.game.coop.partnerAway
     });
+  }
+
+  updateTetherVisual(partner) {
+    const enabled = Boolean(this.game.course?.spec?.mechanics?.tether && partner && this.game.player);
+    if (!enabled) {
+      if (this.tetherLine) this.tetherLine.visible = false;
+      return;
+    }
+    if (!this.tetherLine) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      this.tetherLine = new THREE.Line(
+        geometry,
+        new THREE.LineBasicMaterial({ color: COLORS.yellow, transparent: true, opacity: 0.9 })
+      );
+      this.tetherLine.frustumCulled = false;
+      this.game.scene.add(this.tetherLine);
+    }
+    const points = this.tetherLine.geometry.attributes.position.array;
+    const local = this.game.player.visualPosition;
+    const remote = partner.visualPosition;
+    points.set([local.x, local.y + 0.7, local.z, remote.x, remote.y + 0.7, remote.z]);
+    this.tetherLine.geometry.attributes.position.needsUpdate = true;
+    this.tetherLine.visible = true;
   }
 
   // Позиция напарника для кооп-кадрирования камеры. В гонке возвращает null: подстраивать кадр

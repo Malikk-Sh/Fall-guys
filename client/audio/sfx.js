@@ -21,6 +21,16 @@ export class Sfx {
     this.footPhase = 0;
   }
 
+  ping(position = null) {
+    this.engine.playTone({
+      freq: [vary(620, 25), vary(880, 25)],
+      type: 'sine',
+      duration: 0.18,
+      volume: 0.2,
+      position
+    });
+  }
+
   jump(position = null) {
     // Восходящий скользящий тон — читается как «оттолкнулся».
     this.engine.playTone({

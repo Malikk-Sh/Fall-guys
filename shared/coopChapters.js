@@ -94,6 +94,17 @@ const movingSpan = (length, { range = 4, speed = 0.7 } = {}) => ({
   speed
 });
 
+// Два узких параллельных маршрута с пустотой между ними. В отличие от декоративной стены
+// центральный разрыв использует настоящую проверку поверхности: разделившиеся игроки не могут
+// просто пройти друг сквозь друга и должны решать свою половину участка.
+const splitSpan = (length, { laneGap = 3, leftY = 0, rightY = 0 } = {}) => ({
+  kind: 'splitSpan',
+  length,
+  laneGap,
+  leftY,
+  rightY
+});
+
 // Осыпающиеся плитки: пол, который исчезает через мгновение после того, как на него наступили.
 //
 // Мягкая опасность из трёх ступеней документа: сама по себе не убивает, но не даёт стоять и
@@ -400,6 +411,174 @@ const CHAPTERS = [
         done: { span: 's1' }
       })
     ]
+  },
+
+  {
+    id: 'ch6',
+    title: 'ПО РАЗНЫМ ДОРОГАМ',
+    subtitle: 'Разделитесь, чтобы встретиться',
+    hint: 'Выберите разные дорожки, активируйте узел и помогите напарнику перейти первым.',
+    segments: [
+      floor(22),
+      splitSpan(34, { laneGap: 3.4 }),
+      floor(14, [plate('left', -3.6), plate('right', 3.6)]),
+      gateSpan('reunion', UNJUMPABLE_GAP + 2, ['left', 'right', 'reunionFar']),
+      floor(18, [plate('reunionFar', 0)]),
+      checkpoint(),
+      floor(18, [fan(5, { period: 3.8 })]),
+      splitSpan(28),
+      floor(18),
+      checkpoint(),
+      floor(18),
+      checkpoint(),
+      floor(18)
+    ],
+    lessons: [
+      lesson('split', {
+        at: START_Z,
+        text: 'Дорожка раздваивается: идите по разным сторонам и найдите узлы у места встречи.',
+        done: { plates: ['left', 'right'] }
+      }),
+      lesson('reunion', {
+        near: 'reunion',
+        text: 'Сигнал получен. Один держит мост, второй переходит и включает дальний узел.',
+        done: { span: 'reunion' }
+      })
+    ]
+  },
+
+  {
+    id: 'ch7',
+    title: 'ЭНЕРГЕТИЧЕСКАЯ ЭСТАФЕТА',
+    subtitle: 'Передавайте настоящее ядро',
+    hint: 'Поднимите ядро, перебросьте его напарнику и вставьте в энергетический приёмник.',
+    mechanics: {
+      energyCore: { pickupRadius: 2.2, throwSpeed: 11, sockets: 2 }
+    },
+    segments: [
+      floor(22, [plate('a1', -3.5)]),
+      gateSpan('relay1', UNJUMPABLE_GAP + 2, ['a1', 'a2']),
+      floor(16, [plate('a2', 3.5)]),
+      checkpoint(),
+      splitSpan(24),
+      floor(14, [plate('b1', 3.5)]),
+      gateSpan('relay2', UNJUMPABLE_GAP + 4, ['b1', 'b2']),
+      floor(14, [plate('b2', -3.5)]),
+      checkpoint(),
+      movingSpan(12, { range: 4, speed: 0.8 }),
+      floor(18),
+      checkpoint(),
+      floor(18)
+    ],
+    lessons: [
+      lesson('relay', {
+        near: 'relay1',
+        text: 'Это эстафета: держите узел, пока напарник добирается до следующего, затем меняйтесь.',
+        done: { plates: ['a2'] }
+      })
+    ]
+  },
+
+  {
+    id: 'ch8',
+    title: 'ПОБЕГ',
+    subtitle: 'Решайте на ходу',
+    hint: 'Пол исчезает за спиной. Разделяйтесь быстро и не оставляйте напарника без пути.',
+    segments: [
+      floor(18),
+      collapsing('escape1', 30, { delay: 0.38, respawn: 5 }),
+      checkpoint(),
+      splitSpan(30, { laneGap: 3.8 }),
+      floor(12, [plate('e1', -3.5), plate('e2', 3.5)]),
+      gateSpan('escapeGate', UNJUMPABLE_GAP + 2, ['e1', 'e2', 'e3']),
+      floor(16, [plate('e3', 0)]),
+      checkpoint(),
+      collapsing('escape2', 26, { delay: 0.32, respawn: 5 }),
+      floor(18, [crusher('last', 0, { period: 2.6, warn: 0.65 })]),
+      checkpoint(),
+      floor(18)
+    ],
+    lessons: [
+      lesson('escape', {
+        near: 'escape1',
+        text: 'Побег начался: плитки вернутся нескоро. Двигайтесь, чтобы не отрезать путь второму.',
+        done: { past: 'escape1' }
+      }),
+      lesson('escapeSplit', {
+        near: 'escapeGate',
+        text: 'Займите обе плиты на разных сторонах — останавливаться можно только здесь.',
+        done: { span: 'escapeGate' }
+      })
+    ]
+  },
+
+  {
+    id: 'ch9',
+    title: 'ВЕРХ И НИЗ',
+    subtitle: 'Два уровня одной задачи',
+    hint: 'Верхний игрок видит безопасные символы, нижний — кнопки. Передавайте маршрут пингами.',
+    mechanics: {
+      asymmetricSignals: { symbols: ['●', '▲', '◆', '■'], sequenceLength: 4 }
+    },
+    segments: [
+      floor(20),
+      splitSpan(26, { laneGap: 3.2, leftY: 0.7, rightY: 0 }),
+      floor(14, [plate('high1', -3.5), plate('low1', 3.5)]),
+      gateSpan('verticalGate', UNJUMPABLE_GAP + 2, ['high1', 'low1', 'verticalFar']),
+      floor(14, [plate('verticalFar', 0)]),
+      checkpoint(),
+      splitSpan(28, { laneGap: 3.6, leftY: 0, rightY: 0.7 }),
+      floor(18, [pendulum('verticalHammer', 0, { range: 5, speed: 1.25 })]),
+      checkpoint(),
+      floor(18),
+      syncSpan('verticalSync', UNJUMPABLE_GAP + 2, 1100),
+      floor(16),
+      checkpoint(),
+      floor(18)
+    ],
+    lessons: [
+      lesson('vertical', {
+        at: START_Z,
+        text: 'Левая дорожка выше, правая ниже. Разделитесь: узлы ждут на обоих уровнях.',
+        done: { plates: ['high1', 'low1'] }
+      }),
+      lesson('verticalMeet', {
+        near: 'verticalSync',
+        text: 'Снова на одном уровне. Подойдите к линии вместе и откройте финальный пролёт.',
+        done: { span: 'verticalSync' }
+      })
+    ]
+  },
+
+  {
+    id: 'ch10',
+    title: 'ФИНАЛЬНЫЙ РЫВОК',
+    subtitle: 'Ни секунды в одиночку',
+    hint: 'Трос ограничивает расстояние: страхуйте падения и используйте вес напарника для рывка.',
+    mechanics: {
+      tether: { maxLength: 11, catchDepth: 2.8 },
+      energyCore: { pickupRadius: 2.2, throwSpeed: 11, sockets: 1 }
+    },
+    segments: [
+      floor(18),
+      splitSpan(24, { laneGap: 3.8 }),
+      collapsing('finalTiles1', 22, { delay: 0.36, respawn: 5 }),
+      checkpoint(),
+      floor(14, [catapult('finalCatapult', 0)]),
+      gateSpan('finalRelay', UNJUMPABLE_GAP + 4, ['finalFar']),
+      floor(12, [plate('finalFar', 0)]),
+      checkpoint(),
+      floor(26, [pendulum('finalHammer', 0, { range: 5, speed: 1.1 })]),
+      checkpoint(),
+      floor(18)
+    ],
+    lessons: [
+      lesson('finalRun', {
+        near: 'finalTiles1',
+        text: 'Финальный рывок: пол исчезает быстро. На развилке не бегите следом за напарником.',
+        done: { past: 'finalTiles1' }
+      })
+    ]
   }
 ];
 // --- Разбор глав в геометрию --------------------------------------------------------------------
@@ -498,6 +677,7 @@ export function coopSpec(chapterId) {
     title: chapter.title,
     subtitle: chapter.subtitle,
     hint: chapter.hint,
+    mechanics: chapter.mechanics ? structuredClone(chapter.mechanics) : null,
     segmentCount: chapter.segmentCount,
     checkpoints: [...chapter.checkpoints],
     lessons: resolveLessons(chapter, layoutOf(chapter).anchors),

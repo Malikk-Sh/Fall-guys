@@ -12,6 +12,10 @@ const DIVE_SPEED = 10.8;
 export const RUN_SPEED = 7.7;
 const ACCEL_GROUND = 18;
 const ACCEL_AIR = 7.2;
+const ROLL_TIME = 0.42;
+const ROLL_SPEED = 10.2;
+const LANDING_RETENTION_TIME = 0.34;
+const WALL_BOUNCE_SPEED = 8.8;
 
 // Окно, в течение которого прыжок сработает, если нажать его чуть раньше приземления.
 const JUMP_BUFFER = 0.14;
@@ -57,6 +61,7 @@ export class Player {
     // поэтому выключенный звук её выключать не должен.
     this.haptics = options.haptics || null;
     this.character = new Character(scene, options);
+    this.cosmetics = options.cosmetics || null;
 
     this.velocity = new THREE.Vector3();
     this.checkpoint = 0;
@@ -77,6 +82,9 @@ export class Player {
     this.jumpBuffer = 0;
     this.diveTimer = 0;
     this.diveCooldown = 0;
+    this.rollTimer = 0;
+    this.landingRetention = 0;
+    this.recoveryWindow = 0;
     this.finished = false;
     this.respawns = 0;
     // Счётчики для целей испытания дня. Ведутся всегда, а не только в дни соответствующей цели:
@@ -146,12 +154,22 @@ export class Player {
     this.coyote = this.grounded ? COYOTE_TIME : Math.max(0, this.coyote - dt);
     this.diveCooldown = Math.max(0, this.diveCooldown - dt);
     this.diveTimer = Math.max(0, this.diveTimer - dt);
+    this.rollTimer = Math.max(0, this.rollTimer - dt);
+    this.landingRetention = Math.max(0, this.landingRetention - dt);
+    this.recoveryWindow = Math.max(0, this.recoveryWindow - dt);
 
     if (this.jumpBuffer > 0 && this.coyote > 0 && this.diveTimer <= 0) {
       this.velocity.y = JUMP_SPEED * this.tuning.jump;
       this.grounded = false;
       this.coyote = 0;
       this.jumpBuffer = 0;
+      // Прыжок в коротком окне после dive→roll мгновенно завершает перекат, но сохраняет темп.
+      // Это тот же jump, поэтому на телефоне не появляется новая кнопка.
+      if (this.recoveryWindow > 0) {
+        this.recoveryWindow = 0;
+        this.landingRetention = LANDING_RETENTION_TIME;
+      }
+      this.rollTimer = 0;
       this.effects.burst(this._scratch.copy(this.physics).setY(this.physics.y - 0.3), COLORS.white, 8, 0.72);
       this.sfx?.jump();
       this.haptics?.vibrate(0.32);
@@ -171,6 +189,8 @@ export class Player {
       this.velocity.z = direction.z * diveSpeed;
       this.velocity.y = Math.max(this.velocity.y, 3.25);
       this.diveTimer = 0.58;
+      this.rollTimer = 0;
+      this.recoveryWindow = 0;
       this.diveCooldown = 0.9 * this.tuning.dashCooldown;
       this.grounded = false;
       this.dashes++;
@@ -179,13 +199,21 @@ export class Player {
       this.haptics?.vibrate(0.5);
     }
 
-    const maxSpeed = this.diveTimer > 0 ? DIVE_SPEED * this.tuning.dash : RUN_SPEED;
+    const retainedSpeed = Math.min(ROLL_SPEED, Math.hypot(this.velocity.x, this.velocity.z));
+    const maxSpeed =
+      this.diveTimer > 0
+        ? DIVE_SPEED * this.tuning.dash
+        : this.rollTimer > 0
+          ? ROLL_SPEED
+          : this.landingRetention > 0
+            ? Math.max(RUN_SPEED, retainedSpeed)
+            : RUN_SPEED;
     // Сцепление с землёй меняет только наземное ускорение: в воздухе держаться не за что, и
     // «скользкий воздух» был бы не правилом, а поломкой управления.
     const accel = this.grounded ? ACCEL_GROUND * this.tuning.groundGrip : ACCEL_AIR;
     // Во время рывка управление почти отключается — это делает рывок осмысленным решением,
     // а не просто способом двигаться быстрее.
-    const control = this.diveTimer > 0 ? 0.28 : 1;
+    const control = this.diveTimer > 0 ? 0.28 : this.rollTimer > 0 ? 0.48 : 1;
     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, desired.x * maxSpeed, accel * control, dt);
     this.velocity.z = THREE.MathUtils.damp(this.velocity.z, desired.z * maxSpeed, accel * control, dt);
     if (move.magnitude < 0.05 && this.grounded) {
@@ -202,6 +230,30 @@ export class Player {
     const previousY = this.physics.y;
     this.physics.addScaledVector(this.velocity, dt);
 
+    // Wall-bounce требует обычного прыжка, нажатого непосредственно у подсвеченной стены.
+    // На любых других поверхностях буфер просто продолжает ждать приземления.
+    const wallNormal =
+      !this.grounded && this.jumpBuffer > 0
+        ? this.course.wallBounceAt?.(this.physics, this.previous, this.velocity)
+        : null;
+    if (wallNormal) {
+      if (wallNormal.x) this.physics.x = this.previous.x;
+      if (wallNormal.z) this.physics.z = this.previous.z;
+      const tangentX = wallNormal.z;
+      const tangentZ = -wallNormal.x;
+      const along = this.velocity.x * tangentX + this.velocity.z * tangentZ;
+      this.velocity.x = wallNormal.x * WALL_BOUNCE_SPEED + tangentX * along * 0.72;
+      this.velocity.z = wallNormal.z * WALL_BOUNCE_SPEED + tangentZ * along * 0.72;
+      this.velocity.y = Math.max(this.velocity.y, JUMP_SPEED * 0.82);
+      this.jumpBuffer = 0;
+      this.diveTimer = 0;
+      this.rollTimer = 0;
+      this.recoveryWindow = 0;
+      this.effects.burst(this.physics, COLORS.cyan, 10, 0.8);
+      this.sfx?.jump();
+      this.haptics?.vibrate(0.42);
+    }
+
     const landingVelocity = this.velocity.y;
     const surface = this.course.surfaceAt(this.physics, previousY, this.velocity.y);
     const wasGrounded = this.grounded;
@@ -214,6 +266,23 @@ export class Player {
       this.velocity.y = 0;
       this.grounded = true;
       this.slamming = false;
+      const landingSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+      if (!wasGrounded && this.diveTimer > 0 && landingSpeed > RUN_SPEED + 0.45) {
+        this.rollTimer = ROLL_TIME;
+        this.recoveryWindow = 0.18;
+        this.landingRetention = LANDING_RETENTION_TIME;
+        this.diveTimer = 0;
+      } else if (
+        !wasGrounded &&
+        landingVelocity > -7.5 &&
+        landingVelocity < -2.8 &&
+        landingSpeed > RUN_SPEED * 0.82 &&
+        desired.dot(this._scratch.set(this.velocity.x, 0, this.velocity.z).normalize()) > 0.82
+      ) {
+        // Мягкое приземление по направлению движения не дарит скорость из воздуха — оно лишь
+        // ненадолго не даёт уже набранному импульсу исчезнуть.
+        this.landingRetention = LANDING_RETENTION_TIME;
+      }
       if (!wasGrounded && landingVelocity < -3.2) {
         const strength = Math.min(1, Math.abs(landingVelocity) / 12);
         this.character.landed(strength);
@@ -243,14 +312,17 @@ export class Player {
       this.sfx?.fall(Math.min(1, (-this.velocity.y - 9) / 12));
     }
     if (this.diveTimer > 0 && Math.random() < dt * 18) {
-      this.effects.trail(this._scratch.copy(this.physics).setY(this.physics.y + 0.35), COLORS.yellow);
+      this.effects.trail(
+        this._scratch.copy(this.physics).setY(this.physics.y + 0.35),
+        this.cosmetics?.trail?.color ?? COLORS.yellow
+      );
     }
 
     this.character.animate(dt, {
       speed: horizontal,
       grounded: this.grounded,
       vertical: this.velocity.y,
-      diving: this.diveTimer > 0
+      diving: this.diveTimer > 0 || this.rollTimer > 0
     });
 
     const next = this.course.checkpointFor(this.physics, this.checkpoint);
@@ -301,6 +373,8 @@ export class Player {
     this.velocity.set(vector.x, vector.y, vector.z);
     this.grounded = false;
     this.slamming = false;
+    this.rollTimer = 0;
+    this.recoveryWindow = 0;
   }
 
   // Падение в кооперативе не откатывает обоих к чекпоинту: упавший ждёт напарника «пузырём».
@@ -324,6 +398,9 @@ export class Player {
     this.previous.copy(position);
     this.character.group.position.copy(position);
     this.velocity.set(0, 0, 0);
+    this.rollTimer = 0;
+    this.landingRetention = 0;
+    this.recoveryWindow = 0;
   }
 
   angleDamp(current, target, smoothing, dt) {
@@ -343,6 +420,9 @@ export class Player {
     this.character.group.position.copy(this.physics);
     this.velocity.set(0, 0, 0);
     this.diveTimer = 0;
+    this.rollTimer = 0;
+    this.landingRetention = 0;
+    this.recoveryWindow = 0;
     this.grounded = false;
     this.character.visual.scale.set(1.35, 0.72, 1.35);
     this.sfx?.respawn();
@@ -364,7 +444,7 @@ export class Player {
         ? 'downed'
         : this.slamming
           ? 'slam'
-          : this.diveTimer > 0
+          : this.diveTimer > 0 || this.rollTimer > 0
             ? 'dive'
             : this.grounded
               ? 'ground'

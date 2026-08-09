@@ -10,6 +10,7 @@
 // запомнить и как-то восстанавливать, а почты у нас нет и сбрасывать пароль было бы нечем.
 
 const crypto = require('crypto');
+const { migrateDatabase } = require('./migrations');
 
 // Код восстановления: четыре группы по четыре знака, WOBBLE-XXXX-XXXX-XXXX-XXXX.
 //
@@ -23,31 +24,12 @@ const CODE_PREFIX = 'WOBBLE';
 const MAX_NAME = 16;
 const MODES = Object.freeze(['solo', 'coop', 'race']);
 
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS accounts (
-    id TEXT PRIMARY KEY,
-    display_name TEXT NOT NULL,
-    secret_hash TEXT NOT NULL UNIQUE,
-    created_at INTEGER NOT NULL,
-    last_seen_at INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS personal_records (
-    account_id TEXT NOT NULL,
-    mode TEXT NOT NULL,
-    course_key TEXT NOT NULL,
-    time_ms INTEGER NOT NULL,
-    achieved_at INTEGER NOT NULL,
-    PRIMARY KEY (account_id, mode, course_key)
-  );
-  CREATE INDEX IF NOT EXISTS idx_records_account ON personal_records (account_id);
-`;
-
 class Accounts {
   constructor({ db, maxRecordsPerAccount = 400 } = {}) {
     if (!db) throw new Error('Accounts требует открытую базу');
     this.db = db;
     this.maxRecordsPerAccount = maxRecordsPerAccount;
-    this.db.exec(SCHEMA);
+    migrateDatabase(this.db);
     this.statements = prepare(this.db);
   }
 
@@ -60,6 +42,7 @@ class Accounts {
       createdAt: now
     };
     this.statements.insert.run(account.id, account.name, hashCode(secret), now, now);
+    this.statements.insertStats.run(account.id, now);
     return { ...account, secret };
   }
 
@@ -116,6 +99,63 @@ class Accounts {
       time: row.time_ms,
       achievedAt: row.achieved_at
     }));
+  }
+
+  // Прогресс кооперативной кампании записывает только игровой сервер после завершения матча.
+  // HTTP-клиент не получает метода, которым мог бы сам объявить главу пройденной.
+  recordCoopCompletion({ accountId, chapterId, timeMs, revives = 0, falls = 0, completedAt = Date.now() }) {
+    const id = String(accountId || '');
+    const chapter = String(chapterId || '');
+    if (!this.statements.byId.get(id)) return false;
+    if (!/^ch(?:10|[1-9])$/.test(chapter) || !Number.isFinite(timeMs) || timeMs <= 0) return false;
+    const time = Math.round(timeMs);
+    const saves = Number.isSafeInteger(revives) && revives >= 0 ? revives : 0;
+    const downs = Number.isSafeInteger(falls) && falls >= 0 ? falls : 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.upsertChapter.run(id, chapter, time, saves, downs === 0 ? 1 : 0, completedAt);
+      const uniqueChapters = Number(this.statements.chapterCount.get(id).count);
+      this.statements.updateStats.run(uniqueChapters, saves, completedAt, id);
+      this.statements.unlockAchievement.run(id, 'coop-first-clear', completedAt);
+      if (downs === 0) this.statements.unlockAchievement.run(id, 'coop-flawless', completedAt);
+      if (chapter === 'ch10') this.statements.unlockAchievement.run(id, 'coop-ch10-clear', completedAt);
+      if (uniqueChapters === 10)
+        this.statements.unlockAchievement.run(id, 'coop-campaign-complete', completedAt);
+      const stats = this.statements.stats.get(id);
+      const flawless = Number(this.statements.flawlessCount.get(id)?.count || 0);
+      if (flawless >= 5) this.statements.unlockAchievement.run(id, 'coop-flawless-5', completedAt);
+      if (Number(stats?.coop_revives || 0) >= 25)
+        this.statements.unlockAchievement.run(id, 'coop-helper-25', completedAt);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return true;
+  }
+
+  progress(accountId) {
+    const id = String(accountId || '');
+    const stats = this.statements.stats.get(id);
+    return {
+      stats: {
+        coopMatchesCompleted: Number(stats?.coop_matches_completed || 0),
+        coopChaptersCompleted: Number(stats?.coop_chapters_completed || 0),
+        coopRevives: Number(stats?.coop_revives || 0)
+      },
+      chapters: this.statements.chapters.all(id).map(row => ({
+        chapterId: row.chapter_id,
+        completions: row.completions,
+        bestTime: row.best_time_ms,
+        revives: row.revives,
+        flawless: row.flawless,
+        lastCompletedAt: row.last_completed_at
+      })),
+      achievements: this.statements.achievements.all(id).map(row => ({
+        id: row.achievement_id,
+        unlockedAt: row.unlocked_at
+      }))
+    };
   }
 
   count() {
@@ -188,6 +228,7 @@ function prepare(db) {
     touch: db.prepare('UPDATE accounts SET last_seen_at = ? WHERE id = ?'),
     rename: db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?'),
     count: db.prepare('SELECT COUNT(*) AS count FROM accounts'),
+    insertStats: db.prepare(`INSERT OR IGNORE INTO account_stats (account_id, updated_at) VALUES (?, ?)`),
     record: db.prepare(
       'SELECT time_ms FROM personal_records WHERE account_id = ? AND mode = ? AND course_key = ?'
     ),
@@ -208,7 +249,38 @@ function prepare(db) {
         SELECT rowid FROM personal_records WHERE account_id = ?
         ORDER BY achieved_at DESC LIMIT ?
       )
-    `)
+    `),
+    upsertChapter: db.prepare(`
+      INSERT INTO chapter_progress
+        (account_id, chapter_id, completions, best_time_ms, revives, flawless, last_completed_at)
+      VALUES (?, ?, 1, ?, ?, ?, ?)
+      ON CONFLICT (account_id, chapter_id) DO UPDATE SET
+        completions = completions + 1,
+        best_time_ms = MIN(best_time_ms, excluded.best_time_ms),
+        revives = revives + excluded.revives,
+        flawless = flawless + excluded.flawless,
+        last_completed_at = excluded.last_completed_at
+    `),
+    chapterCount: db.prepare('SELECT COUNT(*) AS count FROM chapter_progress WHERE account_id = ?'),
+    flawlessCount: db.prepare(
+      'SELECT COALESCE(SUM(flawless), 0) AS count FROM chapter_progress WHERE account_id = ?'
+    ),
+    updateStats: db.prepare(`
+      UPDATE account_stats SET
+        coop_matches_completed = coop_matches_completed + 1,
+        coop_chapters_completed = ?,
+        coop_revives = coop_revives + ?,
+        updated_at = ?
+      WHERE account_id = ?
+    `),
+    stats: db.prepare('SELECT * FROM account_stats WHERE account_id = ?'),
+    chapters: db.prepare('SELECT * FROM chapter_progress WHERE account_id = ? ORDER BY chapter_id'),
+    unlockAchievement: db.prepare(`
+      INSERT OR IGNORE INTO achievements (account_id, achievement_id, unlocked_at) VALUES (?, ?, ?)
+    `),
+    achievements: db.prepare(
+      'SELECT achievement_id, unlocked_at FROM achievements WHERE account_id = ? ORDER BY unlocked_at'
+    )
   };
 }
 

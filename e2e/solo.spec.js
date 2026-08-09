@@ -78,13 +78,18 @@ test.describe('одиночная игра и меню', () => {
     await page.locator('[data-mode="coop"]').click();
     await expect(page.locator('#coop')).toBeVisible();
     await expect(page.locator('#multi')).toBeHidden();
+    await expect(page.locator('.campaign-card')).toHaveCount(10);
+    await page.locator('.campaign-card[data-chapter="ch7"]').click();
+    await expect(page.locator('#coopChapter')).toHaveValue('ch7');
     await page.locator('[data-mode="single"]').click();
     await expect(page.locator('#single')).toBeVisible();
 
     // Окно аккаунта: открывается по чипу, закрывается Escape.
     await page.locator('#accountChip').click();
     await expect(page.locator('#account')).toBeVisible();
-    await expect(page.locator('#accountList')).toBeVisible();
+    await expect(page.locator('#accountList')).toBeAttached();
+    await expect(page.locator('.cosmetic-card')).toHaveCount(6);
+    await expect(page.locator('.cosmetic-card-equipped')).toContainText('КЛАССИКА');
     await page.keyboard.press('Escape');
     await expect(page.locator('#account')).toBeHidden();
 
@@ -95,5 +100,26 @@ test.describe('одиночная игра и меню', () => {
     await expect(page.locator('#accountName')).toHaveText('Дымовой', { timeout: 10_000 });
     await page.locator('#accountClose').click();
     await expect(page.locator('#account')).toBeHidden();
+  });
+
+  test('экран результата объясняет рекорд, чистоту забега и следующую награду', async ({ page }) => {
+    await openMenu(page);
+    await page.locator('#play').click();
+    await expect(page.locator('#hud')).toBeVisible({ timeout: 20_000 });
+    await page.evaluate(() => {
+      const game = window.__WOBBLE_GAME__;
+      game.ui.finishSolo({
+        time: 45_000,
+        respawns: 0,
+        dashes: 1,
+        hits: 0,
+        spec: game.course.spec
+      });
+    });
+    await expect(page.locator('#finish')).toBeVisible();
+    await expect(page.locator('.finish-highlight')).toHaveCount(3);
+    await expect(page.locator('#finishHighlights')).toContainText('ПЕРВОЕ ВРЕМЯ');
+    await expect(page.locator('#finishHighlights')).toContainText('БЕЗ ПАДЕНИЙ');
+    await expect(page.locator('#finishHighlights')).toContainText('Прогресс');
   });
 });

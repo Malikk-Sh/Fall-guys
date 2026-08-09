@@ -9,6 +9,7 @@ const { VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER } = require('../shared/courseSpec.js');
 const {
   server,
+  accounts,
   gameplay,
   rooms,
   resetRateLimits,
@@ -107,6 +108,83 @@ const shutdown = () => new Promise(resolve => server.close(resolve));
 // ограничение «не чаще раза в 32 мс».
 const STATE_STEP = 3.2;
 const STATE_GAP_MS = 55;
+
+test('matchmaking соединяет двух старейших совместимых игроков и сразу запускает кооп', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const first = new TestClient(url);
+  const second = new TestClient(url);
+  t.after(async () => {
+    await Promise.all([first.close(), second.close()]);
+    await shutdown();
+  });
+  await Promise.all([first.wait('hello'), second.wait('hello')]);
+
+  first.send('findCoop', { name: 'Первый', chapterId: 'ch9', protocolVersion: 9 });
+  await first.wait('matchmakingWaiting');
+  second.send('findCoop', { name: 'Второй', chapterId: 'ch9', protocolVersion: 9 });
+
+  const [firstStart, secondStart] = await Promise.all([first.wait('start'), second.wait('start')]);
+  assert.equal(firstStart.mode, 'coop');
+  assert.equal(firstStart.spec.chapterId, 'ch9');
+  assert.equal(firstStart.matchId, secondStart.matchId);
+  const room = [...rooms.values()].find(item => item.matchId === firstStart.matchId);
+  assert.equal(room.players.size, 2);
+  assert.deepEqual(
+    [...room.players.values()].map(player => player.name),
+    ['Первый', 'Второй']
+  );
+  gameplay.flush();
+  const queueMetrics = new Set(gameplay.summary({ days: 1, limit: 1000 }).rows.map(row => row.metric));
+  for (const metric of ['queue_enter', 'match_found', 'matchmaking_wait_ms', 'chapter_started']) {
+    assert.ok(queueMetrics.has(metric), `воронка записывает ${metric}`);
+  }
+});
+
+test('свёрнутый игрок удаляется из matchmaking и не достаётся следующей паре', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const away = new TestClient(url);
+  const second = new TestClient(url);
+  const third = new TestClient(url);
+  t.after(async () => {
+    await Promise.all([away.close(), second.close(), third.close()]);
+    await shutdown();
+  });
+  await Promise.all([away.wait('hello'), second.wait('hello'), third.wait('hello')]);
+  away.send('findCoop', { name: 'Отошёл', chapterId: 'ch1', protocolVersion: 9 });
+  await away.wait('matchmakingWaiting');
+  away.send('presence', { away: true });
+  const cancelled = await away.wait('matchmakingWaiting', message => message.cancelled === true);
+  assert.equal(cancelled.reason, 'away');
+
+  second.send('findCoop', { name: 'Второй', chapterId: 'ch1', protocolVersion: 9 });
+  await second.wait('matchmakingWaiting');
+  third.send('findCoop', { name: 'Третий', chapterId: 'ch1', protocolVersion: 9 });
+  const [secondStart, thirdStart] = await Promise.all([second.wait('start'), third.wait('start')]);
+  assert.equal(secondStart.matchId, thirdStart.matchId);
+  assert.equal(
+    away.messages.some(message => message.type === 'start'),
+    false
+  );
+});
+
+test('быстрый кооп-пинг безопасно ретранслируется напарнику', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  host.send('coopPing', { matchId: started.matchId, command: 'help' });
+  const ping = await guest.wait('coopPing', message => message.command === 'help', WAIT_MS);
+  assert.equal(ping.id, host.messages.find(message => message.type === 'hello').id);
+  assert.equal(ping.matchId, started.matchId);
+  assert.equal(typeof ping.at, 'number');
+});
 
 // Шаг сделан заведомо меньше серверного разрешения (3.2 + dt*18 за пакет), но одного этого мало.
 //
@@ -538,6 +616,53 @@ test('первый голос за реванш не закрывает экра
   const restart = await guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS);
   assert.notEqual(restart.matchId, started.matchId, 'у реванша свой matchId');
   assert.equal(restart.spec.seed, started.spec.seed, 'реванш идёт по той же трассе');
+});
+
+test('два голоса за следующую главу сохраняют пару и запускают её без лобби', async t => {
+  await listen();
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await runToFinish(host, started.spec, started.matchId);
+  await host.wait('finish', () => true, WAIT_MS);
+  await runToFinish(guest, started.spec, started.matchId);
+  const results = await host.wait('results', m => m.matchId === started.matchId, WAIT_MS);
+  assert.equal(results.hasNextChapter, true);
+  const messagesAfterResults = host.messages.length;
+
+  host.send('nextChapter', { matchId: started.matchId });
+  const waiting = await guest.wait(
+    'lobby',
+    m => m.state === 'RESULTS' && m.players.some(player => player.choice === 'next'),
+    WAIT_MS
+  );
+  assert.equal(waiting.chapterId, 'ch1');
+
+  guest.send('nextChapter', { matchId: started.matchId });
+  const [hostNext, guestNext] = await Promise.all([
+    host.wait('start', m => m.matchId !== started.matchId, WAIT_MS),
+    guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS)
+  ]);
+  assert.equal(hostNext.spec.chapterId, 'ch2');
+  assert.equal(guestNext.matchId, hostNext.matchId);
+  assert.deepEqual(Object.keys(hostNext.slots).sort(), Object.keys(started.slots).sort());
+  gameplay.flush();
+  const funnelMetrics = new Set(gameplay.summary({ days: 1, limit: 1000 }).rows.map(row => row.metric));
+  for (const metric of ['chapter_started', 'chapter_completed', 'next_chapter_vote', 'pair_continued']) {
+    assert.ok(funnelMetrics.has(metric), `воронка записывает ${metric}`);
+  }
+  assert.equal(
+    host.messages
+      .slice(messagesAfterResults)
+      .some(message => message.type === 'lobby' && message.state === 'LOBBY'),
+    false,
+    'между главами не должно быть обычного лобби'
+  );
 });
 
 // Разошедшиеся голоса вешали комнату намертво: «все за реванш» и «все за лобби» — оба условия
@@ -1179,9 +1304,21 @@ test('пройденная кооп-глава попадает в таблиц�
   });
 
   await Promise.all([host.wait('hello'), guest.wait('hello')]);
-  host.send('create', { name: 'Аня', playerId: 'a'.repeat(32), mode: 'coop' });
+  const hostAccount = accounts.create('Аня');
+  const guestAccount = accounts.create('Боря');
+  host.send('create', {
+    name: 'Аня',
+    playerId: 'подменённый-id',
+    accountToken: hostAccount.secret,
+    mode: 'coop'
+  });
   const created = await host.wait('lobby', m => m.players.length === 1);
-  guest.send('join', { name: 'Боря', playerId: 'b'.repeat(32), code: created.code });
+  guest.send('join', {
+    name: 'Боря',
+    playerId: 'ещё-один-подменённый-id',
+    accountToken: guestAccount.secret,
+    code: created.code
+  });
   await host.wait('lobby', m => m.players.length === 2);
   host.send('ready', { ready: true });
   guest.send('ready', { ready: true });
@@ -1197,6 +1334,8 @@ test('пройденная кооп-глава попадает в таблиц�
   const results = await host.wait('results', () => true, WAIT_MS);
   assert.equal(results.mode, 'coop');
   assert.ok(results.trusted, `подготовка: глава обязана засчитаться (${results.unranked})`);
+  assert.equal(accounts.progress(hostAccount.id).stats.coopMatchesCompleted, 1);
+  assert.equal(accounts.progress(guestAccount.id).chapters[0].chapterId, 'ch1');
 
   const chapter = started.spec.chapterId || started.spec.id;
   const ask = async playerId => {
@@ -1218,8 +1357,8 @@ test('пройденная кооп-глава попадает в таблиц�
   // Проверяется своя пара, а не размер таблицы: база — общий синглтон на весь набор, и главу до
   // этого теста успевают пройти другие. Ждать здесь ровно двух строк значило бы написать тест,
   // который ломается от появления соседнего.
-  const mine = await ask('a'.repeat(32));
-  const partner = await ask('b'.repeat(32));
+  const mine = await ask(hostAccount.id);
+  const partner = await ask(guestAccount.id);
   assert.ok(mine.standing, 'своя строка в таблице главы есть');
   assert.ok(partner.standing, 'у напарника тоже');
   assert.ok(mine.standing.total >= 2, 'в таблице как минимум оба');

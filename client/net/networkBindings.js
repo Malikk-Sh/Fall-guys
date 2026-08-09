@@ -13,6 +13,22 @@ import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { APP_STATE } from '../core/AppStates.js';
 
 export function bindNetwork(game) {
+  game.net.on('matchmakingWaiting', message => {
+    if (message.cancelled) {
+      const button = document.querySelector('#coopFind');
+      if (button) {
+        button.dataset.searching = 'false';
+        button.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+      }
+    }
+    game.ui.status(
+      message.cancelled
+        ? message.reason === 'away'
+          ? 'Поиск остановлен: игра была свёрнута.'
+          : 'Поиск отменён. Можно создать приватную комнату.'
+        : `Ищем напарника… ${Math.max(1, Math.round((message.waitedMs || 0) / 1000))} с`
+    );
+  });
   // Состояние комнаты приходит одним и тем же типом сообщения в любом состоянии — и в лобби,
   // и на экране результатов. Раньше обработчик этого не различал и на каждое обновление открывал
   // лобби. Из-за этого первый же чужой голос за реванш закрывал карточку результатов: сервер
@@ -29,6 +45,12 @@ export function bindNetwork(game) {
       return game.ui.updateResultRoom(message, game.net.id, game.net.serverNow());
     // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
     if (message.state !== ROOM_STATE.LOBBY) return;
+
+    const findButton = document.querySelector('#coopFind');
+    if (findButton) {
+      findButton.dataset.searching = 'false';
+      findButton.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+    }
 
     game.state.transition(APP_STATE.LOBBY, message);
     document.querySelector('#ready').textContent = game.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
@@ -91,6 +113,7 @@ export function bindNetwork(game) {
     }
   });
   game.net.on('coopEvent', message => game.coopControl.receiveCoopEvent(message));
+  game.net.on('coopPing', message => game.coopControl.receivePing(message));
   game.net.on('finish', message => game.receiveFinish(message));
   game.net.on('results', message => game.receiveResults(message));
 

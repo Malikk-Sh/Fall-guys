@@ -11,7 +11,10 @@ function capsule(radius, length, color, segments = 10) {
 }
 
 export class Character {
-  constructor(scene, { color = COLORS.pink, accent = COLORS.yellow, name = '', remote = false } = {}) {
+  constructor(
+    scene,
+    { color = COLORS.pink, accent = COLORS.yellow, name = '', remote = false, cosmetics = null } = {}
+  ) {
     this.group = new THREE.Group();
     this.visual = new THREE.Group();
     this.group.add(this.visual);
@@ -19,16 +22,21 @@ export class Character {
     this.phase = Math.random() * Math.PI * 2;
     this.landPulse = 0;
     this.state = 'idle';
-    const body = capsule(0.48, 0.58, color, 14);
+    const bodyColor = cosmetics?.body?.colors?.body ?? color;
+    const accentColor = cosmetics?.body?.colors?.accent ?? accent;
+    const body = capsule(0.48, 0.58, bodyColor, 14);
     body.scale.set(1.06, 1, 0.93);
     body.position.y = 0.82;
     this.visual.add(body);
-    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.38, 14, 10), standard(accent, 0.24));
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.38, 14, 10), standard(accentColor, 0.24));
     belly.scale.set(1, 0.68, 0.18);
     belly.position.set(0, 0.78, -0.43);
     belly.castShadow = true;
     this.visual.add(belly);
-    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.31, 16, 10), standard(0xdffcff, 0.12, 0.1));
+    const visor = new THREE.Mesh(
+      new THREE.SphereGeometry(0.31, 16, 10),
+      standard(cosmetics?.visor?.color ?? 0xdffcff, 0.12, 0.1)
+    );
     visor.scale.set(1, 0.58, 0.2);
     visor.position.set(0, 1.18, -0.46);
     visor.castShadow = true;
@@ -43,18 +51,24 @@ export class Character {
       eyes.push(eye);
     }
     const antenna = new THREE.Group(),
-      stem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.22, 7), standard(accent));
+      stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.045, 0.22, 7),
+        standard(cosmetics?.antenna?.color ?? accentColor)
+      );
     stem.position.y = 0.11;
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), standard(accent, 0.2));
+    const tip = new THREE.Mesh(
+      new THREE.SphereGeometry(0.09, 8, 6),
+      standard(cosmetics?.antenna?.color ?? accentColor, 0.2)
+    );
     tip.position.y = 0.25;
     antenna.add(stem, tip);
     antenna.position.y = 1.6;
     this.visual.add(antenna);
     this.antenna = antenna;
-    this.leftArm = this.limb(-0.53, 0.9, color, true);
-    this.rightArm = this.limb(0.53, 0.9, color, true);
-    this.leftLeg = this.limb(-0.25, 0.28, color, false);
-    this.rightLeg = this.limb(0.25, 0.28, color, false);
+    this.leftArm = this.limb(-0.53, 0.9, bodyColor, true);
+    this.rightArm = this.limb(0.53, 0.9, bodyColor, true);
+    this.leftLeg = this.limb(-0.25, 0.28, bodyColor, false);
+    this.rightLeg = this.limb(0.25, 0.28, bodyColor, false);
     this.visual.add(this.leftArm, this.rightArm, this.leftLeg, this.rightLeg);
     for (const leg of [this.leftLeg, this.rightLeg]) {
       const boot = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 7), standard(COLORS.purpleDark, 0.3));

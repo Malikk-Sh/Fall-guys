@@ -6,6 +6,7 @@
 // „готов“» можно было только поиском по файлу.
 
 import { COOP_CHAPTERS } from '/shared/coopChapters.js';
+import { COOP_PING_LABELS } from '../game/CoopController.js';
 import { GAME_MODE } from '/shared/protocol.js';
 import { courseSpec, dailyCourseSpec, randomSeed } from '../core/Config.js';
 
@@ -27,6 +28,7 @@ export function bindMenu(game) {
     net.createRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
+      accountToken: game.ui.accountToken(),
       difficulty: $('#difficulty').value
     });
   });
@@ -36,6 +38,7 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
+      accountToken: game.ui.accountToken(),
       code: $('#code').value.trim().toUpperCase()
     });
   });
@@ -55,9 +58,57 @@ export function bindMenu(game) {
     if (!game.net?.matchId) return;
     game.net.send('rematch', { matchId: game.net.matchId });
   });
+  click('#nextChapter', () => {
+    if (!game.net?.matchId) return;
+    game.net.send('nextChapter', { matchId: game.net.matchId });
+  });
   click('#returnLobby', () => {
     if (!game.net?.matchId) return;
     game.net.send('returnLobby', { matchId: game.net.matchId });
+  });
+
+  const pingMenu = $('#coopPingMenu');
+  const pingButton = $('#coopPingButton');
+  const pingCommands = Object.keys(COOP_PING_LABELS);
+  const sendPing = command => {
+    if (!game.coopControl.sendPing(command)) return;
+    pingMenu.classList.add('hidden');
+  };
+  pingMenu.querySelectorAll('[data-ping]').forEach(button =>
+    button.addEventListener('click', event => {
+      event.preventDefault();
+      sendPing(button.dataset.ping);
+    })
+  );
+  let pingOrigin = null;
+  pingButton.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    pingOrigin = { x: event.clientX, y: event.clientY };
+    pingButton.setPointerCapture?.(event.pointerId);
+    pingMenu.classList.remove('hidden');
+  });
+  pingButton.addEventListener('pointerup', event => {
+    if (!pingOrigin) return;
+    const dx = event.clientX - pingOrigin.x;
+    const dy = event.clientY - pingOrigin.y;
+    pingOrigin = null;
+    // Удержание со свайпом выбирает кнопку, над которой отпущен палец; короткий тап оставляет
+    // радиальное меню открытым. elementFromPoint работает и когда pointer capture держит кнопку.
+    if (Math.hypot(dx, dy) < 22) return;
+    const selected = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-ping]');
+    if (selected?.dataset.ping) sendPing(selected.dataset.ping);
+  });
+  addEventListener('keydown', event => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+    if (event.code === 'KeyT' && game.mode === 'coop') {
+      event.preventDefault();
+      pingMenu.classList.toggle('hidden');
+      return;
+    }
+    if (!pingMenu.classList.contains('hidden') && /^Digit[1-6]$/.test(event.code)) {
+      event.preventDefault();
+      sendPing(pingCommands[Number(event.code.at(-1)) - 1]);
+    }
   });
   $('#copyInvite').addEventListener('click', async () => {
     const mode = game.room?.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
@@ -129,12 +180,34 @@ export function bindMenu(game) {
   game.ui.fillChapters(COOP_CHAPTERS, chapter => {
     game.coopChapterId = chapter.id;
   });
+  click('#coopFind', async () => {
+    await game.accountReady;
+    const button = $('#coopFind');
+    const net = game.ensureNetwork();
+    if (button.dataset.searching === 'true') {
+      net.cancelMatchmaking();
+      button.dataset.searching = 'false';
+      button.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+      game.ui.status('Поиск отменён. Можно создать приватную комнату.');
+      return;
+    }
+    button.dataset.searching = 'true';
+    button.querySelector('span').textContent = 'ОТМЕНИТЬ ПОИСК';
+    game.ui.status('Ищем напарника для выбранной главы…');
+    net.findCoop({
+      name: game.ui.coopName(),
+      playerId: game.ui.playerId(),
+      accountToken: game.ui.accountToken(),
+      chapterId: $('#coopAnyChapter').checked ? '' : game.ui.coopChapter()
+    });
+  });
   click('#coopCreate', async () => {
     await game.accountReady;
     const net = game.ensureNetwork();
     net.createRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
+      accountToken: game.ui.accountToken(),
       mode: GAME_MODE.COOP,
       difficulty: game.ui.coopChapter()
     });
@@ -145,6 +218,7 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
+      accountToken: game.ui.accountToken(),
       code: $('#coopCode').value.trim().toUpperCase()
     });
   });

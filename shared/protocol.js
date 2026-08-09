@@ -10,13 +10,15 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 9;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
   RESUME: 'resume',
   CREATE_ROOM: 'create',
   JOIN_ROOM: 'join',
+  FIND_COOP: 'findCoop',
+  CANCEL_MATCHMAKING: 'cancelMatchmaking',
   LEAVE_ROOM: 'leave',
   PLAYER_READY: 'ready',
   HOST_CONFIGURE: 'configure',
@@ -24,9 +26,11 @@ export const C2S = Object.freeze({
   PLAYER_STATE: 'state',
   PRESENCE: 'presence',
   COOP_EVENT: 'coopEvent',
+  COOP_PING: 'coopPing',
   RESPAWN: 'respawn',
   FINISH: 'finish',
   REMATCH_VOTE: 'rematch',
+  NEXT_CHAPTER_VOTE: 'nextChapter',
   RETURN_TO_LOBBY: 'returnLobby',
   PING: 'ping'
 });
@@ -37,11 +41,13 @@ export const S2C = Object.freeze({
   RESUMED: 'resumed',
   RESUME_FAILED: 'resumeFailed',
   ROOM_STATE: 'lobby',
+  MATCHMAKING_WAITING: 'matchmakingWaiting',
   MATCH_START: 'start',
   SNAPSHOT: 'snapshot',
   CORRECTION: 'correction',
   PLAYER_PRESENCE: 'presence',
   COOP_EVENT: 'coopEvent',
+  COOP_PING: 'coopPing',
   PLAYER_FINISHED: 'finish',
   MATCH_RESULTS: 'results',
   // Забег перестал идти в зачёт: кто-то оборвался или вышел посреди главы.
@@ -114,11 +120,13 @@ export const ALLOWED_IN_STATE = Object.freeze({
   // Присутствие сознательно разрешено в любом состоянии комнаты: свернуть игру можно и в лобби,
   // и на экране результатов, и напарнику полезно знать об этом именно там — там его ждут.
   [C2S.COOP_EVENT]: [ROOM_STATE.PLAYING],
+  [C2S.COOP_PING]: [ROOM_STATE.PLAYING],
   [C2S.RESPAWN]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
   [C2S.FINISH]: [ROOM_STATE.PLAYING],
   // Только на экране результатов. Раньше эти типы принимались и в PLAYING, и кнопка «реванш»
   // работала как скрытое «завершить матч досрочно» — побочный эффект, которого никто не просил.
   [C2S.REMATCH_VOTE]: [ROOM_STATE.RESULTS],
+  [C2S.NEXT_CHAPTER_VOTE]: [ROOM_STATE.RESULTS],
   [C2S.RETURN_TO_LOBBY]: [ROOM_STATE.RESULTS]
 });
 
@@ -207,6 +215,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     // Это не средство от читерства. Придумать себе новый идентификатор ничего не стоит, но это
     // ровно то же, что прийти новым игроком, — то есть защищаться тут не от чего.
     playerId: optional(str(64)),
+    accountToken: optional(str(64)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
     protocolVersion: optional(num(0, 1000))
@@ -215,9 +224,20 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.JOIN_ROOM]: {
     name: optional(str(32, 0)), // ноль по той же причине, что и в CREATE_ROOM
     playerId: optional(str(64)),
+    accountToken: optional(str(64)),
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },
+
+  [C2S.FIND_COOP]: {
+    name: optional(str(32, 0)),
+    playerId: optional(str(64)),
+    accountToken: optional(str(64)),
+    // Пустая строка означает «любая глава»; конкретная глава проверяется сервером по каталогу.
+    chapterId: optional(str(16, 0)),
+    protocolVersion: optional(num(0, 1000))
+  },
+  [C2S.CANCEL_MATCHMAKING]: {},
 
   [C2S.PLAYER_READY]: { ready: bool() },
 
@@ -253,6 +273,10 @@ export const MESSAGE_SCHEMAS = Object.freeze({
       fields: { x: VELOCITY, y: VELOCITY, z: VELOCITY }
     })
   },
+  [C2S.COOP_PING]: {
+    matchId: str(32),
+    command: oneOf(['here', 'wait', 'go', 'help', 'ready', 'thanks'])
+  },
 
   [C2S.RESPAWN]: { matchId: str(32), checkpoint: optional(num(0, 64)) },
   // Финальное состояние едет ВНУТРИ finish, а не отдельным пакетом перед ним.
@@ -270,6 +294,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   },
   [C2S.LEAVE_ROOM]: {},
   [C2S.REMATCH_VOTE]: { matchId: str(32) },
+  [C2S.NEXT_CHAPTER_VOTE]: { matchId: str(32) },
   [C2S.RETURN_TO_LOBBY]: { matchId: str(32) }
 });
 
@@ -280,6 +305,8 @@ export const MESSAGE_SCHEMAS = Object.freeze({
 export const RATE_LIMITS = Object.freeze({
   [C2S.CREATE_ROOM]: [5, 60_000],
   [C2S.JOIN_ROOM]: [20, 60_000],
+  [C2S.FIND_COOP]: [10, 60_000],
+  [C2S.CANCEL_MATCHMAKING]: [10, 10_000],
   [C2S.PLAYER_READY]: [30, 10_000],
   [C2S.HOST_CONFIGURE]: [20, 10_000],
   [C2S.START_MATCH]: [10, 10_000],
@@ -288,9 +315,12 @@ export const RATE_LIMITS = Object.freeze({
   // но оставляет запас на нормальную работу с телефоном.
   [C2S.PRESENCE]: [20, 10_000],
   [C2S.COOP_EVENT]: [30, 1_000],
+  // Пинги — человеческое действие: короткий burst допустим, постоянный спам нет.
+  [C2S.COOP_PING]: [4, 5_000],
   [C2S.RESPAWN]: [5, 5_000],
   [C2S.FINISH]: [5, 10_000],
   [C2S.REMATCH_VOTE]: [10, 10_000],
+  [C2S.NEXT_CHAPTER_VOTE]: [10, 10_000],
   [C2S.RETURN_TO_LOBBY]: [10, 10_000],
   [C2S.PING]: [10, 1_000],
   [C2S.RESUME]: [10, 60_000],

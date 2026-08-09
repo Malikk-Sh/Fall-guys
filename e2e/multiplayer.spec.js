@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 // окно аккаунта, вводим имя, сохраняем.
 async function setPlayerName(page, name) {
   // Ждём, пока аккаунт войдёт: до этого переименовывать нечего, и попытка молча ничего не сделает.
-  await expect(page.locator('#accountName')).not.toHaveText('…', { timeout: 20_000 });
+  await expect(page.locator('#accountName')).not.toHaveText(/^(…|без аккаунта)$/, { timeout: 20_000 });
   await page.locator('#accountChip').click();
   await page.locator('#accountRename').fill(name);
   await page.locator('#accountSave').click();

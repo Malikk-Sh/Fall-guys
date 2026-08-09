@@ -28,19 +28,21 @@ export class AccountFlow {
   // Автовход в последний аккаунт. При первом заходе аккаунт заводится сам: игрок не должен
   // регистрироваться, чтобы просто побегать.
   async signIn() {
-    const { account, records, online } = await ensureAccount({});
-    this.apply(account, { online, records });
+    const { account, records, progress, online } = await ensureAccount({});
+    this.apply(account, { online, records, progress });
     if (!online)
       this.game.ui.accountStatus('Сервер не ответил — рекорды сохранятся только на этом устройстве.');
   }
 
   // `records` не передают, когда менялось только имя: рекорды при этом те же, и пересобирать их
   // из уже разобранной карты было бы лишним кругом.
-  apply(account, { online = true, records = null } = {}) {
+  apply(account, { online = true, records = null, progress = null } = {}) {
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
     this.game.ui.setAccount(account, { online });
+    this.game.ui.setAccountRecords(this.records);
+    this.game.ui.setAccountProgress(progress);
     this.game.ui.setAccountList(listAccounts());
     // Меню показывает рекорд текущей трассы, а он у каждого аккаунта свой.
     if (this.game.previewSpec)
@@ -82,7 +84,7 @@ export class AccountFlow {
         const created = await createAccount('Wobbler');
         if (!created) return ui.accountStatus('Не вышло создать аккаунт — сервер не ответил.');
         rememberAccount(created);
-        this.apply(created, { records: created.records });
+        this.apply(created, { records: created.records, progress: created.progress });
         return ui.accountStatus('Новый аккаунт готов. Загляните в «МОЙ КОД», чтобы не потерять его.');
       }
       if (action === 'login') {
@@ -90,7 +92,7 @@ export class AccountFlow {
         if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
         // Код сохраняем ровно тот, что ввёл игрок: сервер его обратно не присылает.
         rememberAccount({ ...entered, secret: value });
-        this.apply({ ...entered, secret: value }, { records: entered.records });
+        this.apply({ ...entered, secret: value }, { records: entered.records, progress: entered.progress });
         return ui.accountStatus(`Вошли как ${entered.name}.`);
       }
       if (action === 'rename') {

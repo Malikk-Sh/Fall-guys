@@ -64,7 +64,8 @@ class GoogleIdentityVerifier {
 
   async verify(credential, { now = Date.now() } = {}) {
     if (!this.enabled) return { ok: false, reason: 'google-disabled' };
-    if (typeof credential !== 'string' || credential.length > 16_384) return { ok: false, reason: 'invalid-token' };
+    if (typeof credential !== 'string' || credential.length > 16_384)
+      return { ok: false, reason: 'invalid-token' };
 
     const parts = credential.split('.');
     if (parts.length !== 3) return { ok: false, reason: 'invalid-token' };
@@ -97,8 +98,7 @@ class GoogleIdentityVerifier {
     const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
     if (!audience.includes(this.clientId)) return { ok: false, reason: 'wrong-audience' };
     if (!GOOGLE_ISSUERS.has(payload.iss)) return { ok: false, reason: 'wrong-issuer' };
-    if (!Number.isFinite(payload.exp) || payload.exp <= seconds)
-      return { ok: false, reason: 'expired' };
+    if (!Number.isFinite(payload.exp) || payload.exp <= seconds) return { ok: false, reason: 'expired' };
     if (Number.isFinite(payload.nbf) && payload.nbf > seconds + 60)
       return { ok: false, reason: 'not-active' };
     if (Number.isFinite(payload.iat) && payload.iat > seconds + 300)

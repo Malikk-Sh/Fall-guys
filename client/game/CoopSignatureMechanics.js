@@ -1,3 +1,5 @@
+import { deterministicSignalSequence } from '/shared/signatureCoop.js';
+
 const CORE_PICKUP_RADIUS = 2.2;
 const CORE_THROW_SPEED = 11;
 const CORE_SOCKET_RADIUS = 1.8;
@@ -99,7 +101,7 @@ export class AsymmetricSignalPuzzle {
   constructor(id, symbols = ['●', '▲', '◆', '■']) {
     this.id = String(id || 'signal');
     this.symbols = [...symbols];
-    this.sequence = deterministicSequence(this.id, this.symbols);
+    this.sequence = deterministicSignalSequence(this.id, this.symbols);
     this.progress = 0;
   }
 
@@ -124,15 +126,4 @@ export class AsymmetricSignalPuzzle {
     this.progress++;
     return this.progress === this.sequence.length;
   }
-}
-
-function deterministicSequence(id, symbols) {
-  let hash = 2166136261;
-  for (const char of id) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619) >>> 0;
-  const result = [];
-  for (let index = 0; index < Math.max(3, symbols.length); index++) {
-    hash = (Math.imul(hash, 1664525) + 1013904223) >>> 0;
-    result.push(symbols[hash % symbols.length]);
-  }
-  return result;
 }

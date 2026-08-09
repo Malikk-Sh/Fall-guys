@@ -6,6 +6,7 @@ const AUTH_WINDOW_MS = 10 * 60 * 1000;
 function installAuthRoutes({
   app,
   accounts,
+  recoveryLogin = secret => accounts.login(secret),
   auth,
   google,
   clientIp = req => req.socket.remoteAddress || 'unknown',
@@ -84,7 +85,7 @@ function installAuthRoutes({
   app.post('/api/auth/recovery', json, (req, res) => {
     if (rateLimited('recovery', clientIp(req)))
       return res.status(429).json({ ok: false, error: 'rate-limited' });
-    const account = accounts.login(req.body?.secret);
+    const account = recoveryLogin(req.body?.secret);
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
 

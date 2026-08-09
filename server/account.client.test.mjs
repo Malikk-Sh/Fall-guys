@@ -165,7 +165,10 @@ test('следующий заход использует HttpOnly session без
   assert.equal(result.account.id, 'known');
   assert.equal(result.account.name, 'Малик');
   assert.equal(result.progress.chapters[0].chapterId, 'ch7');
-  assert.deepEqual(server.calls.map(c => c.path), ['/api/auth/session']);
+  assert.deepEqual(
+    server.calls.map(c => c.path),
+    ['/api/auth/session']
+  );
   assert.equal(currentAccount(storage).secret, 'КОД');
 });
 
@@ -193,7 +196,10 @@ test('явно выбранный сохранённый аккаунт заме
 
   const result = await ensureAccount({ storage, fetchImpl: server.fetchImpl });
   assert.equal(result.account.id, 'first');
-  assert.deepEqual(server.calls.map(c => c.path), ['/api/auth/session', '/api/auth/recovery']);
+  assert.deepEqual(
+    server.calls.map(c => c.path),
+    ['/api/auth/session', '/api/auth/recovery']
+  );
 });
 
 test('неизвестный серверу recovery code забывается и заводится новый аккаунт', async () => {
@@ -213,7 +219,10 @@ test('неизвестный серверу recovery code забывается �
 
   const result = await ensureAccount({ storage, fetchImpl: server.fetchImpl });
   assert.equal(result.account.id, 'fresh');
-  assert.deepEqual(listAccounts(storage).map(a => a.id), ['fresh']);
+  assert.deepEqual(
+    listAccounts(storage).map(a => a.id),
+    ['fresh']
+  );
 });
 
 test('недоступный сервер не стирает аккаунт', async () => {

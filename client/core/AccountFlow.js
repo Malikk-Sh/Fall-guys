@@ -71,7 +71,8 @@ export class AccountFlow {
   async setupGoogle() {
     const config = await authConfig();
     if (!config?.googleClientId || !globalThis.document) return;
-    const host = document.querySelector('#account .account-actions') || document.querySelector('#accountStatus');
+    const host =
+      document.querySelector('#account .account-actions') || document.querySelector('#accountStatus');
     if (!host || document.querySelector('#googleSignIn')) return;
 
     const section = document.createElement('div');
@@ -160,8 +161,7 @@ export class AccountFlow {
       }
       if (action === 'login') {
         const entered = await loginAccount(value);
-        if (!entered || entered.unknown)
-          return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
+        if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
         const account = { ...entered, secret: value };
         rememberAccount(account);
         this.apply(account, { records: entered.records, progress: entered.progress });
@@ -171,7 +171,8 @@ export class AccountFlow {
         const account = accountForRecords();
         if (!account) return ui.accountStatus('Сначала нужен аккаунт.');
         const renamed = await renameAccount(value);
-        if (!renamed) return ui.accountStatus('Переименовать не вышло — сессия истекла или сервер недоступен.');
+        if (!renamed)
+          return ui.accountStatus('Переименовать не вышло — сессия истекла или сервер недоступен.');
         const next = { ...this.game.ui.account, ...renamed, networkTicket: this.networkTicket };
         rememberAccount(next);
         this.apply(next);

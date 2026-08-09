@@ -34,18 +34,25 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      # Форматирование запускается до долгих интеграционных и браузерных сценариев. Помимо стиля,
-      # это быстро ловит следы неразрешённого merge и случайно вставленный в исходник обычный текст.
+      # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
+      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
+      # в успешную проверку и фактически отключал защиту от merge markers.
       - name: Check formatting and merge artifacts
         run: |
           npm run format:check
-          ! rg -n '^(<<<<<<<|=======|>>>>>>>)' --glob '!node_modules/**' .
+          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' \
+            --exclude-dir=node_modules \
+            --exclude-dir=.git \
+            .; then
+            echo "Merge conflict markers found"
+            exit 1
+          fi
+
+      - name: Lint source
+        run: npm run check
 
       - name: Run gameplay and multiplayer tests
         run: npm test
-
-      - name: Check production entry points
-        run: npm run check
 
       - name: Install Chromium for browser tests
         run: npx playwright install --with-deps chromium

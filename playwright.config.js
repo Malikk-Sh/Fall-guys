@@ -20,8 +20,24 @@ export default defineConfig({
     video: 'retain-on-failure'
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions } },
-    { name: 'mobile-chromium', use: { ...devices['Pixel 7'], launchOptions } }
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        launchOptions,
+        // E2E идёт через один локальный сервер. Разные тестовые адреса не дают desktop-проекту
+        // исчерпать production rate-limit аккаунтов до запуска mobile-проекта.
+        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.10' }
+      }
+    },
+    {
+      name: 'mobile-chromium',
+      use: {
+        ...devices['Pixel 7'],
+        launchOptions,
+        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
+      }
+    }
   ],
   webServer: {
     command: 'node server/index.js',
@@ -31,6 +47,9 @@ export default defineConfig({
     env: {
       HOST: '127.0.0.1',
       PORT: '4173',
+      // Только локальный Playwright-сервер доверяет тестовому X-Forwarded-For. Production по
+      // умолчанию по-прежнему использует реальный remoteAddress и те же защитные лимиты.
+      TRUST_PROXY: '1',
       // Трасса гонки в обычной работе случайная. Браузерный тест проходит её до финиша живым
       // управлением, и на случайной трассе он означал бы разное каждый прогон — то падал бы, то нет.
       //

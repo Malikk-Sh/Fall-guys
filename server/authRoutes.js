@@ -9,6 +9,7 @@ function installAuthRoutes({
   recoveryLogin = secret => accounts.login(secret),
   auth,
   google,
+  inventory = null,
   clientIp = req => req.socket.remoteAddress || 'unknown',
   accountPayload,
   secureCookies = process.env.NODE_ENV === 'production'
@@ -61,8 +62,6 @@ function installAuthRoutes({
     return null;
   };
 
-  // Auth routes устанавливаются bootstrap-модулем после основного приложения. В index.js уже есть
-  // catch-all GET для SPA, поэтому служебные чтения делаем POST: они не пересекаются с навигацией.
   app.post('/api/auth/config', json, (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ ok: true, googleClientId: google.enabled ? google.clientId : null });
@@ -172,6 +171,16 @@ function installAuthRoutes({
     });
     if (saved.reason) return res.status(400).json({ ok: false, error: saved.reason });
     return res.json({ ok: true, ...saved });
+  });
+
+  app.post('/api/cosmetics/equip', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    if (!inventory) return res.status(503).json({ ok: false, error: 'inventory-disabled' });
+    inventory.syncEntitlements(session.accountId);
+    const equipped = inventory.equip(session.accountId, req.body?.slot, req.body?.cosmeticId);
+    if (!equipped.ok) return res.status(400).json({ ok: false, error: equipped.reason });
+    return res.json({ ok: true, inventory: inventory.profile(session.accountId) });
   });
 
   return { tokenFrom, sessionFrom, requireSession };

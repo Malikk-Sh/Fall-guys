@@ -1,7 +1,28 @@
 // Production entrypoint for account sessions and external identities.
 //
 // `index.js` remains directly importable by the existing unit/integration tests. This thin layer
-// installs Auth V2 on the exported Express app, then starts the same HTTP/WebSocket server.
+// extends CSP for Google Identity Services, installs Auth V2 on the exported Express app, then
+// starts the same HTTP/WebSocket server.
+
+const http = require('http');
+
+// Security headers are created inside index.js. Patch the response setter BEFORE loading it so the
+// existing strict CSP remains the source of truth and Auth V2 adds only the two Google origins it
+// actually needs. No `unsafe-inline`/`unsafe-eval` is introduced.
+const setHeader = http.ServerResponse.prototype.setHeader;
+http.ServerResponse.prototype.setHeader = function authV2SetHeader(name, value) {
+  if (String(name).toLowerCase() === 'content-security-policy' && typeof value === 'string') {
+    let policy = value
+      .replace("script-src 'self'", "script-src 'self' https://accounts.google.com")
+      .replace(
+        "connect-src 'self' ws: wss:",
+        "connect-src 'self' ws: wss: https://accounts.google.com"
+      );
+    if (!policy.includes('frame-src ')) policy += '; frame-src https://accounts.google.com';
+    return setHeader.call(this, name, policy);
+  }
+  return setHeader.call(this, name, value);
+};
 
 const core = require('./index');
 const { AuthService } = require('./auth');

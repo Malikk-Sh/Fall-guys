@@ -1,9 +1,9 @@
 // Аккаунты на стороне игрока.
 //
 // Recovery code остаётся только средством восстановления. После успешного входа сервер ставит
-// HttpOnly session cookie; rename/records и обновление сетевой личности используют уже сессию.
-// Для совместимости со старой схемой WebSocket клиент получает короткий network ticket, но сам
-// cookie JavaScript прочитать не может.
+// HttpOnly session cookie; rename/records/cosmetics и обновление сетевой личности используют уже
+// сессию. Для совместимости со старой схемой WebSocket клиент получает короткий network ticket,
+// но сам cookie JavaScript прочитать не может.
 
 const STORAGE_KEY = 'wobble-accounts-v1';
 const MAX_ACCOUNTS = 8;
@@ -63,8 +63,8 @@ export function listAccounts(storage) {
   return state.accounts.map(a => ({ ...a, current: a.id === state.current }));
 }
 
-// Network ticket намеренно НЕ кладём в localStorage: он bearer и живёт всего пару минут. Он нужен
-// только текущей странице для входа в комнату. Recovery code сохраняем, если он у нас уже есть.
+// Network ticket и server inventory намеренно НЕ кладём в localStorage. Первый — короткий bearer,
+// второй — серверный источник истины, который надо получать заново из authenticated session.
 export function rememberAccount(account, storage) {
   if (!account?.id) return readAccounts(storage);
   const state = readAccounts(storage);
@@ -103,8 +103,6 @@ export function forgetAccount(id, storage) {
   return writeAccounts(state, storage);
 }
 
-// --- разговор с сервером -----------------------------------------------------------------------
-
 async function post(path, body = {}, { fetchImpl = globalThis.fetch } = {}) {
   const response = await fetchImpl(path, {
     method: 'POST',
@@ -126,7 +124,8 @@ function serverAccount(data, fallbackSecret = '') {
     networkTicket: data.networkTicket || null,
     identities: data.identities || [],
     records: data.records || [],
-    progress: data.progress || null
+    progress: data.progress || null,
+    inventory: data.inventory || null
   };
 }
 
@@ -150,8 +149,6 @@ export async function createAccount(name, options) {
     records: data.records || [],
     progress: data.progress || null
   };
-  // Создание старым endpoint остаётся обратно совместимым, но тут же меняем recovery credential
-  // на нормальную server session. Если Auth V2 временно недоступен, аккаунт всё равно создан.
   try {
     return (await loginAccount(created.secret, options)) || created;
   } catch {
@@ -188,6 +185,11 @@ export async function submitRecord({ mode, courseKey, timeMs }, options) {
   return ok ? data : null;
 }
 
+export async function equipAccountCosmetic(slot, cosmeticId, options) {
+  const { ok, data } = await post('/api/cosmetics/equip', { slot, cosmeticId }, options);
+  return ok ? data.inventory || null : null;
+}
+
 export async function ensureAccount(options = {}) {
   const { storage } = options;
   const stored = currentAccount(storage);
@@ -199,10 +201,6 @@ export async function ensureAccount(options = {}) {
     }
   };
 
-  // Cookie — самый дешёвый и безопасный путь. Но пользователь мог только что выбрать ДРУГОЙ
-  // сохранённый аккаунт: тогда cookie ещё принадлежит прошлому аккаунту, и она не должна отменять
-  // явный выбор. В таком случае ниже выполняется recovery login выбранного аккаунта и cookie
-  // заменяется новой server session.
   const session = await quiet(() => sessionAccount(options));
   const sessionMatchesSelection = session && !session.missing && (!stored || stored.id === session.id);
   if (sessionMatchesSelection) {
@@ -234,13 +232,9 @@ export async function ensureAccount(options = {}) {
       return { account: stored, records: [], online: false };
     }
   } else if (stored) {
-    // Google-only identity без подходящей живой cookie. Играть офлайн можно; кнопка Google
-    // восстановит сессию выбранного аккаунта.
     return { account: stored, records: [], online: false };
   }
 
-  // Cookie могла пережить очистку localStorage. Даже без локального recovery code такая session
-  // всё ещё валидна для игры на этом устройстве — используем её, но не записываем секрет в браузер.
   if (session && !session.missing) {
     return {
       account: session,

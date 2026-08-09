@@ -14,10 +14,7 @@ http.ServerResponse.prototype.setHeader = function authV2SetHeader(name, value) 
   if (String(name).toLowerCase() === 'content-security-policy' && typeof value === 'string') {
     let policy = value
       .replace("script-src 'self'", "script-src 'self' https://accounts.google.com")
-      .replace(
-        "connect-src 'self' ws: wss:",
-        "connect-src 'self' ws: wss: https://accounts.google.com"
-      );
+      .replace("connect-src 'self' ws: wss:", "connect-src 'self' ws: wss: https://accounts.google.com");
     if (!policy.includes('frame-src ')) policy += '; frame-src https://accounts.google.com';
     return setHeader.call(this, name, policy);
   }

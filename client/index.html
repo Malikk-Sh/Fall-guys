@@ -164,6 +164,9 @@
           <button id="quality" class="icon-button" aria-label="Изменить качество графики">
             АВТО КАЧЕСТВО
           </button>
+          <button id="openSettings" class="icon-button" aria-label="Настройки управления">
+            УПРАВЛЕНИЕ
+          </button>
           <span id="controlHint">WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА</span>
         </div>
       </section>
@@ -208,6 +211,18 @@
         </div>
 
         <p id="accountStatus" class="status-line" role="status"></p>
+      </div>
+    </section>
+
+    <!-- Экран настроек управления. Содержимое собирается из схемы в client/core/settings.js —
+         добавление настройки не требует правки этой разметки. -->
+    <section id="settings" class="screen center-screen hidden">
+      <div class="settings-card glass" role="dialog" aria-label="Настройки управления">
+        <button id="settingsClose" class="close-button" aria-label="Закрыть">×</button>
+        <span class="eyebrow">УПРАВЛЕНИЕ</span>
+        <div id="settingsBody" class="settings-body"></div>
+        <p id="settingsStatus" class="status-line" role="status"></p>
+        <button id="settingsReset" class="button button-secondary">СБРОСИТЬ ВСЁ</button>
       </div>
     </section>
 
@@ -287,6 +302,9 @@
     </div>
 
     <div id="touch" class="touch-ui hidden">
+      <!-- Зона плавающего джойстика: ловит касание там, где его сделали, и ставит джойстик под
+           палец. У фиксированного джойстика зона прозрачна для касаний, и всё работает как раньше. -->
+      <div id="stickZone" class="stick-zone" aria-hidden="true"></div>
       <div id="stick" class="stick" aria-label="Джойстик движения"><i></i><span>БЕГ</span></div>
       <button id="recenter" class="recenter" aria-label="Посмотреть за спину">⌖</button>
       <button id="cameraMode" class="recenter camera-mode" aria-label="Режим камеры">◲</button>

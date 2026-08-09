@@ -1,7 +1,24 @@
+import { DEFAULT_BINDINGS } from './settings.js';
+
+// Клавиши, которые браузер понимает по-своему: пробел листает страницу, стрелки её прокручивают.
+// Отменять их поведение можно только когда они действительно назначены на действие в игре, иначе
+// игра сломала бы прокрутку в меню ради клавиши, которую сама не использует.
+const SCROLLING_KEYS = new Set(['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
+// Действия, у которых есть длительный режим: важен не только момент нажатия, но и то, что кнопку
+// всё ещё держат.
+const HOLD_ACTIONS = new Set(['jump', 'dive']);
+
+// Доля экрана под джойстик. Всё, что вне её, отдано обзору — и наоборот. Число то же, что стояло
+// в прежней жёсткой проверке `clientX < innerWidth * 0.34`; изменилось лишь то, что теперь оно
+// умеет считаться от правого края.
+const STICK_ZONE_WIDTH = 0.34;
+
 export class InputManager {
-  constructor(canvas, root = document) {
+  constructor(canvas, root = document, settings = null) {
     this.canvas = canvas;
     this.root = root;
+    this.settings = settings;
     this.keys = new Set();
     this.moveX = 0;
     this.moveForward = 0;
@@ -15,15 +32,30 @@ export class InputManager {
     this.cameraY = 0;
     this.touchCapable = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 0;
     this.activeMethod = this.touchCapable ? 'touch' : 'keyboard';
+    // Способ ввода проставляется сразу, а не только при первой смене. Стили и разделы интерфейса
+    // на него смотрят с первого кадра: без этого раздел переназначения клавиш висел бы на
+    // телефоне до тех пор, пока к нему не подключат клавиатуру.
+    if (globalThis.document?.body) document.body.dataset.input = this.activeMethod;
     this.enabled = false;
+
+    // Обратный указатель «код клавиши → действие». Пересобирается при смене раскладки: искать
+    // действие перебором всех привязок на каждое нажатие незачем.
+    this.byCode = new Map();
+    this.rebind();
+    settings?.subscribe((_values, key) => {
+      if (key === null || key === 'keys') this.rebind();
+    });
+
     this.onKeyDown = e => {
-      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code) && this.enabled)
-        e.preventDefault();
+      const action = this.byCode.get(e.code);
+      if (action && SCROLLING_KEYS.has(e.code) && this.enabled) e.preventDefault();
       this.keys.add(e.code);
-      if (!e.repeat && e.code === 'Space') this.jumpQueued = true;
-      if (!e.repeat && (e.code === 'ShiftLeft' || e.code === 'ShiftRight')) this.diveQueued = true;
-      if (e.code === 'KeyR') this.recenterQueued = true;
-      if (!e.repeat && e.code === 'KeyC') this.cameraModeQueued = true;
+      if (!action) return;
+      // Повтор от зажатой клавиши — не новое нажатие: иначе удержание прыжка превращалось бы в
+      // очередь из тридцати прыжков в секунду.
+      if (!e.repeat && (action === 'jump' || action === 'dive' || action === 'cameraMode'))
+        this[`${action}Queued`] = true;
+      if (action === 'recenter') this.recenterQueued = true;
       this.setMethod('keyboard');
     };
     this.onKeyUp = e => this.keys.delete(e.code);
@@ -31,15 +63,50 @@ export class InputManager {
     addEventListener('keyup', this.onKeyUp);
     this.setupPointers();
   }
+
+  bindings() {
+    return this.settings?.get('keys') || DEFAULT_BINDINGS;
+  }
+
+  rebind() {
+    this.byCode = new Map();
+    for (const [action, codes] of Object.entries(this.bindings()))
+      for (const code of codes) this.byCode.set(code, action);
+  }
+
+  // Нажата ли хоть одна клавиша, назначенная на действие.
+  pressed(action) {
+    for (const code of this.bindings()[action] || []) if (this.keys.has(code)) return true;
+    return false;
+  }
+
+  // С какой стороны экрана джойстик. Всё, что зависит от руки, спрашивает это, а не настройку
+  // напрямую: правило «джойстик слева» задано в одном месте.
+  get leftHanded() {
+    return (this.settings?.get('hand') || 'left') === 'left';
+  }
+
+  get floatingStick() {
+    return this.settings?.get('stickMode') === 'floating';
+  }
+
+  // Попадает ли точка в зону джойстика. Обзор работает во всей остальной части экрана.
+  inStickZone(clientX) {
+    const width = globalThis.innerWidth || 1280;
+    return this.leftHanded ? clientX < width * STICK_ZONE_WIDTH : clientX > width * (1 - STICK_ZONE_WIDTH);
+  }
+
   setMethod(method) {
     if (this.activeMethod === method) return;
     this.activeMethod = method;
     document.body.dataset.input = method;
     dispatchEvent(new CustomEvent('inputmethodchange', { detail: method }));
   }
+
   setupPointers() {
     const stick = this.root.querySelector('#stick'),
       nub = stick.querySelector('i'),
+      zone = this.root.querySelector('#stickZone'),
       jump = this.root.querySelector('#jump'),
       dive = this.root.querySelector('#dive'),
       recenter = this.root.querySelector('#recenter'),
@@ -48,39 +115,82 @@ export class InputManager {
       lookId = null,
       lastX = 0,
       lastY = 0;
+
+    // Центр джойстика в координатах окна. У фиксированного он там, где его нарисовал CSS; у
+    // плавающего — там, где палец коснулся экрана, и запоминается на всё касание. Считать центр
+    // по getBoundingClientRect на каждое движение нельзя: плавающий джойстик сам двигается вслед
+    // за пальцем и утаскивал бы отсчёт за собой.
+    let centerX = 0,
+      centerY = 0,
+      radius = 45;
+
+    const placeFloating = (x, y) => {
+      stick.style.left = `${x}px`;
+      stick.style.top = `${y}px`;
+      stick.style.right = 'auto';
+      stick.style.bottom = 'auto';
+    };
+    const clearFloating = () => {
+      stick.style.left = stick.style.top = stick.style.right = stick.style.bottom = '';
+    };
+
+    const beginStick = (e, floating) => {
+      if (!this.enabled) return;
+      e.preventDefault();
+      this.setMethod('touch');
+      stickId = e.pointerId;
+      if (floating) placeFloating(e.clientX, e.clientY);
+      const r = stick.getBoundingClientRect();
+      centerX = floating ? e.clientX : r.left + r.width / 2;
+      centerY = floating ? e.clientY : r.top + r.height / 2;
+      radius = r.width * 0.34;
+      stick.classList.add('active');
+      // Палец ловится на элементе, который его получил: у плавающего джойстика это зона, и захват
+      // на самом джойстике потерял бы движение, вышедшее за его пределы.
+      (floating ? zone : stick).setPointerCapture?.(e.pointerId);
+      moveStick(e);
+    };
+
     const moveStick = e => {
       if (e.pointerId !== stickId) return;
-      const r = stick.getBoundingClientRect(),
-        dx = e.clientX - (r.left + r.width / 2),
-        dy = e.clientY - (r.top + r.height / 2),
-        radius = r.width * 0.34,
+      const dx = e.clientX - centerX,
+        dy = e.clientY - centerY,
         length = Math.hypot(dx, dy) || 1,
         scale = Math.min(1, radius / length);
       this.moveX = (dx * scale) / radius;
       this.moveForward = (-dy * scale) / radius;
       nub.style.transform = `translate(${dx * scale}px,${dy * scale}px)`;
     };
+
     const endStick = e => {
       if (e.pointerId !== stickId) return;
       stickId = null;
       this.moveX = this.moveForward = 0;
       nub.style.transform = '';
       stick.classList.remove('active');
+      if (this.floatingStick) clearFloating();
     };
+
     stick.addEventListener('pointerdown', e => {
-      if (!this.enabled) return;
-      e.preventDefault();
-      this.setMethod('touch');
-      stickId = e.pointerId;
-      stick.setPointerCapture?.(e.pointerId);
-      stick.classList.add('active');
-      moveStick(e);
+      // У плавающего джойстика нажатие обрабатывает зона: иначе касание точно по нарисованному
+      // джойстику пошло бы двумя путями сразу.
+      if (this.floatingStick) return;
+      beginStick(e, false);
     });
     stick.addEventListener('pointermove', moveStick);
     stick.addEventListener('pointerup', endStick);
     stick.addEventListener('pointercancel', endStick);
-    // hold — имя удерживаемого действия, если у кнопки есть длительный режим. Планирование ИСКРЫ
-    // и удержание луча требуют знать не только момент нажатия, но и что кнопку всё ещё держат.
+
+    zone.addEventListener('pointerdown', e => {
+      if (!this.floatingStick || !this.inStickZone(e.clientX)) return;
+      beginStick(e, true);
+    });
+    zone.addEventListener('pointermove', moveStick);
+    zone.addEventListener('pointerup', endStick);
+    zone.addEventListener('pointercancel', endStick);
+
+    // hold — имя удерживаемого действия, если у кнопки есть длительный режим. Планирование в
+    // падении требует знать не только момент нажатия, но и что кнопку всё ещё держат.
     const action = (element, key, hold = null) => {
       element.addEventListener('pointerdown', e => {
         if (!this.enabled) return;
@@ -104,10 +214,11 @@ export class InputManager {
     action(dive, 'diveQueued', 'dive');
     action(recenter, 'recenterQueued');
     action(cameraMode, 'cameraModeQueued');
+
     this.canvas.addEventListener('contextmenu', e => e.preventDefault());
     this.canvas.addEventListener('pointerdown', e => {
       if (!this.enabled) return;
-      if (e.pointerType === 'touch' && e.clientX < innerWidth * 0.34) return;
+      if (e.pointerType === 'touch' && this.inStickZone(e.clientX)) return;
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 2) return;
       lookId = e.pointerId;
       lastX = e.clientX;
@@ -129,18 +240,16 @@ export class InputManager {
     this.canvas.addEventListener('pointerup', endLook);
     this.canvas.addEventListener('pointercancel', endLook);
   }
+
   update() {
     if (this.activeMethod !== 'touch') {
-      this.moveX =
-        (this.keys.has('KeyD') || this.keys.has('ArrowRight') ? 1 : 0) -
-        (this.keys.has('KeyA') || this.keys.has('ArrowLeft') ? 1 : 0);
-      this.moveForward =
-        (this.keys.has('KeyW') || this.keys.has('ArrowUp') ? 1 : 0) -
-        (this.keys.has('KeyS') || this.keys.has('ArrowDown') ? 1 : 0);
+      this.moveX = (this.pressed('right') ? 1 : 0) - (this.pressed('left') ? 1 : 0);
+      this.moveForward = (this.pressed('forward') ? 1 : 0) - (this.pressed('back') ? 1 : 0);
     }
-    if (this.keys.has('KeyQ')) this.cameraX -= 2.6;
-    if (this.keys.has('KeyE')) this.cameraX += 2.6;
+    if (this.pressed('cameraLeft')) this.cameraX -= 2.6;
+    if (this.pressed('cameraRight')) this.cameraX += 2.6;
   }
+
   movement() {
     const length = Math.hypot(this.moveX, this.moveForward);
     return {
@@ -149,25 +258,34 @@ export class InputManager {
       magnitude: Math.min(1, length)
     };
   }
+
   // Удерживается ли действие прямо сейчас, в отличие от consume(), который срабатывает один раз.
   // Нужен для длительных действий — сейчас это планирование в падении (удержанный прыжок).
   isHeld(action) {
-    if (action === 'jump') return this.keys.has('Space') || this.holding.jump === true;
-    if (action === 'dive')
-      return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight') || this.holding.dive === true;
-    return false;
+    if (!HOLD_ACTIONS.has(action)) return false;
+    return this.pressed(action) || this.holding[action] === true;
   }
+
   consume(action) {
     const key = `${action}Queued`,
       value = !!this[key];
     this[key] = false;
     return value;
   }
+
+  // Смещение обзора за кадр, уже с учётом чувствительности и инверсии. Раньше здесь отдавались
+  // сырые пиксели, а множитель жил в камере — но обзор двигают и клавиши, и палец, и настройка
+  // относится к обоим. Место, где сходятся оба источника, ровно одно: здесь.
   consumeCamera() {
-    const result = { x: this.cameraX, y: this.cameraY };
+    const scale = this.settings?.lookScale ?? 1;
+    const result = {
+      x: this.cameraX * scale * (this.settings?.get('invertX') ? -1 : 1),
+      y: this.cameraY * scale * (this.settings?.get('invertY') ? -1 : 1)
+    };
     this.cameraX = this.cameraY = 0;
     return result;
   }
+
   reset() {
     this.moveX = this.moveForward = this.cameraX = this.cameraY = 0;
     this.jumpQueued = this.diveQueued = this.recenterQueued = this.cameraModeQueued = false;

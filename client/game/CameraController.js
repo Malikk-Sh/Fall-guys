@@ -26,8 +26,12 @@ export const CAMERA_MODES = ['follow', 'free'];
 const STORAGE_KEY = 'wobble-camera-mode';
 
 export class CameraController {
-  constructor(camera) {
+  // `settings` — настройки управления. Отсюда берутся сила тряски и решение про уменьшенную
+  // анимацию; чувствительность и инверсия осей учтены раньше, во вводе, потому что обзор двигают
+  // и палец, и клавиши, и сходятся оба источника именно там.
+  constructor(camera, settings = null) {
     this.camera = camera;
+    this.settings = settings;
     this.mode = CameraController.storedMode();
     this.yaw = 0;
     this.pitch = 0.08;
@@ -42,7 +46,6 @@ export class CameraController {
 
     // Тряска экрана: сила затухает со временем, смещение накладывается на итоговую позицию камеры.
     this.shake = 0;
-    this.reducedMotion = !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
     // Переиспользуемые векторы — чтобы не создавать мусор каждый кадр.
     this._forward = new THREE.Vector3();
@@ -83,14 +86,23 @@ export class CameraController {
     }
   }
 
+  // Во сколько раз трясти. Ноль — не трясти вовсе: и по регулятору, и по просьбе уменьшить
+  // анимацию. Спрашивается каждый раз, а не запоминается при создании: настройку меняют посреди
+  // игры, и камера, узнавшая о ней только при следующем запуске, — это невыполненная просьба.
+  get shakeScale() {
+    return this.settings ? this.settings.shakeScale : 1;
+  }
+
   // Вызывается при ударах, жёстких приземлениях и запусках катапульты.
   addShake(strength) {
-    if (this.reducedMotion) return;
-    this.shake = Math.min(1, this.shake + strength);
+    const scale = this.shakeScale;
+    if (scale <= 0) return;
+    this.shake = Math.min(1, this.shake + strength * scale);
   }
 
   // `partner` — позиция напарника в кооп-режиме либо null.
   update(dt, player, input, course, partner = null) {
+    // Смещение приходит уже с учётом чувствительности и инверсии — их применяет ввод.
     const orbit = input.consumeCamera();
     if (Math.abs(orbit.x) + Math.abs(orbit.y) > 0.01) {
       const sensitivity = this.mobile ? 0.0062 : 0.0046;

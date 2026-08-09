@@ -24,6 +24,8 @@ import { RaceSession } from './game/RaceSession.js';
 import { CoopSession } from './game/CoopSession.js';
 import { CoopController } from './game/CoopController.js';
 import { AccountFlow } from './core/AccountFlow.js';
+import { Settings } from './core/settings.js';
+import { SettingsPanel } from './ui/settingsPanel.js';
 
 // Шаг физики. 60 Гц — компромисс: достаточно часто, чтобы столкновения не «протыкались», и
 // достаточно редко, чтобы на слабых устройствах хватало времени на отрисовку.
@@ -42,7 +44,11 @@ class Game {
   constructor() {
     this.ui = new UI();
     this.canvas = document.querySelector('#game');
-    this.input = new InputManager(this.canvas);
+    // Настройки создаются до ввода и камеры: обе спрашивают их с первого кадра, а применить
+    // раскладку задним числом — значит показать игроку чужую и переставить у него под руками.
+    this.settings = new Settings();
+    this.settings.apply();
+    this.input = new InputManager(this.canvas, document, this.settings);
     this.input.enabled = false;
     this.state = new StateRouter(this, createAppStates());
     this.session = new RaceSession();
@@ -66,11 +72,14 @@ class Game {
 
     this.createRenderer();
     this.createScene();
-    this.cameraController = new CameraController(this.camera);
+    this.cameraController = new CameraController(this.camera, this.settings);
     this.postFX = new PostFX(this.renderer, this.scene, this.camera, this.detectQuality());
     this.effects = new Effects(this.scene, this.detectQuality());
 
     bindMenu(this);
+    // Панель создаётся после привязки меню: её кнопка живёт в подвале меню, и порядок здесь —
+    // не эстетика, а условие того, что кнопка вообще найдётся.
+    this.settingsPanel = new SettingsPanel(this.settings);
     this.installAudioUnlock();
     this.installLifecycle();
 
@@ -325,6 +334,7 @@ class Game {
       color: myColor,
       accent: COLORS.yellow,
       sfx: this.sfx,
+      haptics: this.settings,
       // Модификатор дня меняет и мир, и управление. Мир его читает из spec сам, а игроку правило
       // передаётся здесь — одним источником, чтобы описание в лобби и ощущение в забеге не разошлись.
       modifier: this.course.spec.modifier || null,

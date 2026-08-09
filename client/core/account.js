@@ -199,10 +199,13 @@ export async function ensureAccount(options = {}) {
     }
   };
 
-  // Cookie — самый дешёвый и безопасный путь. Он работает и для Google-only аккаунта, где recovery
-  // code на этом устройстве вообще никогда не появлялся.
+  // Cookie — самый дешёвый и безопасный путь. Но пользователь мог только что выбрать ДРУГОЙ
+  // сохранённый аккаунт: тогда cookie ещё принадлежит прошлому аккаунту, и она не должна отменять
+  // явный выбор. В таком случае ниже выполняется recovery login выбранного аккаунта и cookie
+  // заменяется новой server session.
   const session = await quiet(() => sessionAccount(options));
-  if (session && !session.missing) {
+  const sessionMatchesSelection = session && !session.missing && (!stored || stored.id === session.id);
+  if (sessionMatchesSelection) {
     const secret = stored?.id === session.id ? stored.secret : '';
     const account = { ...session, ...(secret ? { secret } : {}) };
     rememberAccount(account, storage);
@@ -231,8 +234,20 @@ export async function ensureAccount(options = {}) {
       return { account: stored, records: [], online: false };
     }
   } else if (stored) {
-    // Google-only identity без живой cookie. Играть офлайн можно; кнопка Google восстановит сессию.
+    // Google-only identity без подходящей живой cookie. Играть офлайн можно; кнопка Google
+    // восстановит сессию выбранного аккаунта.
     return { account: stored, records: [], online: false };
+  }
+
+  // Cookie могла пережить очистку localStorage. Даже без локального recovery code такая session
+  // всё ещё валидна для игры на этом устройстве — используем её, но не записываем секрет в браузер.
+  if (session && !session.missing) {
+    return {
+      account: session,
+      records: session.records,
+      progress: session.progress,
+      online: true
+    };
   }
 
   const created = await quiet(() => createAccount(options.name, options));

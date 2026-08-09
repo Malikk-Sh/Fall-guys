@@ -34,19 +34,15 @@ class InventoryService {
     const id = String(accountId || '');
     if (!this.statements.account.get(id)) return null;
     this.ensureLoadout(id, now);
-    this.grant(id, 'body-mint', 'default', now);
+    this.grant(id, 'classic', 'default', now);
 
     const progress = this.accounts.progress(id);
     const achievements = new Set((progress?.achievements || []).map(item => item.id));
-    const stats = this.statements.stats.get(id) || {};
-
-    if (achievements.has('campaign_complete')) {
-      this.grant(id, 'body-sunset', 'achievement', now);
-      this.grant(id, 'finish-champion', 'campaign', now);
+    for (const cosmetic of COSMETIC_CATALOG) {
+      if (cosmetic.achievement && achievements.has(cosmetic.achievement)) {
+        this.grant(id, cosmetic.id, `achievement:${cosmetic.achievement}`, now);
+      }
     }
-    if ((stats.flawless_completions || 0) >= 3) this.grant(id, 'head-crown', 'achievement', now);
-    if ((stats.coop_matches_completed || 0) >= 12) this.grant(id, 'trail-spark', 'achievement', now);
-    if ((stats.best_streak || 0) >= 3) this.grant(id, 'finish-stars', 'achievement', now);
 
     return this.profile(id);
   }
@@ -66,17 +62,17 @@ class InventoryService {
   }
 
   owns(accountId, cosmeticId) {
-    if (cosmeticId === 'none') return true;
+    if (cosmeticId == null) return true;
     return Boolean(this.statements.owns.get(String(accountId || ''), String(cosmeticId || '')));
   }
 
   equip(accountId, slot, cosmeticId, now = Date.now()) {
     const id = String(accountId || '');
     const safeSlot = String(slot || '');
-    const safeCosmetic = String(cosmeticId || '');
+    const safeCosmetic = cosmeticId == null || cosmeticId === '' ? null : String(cosmeticId);
     if (!COSMETIC_SLOTS.includes(safeSlot)) return { ok: false, reason: 'unknown-slot' };
-    if (safeSlot === 'body' && safeCosmetic === 'none') return { ok: false, reason: 'body-required' };
-    if (safeCosmetic !== 'none') {
+    if (safeSlot === 'body' && !safeCosmetic) return { ok: false, reason: 'body-required' };
+    if (safeCosmetic) {
       const cosmetic = COSMETIC_BY_ID[safeCosmetic];
       if (!cosmetic || cosmetic.slot !== safeSlot) return { ok: false, reason: 'wrong-slot' };
       if (!this.owns(id, safeCosmetic)) return { ok: false, reason: 'not-owned' };
@@ -93,7 +89,7 @@ class InventoryService {
 
   profile(accountId) {
     const id = String(accountId || '');
-    this.ensureLoadout(id);
+    if (!this.ensureLoadout(id)) return null;
     const owned = this.owned(id);
     return {
       owned,
@@ -107,11 +103,6 @@ class InventoryService {
 function prepare(db) {
   const statements = {
     account: db.prepare('SELECT id FROM accounts WHERE id = ?'),
-    stats: db.prepare(`
-      SELECT flawless_completions, coop_matches_completed, best_streak
-      FROM account_stats
-      WHERE account_id = ?
-    `),
     insertCosmetic: db.prepare(`
       INSERT OR IGNORE INTO account_cosmetics (account_id, cosmetic_id, unlocked_at, source)
       VALUES (?, ?, ?, ?)
@@ -124,10 +115,13 @@ function prepare(db) {
     `),
     owns: db.prepare('SELECT 1 FROM account_cosmetics WHERE account_id = ? AND cosmetic_id = ?'),
     insertLoadout: db.prepare(`
-      INSERT OR IGNORE INTO account_loadout (account_id, body, head, trail, finish, updated_at)
-      VALUES (?, 'body-mint', 'none', 'none', 'none', ?)
+      INSERT OR IGNORE INTO account_loadout
+        (account_id, body, visor, antenna, trail, finish, updated_at)
+      VALUES (?, 'classic', NULL, NULL, NULL, NULL, ?)
     `),
-    loadout: db.prepare('SELECT body, head, trail, finish FROM account_loadout WHERE account_id = ?')
+    loadout: db.prepare(
+      'SELECT body, visor, antenna, trail, finish FROM account_loadout WHERE account_id = ?'
+    )
   };
   for (const slot of COSMETIC_SLOTS) {
     statements[`equip_${slot}`] = db.prepare(

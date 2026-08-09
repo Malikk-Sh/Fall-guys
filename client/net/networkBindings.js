@@ -12,6 +12,20 @@ import * as THREE from 'three';
 import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { APP_STATE } from '../core/AppStates.js';
 
+function syncCoopCampaignResult(message) {
+  if (message.mode !== GAME_MODE.COOP || message.hasNextChapter !== false) return;
+
+  // Финальная глава не должна предлагать «следующую»: главы 11 нет, а сервер в этом случае
+  // повторил бы ch10. Флаг приходит и в MATCH_RESULTS, и в последующих ROOM_STATE, поэтому
+  // применяем состояние после обоих типов сообщений — голос другого игрока не вернёт кнопку.
+  document.querySelector('#nextChapter')?.classList.add('hidden');
+
+  const eyebrow = document.querySelector('#finishEyebrow');
+  if (eyebrow) eyebrow.textContent = 'КАМПАНИЯ ЗАВЕРШЕНА';
+  const title = document.querySelector('#finishTitle');
+  if (title) title.textContent = 'КАМПАНИЯ ПРОЙДЕНА!';
+}
+
 export function bindNetwork(game) {
   game.net.on('matchmakingWaiting', message => {
     if (message.cancelled) {
@@ -41,8 +55,11 @@ export function bindNetwork(game) {
     game.coopControl.refreshSolo();
     game.ready = message.players.find(p => p.id === game.net.id)?.ready || false;
 
-    if (message.state === ROOM_STATE.RESULTS)
-      return game.ui.updateResultRoom(message, game.net.id, game.net.serverNow());
+    if (message.state === ROOM_STATE.RESULTS) {
+      game.ui.updateResultRoom(message, game.net.id, game.net.serverNow());
+      syncCoopCampaignResult(message);
+      return;
+    }
     // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
     if (message.state !== ROOM_STATE.LOBBY) return;
 
@@ -115,7 +132,10 @@ export function bindNetwork(game) {
   game.net.on('coopEvent', message => game.coopControl.receiveCoopEvent(message));
   game.net.on('coopPing', message => game.coopControl.receivePing(message));
   game.net.on('finish', message => game.receiveFinish(message));
-  game.net.on('results', message => game.receiveResults(message));
+  game.net.on('results', message => {
+    game.receiveResults(message);
+    syncCoopCampaignResult(message);
+  });
 
   // Сервер снял зачёт: кто-то оборвался или вышел. Говорим об этом сразу, а не на финише —
   // игрок вправе знать, что бежит уже не за рекорд, до того как добежит.

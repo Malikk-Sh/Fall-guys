@@ -52,6 +52,10 @@ export class Player {
     this.course = course;
     this.effects = effects;
     this.sfx = options.sfx || null;
+    // Вибрация идёт рядом со звуком, но своим путём: у неё свой регулятор и свой ноль. На
+    // беззвучном телефоне она — единственная обратная связь, а глухому игроку нужна тем более,
+    // поэтому выключенный звук её выключать не должен.
+    this.haptics = options.haptics || null;
     this.character = new Character(scene, options);
 
     this.velocity = new THREE.Vector3();
@@ -150,6 +154,7 @@ export class Player {
       this.jumpBuffer = 0;
       this.effects.burst(this._scratch.copy(this.physics).setY(this.physics.y - 0.3), COLORS.white, 8, 0.72);
       this.sfx?.jump();
+      this.haptics?.vibrate(0.32);
     }
 
     if (input.consume('dive') && this.diveCooldown <= 0) {
@@ -171,6 +176,7 @@ export class Player {
       this.dashes++;
       this.effects.burst(this.physics, COLORS.yellow, 12, 1);
       this.sfx?.dive();
+      this.haptics?.vibrate(0.5);
     }
 
     const maxSpeed = this.diveTimer > 0 ? DIVE_SPEED * this.tuning.dash : RUN_SPEED;
@@ -218,6 +224,7 @@ export class Player {
           0.55
         );
         this.sfx?.land(strength);
+        this.haptics?.vibrate(strength * 0.8);
         // Жёсткое приземление ощущается ударом — мягкое не должно трясти экран вовсе.
         if (strength > 0.45) this.impact = Math.max(this.impact, (strength - 0.45) * 0.6);
       }
@@ -252,6 +259,7 @@ export class Player {
       this.spawn.copy(this.course.spawnFor(next));
       this.effects.burst(this.physics, COLORS.mint, 18, 1);
       this.sfx?.checkpoint();
+      this.haptics?.vibrate(0.7);
       this.onCheckpoint(next);
     }
 
@@ -267,6 +275,7 @@ export class Player {
       this.velocity.set(0, 0, 0);
       this.effects.burst(this.physics, COLORS.yellow, 30, 1.25);
       this.sfx?.finish();
+      this.haptics?.vibrate(1);
       this.onFinish();
     }
   }
@@ -337,6 +346,7 @@ export class Player {
     this.grounded = false;
     this.character.visual.scale.set(1.35, 0.72, 1.35);
     this.sfx?.respawn();
+    this.haptics?.vibrate(0.6);
     if (notify) this.onRespawn(this.checkpoint);
   }
 

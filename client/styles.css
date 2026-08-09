@@ -13,6 +13,15 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+
+  /* Настройки управления. Значения здесь — умолчания и адаптивные, их же переопределяют
+     медиазапросы ниже. Игрок, тронувший регулятор, переопределяет их инлайновым стилем на body
+     (см. Settings.apply): выбор человека сильнее брейкпоинта, а брейкпоинт — сильнее умолчания. */
+  --stick-size: 132px;
+  --stick-opacity: 1;
+  --ui-scale: 1;
+  --action-size: 92px;
+  --dive-size: 72px;
 }
 * {
   box-sizing: border-box;
@@ -705,13 +714,36 @@ canvas {
   inset: 0;
   pointer-events: none;
 }
+/* Зона плавающего джойстика. Для касаний прозрачна, пока джойстик фиксированный: тогда всё
+   работает ровно как раньше, а холст сам решает, что нижняя треть — не обзор. */
+.stick-zone {
+  position: absolute;
+  bottom: 0;
+  width: 34%;
+  height: 62%;
+  pointer-events: none;
+  touch-action: none;
+}
+body[data-hand='left'] .stick-zone {
+  left: 0;
+}
+body[data-hand='right'] .stick-zone {
+  right: 0;
+}
+body[data-stick='floating'] .stick-zone {
+  pointer-events: auto;
+}
 .stick {
   position: absolute;
   pointer-events: auto;
   left: calc(18px + var(--safe-left));
   bottom: calc(20px + var(--safe-bottom));
-  width: 132px;
-  height: 132px;
+  /* Размером интерфейса джойстик намеренно не масштабируется: у него есть собственный регулятор,
+     и два множителя на одно и то же дают 320 пикселей при обоих ползунках вправо — размер, при
+     котором джойстик закрывает игру. Кнопки действий масштаб слушают: своей настройки у них нет. */
+  width: var(--stick-size);
+  height: var(--stick-size);
+  opacity: var(--stick-opacity);
   border-radius: 50%;
   background: radial-gradient(circle, #fff1 0 33%, #28196658 35%);
   border: 3px solid #ffffff72;
@@ -719,12 +751,36 @@ canvas {
   transition: opacity 0.2s;
   touch-action: none;
 }
+/* Джойстик справа — для тех, кто держит телефон иначе. Кнопки действий уезжают налево, и вместе
+   с ними меняется сторона, которую холст отдаёт под обзор (см. InputManager.inStickZone). */
+body[data-hand='right'] .stick {
+  left: auto;
+  right: calc(18px + var(--safe-right));
+}
+/* Плавающий джойстик появляется под пальцем: JS ставит left/top в точку касания, здесь остаётся
+   сдвинуть его на половину собственного размера, чтобы центр совпал с пальцем. Пока его не
+   держат — он невидим, иначе на экране болталось бы кольцо там, где игрок случайно ткнул. */
+body[data-stick='floating'] .stick {
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    transform 0s;
+}
+body[data-stick='floating'] .stick.active {
+  opacity: var(--stick-opacity);
+}
+body[data-stick='floating'] .stick span {
+  display: none;
+}
+/* Размеры пятака заданы долями, а не пикселями: джойстик теперь меняет размер, и жёсткие 52px
+   на маленьком джойстике вылезали бы за его край. */
 .stick i {
   position: absolute;
-  left: 38px;
-  top: 38px;
-  width: 52px;
-  height: 52px;
+  left: 29%;
+  top: 29%;
+  width: 39%;
+  height: 39%;
   border-radius: 50%;
   background: linear-gradient(#fff, #c9f9ff);
   border: 3px solid #ffffffd9;
@@ -767,16 +823,30 @@ canvas {
 .jump-button {
   right: calc(20px + var(--safe-right));
   bottom: calc(24px + var(--safe-bottom));
-  width: 92px;
-  height: 92px;
+  width: calc(var(--action-size) * var(--ui-scale));
+  height: calc(var(--action-size) * var(--ui-scale));
   background: linear-gradient(#ff6aa2, #ed347c);
 }
 .dive-button {
   right: calc(116px + var(--safe-right));
   bottom: calc(29px + var(--safe-bottom));
-  width: 72px;
-  height: 72px;
+  width: calc(var(--dive-size) * var(--ui-scale));
+  height: calc(var(--dive-size) * var(--ui-scale));
   background: linear-gradient(#765de3, #4f35bf);
+}
+/* Зеркальная раскладка: всё, что было справа, уезжает налево одним блоком. Отступы берутся от
+   своей безопасной зоны — на телефоне с вырезом левый и правый край разные. */
+body[data-hand='right'] .jump-button {
+  right: auto;
+  left: calc(20px + var(--safe-left));
+}
+body[data-hand='right'] .dive-button {
+  right: auto;
+  left: calc(116px + var(--safe-left));
+}
+body[data-hand='right'] .recenter {
+  right: auto;
+  left: calc(24px + var(--safe-left));
 }
 .recenter {
   position: absolute;
@@ -813,6 +883,11 @@ canvas {
   color: #fff9;
   text-shadow: 0 2px 4px #2a175d;
   transition: opacity 0.5s;
+}
+/* Подсказка про обзор висит над зоной обзора, а та меняет сторону вместе с джойстиком. */
+body[data-hand='right'] .look-hint {
+  right: auto;
+  left: calc(76px + var(--safe-left));
 }
 /* Плашка «без зачёта» на карточке финиша: заметная, но не празднующая — это не награда. */
 .unranked-note {
@@ -1112,24 +1187,17 @@ canvas {
   .finish-card {
     padding: 19px;
   }
-  .stick {
-    width: 120px;
-    height: 120px;
+  /* Размер задаётся переменной, а не width/height: инлайновый выбор игрока обязан её переписать,
+     а жёсткое правило отсюда он переписать бы не смог — специфичность у медиазапроса та же. */
+  :root {
+    --stick-size: 120px;
   }
-  .stick i {
-    left: 34px;
-    top: 34px;
-    width: 48px;
-    height: 48px;
-  }
-  .jump-button {
-    width: 84px;
-    height: 84px;
+  :root {
+    --action-size: 84px;
+    --dive-size: 66px;
   }
   .dive-button {
     right: calc(108px + var(--safe-right));
-    width: 66px;
-    height: 66px;
   }
 }
 @media (max-height: 590px) and (orientation: landscape) {
@@ -1185,25 +1253,18 @@ canvas {
   .player-list {
     max-height: 120px;
   }
+  :root {
+    --stick-size: 96px;
+    --action-size: 72px;
+    --dive-size: 58px;
+  }
   .stick {
-    width: 96px;
-    height: 96px;
     bottom: calc(10px + var(--safe-bottom));
   }
-  .stick i {
-    left: 27px;
-    top: 27px;
-    width: 39px;
-    height: 39px;
-  }
   .jump-button {
-    width: 72px;
-    height: 72px;
     bottom: calc(12px + var(--safe-bottom));
   }
   .dive-button {
-    width: 58px;
-    height: 58px;
     right: calc(97px + var(--safe-right));
     bottom: calc(15px + var(--safe-bottom));
   }
@@ -1635,4 +1696,178 @@ canvas {
   letter-spacing: 0.06em;
   /* Код переписывают с экрана — он должен переноситься, а не уезжать за край. */
   overflow-wrap: anywhere;
+}
+
+/* ==== Доступность: крупный интерфейс и уменьшенная анимация ==== */
+
+/* Крупный интерфейс.
+   zoom, а не transform: он увеличивает и область нажатия, а не только картинку — кнопка,
+   выглядящая большой, но нажимающаяся по-старому, была бы издевательством именно над тем, кому
+   этот режим нужен.
+   Масштабируются карточки и блоки, а не их контейнеры: у .screen и .hud задан inset/left+right,
+   и zoom растянул бы сам бокс шире экрана вместе с содержимым.
+   Экранное управление сюда намеренно не попадает: его геометрию считает JS в пикселях окна, и
+   масштабирование контейнера развело бы нарисованный джойстик с тем местом, где его ищет палец.
+   Кнопки и джойстик растут через calc(... * var(--ui-scale)) в своих правилах, оставаясь в тех же
+   координатах. */
+body.large-ui .hud-card,
+body.large-ui .hud-progress,
+body.large-ui .hud-leave,
+body.large-ui .menu-card,
+body.large-ui .lobby-card,
+body.large-ui .finish-card,
+body.large-ui .settings-card,
+body.large-ui .countdown,
+body.large-ui .checkpoint-banner,
+body.large-ui .coop-lesson {
+  zoom: var(--ui-scale);
+}
+
+/* Уменьшенная анимация по выбору игрока.
+   Медиазапросы prefers-reduced-motion выше никуда не деваются — они и есть режим «авто». Этот
+   класс добавляет то, чего медиазапрос дать не может: возможность попросить меньше движения
+   только в игре, не трогая всю систему, и наоборот — оставить анимацию в игре при включённой
+   системной настройке. Тряска камеры гасится отдельно, в Settings.shakeScale: она живёт не в CSS. */
+body.reduced-motion *,
+body.reduced-motion *::before,
+body.reduced-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* ==== Экран настроек управления ==== */
+.settings-card {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px);
+  overflow: auto;
+  border-radius: 27px;
+  padding: 24px;
+  text-align: left;
+}
+.settings-body {
+  display: grid;
+  gap: 16px;
+}
+.settings-group {
+  display: grid;
+  gap: 9px;
+  padding-top: 13px;
+  border-top: 1px solid #ffffff17;
+}
+.settings-group:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.settings-group h3 {
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.17em;
+  color: var(--yellow);
+}
+.settings-note {
+  margin: -4px 0 2px;
+  font-size: 10px;
+  line-height: 1.45;
+  color: #b0abd8;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+}
+/* У ползунка три колонки: подпись, сам ползунок и значение. Значение шириной в фиксированные
+   52px, иначе строка дёргается при каждом движении пальца — «5 %» и «100 %» разной ширины. */
+.settings-row:has(input[type='range']) {
+  grid-template-columns: 1fr minmax(96px, 1.1fr) 52px;
+}
+.settings-label {
+  font-size: 11px;
+  font-weight: 800;
+  color: #ded9ff;
+}
+.settings-value {
+  font-size: 10px;
+  text-align: right;
+  color: var(--cyan);
+}
+.settings-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--cyan);
+}
+.settings-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+.settings-choice button,
+.settings-toggle,
+.settings-key {
+  border: 1px solid #ffffff2e;
+  border-radius: 9px;
+  padding: 7px 10px;
+  min-height: 32px;
+  background: #ffffff10;
+  color: #ddd8ff;
+  font-size: 9.5px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: 0.15s;
+}
+.settings-choice button.active,
+.settings-toggle.active {
+  color: #241750;
+  background: linear-gradient(180deg, #7ceee2, #3fc9d6);
+  border-color: transparent;
+}
+.settings-key {
+  min-width: 96px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* Ожидание нажатия видно и без чтения подписи внизу: иначе игрок не понимает, что игра ждёт
+   именно его, и уходит нажимать что-то ещё. */
+.settings-key.awaiting {
+  color: #241750;
+  background: var(--yellow);
+  border-color: transparent;
+}
+.settings-keys {
+  /* Клавиатурный раздел незачем показывать тому, у кого клавиатуры нет. */
+  display: grid;
+}
+body[data-input='touch'] .settings-keys {
+  display: none;
+}
+/* Длинный набор вариантов уезжает под подпись: справа он переносится на вторую строку и тянет
+   выравнивание всей строки за собой. */
+.settings-row-stack {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.settings-row-stack .settings-choice {
+  justify-content: flex-start;
+}
+
+/* Потолок высоты у масштабированных карточек делится на масштаб.
+   zoom увеличивает отрисовку, но 100dvh внутри элемента по-прежнему означает полную высоту экрана
+   в неотмасштабированных пикселях — то есть при zoom 1.5 карточка, «влезающая по расчёту», рисуется
+   в полтора раза выше экрана, и нижние кнопки уезжают за край. Поймано браузерным тестом: кнопка
+   сброса переставала нажиматься ровно при том масштабе, ради которого режим и сделан. */
+body.large-ui .settings-card,
+body.large-ui .account-card,
+body.large-ui .lobby-card,
+body.large-ui .finish-card {
+  max-height: calc((100dvh - var(--safe-top) - var(--safe-bottom) - 24px) / var(--ui-scale));
+}
+body.large-ui .menu-card {
+  max-height: calc((100vh - 52px - var(--safe-top) - var(--safe-bottom)) / var(--ui-scale));
 }

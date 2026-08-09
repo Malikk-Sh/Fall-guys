@@ -98,9 +98,12 @@ class GoogleIdentityVerifier {
     const audience = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
     if (!audience.includes(this.clientId)) return { ok: false, reason: 'wrong-audience' };
     if (!GOOGLE_ISSUERS.has(payload.iss)) return { ok: false, reason: 'wrong-issuer' };
-    if (!Number.isFinite(payload.exp) || payload.exp <= seconds) return { ok: false, reason: 'expired' };
-    if (Number.isFinite(payload.nbf) && payload.nbf > seconds + 60) return { ok: false, reason: 'not-active' };
-    if (Number.isFinite(payload.iat) && payload.iat > seconds + 300) return { ok: false, reason: 'issued-in-future' };
+    if (!Number.isFinite(payload.exp) || payload.exp <= seconds)
+      return { ok: false, reason: 'expired' };
+    if (Number.isFinite(payload.nbf) && payload.nbf > seconds + 60)
+      return { ok: false, reason: 'not-active' };
+    if (Number.isFinite(payload.iat) && payload.iat > seconds + 300)
+      return { ok: false, reason: 'issued-in-future' };
     if (typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255)
       return { ok: false, reason: 'missing-subject' };
 

@@ -95,9 +95,32 @@ export class CoopCourse extends CourseBuilder {
       case 'movingSpan':
         this.addMovingSpan(piece);
         break;
+      case 'splitSpan':
+        this.addSplitSpan(piece);
+        break;
       case 'collapsing':
         this.addCollapsing(piece);
         break;
+    }
+  }
+
+  addSplitSpan(piece) {
+    const laneWidth = (LANE_WIDTH - piece.laneGap) / 2;
+    const offset = piece.laneGap / 2 + laneWidth / 2;
+    for (const [x, y] of [
+      [-offset, piece.leftY || 0],
+      [offset, piece.rightY || 0]
+    ]) {
+      this.box({
+        x,
+        y,
+        z: piece.z,
+        w: laneWidth,
+        h: 1,
+        d: piece.length,
+        color: x < 0 ? COLORS.cyan : COLORS.orange,
+        bevel: true
+      });
     }
   }
 

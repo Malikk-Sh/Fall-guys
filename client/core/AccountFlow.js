@@ -14,6 +14,7 @@ import {
   switchAccount,
   submitRecord
 } from './account.js';
+import { setServerCosmeticEquipHandler, setServerInventory } from './cosmetics.js';
 
 const GOOGLE_SCRIPT = 'https://accounts.google.com/gsi/client';
 
@@ -23,7 +24,7 @@ export class AccountFlow {
     this.records = new Map();
     this.networkTicket = null;
     this.game.ui.accountToken = () => this.networkTicket;
-    this.game.ui.onCosmeticEquip = (slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId);
+    setServerCosmeticEquipHandler((slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId));
   }
 
   async signIn() {
@@ -39,6 +40,7 @@ export class AccountFlow {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
     this.networkTicket = online ? account?.networkTicket || null : null;
+    setServerInventory(online ? account?.inventory || null : null);
     this.game.ui.setAccount(account, { online });
     this.game.ui.setAccountRecords(this.records);
     this.game.ui.setAccountProgress(progress);
@@ -74,6 +76,7 @@ export class AccountFlow {
         this.game.ui.renderCosmetics();
         return;
       }
+      setServerInventory(inventory);
       this.game.ui.setAccount({ ...this.game.ui.account, inventory }, { online: true });
       this.game.ui.onCosmeticChange?.();
     } catch {

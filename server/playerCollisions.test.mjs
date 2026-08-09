@@ -42,3 +42,12 @@ test('crowd uses interpolated remote velocity and caps a dense pack displacement
   assert.ok(local.velocity.x > 0, 'скорость читается из сетевого target');
   assert.ok(Math.hypot(local.position.x, local.position.z) <= 0.0551, 'толпа не телепортирует за шаг');
 });
+
+test('perfect overlap separates both clients in deterministic opposite directions', () => {
+  const first = actor(0, 0);
+  const second = actor(0, 0);
+  resolvePlayerCrowd(first, [['b', second]], 1 / 60, 'a');
+  resolvePlayerCrowd(second, [['a', actor(0, 0)]], 1 / 60, 'b');
+  assert.ok(Math.abs(first.position.x + second.position.x) < 1e-9);
+  assert.ok(Math.abs(first.position.z + second.position.z) < 1e-9);
+});

@@ -728,7 +728,7 @@ class Game {
     // Удалённые игроки остаются интерполированными «мягкими телами». Толпа мешает занять одну
     // точку и слегка передаёт импульс, но не может жёстко исправлять локальную физику.
     if (this.mode === 'multi' && !this.player.downed) {
-      resolvePlayerCrowd(this.player, this.remotes.values(), dt);
+      resolvePlayerCrowd(this.player, this.remotes.entries(), dt, this.net?.id);
     }
 
     // Удары, накопленные препятствиями за шаг, уходят в тряску камеры. Препятствия про камеру

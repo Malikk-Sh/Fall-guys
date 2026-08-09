@@ -124,11 +124,16 @@
             ><select id="coopChapter"></select
           ></label>
           <p id="coopHint" class="coop-hint"></p>
+          <label class="toggle-row">
+            <input id="coopAnyChapter" type="checkbox" />
+            <span>Для быстрой игры подойдёт любая глава</span>
+          </label>
           <div class="profile-strip coop-profile" aria-label="Прогресс кооперативной пары">
             <span>ГЛАВЫ <b id="coopProfileChapters">0</b></span>
             <span>СПАСЕНИЯ <b id="coopProfileRevives">0</b></span>
             <span>РЕКОРД <b id="coopProfileBest">—</b></span>
           </div>
+          <button id="coopFind" class="button button-primary"><span>НАЙТИ НАПАРНИКА</span><b>⚡</b></button>
           <button id="coopCreate" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
           <div class="join-row">
             <input
@@ -164,9 +169,7 @@
           <button id="quality" class="icon-button" aria-label="Изменить качество графики">
             АВТО КАЧЕСТВО
           </button>
-          <button id="openSettings" class="icon-button" aria-label="Настройки управления">
-            УПРАВЛЕНИЕ
-          </button>
+          <button id="openSettings" class="icon-button" aria-label="Настройки управления">УПРАВЛЕНИЕ</button>
           <span id="controlHint">WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА</span>
         </div>
       </section>

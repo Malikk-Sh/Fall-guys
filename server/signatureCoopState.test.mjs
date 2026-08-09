@@ -13,7 +13,10 @@ const player = (id, position) => ({
 
 function roomFor(chapterId, matchId = 'match-1') {
   const layout = signatureLayout(chapterId);
-  const first = player('a-player', layout.core?.spawn || layout.signal?.guide || { x: 0, y: 1, z: 0 });
+  const first = player(
+    'a-player',
+    layout.core?.spawn || layout.signal?.guide || { x: 0, y: 1, z: 0 }
+  );
   const second = player(
     'b-player',
     layout.core?.socket || layout.signal?.operator || { x: 1, y: 1, z: 0 }
@@ -46,7 +49,12 @@ test('ch7: сервер владеет ядром от pickup до socket и с�
   assert.equal(result.ok, true);
   assert.equal(result.relay.signature.core.carrier, first.id);
 
-  first.last = { ...first.last, x: layout.core.spawn.x, y: layout.core.spawn.y, z: layout.core.spawn.z };
+  first.last = {
+    ...first.last,
+    x: layout.core.spawn.x,
+    y: layout.core.spawn.y,
+    z: layout.core.spawn.z
+  };
   result = validateCoopEvent(
     room,
     first,
@@ -107,7 +115,12 @@ test('ch9: только operator у терминала может вводить
   for (let progress = 0; progress < layout.signal.sequence.length; progress++) {
     const symbol = layout.signal.sequence[progress];
     const index = layout.signal.symbols.indexOf(symbol);
-    const result = validateCoopEvent(room, operator, signatureEvent(`signal:press:${index}`), 30_100 + progress);
+    const result = validateCoopEvent(
+      room,
+      operator,
+      signatureEvent(`signal:press:${index}`),
+      30_100 + progress
+    );
     assert.equal(result.ok, true);
     assert.equal(result.relay.signature.signal.progress, progress + 1);
   }

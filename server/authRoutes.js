@@ -86,8 +86,8 @@ function installAuthRoutes({
       return res.status(429).json({ ok: false, error: 'rate-limited' });
     const account = accounts.login(req.body?.secret);
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
-    if (!issue(res, account.id))
-      return res.status(500).json({ ok: false, error: 'session-failed' });
+    if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
+
     return res.json(
       withNetworkTicket(
         { ...accountPayload(account), identities: auth.identities(account.id) },
@@ -121,7 +121,7 @@ function installAuthRoutes({
       account = accounts.get(current.accountId);
       linked = Boolean(
         account &&
-        auth.linkIdentity({ provider: 'google', subject: verified.subject, accountId: account.id })
+          auth.linkIdentity({ provider: 'google', subject: verified.subject, accountId: account.id })
       );
       if (!linked) return res.status(409).json({ ok: false, error: 'identity-conflict' });
     } else {
@@ -135,8 +135,8 @@ function installAuthRoutes({
     }
 
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-account' });
-    if (!issue(res, account.id))
-      return res.status(500).json({ ok: false, error: 'session-failed' });
+    if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
+
     return res.json(
       withNetworkTicket(
         {

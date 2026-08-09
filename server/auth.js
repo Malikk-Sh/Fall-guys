@@ -3,6 +3,7 @@ const { migrateDatabase } = require('./migrations');
 
 const SESSION_COOKIE = 'wobble_session';
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const SOCKET_TICKET_TTL_MS = 2 * 60 * 1000;
 
 function hashToken(token) {
   if (typeof token !== 'string' || token.length < 24 || token.length > 256) return '';
@@ -49,6 +50,7 @@ class AuthService {
     if (!db) throw new Error('AuthService требует открытую базу');
     this.db = db;
     this.sessionTtlMs = sessionTtlMs;
+    this.socketTickets = new Map();
     migrateDatabase(db);
     this.statements = prepare(db);
   }
@@ -82,6 +84,33 @@ class AuthService {
       },
       expiresAt
     };
+  }
+
+  createSocketTicket(accountId, now = Date.now()) {
+    const id = String(accountId || '');
+    if (!this.statements.account.get(id)) return null;
+    this.cleanupSocketTickets(now);
+    const token = `WST.${crypto.randomBytes(24).toString('base64url')}`;
+    this.socketTickets.set(hashToken(token), { accountId: id, expiresAt: now + SOCKET_TICKET_TTL_MS });
+    return { token, accountId: id, expiresAt: now + SOCKET_TICKET_TTL_MS };
+  }
+
+  resolveSocketTicket(token, now = Date.now()) {
+    if (typeof token !== 'string' || !token.startsWith('WST.')) return null;
+    const hash = hashToken(token);
+    const ticket = hash ? this.socketTickets.get(hash) : null;
+    if (!ticket) return null;
+    if (ticket.expiresAt <= now) {
+      this.socketTickets.delete(hash);
+      return null;
+    }
+    return { ...ticket };
+  }
+
+  cleanupSocketTickets(now = Date.now()) {
+    for (const [hash, ticket] of this.socketTickets) {
+      if (ticket.expiresAt <= now) this.socketTickets.delete(hash);
+    }
   }
 
   revokeSession(token) {
@@ -120,6 +149,7 @@ class AuthService {
   }
 
   cleanup(now = Date.now()) {
+    this.cleanupSocketTickets(now);
     return this.statements.expireSessions.run(now).changes;
   }
 }
@@ -160,6 +190,7 @@ module.exports = {
   AuthService,
   SESSION_COOKIE,
   DEFAULT_SESSION_TTL_MS,
+  SOCKET_TICKET_TTL_MS,
   hashToken,
   parseCookies,
   cookieForSession,

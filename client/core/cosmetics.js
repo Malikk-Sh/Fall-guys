@@ -4,6 +4,16 @@ const STORAGE_KEY = 'wobble-cosmetics-v1';
 
 export const COSMETICS = COSMETIC_CATALOG;
 const defaults = DEFAULT_COSMETIC_LOADOUT;
+let serverInventory = null;
+let serverEquip = null;
+
+export function setServerInventory(inventory) {
+  serverInventory = inventory || null;
+}
+
+export function setServerCosmeticEquipHandler(handler) {
+  serverEquip = typeof handler === 'function' ? handler : null;
+}
 
 function locallyUnlocked(item, progress, profile) {
   const achievements = new Set((progress?.achievements || []).map(entry => entry.id));
@@ -22,7 +32,7 @@ function locallyUnlocked(item, progress, profile) {
   );
 }
 
-export function unlockedCosmetics(progress = null, profile = null, inventory = null) {
+export function unlockedCosmetics(progress = null, profile = null, inventory = serverInventory) {
   const owned = Array.isArray(inventory?.ownedIds) ? new Set(inventory.ownedIds) : null;
   return COSMETICS.filter(item => {
     // Daily streak пока остаётся локальной механикой и не притворяется server-authoritative.
@@ -36,7 +46,7 @@ export function readCosmetics(
   progress = null,
   profile = null,
   storage = globalThis.localStorage,
-  inventory = null
+  inventory = serverInventory
 ) {
   let stored = {};
   try {
@@ -67,7 +77,7 @@ export function equipCosmetic(
   progress = null,
   profile = null,
   storage = globalThis.localStorage,
-  inventory = null
+  inventory = serverInventory
 ) {
   const item = unlockedCosmetics(progress, profile, inventory).find(candidate => candidate.id === id);
   if (!item) return readCosmetics(progress, profile, storage, inventory);
@@ -78,6 +88,7 @@ export function equipCosmetic(
   } catch {
     // Закрытый storage не должен мешать примерить уже полученную награду в текущей сессии.
   }
+  if (inventory && !item.localGoal) serverEquip?.(item.slot, item.id);
   return equipped;
 }
 
@@ -85,7 +96,7 @@ export function cosmeticLoadout(
   progress = null,
   profile = null,
   storage = globalThis.localStorage,
-  inventory = null
+  inventory = serverInventory
 ) {
   const equipped = readCosmetics(progress, profile, storage, inventory);
   return Object.fromEntries(
@@ -93,7 +104,7 @@ export function cosmeticLoadout(
   );
 }
 
-export function nextCosmeticGoal(progress = null, profile = null, inventory = null) {
+export function nextCosmeticGoal(progress = null, profile = null, inventory = serverInventory) {
   const unlocked = new Set(unlockedCosmetics(progress, profile, inventory).map(item => item.id));
   const chapters = progress?.chapters || [];
   const localChapters = profile?.coop?.chapterStats || {};

@@ -89,10 +89,7 @@ function installAuthRoutes({
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
 
     return res.json(
-      withNetworkTicket(
-        { ...accountPayload(account), identities: auth.identities(account.id) },
-        account.id
-      )
+      withNetworkTicket({ ...accountPayload(account), identities: auth.identities(account.id) }, account.id)
     );
   });
 
@@ -120,8 +117,7 @@ function installAuthRoutes({
     } else if (current) {
       account = accounts.get(current.accountId);
       linked = Boolean(
-        account &&
-          auth.linkIdentity({ provider: 'google', subject: verified.subject, accountId: account.id })
+        account && auth.linkIdentity({ provider: 'google', subject: verified.subject, accountId: account.id })
       );
       if (!linked) return res.status(409).json({ ok: false, error: 'identity-conflict' });
     } else {

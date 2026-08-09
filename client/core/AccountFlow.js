@@ -1,50 +1,51 @@
 // Личность игрока и его рекорды.
 //
-// Аккаунт заводится сам при первом заходе, вход на своём устройстве происходит молча, а рекорды
-// каждого режима хранятся при аккаунте, а не при браузере. Всё это не имеет отношения ни к
-// физике, ни к сети забега — и лежало в Game только потому, что там лежало всё.
-//
-// Карта серверных рекордов живёт здесь же: она принадлежит аккаунту и меняется вместе с ним. Пока
-// она была полем игры, о ней приходилось помнить при каждом переключении аккаунта.
+// Recovery code используется только для восстановления server session. Игровая сеть получает
+// короткий network ticket, а rename/records авторизуются HttpOnly cookie.
 
 import {
   ensureAccount,
   listAccounts,
   currentAccount as accountForRecords,
+  authConfig,
   createAccount,
   loginAccount,
+  loginGoogle,
   renameAccount,
   rememberAccount,
   switchAccount,
   submitRecord
 } from './account.js';
 
+const GOOGLE_SCRIPT = 'https://accounts.google.com/gsi/client';
+
 export class AccountFlow {
   constructor(game) {
     this.game = game;
     this.records = new Map();
+    this.networkTicket = null;
+    // UI исторически отдавал в WebSocket recovery code через accountToken(). Не меняем public
+    // wiring всего меню в этом PR: подменяем источник на короткий session-derived ticket.
+    this.game.ui.accountToken = () => this.networkTicket;
   }
 
-  // Автовход в последний аккаунт. При первом заходе аккаунт заводится сам: игрок не должен
-  // регистрироваться, чтобы просто побегать.
   async signIn() {
     const { account, records, progress, online } = await ensureAccount({});
     this.apply(account, { online, records, progress });
     if (!online)
       this.game.ui.accountStatus('Сервер не ответил — рекорды сохранятся только на этом устройстве.');
+    this.setupGoogle().catch(() => {});
   }
 
-  // `records` не передают, когда менялось только имя: рекорды при этом те же, и пересобирать их
-  // из уже разобранной карты было бы лишним кругом.
   apply(account, { online = true, records = null, progress = null } = {}) {
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
+    this.networkTicket = online ? account?.networkTicket || null : null;
     this.game.ui.setAccount(account, { online });
     this.game.ui.setAccountRecords(this.records);
     this.game.ui.setAccountProgress(progress);
     this.game.ui.setAccountList(listAccounts());
-    // Меню показывает рекорд текущей трассы, а он у каждого аккаунта свой.
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }
@@ -55,20 +56,90 @@ export class AccountFlow {
     return this.records?.get(`${mode}:${key}`) ?? null;
   }
 
-  // Личный рекорд уходит на сервер после любого режима.
-  //
-  // Соло и кооп сервер проверить не может — он просто верит присланному времени, поэтому эти
-  // результаты остаются личными и в общую таблицу не попадают. Общий топ по-прежнему только у
-  // гонки, где каждое положение игрока проверено.
   async save(mode, spec, time) {
     const account = accountForRecords();
     if (!account || !Number.isFinite(time) || time <= 0) return;
     const courseKey = mode === 'coop' ? spec.chapterId || spec.id : `${spec.seed}:${spec.difficulty}`;
     try {
-      const saved = await submitRecord({ secret: account.secret, mode, courseKey, timeMs: Math.round(time) });
+      const saved = await submitRecord({ mode, courseKey, timeMs: Math.round(time) });
       if (saved?.best) this.records?.set(`${mode}:${courseKey}`, saved.best);
     } catch {
       // Рекорд не уехал — забег от этого не перестаёт быть пройденным, а локальная запись уже есть.
+    }
+  }
+
+  async setupGoogle() {
+    const config = await authConfig();
+    if (!config?.googleClientId || !globalThis.document) return;
+    const host = document.querySelector('#account .account-actions') || document.querySelector('#accountStatus');
+    if (!host || document.querySelector('#googleSignIn')) return;
+
+    const section = document.createElement('div');
+    section.id = 'googleSignIn';
+    section.style.cssText = 'display:flex;justify-content:center;margin:12px 0 4px';
+    host.after(section);
+
+    await this.loadGoogleScript();
+    const identity = globalThis.google?.accounts?.id;
+    if (!identity) return section.remove();
+    identity.initialize({
+      client_id: config.googleClientId,
+      callback: response => this.handleGoogleCredential(response?.credential)
+    });
+    identity.renderButton(section, {
+      theme: 'outline',
+      size: 'large',
+      shape: 'pill',
+      text: 'continue_with',
+      width: Math.min(320, Math.max(220, section.clientWidth || 280))
+    });
+  }
+
+  loadGoogleScript() {
+    if (globalThis.google?.accounts?.id) return Promise.resolve();
+    const existing = document.querySelector(`script[src="${GOOGLE_SCRIPT}"]`);
+    if (existing)
+      return new Promise((resolve, reject) => {
+        existing.addEventListener('load', resolve, { once: true });
+        existing.addEventListener('error', reject, { once: true });
+      });
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = GOOGLE_SCRIPT;
+      script.async = true;
+      script.defer = true;
+      script.addEventListener('load', resolve, { once: true });
+      script.addEventListener('error', reject, { once: true });
+      document.head.append(script);
+    });
+  }
+
+  async handleGoogleCredential(credential) {
+    if (!credential) return;
+    const ui = this.game.ui;
+    ui.accountStatus('Проверяем Google…');
+    try {
+      const entered = await loginGoogle(credential);
+      if (!entered || entered.conflict)
+        return ui.accountStatus(
+          entered?.conflict
+            ? 'Этот Google-аккаунт уже связан с другим Wobble account.'
+            : 'Google-вход не подтвердился.'
+        );
+      const stored = accountForRecords();
+      const account = {
+        ...entered,
+        ...(entered.secret || stored?.id === entered.id ? { secret: entered.secret || stored?.secret } : {})
+      };
+      rememberAccount(account);
+      this.apply(account, { records: entered.records, progress: entered.progress });
+      return ui.accountStatus(
+        entered.secret
+          ? 'Google подключён. Recovery code сохранён как резервный способ входа.'
+          : `Google ✓ · ${entered.name}`
+      );
+    } catch {
+      return ui.accountStatus('Google-вход сейчас недоступен.');
     }
   }
 
@@ -89,19 +160,21 @@ export class AccountFlow {
       }
       if (action === 'login') {
         const entered = await loginAccount(value);
-        if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
-        // Код сохраняем ровно тот, что ввёл игрок: сервер его обратно не присылает.
-        rememberAccount({ ...entered, secret: value });
-        this.apply({ ...entered, secret: value }, { records: entered.records, progress: entered.progress });
+        if (!entered || entered.unknown)
+          return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
+        const account = { ...entered, secret: value };
+        rememberAccount(account);
+        this.apply(account, { records: entered.records, progress: entered.progress });
         return ui.accountStatus(`Вошли как ${entered.name}.`);
       }
       if (action === 'rename') {
         const account = accountForRecords();
         if (!account) return ui.accountStatus('Сначала нужен аккаунт.');
-        const renamed = await renameAccount(account.secret, value);
-        if (!renamed) return ui.accountStatus('Переименовать не вышло — сервер не ответил.');
-        rememberAccount({ ...renamed, secret: account.secret });
-        this.apply({ ...renamed, secret: account.secret });
+        const renamed = await renameAccount(value);
+        if (!renamed) return ui.accountStatus('Переименовать не вышло — сессия истекла или сервер недоступен.');
+        const next = { ...this.game.ui.account, ...renamed, networkTicket: this.networkTicket };
+        rememberAccount(next);
+        this.apply(next);
         return ui.accountStatus('Имя изменено.');
       }
     } catch {

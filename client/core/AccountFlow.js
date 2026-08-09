@@ -1,7 +1,4 @@
-// Личность игрока и его рекорды.
-//
-// Recovery code используется только для восстановления server session. Игровая сеть получает
-// короткий network ticket, а rename/records авторизуются HttpOnly cookie.
+// Личность игрока, его рекорды и server-owned cosmetics.
 
 import {
   ensureAccount,
@@ -9,6 +6,7 @@ import {
   currentAccount as accountForRecords,
   authConfig,
   createAccount,
+  equipAccountCosmetic,
   loginAccount,
   loginGoogle,
   renameAccount,
@@ -24,9 +22,8 @@ export class AccountFlow {
     this.game = game;
     this.records = new Map();
     this.networkTicket = null;
-    // UI исторически отдавал в WebSocket recovery code через accountToken(). Не меняем public
-    // wiring всего меню в этом PR: подменяем источник на короткий session-derived ticket.
     this.game.ui.accountToken = () => this.networkTicket;
+    this.game.ui.onCosmeticEquip = (slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId);
   }
 
   async signIn() {
@@ -65,6 +62,23 @@ export class AccountFlow {
       if (saved?.best) this.records?.set(`${mode}:${courseKey}`, saved.best);
     } catch {
       // Рекорд не уехал — забег от этого не перестаёт быть пройденным, а локальная запись уже есть.
+    }
+  }
+
+  async equipCosmetic(slot, cosmeticId) {
+    if (!this.game.ui.account?.inventory) return;
+    try {
+      const inventory = await equipAccountCosmetic(slot, cosmeticId);
+      if (!inventory) {
+        this.game.ui.accountStatus('Сервер не подтвердил экипировку.');
+        this.game.ui.renderCosmetics();
+        return;
+      }
+      this.game.ui.setAccount({ ...this.game.ui.account, inventory }, { online: true });
+      this.game.ui.onCosmeticChange?.();
+    } catch {
+      this.game.ui.accountStatus('Экипировку не удалось сохранить на сервере.');
+      this.game.ui.renderCosmetics();
     }
   }
 
@@ -175,7 +189,7 @@ export class AccountFlow {
           return ui.accountStatus('Переименовать не вышло — сессия истекла или сервер недоступен.');
         const next = { ...this.game.ui.account, ...renamed, networkTicket: this.networkTicket };
         rememberAccount(next);
-        this.apply(next);
+        this.game.ui.setAccount(next, { online: true });
         return ui.accountStatus('Имя изменено.');
       }
     } catch {

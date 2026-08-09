@@ -138,8 +138,12 @@ class AuthService {
   }
 
   linkIdentity({ provider, subject, accountId, createdAt = Date.now() }) {
-    const safeProvider = String(provider || '').trim().slice(0, 32);
-    const safeSubject = String(subject || '').trim().slice(0, 255);
+    const safeProvider = String(provider || '')
+      .trim()
+      .slice(0, 32);
+    const safeSubject = String(subject || '')
+      .trim()
+      .slice(0, 255);
     const id = String(accountId || '');
     if (!safeProvider || !safeSubject || !this.statements.account.get(id)) return null;
     const existing = this.identity(safeProvider, safeSubject);

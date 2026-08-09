@@ -29,6 +29,7 @@ const {
   ERROR_CODES,
   ROOM_STATE,
   GAME_MODE,
+  courseKeyFor,
   ALLOWED_IN_STATE,
   canTransition,
   MAX_MESSAGE_BYTES,
@@ -325,16 +326,45 @@ app.get('/leaderboard', (req, res) => {
   // выдаче. Приходит параметром запроса, а не заголовком: страница лобби обновляет таблицу обычным
   // fetch, и лишний слой тут ничего не даёт.
   const playerId = typeof req.query.playerId === 'string' ? req.query.playerId.slice(0, 64) : null;
+  const key = courseKeyFor(GAME_MODE.RACE, { seed, difficulty });
   res.setHeader('Cache-Control', 'no-store');
   return res.json({
     ok: true,
+    mode: GAME_MODE.RACE,
     seed: seed >>> 0,
     difficulty,
     verificationVersion: VERIFICATION_VERSION,
-    entries: verifiedLeaderboard.get(seed, difficulty, req.query.limit, playerId),
+    entries: verifiedLeaderboard.get(GAME_MODE.RACE, key, req.query.limit, playerId),
     // null, если игрок эту трассу ещё не проходил, — отдельно от entries, потому что его строка
     // может быть далеко за пределами показанной десятки.
-    standing: verifiedLeaderboard.standing(seed, difficulty, playerId)
+    standing: verifiedLeaderboard.standing(GAME_MODE.RACE, key, playerId)
+  });
+});
+
+// Таблица кооперативных глав.
+//
+// Отдельным адресом, а не параметром к /leaderboard: у гонки трасса задаётся сидом и сложностью,
+// у главы — идентификатором, и склеивать два разных набора параметров в один маршрут значило бы
+// проверять их вперемешку.
+//
+// Времена здесь мерил сервер — от старта комнаты до финиша, по своим часам. Движение он не
+// проверял: разметка главы рукотворная, и коридоров, по которым проверяется гонка, у неё нет.
+// Клиенту это сообщается полем movementVerified, чтобы интерфейс не обещал больше, чем есть.
+app.get('/leaderboard/coop', (req, res) => {
+  const chapterId = typeof req.query.chapter === 'string' ? req.query.chapter : '';
+  if (!COOP_CHAPTER_IDS.includes(chapterId))
+    return res.status(400).json({ ok: false, error: 'invalid-chapter' });
+  const playerId = typeof req.query.playerId === 'string' ? req.query.playerId.slice(0, 64) : null;
+  const key = courseKeyFor(GAME_MODE.COOP, { chapterId });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({
+    ok: true,
+    mode: GAME_MODE.COOP,
+    chapter: chapterId,
+    movementVerified: false,
+    verificationVersion: VERIFICATION_VERSION,
+    entries: verifiedLeaderboard.get(GAME_MODE.COOP, key, req.query.limit, playerId),
+    standing: verifiedLeaderboard.standing(GAME_MODE.COOP, key, playerId)
   });
 });
 
@@ -1138,11 +1168,17 @@ function finishMatch(room) {
     unranked: room.unranked || (verificationFailed ? 'verification' : null),
     trusted: !room.unranked && !verificationFailed
   };
-  if (room.mode === GAME_MODE.RACE && room.results.trusted) {
+  // В таблицу идут оба режима — но только те, где время мерил сервер.
+  //
+  // В гонке проверено и время, и каждое положение игрока. В коопе геометрия главы серверу
+  // неизвестна, и движение он не проверяет, — зато время меряет сам, по своим часам, от старта
+  // комнаты до финиша. Подделать его клиент не может, и этого достаточно, чтобы таблица глав
+  // означала то, что обещает. Соло в таблицу не идёт и идти не может: там сервера нет вовсе.
+  if (room.results.trusted) {
     verifiedLeaderboard.record({
       matchId: room.matchId,
-      seed: room.spec.seed,
-      difficulty: room.spec.difficulty,
+      mode: room.mode,
+      courseKey: courseKeyFor(room.mode, room.spec),
       // Анонимный идентификатор подставляется здесь, а не в leaderboard(): board уходит в рассылку
       // всем игрокам комнаты, и чужой ключ в нём означал бы, что перезаписать чужую строку в
       // таблице может любой, кто был с человеком в одном матче.

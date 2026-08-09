@@ -365,13 +365,17 @@ export class UI {
       row.append(avatar, name, state);
       list.append(row);
     }
-    const verifiedTop = $('#verifiedTop');
-    const race = data.mode === GAME_MODE.RACE;
-    verifiedTop.classList.toggle('hidden', !race);
-    if (race) this.loadVerifiedTop(data.seed, data.difficulty);
+    // Таблица показывается там, где время мерил сервер: в гонке и в кооперативе. У соло сервера
+    // нет вовсе, и его результат в общую таблицу не идёт — см. loadVerifiedTop.
+    const coop = data.mode === GAME_MODE.COOP;
+    const hasBoard = data.mode === GAME_MODE.RACE || (coop && data.chapterId);
+    $('#verifiedTop').classList.toggle('hidden', !hasBoard);
+    if (hasBoard) this.loadVerifiedTop(data.mode, coop ? data.chapterId : `${data.seed}:${data.difficulty}`);
   }
-  async loadVerifiedTop(seed, difficulty) {
-    const key = `${seed}:${difficulty}`;
+  // Ключ трассы приходит готовым: правило, по которому он считается, живёт в общем с сервером
+  // модуле (courseKeyFor), а не повторяется здесь.
+  async loadVerifiedTop(mode, courseKey) {
+    const key = `${mode}:${courseKey}`;
     if (this.verifiedTopKey === key) return;
     this.verifiedTopKey = key;
     const list = $('#verifiedTopList');
@@ -381,13 +385,15 @@ export class UI {
     count.textContent = '';
     standing.textContent = 'ЗАГРУЗКА…';
     try {
-      const params = new URLSearchParams({
-        seed,
-        difficulty,
-        limit: '10',
-        playerId: this.playerId()
-      });
-      const response = await fetch(`/leaderboard?${params}`);
+      const coop = mode === GAME_MODE.COOP;
+      const params = new URLSearchParams({ limit: '10', playerId: this.playerId() });
+      if (coop) params.set('chapter', courseKey);
+      else {
+        const [seed, difficulty] = courseKey.split(':');
+        params.set('seed', seed);
+        params.set('difficulty', difficulty);
+      }
+      const response = await fetch(`/leaderboard${coop ? '/coop' : ''}?${params}`);
       if (!response.ok) throw new Error('leaderboard unavailable');
       const data = await response.json();
       this.renderVerifiedTop(data);
@@ -398,12 +404,16 @@ export class UI {
       this.verifiedTopKey = null;
     }
   }
-  renderVerifiedTop({ entries = [], standing = null }) {
+  renderVerifiedTop({ entries = [], standing = null, movementVerified = true }) {
     const list = $('#verifiedTopList');
     const line = $('#verifiedTopStanding');
     const count = $('#verifiedTopCount');
     list.replaceChildren();
-    count.textContent = standing?.total ? `ВСЕГО ${standing.total}` : '';
+    // В коопе сервер мерил время, но не проверял движение: разметка главы рукотворная, коридоров
+    // у неё нет. Обещать «подтверждено» одинаково для обеих таблиц значило бы врать в одной из них.
+    count.textContent = standing?.total
+      ? `ВСЕГО ${standing.total}${movementVerified ? '' : ' · ВРЕМЯ ПО СЕРВЕРУ'}`
+      : '';
 
     if (!entries.length) {
       line.textContent = 'ПОКА НЕТ РЕЗУЛЬТАТОВ — ПЕРВОЕ МЕСТО СВОБОДНО';

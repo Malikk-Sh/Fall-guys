@@ -38,8 +38,8 @@ const MAX_RECORDED_MATCHES = 20_000;
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS leaderboard_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    course_seed INTEGER NOT NULL,
-    difficulty TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    course_key TEXT NOT NULL,
     player_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
     color INTEGER NOT NULL,
@@ -47,16 +47,54 @@ const SCHEMA = `
     achieved_at INTEGER NOT NULL,
     verification_version INTEGER NOT NULL,
     match_id TEXT NOT NULL,
-    UNIQUE (course_seed, difficulty, player_id)
+    UNIQUE (mode, course_key, player_id)
   );
   CREATE INDEX IF NOT EXISTS idx_entries_course
-    ON leaderboard_entries (course_seed, difficulty, time_ms, achieved_at);
+    ON leaderboard_entries (mode, course_key, time_ms, achieved_at);
   CREATE TABLE IF NOT EXISTS recorded_matches (
     match_id TEXT PRIMARY KEY,
     recorded_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_matches_time ON recorded_matches (recorded_at);
 `;
+
+// Перенос со старой схемы, где трасса задавалась парой (сид, сложность).
+//
+// Пара работала, пока таблица была одна — гоночная. Кооперативная глава сидом не описывается: у
+// неё рукотворная разметка и имя вместо числа. Поэтому ключ обобщён до пары (режим, ключ трассы),
+// где у гонки ключ — «сид:сложность», а у коопа — идентификатор главы. Та же пара уже используется
+// для личных рекордов в accounts.js, так что обе таблицы теперь называют трассу одинаково.
+//
+// Переносить, а не начинать заново: в таблице лежат рекорды живых людей, и «мы поменяли схему»
+// для них означало бы просто исчезновение результата.
+function migrate(db) {
+  const columns = db.prepare('PRAGMA table_info(leaderboard_entries)').all();
+  // Таблицы ещё нет — её создаст SCHEMA уже в новом виде. Либо она уже новая.
+  if (!columns.length || columns.some(column => column.name === 'course_key')) return false;
+
+  db.exec('BEGIN');
+  try {
+    // Индекс носит то же имя, что и новый, и уезжает вместе с переименованной таблицей — иначе
+    // CREATE INDEX ниже наткнулся бы на занятое имя.
+    db.exec('DROP INDEX IF EXISTS idx_entries_course');
+    db.exec('ALTER TABLE leaderboard_entries RENAME TO leaderboard_entries_v1');
+    db.exec(SCHEMA);
+    db.exec(`
+      INSERT INTO leaderboard_entries
+        (mode, course_key, player_id, display_name, color, time_ms, achieved_at,
+         verification_version, match_id)
+      SELECT 'race', course_seed || ':' || difficulty, player_id, display_name, color, time_ms,
+             achieved_at, verification_version, match_id
+      FROM leaderboard_entries_v1
+    `);
+    db.exec('DROP TABLE leaderboard_entries_v1');
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return true;
+}
 
 class VerifiedLeaderboard {
   // `file` по умолчанию ':memory:' — так тесты гоняют ровно тот же SQL, что и боевой сервер, но без
@@ -79,28 +117,29 @@ class VerifiedLeaderboard {
     this.verificationVersion = verificationVersion;
     this.ownsDb = !db;
     this.db = db || openDatabase(file);
+    this.migrated = migrate(this.db);
     this.db.exec(SCHEMA);
     this.statements = prepare(this.db);
   }
 
   // Возвращает true, если матч учтён впервые. Записи внутри матча складываются по лучшему времени
   // каждого игрока: один человек занимает в таблице ровно одну строку на трассу.
-  record({ matchId, seed, difficulty, entries, achievedAt = Date.now() }) {
-    if (!matchId || !Number.isSafeInteger(seed) || !Array.isArray(entries)) return false;
+  record({ matchId, mode, courseKey, entries, achievedAt = Date.now() }) {
+    if (!matchId || !mode || !courseKey || !Array.isArray(entries)) return false;
     const verified = entries.filter(
       entry => entry?.verified && Number.isFinite(entry.time) && entry.time > 0
     );
     if (!verified.length) return false;
     if (this.statements.knownMatch.get(matchId)) return false;
 
-    const course = seed >>> 0;
-    const level = difficulty || 'normal';
+    const course = String(courseKey);
+    const level = String(mode);
     this.db.exec('BEGIN');
     try {
       for (const entry of verified) {
         this.statements.upsert.run(
-          course,
           level,
+          course,
           playerKey(entry, matchId),
           String(entry.name || 'Wobbler').slice(0, 16),
           Number(entry.color) || 0xff4f91,
@@ -111,7 +150,7 @@ class VerifiedLeaderboard {
         );
       }
       this.statements.rememberMatch.run(matchId, achievedAt);
-      this.statements.trimCourse.run(course, level, course, level, this.storedPerCourse);
+      this.statements.trimCourse.run(level, course, level, course, this.storedPerCourse);
       this.statements.trimMatches.run(MAX_RECORDED_MATCHES);
       this.statements.trimCourses.run(this.maxCourses);
       this.db.exec('COMMIT');
@@ -123,10 +162,10 @@ class VerifiedLeaderboard {
   }
 
   // Верхние строки таблицы. `playerId` не обязателен: с ним у своей строки появляется признак self.
-  get(seed, difficulty, limit = this.limit, playerId = null) {
-    if (!Number.isSafeInteger(seed)) return [];
+  get(mode, courseKey, limit = this.limit, playerId = null) {
+    if (!mode || !courseKey) return [];
     const safeLimit = Math.max(1, Math.min(MAX_LIMIT, Number(limit) || this.limit));
-    return this.statements.top.all(seed >>> 0, difficulty || 'normal', safeLimit).map((row, index) => ({
+    return this.statements.top.all(String(mode), String(courseKey), safeLimit).map((row, index) => ({
       place: index + 1,
       name: row.display_name,
       time: row.time_ms,
@@ -141,14 +180,14 @@ class VerifiedLeaderboard {
   //
   // Считается запросом, а не поиском по выданному топу: игрок вне первой десятки своё место всё
   // равно должен видеть, иначе таблица говорит ему только «тебя здесь нет».
-  standing(seed, difficulty, playerId) {
-    if (!playerId || !Number.isSafeInteger(seed)) return null;
-    const course = seed >>> 0;
-    const level = difficulty || 'normal';
-    const own = this.statements.own.get(course, level, playerId);
+  standing(mode, courseKey, playerId) {
+    if (!playerId || !mode || !courseKey) return null;
+    const course = String(courseKey);
+    const level = String(mode);
+    const own = this.statements.own.get(level, course, playerId);
     if (!own) return null;
-    const ahead = this.statements.countAhead.get(course, level, own.time_ms, own.time_ms, own.achieved_at);
-    const next = this.statements.nextAbove.get(course, level, own.time_ms, own.time_ms, own.achieved_at);
+    const ahead = this.statements.countAhead.get(level, course, own.time_ms, own.time_ms, own.achieved_at);
+    const next = this.statements.nextAbove.get(level, course, own.time_ms, own.time_ms, own.achieved_at);
     return {
       place: Number(ahead.count) + 1,
       time: own.time_ms,
@@ -156,7 +195,7 @@ class VerifiedLeaderboard {
       verificationVersion: own.verification_version,
       // null у лидера: отставать ему не от кого, и ноль здесь читался бы как «идёт вровень».
       gap: next ? own.time_ms - next.time_ms : null,
-      total: Number(this.statements.countCourse.get(course, level).count)
+      total: Number(this.statements.countCourse.get(level, course).count)
     };
   }
 
@@ -194,10 +233,10 @@ function prepare(db) {
     // забега, а не от последнего.
     upsert: db.prepare(`
       INSERT INTO leaderboard_entries
-        (course_seed, difficulty, player_id, display_name, color, time_ms, achieved_at,
+        (mode, course_key, player_id, display_name, color, time_ms, achieved_at,
          verification_version, match_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT (course_seed, difficulty, player_id) DO UPDATE SET
+      ON CONFLICT (mode, course_key, player_id) DO UPDATE SET
         display_name = excluded.display_name,
         color = excluded.color,
         time_ms = excluded.time_ms,
@@ -209,37 +248,37 @@ function prepare(db) {
     top: db.prepare(`
       SELECT display_name, color, time_ms, achieved_at, verification_version, player_id
       FROM leaderboard_entries
-      WHERE course_seed = ? AND difficulty = ?
+      WHERE mode = ? AND course_key = ?
       ORDER BY time_ms ASC, achieved_at ASC
       LIMIT ?
     `),
     own: db.prepare(`
       SELECT time_ms, achieved_at, verification_version
       FROM leaderboard_entries
-      WHERE course_seed = ? AND difficulty = ? AND player_id = ?
+      WHERE mode = ? AND course_key = ? AND player_id = ?
     `),
     // Ничья разводится по времени установки: кто добежал раньше, тот и выше. Без этого два
     // одинаковых времени давали бы обоим одно место, и сумма мест не сходилась бы с числом строк.
     countAhead: db.prepare(`
       SELECT COUNT(*) AS count FROM leaderboard_entries
-      WHERE course_seed = ? AND difficulty = ?
+      WHERE mode = ? AND course_key = ?
         AND (time_ms < ? OR (time_ms = ? AND achieved_at < ?))
     `),
     nextAbove: db.prepare(`
       SELECT time_ms FROM leaderboard_entries
-      WHERE course_seed = ? AND difficulty = ?
+      WHERE mode = ? AND course_key = ?
         AND (time_ms < ? OR (time_ms = ? AND achieved_at < ?))
       ORDER BY time_ms DESC, achieved_at DESC
       LIMIT 1
     `),
     countCourse: db.prepare(
-      'SELECT COUNT(*) AS count FROM leaderboard_entries WHERE course_seed = ? AND difficulty = ?'
+      'SELECT COUNT(*) AS count FROM leaderboard_entries WHERE mode = ? AND course_key = ?'
     ),
     trimCourse: db.prepare(`
       DELETE FROM leaderboard_entries
-      WHERE course_seed = ? AND difficulty = ? AND id NOT IN (
+      WHERE mode = ? AND course_key = ? AND id NOT IN (
         SELECT id FROM leaderboard_entries
-        WHERE course_seed = ? AND difficulty = ?
+        WHERE mode = ? AND course_key = ?
         ORDER BY time_ms ASC, achieved_at ASC
         LIMIT ?
       )
@@ -251,10 +290,16 @@ function prepare(db) {
     `),
     // Трассы вытесняются целиком и по времени последнего рекорда: сид случайный, число возможных
     // трасс огромно, и без потолка файл рос бы вслед за числом сыгранных матчей.
+    //
+    // Вытесняются только гоночные. Кооперативных глав ровно столько, сколько написано руками, —
+    // они не растут и вытеснять их незачем. Хуже того: гоночные трассы появляются потоком, и общий
+    // потолок рано или поздно вытолкнул бы главу вместе с рекордами всех, кто её проходил.
     trimCourses: db.prepare(`
-      DELETE FROM leaderboard_entries WHERE (course_seed, difficulty) NOT IN (
-        SELECT course_seed, difficulty FROM leaderboard_entries
-        GROUP BY course_seed, difficulty
+      DELETE FROM leaderboard_entries
+      WHERE mode = 'race' AND course_key NOT IN (
+        SELECT course_key FROM leaderboard_entries
+        WHERE mode = 'race'
+        GROUP BY course_key
         ORDER BY MAX(achieved_at) DESC
         LIMIT ?
       )
@@ -262,13 +307,16 @@ function prepare(db) {
   };
 }
 
-function courseKey(seed, difficulty) {
+// Как называется трасса в таблице. Гонка описывается сидом и сложностью, кооперативная глава —
+// своим идентификатором. Та же запись используется для личных рекордов в accounts.js: две таблицы,
+// называющие одну трассу по-разному, рано или поздно разъедутся.
+function raceCourseKey(seed, difficulty) {
   return `${seed >>> 0}:${difficulty || 'normal'}`;
 }
 
 module.exports = {
   VerifiedLeaderboard,
-  courseKey,
+  raceCourseKey,
   DEFAULT_LIMIT,
   MAX_LIMIT,
   STORED_PER_COURSE,

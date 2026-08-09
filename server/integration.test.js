@@ -137,8 +137,9 @@ async function runToFinish(client, spec, matchId, { stopBefore = 0, from = spec.
 
 // Забег, который проходит проверку на честность, а не только доезжает до финиша.
 //
-// runToFinish выше шлёт 3.2 единицы за 55 мс — это 58 единиц в секунду. Коопу это сходит с рук: его
-// итоги в таблицу рекордов не идут, и ни один тест там отметку «проверено» не смотрит. Гонке — нет.
+// runToFinish выше шлёт 3.2 единицы за 55 мс — это 58 единиц в секунду. Коопу это сходит с рук:
+// движение там не проверяется вовсе — геометрия главы серверу неизвестна, — и в таблицу глав
+// попадает время, которое он измерил сам. Гонке не сходит: там проверено каждое положение.
 //
 // Темп здесь равен беговой скорости персонажа: RUN_SPEED = 7.7, шлём 8. Раньше стояло 18 единиц в
 // секунду при заявленных восьми — то есть забег, который сервер считал честным, шёл вдвое быстрее
@@ -1156,6 +1157,83 @@ test('падение записывается на том препятствии
   assert.equal(row.mode, 'race');
   assert.equal(row.course, spec.difficulty, 'сложность — отдельное измерение: на «хаосе» падают иначе');
   assert.equal(row.device, 'desktop', 'устройство определено, а не оставлено пустым');
+});
+
+// Кооперативная глава попадает в общую таблицу — и это единственный режим, кроме гонки, где она
+// вообще имеет смысл.
+//
+// Движение в коопе сервер не проверяет: разметка главы рукотворная, коридоров и потолков скорости
+// у неё нет. Зато время он меряет сам, по своим часам, от старта комнаты до финиша, — подделать
+// его клиент не может. Проверяется именно это: строка появляется, время в ней серверное, а не
+// присланное, и оба напарника получают своё место.
+test('пройденная кооп-глава попадает в таблицу глав', async t => {
+  await listen();
+  const port = server.address().port;
+  const url = `ws://127.0.0.1:${port}/ws`;
+  const host = new TestClient(url);
+  const guest = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('create', { name: 'Аня', playerId: 'a'.repeat(32), mode: 'coop' });
+  const created = await host.wait('lobby', m => m.players.length === 1);
+  guest.send('join', { name: 'Боря', playerId: 'b'.repeat(32), code: created.code });
+  await host.wait('lobby', m => m.players.length === 2);
+  host.send('ready', { ready: true });
+  guest.send('ready', { ready: true });
+  await host.wait('lobby', m => m.players.every(p => p.ready));
+  host.send('start');
+  const started = await host.wait('start');
+  await waitForStart(started.at);
+
+  await Promise.all([
+    runToFinish(host, started.spec, started.matchId),
+    runToFinish(guest, started.spec, started.matchId)
+  ]);
+  const results = await host.wait('results', () => true, WAIT_MS);
+  assert.equal(results.mode, 'coop');
+  assert.ok(results.trusted, `подготовка: глава обязана засчитаться (${results.unranked})`);
+
+  const chapter = started.spec.chapterId || started.spec.id;
+  const ask = async playerId => {
+    const params = new URLSearchParams({ chapter, limit: '10' });
+    if (playerId) params.set('playerId', playerId);
+    const response = await fetch(`http://127.0.0.1:${port}/leaderboard/coop?${params}`);
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+
+  const board = await ask(null);
+  assert.equal(board.mode, 'coop');
+  assert.equal(
+    board.movementVerified,
+    false,
+    'интерфейсу честно сообщается, что движение здесь не проверялось'
+  );
+
+  // Проверяется своя пара, а не размер таблицы: база — общий синглтон на весь набор, и главу до
+  // этого теста успевают пройти другие. Ждать здесь ровно двух строк значило бы написать тест,
+  // который ломается от появления соседнего.
+  const mine = await ask('a'.repeat(32));
+  const partner = await ask('b'.repeat(32));
+  assert.ok(mine.standing, 'своя строка в таблице главы есть');
+  assert.ok(partner.standing, 'у напарника тоже');
+  assert.ok(mine.standing.total >= 2, 'в таблице как минимум оба');
+  assert.equal(mine.entries.filter(entry => entry.self).length <= 1, true, 'своя строка не двоится');
+
+  // Время серверное. Клиент в этом забеге ничего похожего не присылал: runToFinish сообщает
+  // clientTime 1000, а сервер меряет от старта комнаты, и на прохождение уходят секунды.
+  assert.ok(
+    mine.standing.time > 1500 && partner.standing.time > 1500,
+    `время меряет сервер, а не клиент (${mine.standing.time}, ${partner.standing.time})`
+  );
+
+  const wrong = await fetch(`http://127.0.0.1:${port}/leaderboard/coop?chapter=не-глава`);
+  assert.equal(wrong.status, 400, 'выдуманная глава — отказ, а не пустая таблица');
 });
 
 // ВНИМАНИЕ: этот тест обязан оставаться ПОСЛЕДНИМ в файле.

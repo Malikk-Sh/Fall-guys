@@ -47,7 +47,10 @@ test('provider subject нельзя привязать к двум Wobble accoun
   const { db, accounts, auth } = setup();
   const a = accounts.create('A');
   const b = accounts.create('B');
-  assert.equal(auth.linkIdentity({ provider: 'google', subject: 'google-sub', accountId: a.id }).accountId, a.id);
+  assert.equal(
+    auth.linkIdentity({ provider: 'google', subject: 'google-sub', accountId: a.id }).accountId,
+    a.id
+  );
   assert.equal(auth.linkIdentity({ provider: 'google', subject: 'google-sub', accountId: b.id }), null);
   assert.equal(auth.identity('google', 'google-sub').accountId, a.id);
   assert.equal(auth.identities(a.id)[0].provider, 'google');

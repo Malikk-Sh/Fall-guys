@@ -56,7 +56,11 @@ test('сервер материализует существующие achieveme
   for (const id of ['sky-hero', 'clear-visor', 'rescue-antenna', 'campaign-finish']) {
     assert.ok(profile.ownedIds.includes(id), `${id} выдан сервером`);
   }
-  assert.equal(profile.ownedIds.includes('sunrise-trail'), false, 'local daily reward не подделывается сервером');
+  assert.equal(
+    profile.ownedIds.includes('sunrise-trail'),
+    false,
+    'local daily reward не подделывается сервером'
+  );
   assert.equal(inventory.equip(account.id, 'visor', 'clear-visor', 4000).ok, true);
   assert.equal(inventory.equip(account.id, 'finish', 'campaign-finish', 4001).ok, true);
   assert.equal(inventory.publicLoadout(account.id).visor, 'clear-visor');

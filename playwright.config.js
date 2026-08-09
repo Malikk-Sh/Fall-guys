@@ -40,13 +40,14 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: 'node server/index.js',
+    command: 'node server/bootstrap.js',
     url: 'http://127.0.0.1:4173/health/ready',
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,
     env: {
       HOST: '127.0.0.1',
       PORT: '4173',
+      COOKIE_SECURE: '0',
       // Только локальный Playwright-сервер доверяет тестовому X-Forwarded-For. Production по
       // умолчанию по-прежнему использует реальный remoteAddress и те же защитные лимиты.
       TRUST_PROXY: '1',

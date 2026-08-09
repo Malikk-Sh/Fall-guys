@@ -18,10 +18,11 @@ Type=simple
 User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
-ExecStart=/usr/bin/node server/index.js
+# bootstrap устанавливает Auth V2 (sessions/Google) поверх того же HTTP/WebSocket сервера.
+ExecStart=/usr/bin/node server/bootstrap.js
 
 # Настройки берутся из файла, а не пишутся здесь: так их можно менять, не трогая юнит,
-# и не хранить в git.
+# и не хранить в git. Для Google-входа добавить GOOGLE_CLIENT_ID=<OAuth Web client id>.
 EnvironmentFile=/etc/wobble.env
 
 Restart=always

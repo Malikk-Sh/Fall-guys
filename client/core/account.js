@@ -1,12 +1,9 @@
 // Аккаунты на стороне игрока.
 //
-// Здесь два разных знания, и их важно не смешивать:
-//   • что лежит в браузере — список аккаунтов и код каждого (readAccounts и соседи);
-//   • что говорит сервер — имя и личные рекорды (createAccount, loginAccount и соседи).
-//
-// Всё, что ходит в сеть, обязано переживать недоступный сервер. Игра работает и без него: забег
-// пройдёт, локальный рекорд запишется. Молча потерять возможность играть из-за того, что не удалось
-// войти, было бы худшим решением из возможных.
+// Recovery code остаётся только средством восстановления. После успешного входа сервер ставит
+// HttpOnly session cookie; rename/records и обновление сетевой личности используют уже сессию.
+// Для совместимости со старой схемой WebSocket клиент получает короткий network ticket, но сам
+// cookie JavaScript прочитать не может.
 
 const STORAGE_KEY = 'wobble-accounts-v1';
 const MAX_ACCOUNTS = 8;
@@ -16,8 +13,6 @@ function storageOf(storage) {
   try {
     return globalThis.localStorage || null;
   } catch {
-    // Приватный режим или отключённые куки. Не повод падать: без хранилища игра просто не помнит
-    // аккаунт между заходами.
     return null;
   }
 }
@@ -43,8 +38,7 @@ function isUsable(account) {
     account &&
     typeof account.id === 'string' &&
     account.id &&
-    typeof account.secret === 'string' &&
-    account.secret
+    ((typeof account.secret === 'string' && account.secret) || account.provider === 'google')
   );
 }
 
@@ -69,20 +63,26 @@ export function listAccounts(storage) {
   return state.accounts.map(a => ({ ...a, current: a.id === state.current }));
 }
 
-// Добавляет аккаунт или обновляет уже известный и делает его текущим.
-//
-// Код НЕ затирается пустым: при обычном входе сервер его не возвращает (он отдаётся один раз, при
-// создании), и слепая перезапись стёрла бы единственный способ войти.
+// Network ticket намеренно НЕ кладём в localStorage: он bearer и живёт всего пару минут. Он нужен
+// только текущей странице для входа в комнату. Recovery code сохраняем, если он у нас уже есть.
 export function rememberAccount(account, storage) {
   if (!account?.id) return readAccounts(storage);
   const state = readAccounts(storage);
   const known = state.accounts.find(a => a.id === account.id);
+  const google =
+    account.provider === 'google' || account.identities?.some?.(identity => identity.provider === 'google');
   if (known) {
     known.name = account.name || known.name;
     if (account.secret) known.secret = account.secret;
+    if (google) known.provider = 'google';
   } else {
-    if (!account.secret) return state;
-    state.accounts.unshift({ id: account.id, name: account.name || 'Wobbler', secret: account.secret });
+    if (!account.secret && !google) return state;
+    state.accounts.unshift({
+      id: account.id,
+      name: account.name || 'Wobbler',
+      ...(account.secret ? { secret: account.secret } : {}),
+      ...(google ? { provider: 'google' } : {})
+    });
     state.accounts.splice(MAX_ACCOUNTS);
   }
   state.current = account.id;
@@ -105,9 +105,10 @@ export function forgetAccount(id, storage) {
 
 // --- разговор с сервером -----------------------------------------------------------------------
 
-async function post(path, body, { fetchImpl = globalThis.fetch } = {}) {
+async function post(path, body = {}, { fetchImpl = globalThis.fetch } = {}) {
   const response = await fetchImpl(path, {
     method: 'POST',
+    credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -115,51 +116,81 @@ async function post(path, body, { fetchImpl = globalThis.fetch } = {}) {
   return { ok: response.ok, status: response.status, data };
 }
 
-export async function createAccount(name, options) {
-  const { ok, data } = await post('/account', { name }, options);
-  if (!ok || !data?.account) return null;
+function serverAccount(data, fallbackSecret = '') {
+  if (!data?.account) return null;
+  const google = data.identities?.some?.(identity => identity.provider === 'google');
   return {
     ...data.account,
-    secret: data.secret,
+    ...(data.secret || fallbackSecret ? { secret: data.secret || fallbackSecret } : {}),
+    ...(google ? { provider: 'google' } : {}),
+    networkTicket: data.networkTicket || null,
+    identities: data.identities || [],
     records: data.records || [],
     progress: data.progress || null
   };
 }
 
-export async function loginAccount(secret, options) {
-  const { ok, status, data } = await post('/account/login', { secret }, options);
-  // Отличаем «сервер сказал нет» от «сервер не ответил»: в первом случае аккаунт надо забыть, во
-  // втором — ни в коем случае, иначе потеря связи на минуту стёрла бы игроку код.
-  if (status === 404) return { unknown: true };
-  if (!ok || !data?.account) return null;
-  return { ...data.account, records: data.records || [], progress: data.progress || null };
+export async function sessionAccount(options) {
+  const { ok, status, data } = await post('/api/auth/session', {}, options);
+  if (status === 401) return { missing: true };
+  return ok ? serverAccount(data) : null;
 }
 
-export async function renameAccount(secret, name, options) {
-  const { ok, data } = await post('/account/name', { secret, name }, options);
-  return ok && data?.account ? data.account : null;
-}
-
-export async function submitRecord({ secret, mode, courseKey, timeMs }, options) {
-  const { ok, data } = await post('/account/record', { secret, mode, courseKey, timeMs }, options);
+export async function authConfig(options) {
+  const { ok, data } = await post('/api/auth/config', {}, options);
   return ok ? data : null;
 }
 
-// Приводит игрока в состояние «вошёл»: возвращает текущий аккаунт, заводя его при первом заходе.
-//
-// Возможные исходы честно разделены:
-//   • сервер подтвердил аккаунт — обычный случай;
-//   • сервер такого не знает (базу пересоздали) — забываем и заводим новый, иначе игрок навсегда
-//     остался бы с кодом, который никуда не ведёт;
-//   • сервер не ответил — оставляем всё как есть и работаем без него.
+export async function createAccount(name, options) {
+  const { ok, data } = await post('/account', { name }, options);
+  if (!ok || !data?.account) return null;
+  const created = {
+    ...data.account,
+    secret: data.secret,
+    records: data.records || [],
+    progress: data.progress || null
+  };
+  // Создание старым endpoint остаётся обратно совместимым, но тут же меняем recovery credential
+  // на нормальную server session. Если Auth V2 временно недоступен, аккаунт всё равно создан.
+  try {
+    return (await loginAccount(created.secret, options)) || created;
+  } catch {
+    return created;
+  }
+}
+
+export async function loginAccount(secret, options) {
+  const { ok, status, data } = await post('/api/auth/recovery', { secret }, options);
+  if (status === 404) return { unknown: true };
+  if (!ok) return null;
+  return serverAccount(data, secret);
+}
+
+export async function loginGoogle(credential, options) {
+  const { ok, status, data } = await post('/api/auth/google', { credential }, options);
+  if (status === 409) return { conflict: true };
+  if (!ok) return null;
+  return serverAccount(data);
+}
+
+export async function logoutAccount(options) {
+  const { ok } = await post('/api/auth/logout', {}, options);
+  return ok;
+}
+
+export async function renameAccount(name, options) {
+  const { ok, data } = await post('/api/auth/name', { name }, options);
+  return ok && data?.account ? data.account : null;
+}
+
+export async function submitRecord({ mode, courseKey, timeMs }, options) {
+  const { ok, data } = await post('/api/auth/record', { mode, courseKey, timeMs }, options);
+  return ok ? data : null;
+}
+
 export async function ensureAccount(options = {}) {
   const { storage } = options;
   const stored = currentAccount(storage);
-
-  // Ошибку сети ловим здесь, а не внутри loginAccount и createAccount. Те обязаны отвечать честно:
-  // «сервер отказал» и «сервер недоступен» — разные события, и их различает как раз этот код.
-  // Проглоти их ниже — и обрыв связи стал бы неотличим от «такого аккаунта нет», то есть стоил бы
-  // игроку кода.
   const quiet = async call => {
     try {
       return await call();
@@ -168,14 +199,33 @@ export async function ensureAccount(options = {}) {
     }
   };
 
-  if (stored) {
+  // Cookie — самый дешёвый и безопасный путь. Но пользователь мог только что выбрать ДРУГОЙ
+  // сохранённый аккаунт: тогда cookie ещё принадлежит прошлому аккаунту, и она не должна отменять
+  // явный выбор. В таком случае ниже выполняется recovery login выбранного аккаунта и cookie
+  // заменяется новой server session.
+  const session = await quiet(() => sessionAccount(options));
+  const sessionMatchesSelection = session && !session.missing && (!stored || stored.id === session.id);
+  if (sessionMatchesSelection) {
+    const secret = stored?.id === session.id ? stored.secret : '';
+    const account = { ...session, ...(secret ? { secret } : {}) };
+    rememberAccount(account, storage);
+    return {
+      account,
+      records: session.records,
+      progress: session.progress,
+      online: true
+    };
+  }
+
+  if (stored?.secret) {
     const entered = await quiet(() => loginAccount(stored.secret, options));
     if (entered?.unknown) {
       forgetAccount(stored.id, storage);
     } else if (entered) {
-      rememberAccount({ ...entered, secret: stored.secret }, storage);
+      const account = { ...entered, secret: stored.secret };
+      rememberAccount(account, storage);
       return {
-        account: { ...stored, name: entered.name },
+        account,
         records: entered.records,
         progress: entered.progress,
         online: true
@@ -183,6 +233,21 @@ export async function ensureAccount(options = {}) {
     } else {
       return { account: stored, records: [], online: false };
     }
+  } else if (stored) {
+    // Google-only identity без подходящей живой cookie. Играть офлайн можно; кнопка Google
+    // восстановит сессию выбранного аккаунта.
+    return { account: stored, records: [], online: false };
+  }
+
+  // Cookie могла пережить очистку localStorage. Даже без локального recovery code такая session
+  // всё ещё валидна для игры на этом устройстве — используем её, но не записываем секрет в браузер.
+  if (session && !session.missing) {
+    return {
+      account: session,
+      records: session.records,
+      progress: session.progress,
+      online: true
+    };
   }
 
   const created = await quiet(() => createAccount(options.name, options));

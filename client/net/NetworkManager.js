@@ -495,6 +495,14 @@ export class NetworkManager {
     this.send(C2S.CANCEL_MATCHMAKING);
   }
 
+  findCoop({ name, playerId, chapterId = '' }) {
+    this.send(C2S.FIND_COOP, { name, playerId, chapterId, protocolVersion: PROTOCOL_VERSION });
+  }
+
+  cancelMatchmaking() {
+    this.send(C2S.CANCEL_MATCHMAKING);
+  }
+
   sendState(state, { force = false } = {}) {
     if (!this.matchId) return false;
     // После отправки финиша состояние не шлём вовсе. Сервер к этому моменту уже мог перевести

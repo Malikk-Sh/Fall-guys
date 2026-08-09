@@ -13,14 +13,8 @@ const player = (id, position) => ({
 
 function roomFor(chapterId, matchId = 'match-1') {
   const layout = signatureLayout(chapterId);
-  const first = player(
-    'a-player',
-    layout.core?.spawn || layout.signal?.guide || { x: 0, y: 1, z: 0 }
-  );
-  const second = player(
-    'b-player',
-    layout.core?.socket || layout.signal?.operator || { x: 1, y: 1, z: 0 }
-  );
+  const first = player('a-player', layout.core?.spawn || layout.signal?.guide || { x: 0, y: 1, z: 0 });
+  const second = player('b-player', layout.core?.socket || layout.signal?.operator || { x: 1, y: 1, z: 0 });
   return {
     chapterId,
     spec: { chapterId },

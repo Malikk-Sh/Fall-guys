@@ -53,6 +53,11 @@ function installAuthRoutes({
     return session;
   };
 
+  const withNetworkTicket = (payload, accountId) => ({
+    ...payload,
+    networkTicket: auth.createSocketTicket(accountId)?.token || null
+  });
+
   const requireSession = (req, res) => {
     const session = sessionFrom(req);
     if (session) return session;
@@ -60,18 +65,25 @@ function installAuthRoutes({
     return null;
   };
 
-  app.get('/api/auth/config', (_req, res) => {
+  // Auth routes устанавливаются bootstrap-модулем после основного приложения. В index.js уже есть
+  // catch-all GET для SPA, поэтому служебные чтения делаем POST: они не пересекаются с навигацией.
+  app.post('/api/auth/config', json, (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ ok: true, googleClientId: google.enabled ? google.clientId : null });
   });
 
-  app.get('/api/auth/session', (req, res) => {
+  app.post('/api/auth/session', json, (req, res) => {
     const session = sessionFrom(req);
     if (!session) return res.status(401).json({ ok: false, error: 'no-session' });
-    return res.json({
-      ...accountPayload(session.account),
-      identities: auth.identities(session.accountId)
-    });
+    return res.json(
+      withNetworkTicket(
+        {
+          ...accountPayload(session.account),
+          identities: auth.identities(session.accountId)
+        },
+        session.accountId
+      )
+    );
   });
 
   app.post('/api/auth/recovery', json, (req, res) => {
@@ -80,7 +92,12 @@ function installAuthRoutes({
     const account = accounts.login(req.body?.secret);
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
-    return res.json({ ...accountPayload(account), identities: auth.identities(account.id) });
+    return res.json(
+      withNetworkTicket(
+        { ...accountPayload(account), identities: auth.identities(account.id) },
+        account.id
+      )
+    );
   });
 
   app.post('/api/auth/google', json, async (req, res) => {
@@ -123,12 +140,17 @@ function installAuthRoutes({
 
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-account' });
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
-    return res.json({
-      ...accountPayload(account),
-      identities: auth.identities(account.id),
-      linked,
-      ...(secret ? { secret } : {})
-    });
+    return res.json(
+      withNetworkTicket(
+        {
+          ...accountPayload(account),
+          identities: auth.identities(account.id),
+          linked,
+          ...(secret ? { secret } : {})
+        },
+        account.id
+      )
+    );
   });
 
   app.post('/api/auth/logout', json, (req, res) => {

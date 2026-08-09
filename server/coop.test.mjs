@@ -24,8 +24,8 @@ import { PLAYER_FOOT } from '../client/game/CourseBuilder.js';
 
 const build = id => new CoopCourse(new THREE.Scene(), coopSpec(id), { quality: 'low' });
 
-test('глав ровно пять и у каждой есть всё необходимое', () => {
-  assert.equal(COOP_CHAPTERS.length, 5);
+test('глав ровно десять и у каждой есть всё необходимое', () => {
+  assert.equal(COOP_CHAPTERS.length, 10);
   const ids = new Set();
   for (const chapter of COOP_CHAPTERS) {
     assert.ok(chapter.title, `${chapter.id}: нет названия`);
@@ -112,7 +112,7 @@ test('каждая объявленная плита кем-то использ�
   }
 });
 
-test('все пять глав строятся без ошибок и дают проходимую геометрию', () => {
+test('все десять глав строятся без ошибок и дают проходимую геометрию', () => {
   for (const chapter of COOP_CHAPTERS) {
     const course = build(chapter.id);
     assert.ok(course.platforms.length > 5, `${chapter.id}: слишком мало опор`);

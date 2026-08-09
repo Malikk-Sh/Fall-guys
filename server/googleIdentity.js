@@ -64,8 +64,7 @@ class GoogleIdentityVerifier {
 
   async verify(credential, { now = Date.now() } = {}) {
     if (!this.enabled) return { ok: false, reason: 'google-disabled' };
-    if (typeof credential !== 'string' || credential.length > 16_384)
-      return { ok: false, reason: 'invalid-token' };
+    if (typeof credential !== 'string' || credential.length > 16_384) return { ok: false, reason: 'invalid-token' };
 
     const parts = credential.split('.');
     if (parts.length !== 3) return { ok: false, reason: 'invalid-token' };

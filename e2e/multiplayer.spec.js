@@ -15,8 +15,9 @@ async function setPlayerName(page, name) {
 test('два браузера входят в кооп-комнату по режимной ссылке и готовы к старту', async ({
   browser
 }, testInfo) => {
-  const { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch } = testInfo.project.use;
-  const device = { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch };
+  const { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch, extraHTTPHeaders } =
+    testInfo.project.use;
+  const device = { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch, extraHTTPHeaders };
   const hostContext = await browser.newContext(device);
   const guestContext = await browser.newContext(device);
   const host = await hostContext.newPage();

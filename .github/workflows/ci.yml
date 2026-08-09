@@ -34,6 +34,13 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      # Форматирование запускается до долгих интеграционных и браузерных сценариев. Помимо стиля,
+      # это быстро ловит следы неразрешённого merge и случайно вставленный в исходник обычный текст.
+      - name: Check formatting and merge artifacts
+        run: |
+          npm run format:check
+          ! rg -n '^(<<<<<<<|=======|>>>>>>>)' --glob '!node_modules/**' .
+
       - name: Run gameplay and multiplayer tests
         run: npm test
 

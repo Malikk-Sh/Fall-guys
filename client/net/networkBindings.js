@@ -14,9 +14,18 @@ import { APP_STATE } from '../core/AppStates.js';
 
 export function bindNetwork(game) {
   game.net.on('matchmakingWaiting', message => {
+    if (message.cancelled) {
+      const button = document.querySelector('#coopFind');
+      if (button) {
+        button.dataset.searching = 'false';
+        button.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+      }
+    }
     game.ui.status(
       message.cancelled
-        ? 'Поиск отменён. Можно создать приватную комнату.'
+        ? message.reason === 'away'
+          ? 'Поиск остановлен: игра была свёрнута.'
+          : 'Поиск отменён. Можно создать приватную комнату.'
         : `Ищем напарника… ${Math.max(1, Math.round((message.waitedMs || 0) / 1000))} с`
     );
   });
@@ -104,6 +113,7 @@ export function bindNetwork(game) {
     }
   });
   game.net.on('coopEvent', message => game.coopControl.receiveCoopEvent(message));
+  game.net.on('coopPing', message => game.coopControl.receivePing(message));
   game.net.on('finish', message => game.receiveFinish(message));
   game.net.on('results', message => game.receiveResults(message));
 

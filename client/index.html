@@ -119,6 +119,13 @@
             Одна цель на двоих. Плиты, качели и пролёты требуют, чтобы кто-то держал, пока другой идёт.
             Персонажи одинаковые — договаривайтесь на ходу и меняйтесь ролями.
           </p>
+          <section class="coop-campaign" aria-labelledby="coopCampaignTitle">
+            <div class="campaign-heading">
+              <span id="coopCampaignTitle">ПРИКЛЮЧЕНИЕ 1–10</span>
+              <small>Все главы открыты · рекомендуем идти по порядку</small>
+            </div>
+            <div id="coopCampaign" class="campaign-grid"></div>
+          </section>
           <label class="field field-full"
             ><span>Глава</span
             ><select id="coopChapter"></select
@@ -195,6 +202,12 @@
           <small class="account-legend">МОИ АККАУНТЫ</small>
           <div id="accountList" class="account-list" aria-label="Мои аккаунты"></div>
           <button id="accountNew" class="button button-secondary">СОЗДАТЬ НОВЫЙ</button>
+        </div>
+
+        <div class="account-section">
+          <small class="account-legend">НАГРАДЫ ЗА ИГРУ · БЕЗ МАГАЗИНА</small>
+          <div id="cosmeticGrid" class="cosmetic-grid" aria-label="Полученная косметика"></div>
+          <p id="cosmeticGoal" class="cosmetic-goal"></p>
         </div>
 
         <div class="account-section">
@@ -299,6 +312,14 @@
       <p id="coopLessonText"></p>
     </div>
 
+    <button id="coopPingButton" class="coop-ping-button hidden" aria-label="Быстрые команды">●</button>
+    <div id="coopPingMenu" class="coop-ping-menu hidden" role="menu" aria-label="Быстрые команды">
+      <button data-ping="here">СЮДА</button><button data-ping="wait">ЖДИ</button>
+      <button data-ping="go">ИДИ</button><button data-ping="help">ПОМОГИ</button>
+      <button data-ping="ready">ГОТОВ</button><button data-ping="thanks">👍</button>
+    </div>
+    <div id="coopPingBubble" class="coop-ping-bubble hidden" role="status"></div>
+
     <div id="countdown" class="countdown hidden"><span>3</span></div>
     <div id="checkpointBanner" class="checkpoint-banner hidden">
       <small>КОНТРОЛЬНАЯ ТОЧКА</small><strong>1 / 6</strong>
@@ -324,10 +345,12 @@
         <p id="finishTime">00:00.00</p>
         <div id="unrankedNote" class="unranked-note hidden" role="status"></div>
         <div id="finishStats" class="finish-stats"></div>
+        <div id="finishHighlights" class="finish-highlights" aria-live="polite"></div>
         <div id="board" class="leaderboard"></div>
         <button id="again" class="button button-primary">ПОВТОРИТЬ ТРАССУ</button>
         <button id="newCourse" class="button button-secondary">НОВАЯ ТРАССА</button>
-        <button id="rematch" class="button button-primary hidden">РЕВАНШ</button>
+        <button id="nextChapter" class="button button-primary hidden">ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ</button>
+        <button id="rematch" class="button button-secondary hidden">ЕЩЁ РАЗ</button>
         <button id="returnLobby" class="button button-secondary hidden">В ЛОББИ</button>
         <div id="resultsTimer" class="results-timer" role="status" aria-live="polite"></div>
         <button class="text-button back">В ГЛАВНОЕ МЕНЮ</button>

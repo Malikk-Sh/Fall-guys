@@ -122,13 +122,22 @@ test('следующий заход входит молча, без нового
   const server = fakeServer({
     '/account/login': body => {
       assert.equal(body.secret, 'КОД');
-      return { status: 200, data: { ok: true, account: { id: 'known', name: 'Малик' }, records: [] } };
+      return {
+        status: 200,
+        data: {
+          ok: true,
+          account: { id: 'known', name: 'Малик' },
+          records: [],
+          progress: { chapters: [{ chapterId: 'ch7', completions: 1 }], achievements: [] }
+        }
+      };
     }
   });
 
   const result = await ensureAccount({ storage, fetchImpl: server.fetchImpl });
   assert.equal(result.account.id, 'known');
   assert.equal(result.account.name, 'Малик', 'имя подтягивается с сервера');
+  assert.equal(result.progress.chapters[0].chapterId, 'ch7', 'кампания переносится вместе с аккаунтом');
   assert.deepEqual(
     server.calls.map(c => c.path),
     ['/account/login'],

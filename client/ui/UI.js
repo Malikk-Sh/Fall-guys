@@ -9,6 +9,14 @@ import {
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
 import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
+import {
+  COSMETICS,
+  cosmeticLoadout,
+  equipCosmetic,
+  nextCosmeticGoal,
+  readCosmetics,
+  unlockedCosmetics
+} from '../core/cosmetics.js';
 import { GAME_MODE } from '/shared/protocol.js';
 
 // Лучшее из двух рекордов. Серверный и локальный могут разойтись: играли без связи, играли с
@@ -107,6 +115,20 @@ export class UI {
     $('#accountName').textContent = account?.name || 'без аккаунта';
     $('#accountChip').classList.toggle('offline', !online);
     this.renderAccountPanel();
+    if (this.coopChapters) this.renderCoopCampaign(this.coopChapters);
+  }
+
+  setAccountRecords(records) {
+    this.accountRecords = records || new Map();
+    if (this.coopChapters) this.renderCoopCampaign(this.coopChapters);
+  }
+
+  setAccountProgress(progress) {
+    this.accountProgressData = progress || null;
+    this.accountProgress = new Map((progress?.chapters || []).map(chapter => [chapter.chapterId, chapter]));
+    this.accountAchievements = progress?.achievements || [];
+    if (this.coopChapters) this.renderCoopCampaign(this.coopChapters);
+    this.renderCosmetics();
   }
 
   renderAccountPanel() {
@@ -124,6 +146,39 @@ export class UI {
       else row.addEventListener('click', () => this.onAccountAction?.('switch', account.id));
       list.append(row);
     }
+    this.renderCosmetics();
+  }
+
+  renderCosmetics() {
+    const grid = $('#cosmeticGrid');
+    if (!grid) return;
+    const profile = this.profileData || readProfile();
+    const unlocked = new Set(unlockedCosmetics(this.accountProgressData, profile).map(item => item.id));
+    const equipped = readCosmetics(this.accountProgressData, profile);
+    grid.replaceChildren();
+    for (const item of COSMETICS) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'cosmetic-card';
+      const available = unlocked.has(item.id);
+      card.classList.toggle('cosmetic-card-locked', !available);
+      card.classList.toggle('cosmetic-card-equipped', equipped[item.slot] === item.id);
+      card.disabled = !available;
+      card.innerHTML = `<strong>${available ? '✦' : '🔒'} ${item.name}</strong><small>${
+        equipped[item.slot] === item.id ? 'НАДЕТО' : item.detail
+      }</small>`;
+      if (available)
+        card.addEventListener('click', () => {
+          equipCosmetic(item.id, this.accountProgressData, profile);
+          this.renderCosmetics();
+          this.onCosmeticChange?.();
+        });
+      grid.append(card);
+    }
+    const goal = nextCosmeticGoal(this.accountProgressData, profile);
+    $('#cosmeticGoal').textContent = goal
+      ? `СЛЕДУЮЩАЯ НАГРАДА · ${goal.label}: ${Math.min(goal.current, goal.target)}/${goal.target}`
+      : 'ВСЕ ИГРОВЫЕ НАГРАДЫ ПОЛУЧЕНЫ';
   }
 
   setAccountList(accounts) {
@@ -144,6 +199,7 @@ export class UI {
 
   // Список глав в меню кооператива.
   fillChapters(chapters, onChange) {
+    this.coopChapters = chapters;
     const select = $('#coopChapter');
     select.replaceChildren();
     for (const chapter of chapters) {
@@ -156,10 +212,114 @@ export class UI {
       const chapter = chapters.find(item => item.id === select.value) || chapters[0];
       $('#coopHint').textContent = chapter.hint;
       this.coopProfile(chapter.id);
+      $$('.campaign-card').forEach(card =>
+        card.classList.toggle('selected', card.dataset.chapter === chapter.id)
+      );
       onChange?.(chapter);
     };
     select.addEventListener('change', apply);
+    this.renderCoopCampaign(chapters);
     apply();
+  }
+
+  renderCoopCampaign(chapters, profile = readProfile()) {
+    const grid = $('#coopCampaign');
+    if (!grid) return;
+    grid.replaceChildren();
+    const firstPending = chapters.find(chapter => !this.chapterProgress(profile, chapter.id).completed)?.id;
+    chapters.forEach((chapter, index) => {
+      const progress = this.chapterProgress(profile, chapter.id);
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'campaign-card';
+      card.dataset.chapter = chapter.id;
+      card.classList.toggle('completed', progress.completed);
+      card.classList.toggle('recommended', chapter.id === firstPending);
+      card.setAttribute('aria-label', `Глава ${index + 1}: ${chapter.title}`);
+      const medal = progress.flawless
+        ? '✦ ЗОЛОТО'
+        : progress.best
+          ? '★ СЕРЕБРО'
+          : progress.completed
+            ? '● БРОНЗА'
+            : '○ НЕ ПРОЙДЕНА';
+      card.innerHTML = `
+        <span class="campaign-number">${String(index + 1).padStart(2, '0')}</span>
+        <span class="campaign-copy"><b>${chapter.title}</b><small>${chapter.subtitle}</small></span>
+        <span class="campaign-medal">${medal}</span>
+        <span class="campaign-preview">${this.chapterMechanics(chapter)
+          .map(item => `<i>${item}</i>`)
+          .join('')}</span>
+        <span class="campaign-stats">
+          <small>ЛУЧШЕЕ <b>${progress.best ? formatTime(progress.best) : '—'}</b></small>
+          <small>МЕСТО <b data-campaign-rank>—</b></small>
+          <small>FLAWLESS <b>${progress.flawless}</b></small>
+          <small>СПАСЕНИЯ <b>${progress.revives}</b></small>
+        </span>
+        ${chapter.id === firstPending ? '<em>РЕКОМЕНДУЕМ</em>' : ''}`;
+      card.addEventListener('click', () => {
+        $('#coopChapter').value = chapter.id;
+        $('#coopChapter').dispatchEvent(new Event('change'));
+      });
+      grid.append(card);
+      this.loadCampaignRank(chapter.id, card.querySelector('[data-campaign-rank]'));
+    });
+  }
+
+  chapterProgress(profile, chapterId) {
+    const stats = profile.coop.chapterStats?.[chapterId] || {};
+    const server = this.accountProgress?.get(chapterId) || {};
+    const best = bestOf(
+      profile.coop.bestByChapter[chapterId],
+      server.bestTime,
+      this.accountRecords?.get(`${GAME_MODE.COOP}:${chapterId}`)
+    );
+    return {
+      completed: (stats.runs || 0) > 0 || (server.completions || 0) > 0 || Boolean(best),
+      best,
+      flawless: Math.max(stats.flawless || 0, server.flawless || 0),
+      revives: Math.max(stats.revives || 0, server.revives || 0)
+    };
+  }
+
+  chapterMechanics(chapter) {
+    const labels = new Set();
+    if (chapter.mechanics?.energyCore) labels.add('ЭНЕРГОЯДРО');
+    if (chapter.mechanics?.tether) labels.add('ТРОС');
+    if (chapter.mechanics?.asymmetricSignals) labels.add('СИГНАЛЫ');
+    const kinds = {
+      gateSpan: 'МОСТ',
+      syncSpan: 'СИНХРО',
+      movingSpan: 'ПЛАТФОРМА',
+      splitSpan: 'РАЗВИЛКА',
+      collapsing: 'ОБВАЛ'
+    };
+    const props = {
+      plate: 'ПЛИТЫ',
+      catapult: 'КАЧЕЛИ',
+      conveyor: 'ЛЕНТА',
+      fan: 'ВЕТЕР',
+      pendulum: 'МОЛОТ',
+      crusher: 'ПРЕСС'
+    };
+    for (const segment of chapter.segments || []) {
+      if (kinds[segment.kind]) labels.add(kinds[segment.kind]);
+      for (const prop of segment.props || []) if (props[prop.type]) labels.add(props[prop.type]);
+    }
+    return [...labels].slice(0, 3);
+  }
+
+  async loadCampaignRank(chapterId, target) {
+    if (!target || !this.playerId()) return;
+    try {
+      const params = new URLSearchParams({ limit: '1', playerId: this.playerId(), chapter: chapterId });
+      const response = await fetch(`/leaderboard/coop?${params}`);
+      if (!response.ok) return;
+      const { standing } = await response.json();
+      if (target.isConnected && standing?.place) target.textContent = `#${standing.place}`;
+    } catch {
+      // Кампания остаётся полностью рабочей офлайн; место — необязательное серверное дополнение.
+    }
   }
 
   // Ссылка-приглашение. На телефоне диктовать пятисимвольный код неудобно и легко ошибиться,
@@ -240,11 +400,23 @@ export class UI {
     $('#partnerArrow').style.transform = `rotate(${Math.atan2(screen.y - y, screen.x - x) + Math.PI / 2}rad)`;
     $('#partnerLabel').textContent = down ? 'НУЖНА ПОМОЩЬ' : away ? 'ОТОШЁЛ' : `${Math.round(distance)} м`;
   }
+
+  updateCoopPing(text, screen = null) {
+    const bubble = $('#coopPingBubble');
+    if (!text || !screen) {
+      bubble.classList.add('hidden');
+      return;
+    }
+    bubble.textContent = text;
+    bubble.style.left = `${Math.max(36, Math.min(innerWidth - 36, screen.x))}px`;
+    bubble.style.top = `${Math.max(54, Math.min(innerHeight - 24, screen.y))}px`;
+    bubble.classList.remove('hidden');
+  }
   setInputMethod(method) {
     const touch = method === 'touch';
     $('#controlHint').textContent = touch
       ? 'ДЖОЙСТИК · ПРЫЖОК · РЫВОК · СВАЙП — КАМЕРА'
-      : 'WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА · C — РЕЖИМ';
+      : 'WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА · C — РЕЖИМ · T — КОМАНДЫ';
     if (this.racing) this.elements.touch.classList.toggle('hidden', !touch);
   }
   show(id) {
@@ -290,7 +462,7 @@ export class UI {
     this.toast(message, 'error', 5200);
   }
   status(message) {
-    $('#connectStatus').textContent = message;
+    $(this.mode === 'coop' ? '#coopStatus' : '#connectStatus').textContent = message;
   }
   // `serverBest` — рекорд из аккаунта. Он важнее локального: локальный принадлежит браузеру, а
   // серверный — игроку, и переезжает вместе с ним на другое устройство.
@@ -312,9 +484,14 @@ export class UI {
     }
   }
   profile(data) {
+    this.profileData = data;
     $('#profileRuns').textContent = data.completedRuns;
     $('#profileFlawless').textContent = data.flawlessRuns;
     $('#profileStreak').textContent = data.daily.streak;
+    this.renderCosmetics();
+  }
+  cosmeticLoadout() {
+    return cosmeticLoadout(this.accountProgressData, this.profileData || readProfile());
   }
   coopProfile(chapterId, data = readProfile()) {
     $('#coopProfileChapters').textContent = data.coop.completedChapters;
@@ -333,6 +510,9 @@ export class UI {
   // на компьютере просто не существовал.
   playerId() {
     return this.account?.id || null;
+  }
+  accountToken() {
+    return this.account?.secret || null;
   }
   lobby(data, selfId) {
     this.show('lobby');
@@ -456,6 +636,11 @@ export class UI {
     $('#placeBox').classList.toggle('hidden', !multiplayer || coop);
     $('#pingBox').classList.toggle('hidden', !multiplayer);
     if (!on || !coop) $('#partnerHud').classList.add('hidden');
+    $('#coopPingButton').classList.toggle('hidden', !on || !coop);
+    if (!on || !coop) {
+      $('#coopPingMenu').classList.add('hidden');
+      this.updateCoopPing(null);
+    }
     if (!on) $('#coopIntro').classList.add('hidden');
     if (!on || !coop) this.coopLesson(null);
   }
@@ -530,9 +715,12 @@ export class UI {
   // Кнопки экрана результатов в исходное состояние. Голоса считаются заново для каждого матча,
   // а `disabled` мог остаться с прошлого.
   resetResultButtons() {
+    const next = $('#nextChapter');
+    next.disabled = false;
+    next.textContent = 'ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ';
     const rematch = $('#rematch');
     rematch.disabled = false;
-    rematch.textContent = 'РЕВАНШ';
+    rematch.textContent = 'ЕЩЁ РАЗ';
     const back = $('#returnLobby');
     back.disabled = false;
     back.textContent = 'В ЛОББИ';
@@ -549,20 +737,32 @@ export class UI {
   updateResultRoom(data, selfId, serverNow = Date.now()) {
     const active = data.players.filter(player => player.online);
     const self = active.find(player => player.id === selfId);
+    const forNext = active.filter(player => player.choice === 'next').length;
     const forRematch = active.filter(player => player.choice === 'rematch').length;
     const forLobby = active.filter(player => player.choice === 'lobby').length;
 
     // Кнопки остаются нажимаемыми: выбор меняют, пока комната не решила. Отметка «✓» показывает
     // свой выбор, счётчик — чужой. Без второго игрок не понимает, ждут его или он ждёт.
+    const next = $('#nextChapter');
+    next.disabled = false;
+    next.classList.toggle('hidden', data.mode !== GAME_MODE.COOP);
+    next.textContent =
+      (self?.choice === 'next' ? '✓ ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ' : 'ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ') +
+      ` · ${forNext}/${active.length}`;
+
     const rematch = $('#rematch');
     rematch.disabled = false;
     rematch.textContent =
-      (self?.choice === 'rematch' ? '✓ РЕВАНШ' : 'РЕВАНШ') + ` · ${forRematch}/${active.length}`;
+      (self?.choice === 'rematch' ? '✓ ЕЩЁ РАЗ' : 'ЕЩЁ РАЗ') + ` · ${forRematch}/${active.length}`;
 
     const back = $('#returnLobby');
     back.disabled = false;
     back.textContent =
-      (self?.choice === 'lobby' ? '✓ В ЛОББИ' : 'В ЛОББИ') + ` · ${forLobby}/${active.length}`;
+      (self?.choice === 'lobby'
+        ? `✓ ${data.mode === GAME_MODE.COOP ? 'ВЫЙТИ' : 'В ЛОББИ'}`
+        : data.mode === GAME_MODE.COOP
+          ? 'ВЫЙТИ'
+          : 'В ЛОББИ') + ` · ${forLobby}/${active.length}`;
 
     this.showResultsTimer(data.resultsDeadline, serverNow);
   }
@@ -638,6 +838,7 @@ export class UI {
       medal === 'GOLD' ? '★' : medal === 'SILVER' ? '◆' : medal === 'BRONZE' ? '●' : '✓';
     $('#finishTime').textContent = formatTime(time);
     const objectives = evaluateCourseObjectives(spec, { respawns, time, dashes, hits });
+    const previousBest = bestOf(serverBest, readBest(soloKey(seed, difficulty)));
     const profile = recordSoloProfile(spec, { objectives, unranked, respawns });
     this.profile(profile);
     $('#finishStats').innerHTML = [
@@ -653,6 +854,7 @@ export class UI {
     $('#again').classList.remove('hidden');
     $('#newCourse').classList.remove('hidden');
     $('#rematch').classList.add('hidden');
+    $('#nextChapter').classList.add('hidden');
     $('#returnLobby').classList.add('hidden');
     // Забег без зачёта рекорд не переписывает — правило и его причина живут в core/records.js.
     const saved = saveBest(soloKey(seed, difficulty), time, { unranked });
@@ -662,6 +864,33 @@ export class UI {
     if (saved.improved && (!previous || time < previous)) {
       this.toast(saved.first && !serverBest ? 'Первое время сохранено!' : 'Новый личный рекорд!');
     }
+    const goal = nextCosmeticGoal(this.accountProgressData, profile);
+    this.setFinishHighlights([
+      saved.improved && previousBest
+        ? {
+            title: `НОВЫЙ РЕКОРД −${formatTime(previousBest - time)}`,
+            detail: `Было ${formatTime(previousBest)}`
+          }
+        : previousBest
+          ? {
+              title:
+                time <= previousBest
+                  ? 'ЛУЧШЕЕ ВРЕМЯ ПОВТОРЕНО'
+                  : `ДО РЕКОРДА ${formatTime(time - previousBest)}`,
+              detail: `Ваш рекорд ${formatTime(previousBest)}`
+            }
+          : { title: 'ПЕРВОЕ ВРЕМЯ', detail: 'Теперь есть точка для сравнения' },
+      respawns === 0
+        ? { title: 'БЕЗ ПАДЕНИЙ', detail: 'Чистое прохождение трассы' }
+        : { title: `ВОЗВРАЩЕНИЯ: ${respawns}`, detail: 'Следующая цель — пройти без падений' },
+      goal
+        ? {
+            title: `${goal.label.toUpperCase()} ${Math.min(goal.current, goal.target)}/${goal.target}`,
+            detail: 'Прогресс к следующей косметической награде'
+          }
+        : null
+    ]);
+    this.applyFinishCosmetic();
   }
 
   // Итоги кооп-главы. Мест здесь нет: команда либо прошла главу, либо нет, и время у неё общее —
@@ -672,6 +901,8 @@ export class UI {
     board,
     selfId,
     revives = 0,
+    receivedRevives = 0,
+    downs = 0,
     matchId = null,
     unranked = null,
     serverBest = null
@@ -683,32 +914,109 @@ export class UI {
     $('#finishTitle').textContent = 'ГЛАВА ПРОЙДЕНА!';
     $('#medal').textContent = '✦';
     $('#finishTime').textContent = formatTime(time);
-    const best = bestOf(
-      serverBest,
-      chapter ? this.recordChapterBest(chapter.chapterId, time, unranked) : null
-    );
+    const localPrevious = chapter ? readBest(coopKey(chapter.chapterId)) : null;
+    const previousBest = bestOf(serverBest, localPrevious);
+    const saved = chapter ? saveBest(coopKey(chapter.chapterId), time, { unranked }) : { best: null };
+    const best = bestOf(serverBest, saved.best);
     const profile = recordCoopProfile(chapter, { time, revives, matchId, unranked });
     this.coopProfile(chapter?.chapterId, profile);
+    if (this.coopChapters) this.renderCoopCampaign(this.coopChapters, profile);
     $('#finishStats').innerHTML = [
       `<span>${chapter?.title || 'КООПЕРАТИВ'}</span>`,
       `<span>${chapter?.subtitle || 'ВДВОЁМ'}</span>`,
       best ? `<span>ЛУЧШЕЕ ${formatTime(best)}</span>` : '',
       `<span>СПАСЕНИЙ: ${revives}</span>`
     ].join('');
+    const goal = nextCosmeticGoal(this.accountProgressData, profile);
+    this.setFinishHighlights([
+      saved.improved && previousBest && time < previousBest
+        ? {
+            title: `НОВЫЙ РЕКОРД −${formatTime(previousBest - time)}`,
+            detail: `Было ${formatTime(previousBest)}`
+          }
+        : previousBest
+          ? {
+              title:
+                time <= previousBest
+                  ? 'ЛУЧШЕЕ ВРЕМЯ ПОВТОРЕНО'
+                  : `МЕДЛЕННЕЕ НА ${formatTime(time - previousBest)}`,
+              detail: `Лучшее ${formatTime(previousBest)}`
+            }
+          : { title: 'ПЕРВОЕ ПРОХОЖДЕНИЕ', detail: 'Время главы сохранено' },
+      downs === 0
+        ? { title: 'БЕЗ ПАДЕНИЙ', detail: 'Вы прошли главу без спасения' }
+        : receivedRevives > 0
+          ? {
+              title: `НАПАРНИК СПАС ВАС ${receivedRevives} ${this.timesLabel(receivedRevives)}`,
+              detail: `Падений за главу: ${downs}`
+            }
+          : { title: `ПАДЕНИЙ: ${downs}`, detail: 'Попробуйте пройти следующую главу без падений' },
+      revives > 0
+        ? { title: `ВЫ СПАСЛИ НАПАРНИКА ${revives} ${this.timesLabel(revives)}`, detail: 'Командная работа' }
+        : null,
+      goal
+        ? {
+            title: `${goal.label.toUpperCase()} ${Math.min(goal.current, goal.target)}/${goal.target}`,
+            detail: 'До следующей косметической награды'
+          }
+        : null
+    ]);
+    this.applyFinishCosmetic();
+    if (!unranked && chapter?.chapterId) this.loadResultStanding(chapter.chapterId);
     this.updateBoard(board || [], selfId);
     $('#again').classList.add('hidden');
     $('#newCourse').classList.add('hidden');
     $('#rematch').classList.remove('hidden');
+    $('#nextChapter').classList.remove('hidden');
     $('#returnLobby').classList.remove('hidden');
     this.resetResultButtons();
+    $('#returnLobby').textContent = 'ВЫЙТИ';
   }
 
-  // Лучшее время главы после возможного обновления либо null, если рекорда ещё нет.
-  recordChapterBest(chapterId, time, unranked) {
-    if (!chapterId) return null;
-    const saved = saveBest(coopKey(chapterId), time, { unranked });
-    if (saved.improved) this.toast(saved.first ? 'Первое время главы сохранено!' : 'Рекорд главы побит!');
-    return saved.best;
+  setFinishHighlights(items) {
+    const box = $('#finishHighlights');
+    box.replaceChildren();
+    for (const item of items.filter(Boolean).slice(0, 4)) {
+      const card = document.createElement('div');
+      card.className = 'finish-highlight';
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const detail = document.createElement('span');
+      detail.textContent = item.detail;
+      card.append(title, detail);
+      box.append(card);
+    }
+  }
+
+  async loadResultStanding(chapterId) {
+    try {
+      const params = new URLSearchParams({ chapter: chapterId, playerId: this.playerId() || '' });
+      const response = await fetch(`/leaderboard/coop?${params}`);
+      if (!response.ok) return;
+      const { standing } = await response.json();
+      if (!standing) return;
+      const top = Math.max(1, Math.ceil((standing.place / standing.total) * 100));
+      const items = [...$('#finishHighlights').children].map(card => ({
+        title: card.querySelector('strong')?.textContent || '',
+        detail: card.querySelector('span')?.textContent || ''
+      }));
+      items.unshift({
+        title: `№${standing.place} В ЭТОЙ ГЛАВЕ`,
+        detail: `ТОП ${top}% · участников ${standing.total}`
+      });
+      this.setFinishHighlights(items);
+    } catch {
+      // Наградная карточка остаётся полезной и без таблицы; сетевую ошибку здесь не показываем.
+    }
+  }
+
+  applyFinishCosmetic() {
+    const finish = this.cosmeticLoadout().finish;
+    if (finish?.glyph) $('#medal').textContent = finish.glyph;
+  }
+
+  timesLabel(value) {
+    return Number(value) === 1 ? 'РАЗ' : 'РАЗА';
   }
 
   finishMulti({ time, board, selfId, canRematch = true, unranked = null }) {
@@ -724,10 +1032,13 @@ export class UI {
     $('#medal').textContent = place === 1 ? '♛' : '★';
     $('#finishTime').textContent = formatTime(time);
     $('#finishStats').innerHTML = '<span>ОНЛАЙН-ГОНКА</span><span>РЕЗУЛЬТАТЫ</span>';
+    this.setFinishHighlights([]);
+    this.applyFinishCosmetic();
     this.updateBoard(board, selfId);
     $('#again').classList.add('hidden');
     $('#newCourse').classList.add('hidden');
     $('#rematch').classList.toggle('hidden', !canRematch);
+    $('#nextChapter').classList.add('hidden');
     $('#returnLobby').classList.remove('hidden');
     this.resetResultButtons();
   }

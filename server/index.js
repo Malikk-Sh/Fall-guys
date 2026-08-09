@@ -42,6 +42,7 @@ const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChap
 const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
 const { VerifiedLeaderboard, VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const { openDatabase } = require('./db');
+const { migrateDatabase } = require('./migrations');
 const { Accounts } = require('./accounts');
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 
@@ -143,6 +144,7 @@ const rooms = new Map();
 // это осознанно: сервер, у которого забыли настроить путь, должен работать, а не падать на старте.
 // Одно соединение на весь процесс: таблица рекордов и аккаунты лежат в одном файле.
 const gameDb = openDatabase(process.env.LEADERBOARD_DB || ':memory:');
+migrateDatabase(gameDb);
 const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
 const accounts = new Accounts({ db: gameDb });
 const gameplay = new GameplayMetrics({ db: gameDb });
@@ -408,7 +410,8 @@ function httpRateLimited(kind, ip) {
 const accountPayload = account => ({
   ok: true,
   account: { id: account.id, name: account.name },
-  records: accounts.records(account.id)
+  records: accounts.records(account.id),
+  progress: accounts.progress(account.id)
 });
 
 app.post('/account', accountJson, (req, res) => {
@@ -562,7 +565,13 @@ const wss = new WebSocketServer({
 
 // Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.
 // Все они относятся к идущему забегу и после RESULTS не значат ничего.
-const MATCH_TRAILING_TYPES = new Set([C2S.PLAYER_STATE, C2S.COOP_EVENT, C2S.RESPAWN, C2S.FINISH]);
+const MATCH_TRAILING_TYPES = new Set([
+  C2S.PLAYER_STATE,
+  C2S.COOP_EVENT,
+  C2S.COOP_PING,
+  C2S.RESPAWN,
+  C2S.FINISH
+]);
 
 // Порог, после которого соединение считается захлебнувшимся. При медленном канале очередь
 // отправки растёт неограниченно и съедает память сервера; лучше отбросить устаревший снапшот.
@@ -688,6 +697,8 @@ const lobbyPayload = room => ({
   state: room.state,
   mode: room.mode,
   chapterId: room.chapterId || null,
+  hasNextChapter:
+    room.mode === GAME_MODE.COOP && COOP_CHAPTER_IDS.indexOf(room.chapterId) < COOP_CHAPTER_IDS.length - 1,
   matchId: room.matchId,
   // Оставлено для совместимости с текущим клиентом: булево «идёт ли забег».
   started: room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING,
@@ -767,7 +778,11 @@ function dropPlayer(room, playerId) {
 
 function leave(ws) {
   const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
-  if (queued !== -1) coopMatchmaking.splice(queued, 1);
+  if (queued !== -1) {
+    coopMatchmaking.splice(queued, 1);
+    gameplay.count('matchmaking_queue_exit', { detail: 'leave', device: ws.device || 'desktop' });
+    gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'leave', device: ws.device });
+  }
   if (!ws.room) return;
   const room = rooms.get(ws.room);
   ws.room = null;
@@ -808,7 +823,14 @@ function handleDisconnect(ws) {
 
   if (!ws.room) {
     const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
-    if (queued !== -1) coopMatchmaking.splice(queued, 1);
+    if (queued !== -1) {
+      coopMatchmaking.splice(queued, 1);
+      gameplay.count('matchmaking_queue_exit', {
+        detail: 'disconnect',
+        device: ws.device || 'desktop'
+      });
+      gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'disconnect', device: ws.device });
+    }
     return;
   }
   const room = rooms.get(ws.room);
@@ -824,6 +846,12 @@ function handleDisconnect(ws) {
   }
   player.ws = null;
   player.disconnectedAt = Date.now();
+  if (
+    room.mode === GAME_MODE.COOP &&
+    (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)
+  ) {
+    gameplay.count('partner_disconnect', dims(room, player, `cp${player.checkpoint || 0}`));
+  }
   room.updatedAt = Date.now();
   // Обрыв посреди забега снимает зачёт. Раньше кооп молча превращался в одиночное прохождение:
   // оставшийся доходил до финиша, получал время — и не знал, что это время уже ничего не значит,
@@ -841,15 +869,20 @@ function handleDisconnect(ws) {
   emitLobby(room);
 }
 
-function addPlayer(room, ws, name, playerId = null) {
+function addPlayer(room, ws, name, playerId = null, accountToken = null) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
+  const authenticated = accountToken ? accounts.login(accountToken) : null;
   room.players.set(ws.id, {
     id: ws.id,
     name: safeName(name),
     // Хранится на игроке, но не попадает ни в один рассылаемый пакет: это ключ чужой строки в
     // таблице рекордов, и знать его соседям по комнате незачем.
-    anonymousId: typeof playerId === 'string' && playerId.trim() ? playerId.trim().slice(0, 64) : null,
+    anonymousId:
+      authenticated?.id ||
+      (typeof playerId === 'string' && playerId.trim() ? playerId.trim().slice(0, 64) : null),
+    // Серверный прогресс никогда не доверяет присланному playerId: только проверенному коду.
+    accountId: authenticated?.id || null,
     color,
     slot: 0,
     joinOrder: room.nextJoinOrder++,
@@ -905,6 +938,7 @@ function enqueueCoop(ws, message) {
   leave(ws);
   const requested = COOP_CHAPTER_IDS.includes(message.chapterId) ? message.chapterId : null;
   const now = Date.now();
+  gameplay.count('queue_enter', { mode: GAME_MODE.COOP, course: requested || 'any', device: ws.device });
   const partnerIndex = coopMatchmaking.findIndex(entry => {
     if (entry.ws.readyState !== 1 || entry.ws === ws) return false;
     return !requested || !entry.chapterId || entry.chapterId === requested;
@@ -914,6 +948,7 @@ function enqueueCoop(ws, message) {
       ws,
       name: message.name,
       playerId: message.playerId,
+      accountToken: message.accountToken,
       chapterId: requested,
       queuedAt: now
     });
@@ -924,9 +959,10 @@ function enqueueCoop(ws, message) {
   const [partner] = coopMatchmaking.splice(partnerIndex, 1);
   const chapterId = requested || partner.chapterId || COOP_CHAPTER_IDS[0];
   const room = createCoopRoom(chapterId, partner.ws.id);
-  addPlayer(room, partner.ws, partner.name, partner.playerId);
-  addPlayer(room, ws, message.name, message.playerId);
+  addPlayer(room, partner.ws, partner.name, partner.playerId, partner.accountToken);
+  addPlayer(room, ws, message.name, message.playerId, message.accountToken);
   for (const player of room.players.values()) player.ready = true;
+  for (const player of room.players.values()) gameplay.count('match_found', dims(room, player));
   gameplay.observe(
     'matchmaking_wait_ms',
     now - partner.queuedAt,
@@ -1080,6 +1116,16 @@ function verifyPlayerProgress(room, player, checkpoint, now) {
   return verification;
 }
 
+function trackCheckpointDuration(room, player, checkpoint, now) {
+  if (room.mode !== GAME_MODE.COOP || checkpoint <= player.checkpoint) return;
+  gameplay.observe(
+    'checkpoint_duration_ms',
+    Math.max(0, now - (player.checkpointAt || room.startedAt || now)),
+    dims(room, player, `cp${checkpoint}`)
+  );
+  player.checkpointAt = now;
+}
+
 // Запуск забега: отсчёт, новый matchId, сброс состояния игроков по местам появления.
 //
 // Вынесено из обработчика START_MATCH, потому что вызывать это надо из двух мест: по команде хоста
@@ -1094,19 +1140,26 @@ function beginCountdown(room) {
   room.snapshotSequence = 0;
   room.startedAt = Date.now() + COUNTDOWN_MS;
   room.firstFinishAt = null;
+  room.coopRevives = 0;
   // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
   room.unranked = null;
   room.results = null;
   room.resultsDeadline = null;
   room.abandonTracked = false;
+  room.pairEndedTracked = false;
   metrics.matchesStarted++;
   trackEvent(productEvents, 'matchStarted');
   for (const item of room.players.values()) gameplay.count('match_started', dims(room, item));
+  if (room.mode === GAME_MODE.COOP) {
+    for (const item of room.players.values()) gameplay.count('chapter_started', dims(room, item));
+  }
   assignSlots(room);
 
   for (const item of room.players.values())
     Object.assign(item, {
       finished: false,
+      coopRevives: 0,
+      coopFalls: 0,
       time: null,
       checkpoint: 0,
       last: {
@@ -1171,13 +1224,44 @@ function resolveResultsDecision(room, now = Date.now()) {
   // некому держать. Такой случай уводим в лобби — оттуда видно, что напарника ждут.
   const enoughPlayers = room.mode === GAME_MODE.COOP ? active.length === 2 : active.length > 0;
 
+  // Продолжение кампании сохраняет сокеты, комнату, порядок пары и сразу запускает следующую
+  // главу. Готовность и промежуточное лобби здесь только ломали бы непрерывность приключения.
+  if (
+    room.mode === GAME_MODE.COOP &&
+    enoughPlayers &&
+    decided &&
+    active.every(player => player.resultChoice === 'next')
+  ) {
+    const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
+    const nextChapterId = COOP_CHAPTER_IDS[current + 1];
+    if (nextChapterId) {
+      room.chapterId = nextChapterId;
+      room.spec = coopSpec(nextChapterId);
+      gameplay.count('next_chapter', dims(room, active[0]));
+      for (const player of active) gameplay.count('pair_continued', dims(room, player, 'next'));
+      log('info', 'next_chapter', { roomId: room.code, chapterId: nextChapterId });
+      beginCountdown(room);
+      return true;
+    }
+    for (const player of active) gameplay.count('pair_continued', dims(room, player, 'final-rematch'));
+    beginCountdown(room);
+    return true;
+  }
+
   // Реванш — только единогласно и только явным выбором. Во всех остальных исходах уходим в лобби:
   // и когда кто-то выбрал лобби, и когда время вышло, а кто-то так и не решил. Молчание не должно
   // толковаться как согласие на ещё один забег — человек мог просто отложить телефон.
   if (enoughPlayers && decided && active.every(player => player.resultChoice === 'rematch')) {
+    if (room.mode === GAME_MODE.COOP)
+      for (const player of active) gameplay.count('pair_continued', dims(room, player, 'rematch'));
     log('info', 'rematch', { roomId: room.code, players: active.length });
     beginCountdown(room);
     return true;
+  }
+  if (room.mode === GAME_MODE.COOP && !room.pairEndedTracked) {
+    room.pairEndedTracked = true;
+    for (const player of active)
+      gameplay.count('pair_ended', dims(room, player, expired ? 'timeout' : 'choice'));
   }
   resetLobby(room);
   return true;
@@ -1224,12 +1308,17 @@ function finishMatch(room) {
   }
   const verificationFailed = board.some(entry => !entry.verified);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
+  if (room.mode === GAME_MODE.COOP) {
+    for (const player of room.players.values()) gameplay.count('chapter_completed', dims(room, player));
+  }
   // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
   // по resume уже на экране результатов.
   room.results = {
     type: S2C.MATCH_RESULTS,
     matchId: room.matchId,
     mode: room.mode,
+    hasNextChapter:
+      room.mode === GAME_MODE.COOP && COOP_CHAPTER_IDS.indexOf(room.chapterId) < COOP_CHAPTER_IDS.length - 1,
     board,
     // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
     coopTime,
@@ -1255,6 +1344,18 @@ function finishMatch(room) {
         playerId: room.players.get(entry.id)?.anonymousId || null
       }))
     });
+    if (room.mode === GAME_MODE.COOP && coopTime) {
+      for (const player of room.players.values()) {
+        if (!player.accountId) continue;
+        accounts.recordCoopCompletion({
+          accountId: player.accountId,
+          chapterId: room.chapterId,
+          timeMs: coopTime,
+          revives: player.coopRevives || 0,
+          falls: player.coopFalls || 0
+        });
+      }
+    }
   }
   broadcast(room, room.results);
   // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до
@@ -1399,7 +1500,14 @@ wss.on('connection', (ws, req) => {
 
     if (message.type === C2S.CANCEL_MATCHMAKING) {
       const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
-      if (index !== -1) coopMatchmaking.splice(index, 1);
+      if (index !== -1) {
+        coopMatchmaking.splice(index, 1);
+        gameplay.count('matchmaking_queue_exit', {
+          detail: 'cancel',
+          device: ws.device || 'desktop'
+        });
+        gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'button', device: ws.device });
+      }
       return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, waitedMs: 0 });
     }
 
@@ -1409,6 +1517,27 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
       }
       return enqueueCoop(ws, message);
+    }
+
+    // Свернувший вкладку игрок не должен оставаться кандидатом для случайного напарника. Это не
+    // ready-check и не дополнительный клик: очередь просто честно отменяется, а событие измеряется.
+    if (message.type === C2S.PRESENCE && !ws.room) {
+      const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
+      if (message.away && index !== -1) {
+        coopMatchmaking.splice(index, 1);
+        gameplay.count('matchmaking_queue_exit', {
+          detail: 'away',
+          device: ws.device || 'desktop'
+        });
+        gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'away', device: ws.device });
+        return send(ws, {
+          type: S2C.MATCHMAKING_WAITING,
+          cancelled: true,
+          reason: 'away',
+          waitedMs: 0
+        });
+      }
+      return;
     }
 
     if (message.type === C2S.CREATE_ROOM) {
@@ -1448,7 +1577,7 @@ wss.on('connection', (ws, req) => {
       rooms.set(code, room);
       trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
-      return addPlayer(room, ws, message.name, message.playerId);
+      return addPlayer(room, ws, message.name, message.playerId, message.accountToken);
     }
 
     if (message.type === C2S.JOIN_ROOM) {
@@ -1462,7 +1591,7 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
       trackEvent(productEvents, 'roomJoined');
-      return addPlayer(room, ws, message.name, message.playerId);
+      return addPlayer(room, ws, message.name, message.playerId, message.accountToken);
     }
 
     const room = rooms.get(ws.room);
@@ -1581,6 +1710,7 @@ wss.on('connection', (ws, req) => {
       player.lastAt = now;
       player.lastSequence = message.sequence;
       verifyPlayerProgress(room, player, result.checkpoint, now);
+      trackCheckpointDuration(room, player, result.checkpoint, now);
       if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
       player.checkpoint = result.checkpoint;
       return;
@@ -1606,9 +1736,25 @@ wss.on('connection', (ws, req) => {
       // поэтому штрафа здесь нет: игрока не за что наказывать.
       if (!result.ok) return;
       if (result.relay) {
+        if (result.relay.action === 'revive') {
+          room.coopRevives = (room.coopRevives || 0) + 1;
+          player.coopRevives = (player.coopRevives || 0) + 1;
+        }
         broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, ...result.relay });
       }
       return;
+    }
+
+    if (message.type === C2S.COOP_PING) {
+      if (room.mode !== GAME_MODE.COOP) return;
+      gameplay.count('coop_ping', dims(room, player, message.command));
+      return broadcast(room, {
+        type: S2C.COOP_PING,
+        matchId: room.matchId,
+        id: player.id,
+        command: message.command,
+        at: Date.now()
+      });
     }
 
     if (message.type === C2S.RESPAWN) {
@@ -1619,6 +1765,7 @@ wss.on('connection', (ws, req) => {
         // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
         // чекпоинта, но остаётся «упавшим», пока его не поднимут.
         if (markDowned(player, now)) {
+          player.coopFalls = (player.coopFalls || 0) + 1;
           trackEvent(productEvents, 'playerDowned');
           // В кооперативе трасса рукотворная, и «тип сегмента» к ней неприменим. Место
           // обозначается пройденным чекпоинтом: этого хватает, чтобы найти участок в разметке.
@@ -1686,6 +1833,7 @@ wss.on('connection', (ws, req) => {
         player.lastAt = now;
         player.receivedAt = now;
         verifyPlayerProgress(room, player, result.checkpoint, now);
+        trackCheckpointDuration(room, player, result.checkpoint, now);
         if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
         player.checkpoint = result.checkpoint;
         player.lastSequence = message.sequence;
@@ -1741,6 +1889,18 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.REMATCH_VOTE) {
       if (player.resultChoice === 'rematch') return;
       player.resultChoice = 'rematch';
+      return resolveResultsDecision(room);
+    }
+
+    if (message.type === C2S.NEXT_CHAPTER_VOTE) {
+      // В гонке и после последней главы такой кнопки нет; поддельное сообщение не меняет выбор.
+      const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
+      if (room.mode !== GAME_MODE.COOP || current < 0) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (player.resultChoice === 'next') return;
+      player.resultChoice = 'next';
+      gameplay.count('next_chapter_vote', dims(room, player));
       return resolveResultsDecision(room);
     }
 
@@ -1845,6 +2005,7 @@ const heartbeatTimer = setInterval(() => {
       // Упавший поднимается сам по истечении срока — иначе пара, где один отошёл от устройства,
       // застряла бы в главе навсегда.
       for (const id of autoRevive(room, now)) {
+        room.coopRevives = (room.coopRevives || 0) + 1;
         broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, action: 'revive', target: id });
       }
     }

@@ -13,6 +13,8 @@ export class CoopSession {
     this.partnerDown = false;
     this.partnerAway = false;
     this.revives = 0;
+    this.receivedRevives = 0;
+    this.downs = 0;
   }
 
   start({ selfId = null, slots = {}, partnerAway = false } = {}) {
@@ -23,6 +25,8 @@ export class CoopSession {
     this.partnerDown = false;
     this.partnerAway = Boolean(partnerAway);
     this.revives = 0;
+    this.receivedRevives = 0;
+    this.downs = 0;
     return this;
   }
 
@@ -58,13 +62,14 @@ export class CoopSession {
     if (message.action === 'launch' && self) return { type: 'launch-self', vector: message.vector };
     if (message.action === 'downed') {
       if (!self) this.partnerDown = true;
+      else this.downs++;
       return { type: self ? 'down-self' : 'down-partner' };
     }
     if (message.action === 'revive') {
       if (!self) {
         this.partnerDown = false;
         this.revives++;
-      }
+      } else this.receivedRevives++;
       return { type: self ? 'revive-self' : 'revive-partner' };
     }
     return null;

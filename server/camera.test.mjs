@@ -53,8 +53,7 @@ const course = { cameraMeshes: [] };
 
 // Прогоняет секунду обновлений шагами по 1/60 — примерно столько живёт автодоворот.
 const run = (controller, player, input, seconds = 1) => {
-  for (let i = 0; i < Math.round(seconds * 60); i++)
-    controller.update(1 / 60, player, input, course, null);
+  for (let i = 0; i < Math.round(seconds * 60); i++) controller.update(1 / 60, player, input, course, null);
 };
 
 test('по умолчанию камера в режиме слежения', () => {

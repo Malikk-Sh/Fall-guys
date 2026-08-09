@@ -92,10 +92,28 @@ test('кооперативный профиль хранит лучшие гла
   assert.equal(profile.coop.completedChapters, 1);
   assert.equal(profile.coop.totalRevives, 2);
   assert.equal(profile.coop.bestByChapter.ch2, 80_000);
+  assert.deepEqual(profile.coop.chapterStats.ch2, { runs: 1, revives: 2, flawless: 0 });
   profile = recordCoopProfile(chapter, { time: 75_000, revives: 1, matchId: 'match-b' }, storage);
   assert.equal(profile.coop.completedChapters, 2);
   assert.equal(profile.coop.totalRevives, 3);
   assert.equal(profile.coop.bestByChapter.ch2, 75_000);
+  assert.deepEqual(profile.coop.chapterStats.ch2, { runs: 2, revives: 3, flawless: 0 });
+});
+
+test('кампания хранит flawless и безопасно читает старый профиль без статистики глав', () => {
+  const storage = memoryStorage();
+  let profile = recordCoopProfile(
+    { chapterId: 'ch7' },
+    { time: 60_000, revives: 0, matchId: 'clean' },
+    storage
+  );
+  assert.deepEqual(profile.coop.chapterStats.ch7, { runs: 1, revives: 0, flawless: 1 });
+
+  profile = readProfile(
+    memoryStorage(JSON.stringify({ version: 1, coop: { bestByChapter: { ch3: 42_000 } } }))
+  );
+  assert.deepEqual(profile.coop.chapterStats, {});
+  assert.equal(profile.coop.bestByChapter.ch3, 42_000);
 });
 
 test('кооператив без зачёта считается пройденным, но не обновляет рекорд', () => {

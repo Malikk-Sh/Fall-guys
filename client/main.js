@@ -11,6 +11,7 @@ import { coopSpawnFor } from '/shared/coopChapters.js';
 import { GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { resolvePlayerCrowd } from './game/PlayerCollisions.js';
+import { resolveTether } from './game/CoopSignatureMechanics.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
@@ -56,6 +57,9 @@ class Game {
     this.coop = new CoopSession();
     this.coopControl = new CoopController(this);
     this.account = new AccountFlow(this);
+    this.ui.onCosmeticChange = () => {
+      if (this.mode === 'preview' && this.previewSpec) this.buildPreview(this.previewSpec);
+    };
 
     this.clockLast = performance.now();
     this.accumulator = 0;
@@ -296,7 +300,8 @@ class Game {
     this.player = new Player(this.scene, this.course, this.effects, {
       remote: true,
       color: COLORS.pink,
-      accent: COLORS.yellow
+      accent: COLORS.yellow,
+      cosmetics: this.ui.cosmeticLoadout()
     });
     this.player.teleport(this.course.spawnFor(0));
     this.camera.position.set(10, 7, 17);
@@ -334,6 +339,7 @@ class Game {
     this.player = new Player(this.scene, this.course, this.effects, {
       color: myColor,
       accent: COLORS.yellow,
+      cosmetics: this.ui.cosmeticLoadout(),
       sfx: this.sfx,
       haptics: this.settings,
       // Модификатор дня меняет и мир, и управление. Мир его читает из spec сам, а игроку правило
@@ -556,9 +562,12 @@ class Game {
       board: this.latestBoard,
       selfId: this.net?.id,
       revives: this.coop.revives,
+      receivedRevives: this.coop.receivedRevives,
+      downs: this.coop.downs,
       matchId: this.net?.matchId,
       unranked: this.session.unranked,
-      serverBest: this.account.recordFor('coop', this.course?.spec)
+      serverBest: this.account.recordFor('coop', this.course?.spec),
+      hasNextChapter: message.hasNextChapter === true
     });
   }
 
@@ -714,6 +723,9 @@ class Game {
     this.input.update();
     if (this.mode === 'coop') {
       const actors = this.coopControl.actors();
+      const tether = this.course?.spec?.mechanics?.tether;
+      const partner = actors.find(actor => actor.id !== this.net?.id);
+      if (tether && partner && !this.player.downed) resolveTether(this.player, partner, dt, tether);
       // Пересчёт до шага игрока: пролёт должен появиться раньше, чем по нему пойдут.
       this.course.updateCoop(actors, this.raceNow(), this.sfx);
       this.coopControl.updateRoleActions();

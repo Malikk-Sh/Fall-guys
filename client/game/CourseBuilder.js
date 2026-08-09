@@ -43,6 +43,9 @@ export class CourseBuilder {
     this.dynamic = [];
     // Меши, перекрывающие обзор: по ним камера решает, насколько подъехать ближе.
     this.cameraMeshes = [];
+    // Только явно помеченные стены участвуют в wall-bounce. Обычная декорация и борта трассы
+    // никогда не меняют движение, поэтому приём остаётся читаемым и не удивляет новичка.
+    this.skillWalls = [];
     // Кэш материалов, ключ — сочетание всех визуальных свойств. См. material().
     this.materials = new Map();
   }
@@ -87,7 +90,8 @@ export class CourseBuilder {
     collider = true,
     emissive = null,
     emissiveIntensity = 1,
-    opacity = 1
+    opacity = 1,
+    wallBounce = false
   } = {}) {
     const geometry = bevel ? new THREE.BoxGeometry(w, h, d, 2, 1, 2) : new THREE.BoxGeometry(w, h, d);
     const mesh = new THREE.Mesh(geometry, this.material({ color, emissive, emissiveIntensity, opacity }));
@@ -95,6 +99,7 @@ export class CourseBuilder {
     mesh.castShadow = this.quality !== 'low';
     mesh.receiveShadow = true;
     this.group.add(mesh);
+    if (wallBounce) this.skillWalls.push({ mesh, w, h, d });
     if (collider) {
       const platform = {
         mesh,
@@ -168,6 +173,26 @@ export class CourseBuilder {
     return best;
   }
 
+  // Возвращает нормаль специальной стены, пересечённой за текущий физический шаг.
+  wallBounceAt(position, previous, velocity) {
+    for (const wall of this.skillWalls) {
+      const m = wall.mesh;
+      if (Math.abs(position.y - m.position.y) > wall.h / 2 + 0.45) continue;
+      const withinX = Math.abs(position.x - m.position.x) <= wall.w / 2 + 0.48;
+      const withinZ = Math.abs(position.z - m.position.z) <= wall.d / 2 + 0.48;
+      if (!withinX || !withinZ) continue;
+
+      if (wall.w < wall.d) {
+        const side = Math.sign(previous.x - m.position.x) || -Math.sign(velocity.x) || 1;
+        if (velocity.x * side < -1.5) return { x: side, z: 0 };
+      } else {
+        const side = Math.sign(previous.z - m.position.z) || -Math.sign(velocity.z) || 1;
+        if (velocity.z * side < -1.5) return { x: 0, z: side };
+      }
+    }
+    return null;
+  }
+
   // Сдвиг движущихся платформ за шаг. Игрок, стоящий сверху, получает этот сдвиг в surfaceAt.
   updateDynamic(elapsed) {
     for (const platform of this.dynamic) {
@@ -191,5 +216,6 @@ export class CourseBuilder {
     this.obstacles.length = 0;
     this.dynamic.length = 0;
     this.cameraMeshes.length = 0;
+    this.skillWalls.length = 0;
   }
 }

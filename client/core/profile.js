@@ -8,7 +8,13 @@ export function emptyProfile() {
     completedObjectives: 0,
     flawlessRuns: 0,
     daily: { lastDay: null, streak: 0, bestStreak: 0, completedDays: 0 },
-    coop: { completedChapters: 0, totalRevives: 0, bestByChapter: {}, recordedMatches: [] }
+    coop: {
+      completedChapters: 0,
+      totalRevives: 0,
+      bestByChapter: {},
+      chapterStats: {},
+      recordedMatches: []
+    }
   };
 }
 
@@ -34,6 +40,7 @@ export function readProfile(storage = globalThis.localStorage) {
         completedChapters: safeCount(parsed.coop?.completedChapters),
         totalRevives: safeCount(parsed.coop?.totalRevives),
         bestByChapter: safeChapterBests(parsed.coop?.bestByChapter),
+        chapterStats: safeChapterStats(parsed.coop?.chapterStats),
         recordedMatches: Array.isArray(parsed.coop?.recordedMatches)
           ? parsed.coop.recordedMatches.filter(id => typeof id === 'string').slice(-32)
           : []
@@ -54,6 +61,13 @@ export function recordCoopProfile(
   profile.coop.completedChapters++;
   profile.coop.totalRevives += safeCount(revives);
   const chapterId = chapter?.chapterId;
+  if (chapterId) {
+    const stats = profile.coop.chapterStats[chapterId] || { runs: 0, revives: 0, flawless: 0 };
+    stats.runs++;
+    stats.revives += safeCount(revives);
+    if (!unranked && safeCount(revives) === 0) stats.flawless++;
+    profile.coop.chapterStats[chapterId] = stats;
+  }
   if (chapterId && !unranked && Number.isFinite(time) && time > 0) {
     const previous = profile.coop.bestByChapter[chapterId];
     if (!Number.isFinite(previous) || time < previous)
@@ -132,6 +146,20 @@ function safeChapterBests(value) {
   const result = {};
   for (const [id, time] of Object.entries(value))
     if (/^[a-z0-9-]{1,32}$/i.test(id) && Number.isFinite(time) && time > 0) result[id] = Math.round(time);
+  return result;
+}
+
+function safeChapterStats(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  for (const [id, stats] of Object.entries(value)) {
+    if (!/^[a-z0-9-]{1,32}$/i.test(id) || !stats || typeof stats !== 'object') continue;
+    result[id] = {
+      runs: safeCount(stats.runs),
+      revives: safeCount(stats.revives),
+      flawless: safeCount(stats.flawless)
+    };
+  }
   return result;
 }
 

@@ -450,8 +450,11 @@ const CHAPTERS = [
   {
     id: 'ch7',
     title: 'ЭНЕРГЕТИЧЕСКАЯ ЭСТАФЕТА',
-    subtitle: 'Передавайте управление',
-    hint: 'Активируйте узлы по очереди: один держит путь, второй переносит эстафету дальше.',
+    subtitle: 'Передавайте настоящее ядро',
+    hint: 'Поднимите ядро, перебросьте его напарнику и вставьте в энергетический приёмник.',
+    mechanics: {
+      energyCore: { pickupRadius: 2.2, throwSpeed: 11, sockets: 2 }
+    },
     segments: [
       floor(22, [plate('a1', -3.5)]),
       gateSpan('relay1', UNJUMPABLE_GAP + 2, ['a1', 'a2']),
@@ -513,7 +516,10 @@ const CHAPTERS = [
     id: 'ch9',
     title: 'ВЕРХ И НИЗ',
     subtitle: 'Два уровня одной задачи',
-    hint: 'Одна дорожка поднимается над другой. Следите за напарником, а не только за своим путём.',
+    hint: 'Верхний игрок видит безопасные символы, нижний — кнопки. Передавайте маршрут пингами.',
+    mechanics: {
+      asymmetricSignals: { symbols: ['●', '▲', '◆', '■'], sequenceLength: 4 }
+    },
     segments: [
       floor(20),
       splitSpan(26, { laneGap: 3.2, leftY: 0.7, rightY: 0 }),
@@ -548,7 +554,11 @@ const CHAPTERS = [
     id: 'ch10',
     title: 'ФИНАЛЬНЫЙ РЫВОК',
     subtitle: 'Ни секунды в одиночку',
-    hint: 'Десятая глава соединяет развилки, эстафету, катапульту и побег без длинных передышек.',
+    hint: 'Трос ограничивает расстояние: страхуйте падения и используйте вес напарника для рывка.',
+    mechanics: {
+      tether: { maxLength: 11, catchDepth: 2.8 },
+      energyCore: { pickupRadius: 2.2, throwSpeed: 11, sockets: 1 }
+    },
     segments: [
       floor(18),
       splitSpan(24, { laneGap: 3.8 }),
@@ -667,6 +677,7 @@ export function coopSpec(chapterId) {
     title: chapter.title,
     subtitle: chapter.subtitle,
     hint: chapter.hint,
+    mechanics: chapter.mechanics ? structuredClone(chapter.mechanics) : null,
     segmentCount: chapter.segmentCount,
     checkpoints: [...chapter.checkpoints],
     lessons: resolveLessons(chapter, layoutOf(chapter).anchors),

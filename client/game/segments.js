@@ -506,6 +506,22 @@ const bounce = [
   (course, ctx) => {
     slab(course, ctx);
     rails(course, ctx, 5.6);
+    // Светящиеся тренировочные стенки: jump у самой поверхности превращает рывок в управляемый
+    // отскок. Они стоят вне прямой линии, поэтому новичку не мешают просто пробежать сегмент.
+    for (const side of [-1, 1])
+      course.box({
+        x: side * 5.25,
+        y: 2.1,
+        z: ctx.z + 1,
+        w: 0.34,
+        h: 3.2,
+        d: 7,
+        color: COLORS.cyan,
+        emissive: COLORS.cyan,
+        emissiveIntensity: 0.55,
+        collider: false,
+        wallBounce: true
+      });
     for (const [x, oz] of [
       [-3, 5],
       [2.5, 2],

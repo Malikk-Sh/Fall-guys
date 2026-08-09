@@ -36,6 +36,17 @@ test('глав ровно десять и у каждой есть всё нео
   }
 });
 
+test('signature-механики входят в сетевую спецификацию глав', () => {
+  assert.ok(coopSpec('ch7').mechanics.energyCore);
+  assert.ok(coopSpec('ch9').mechanics.asymmetricSignals);
+  assert.ok(coopSpec('ch10').mechanics.tether);
+  assert.notEqual(
+    coopSpec('ch10').mechanics,
+    getChapter('ch10').mechanics,
+    'спека не делит изменяемые данные'
+  );
+});
+
 test('чекпоинты идут по порядку, финиш за последним', () => {
   for (const chapter of COOP_CHAPTERS) {
     const spec = coopSpec(chapter.id);

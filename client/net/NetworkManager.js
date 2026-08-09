@@ -28,9 +28,11 @@ const SESSION_KEY = 'wobble-session';
 const TRANSIENT_TYPES = new Set([
   C2S.PLAYER_STATE,
   C2S.COOP_EVENT,
+  C2S.COOP_PING,
   C2S.RESPAWN,
   C2S.FINISH,
   C2S.REMATCH_VOTE,
+  C2S.NEXT_CHAPTER_VOTE,
   C2S.RETURN_TO_LOBBY,
   C2S.PRESENCE,
   C2S.PING
@@ -464,18 +466,33 @@ export class NetworkManager {
     return false;
   }
 
-  createRoom({ name, playerId, difficulty, mode }) {
+  createRoom({ name, playerId, accountToken, difficulty, mode }) {
     this.send(C2S.CREATE_ROOM, {
       name,
       playerId,
+      accountToken,
       difficulty,
       mode,
       protocolVersion: PROTOCOL_VERSION
     });
   }
 
-  joinRoom({ name, playerId, code }) {
-    this.send(C2S.JOIN_ROOM, { name, playerId, code, protocolVersion: PROTOCOL_VERSION });
+  joinRoom({ name, playerId, accountToken, code }) {
+    this.send(C2S.JOIN_ROOM, { name, playerId, accountToken, code, protocolVersion: PROTOCOL_VERSION });
+  }
+
+  findCoop({ name, playerId, accountToken, chapterId = '' }) {
+    this.send(C2S.FIND_COOP, {
+      name,
+      playerId,
+      accountToken,
+      chapterId,
+      protocolVersion: PROTOCOL_VERSION
+    });
+  }
+
+  cancelMatchmaking() {
+    this.send(C2S.CANCEL_MATCHMAKING);
   }
 
   findCoop({ name, playerId, chapterId = '' }) {

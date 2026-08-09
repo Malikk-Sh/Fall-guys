@@ -100,6 +100,62 @@ test('личный рекорд хранится по режиму и трасс
   assert.equal(records.find(r => r.mode === 'race').time, 22_000);
 });
 
+test('серверный прогресс кампании считает главы, спасения и достижения', () => {
+  const accounts = fresh();
+  const { id } = accounts.create('Напарник');
+  assert.equal(
+    accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch2', timeMs: 80_000, revives: 2 }),
+    true
+  );
+  accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch2', timeMs: 70_000, revives: 0, falls: 0 });
+  const progress = accounts.progress(id);
+  assert.deepEqual(progress.stats, {
+    coopMatchesCompleted: 2,
+    coopChaptersCompleted: 1,
+    coopRevives: 2
+  });
+  assert.deepEqual(progress.chapters[0], {
+    chapterId: 'ch2',
+    completions: 2,
+    bestTime: 70_000,
+    revives: 2,
+    flawless: 2,
+    lastCompletedAt: progress.chapters[0].lastCompletedAt
+  });
+  assert.deepEqual(progress.achievements.map(item => item.id).sort(), ['coop-first-clear', 'coop-flawless']);
+});
+
+test('прогресс кампании принимает только существующий аккаунт и настоящую главу', () => {
+  const accounts = fresh();
+  const { id } = accounts.create('Проверка');
+  assert.equal(accounts.recordCoopCompletion({ accountId: 'чужой', chapterId: 'ch1', timeMs: 1000 }), false);
+  assert.equal(accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch99', timeMs: 1000 }), false);
+  assert.equal(accounts.progress(id).stats.coopMatchesCompleted, 0);
+});
+
+test('косметические достижения требуют конкретного игрового прогресса', () => {
+  const accounts = fresh();
+  const { id } = accounts.create('Коллекционер');
+  for (let run = 0; run < 5; run++)
+    accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch10', timeMs: 80_000 - run, revives: 0 });
+  accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch1', timeMs: 70_000, revives: 25 });
+  const achievements = accounts.progress(id).achievements.map(item => item.id);
+  assert.ok(achievements.includes('coop-ch10-clear'));
+  assert.ok(achievements.includes('coop-flawless-5'));
+  assert.ok(achievements.includes('coop-helper-25'));
+  assert.ok(!achievements.includes('coop-campaign-complete'));
+});
+
+test('flawless зависит от собственных падений, а помощник — от собственных спасений', () => {
+  const accounts = fresh();
+  const { id } = accounts.create('Командный');
+  accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch3', timeMs: 60_000, revives: 4, falls: 0 });
+  accounts.recordCoopCompletion({ accountId: id, chapterId: 'ch3', timeMs: 59_000, revives: 0, falls: 2 });
+  const chapter = accounts.progress(id).chapters[0];
+  assert.equal(chapter.revives, 4);
+  assert.equal(chapter.flawless, 1);
+});
+
 test('рекорд не принимается без аккаунта, с чужим режимом или дурным временем', () => {
   const accounts = fresh();
   const { id } = accounts.create('Бегун');
@@ -148,6 +204,7 @@ test('аккаунты и рекорды переживают перезапус
     const before = new Accounts({ db: openDatabase(file) });
     const { id, secret } = before.create('Постоянный');
     before.saveRecord({ accountId: id, mode: 'solo', courseKey: '7:normal', timeMs: 19_000 });
+    before.recordCoopCompletion({ accountId: id, chapterId: 'ch1', timeMs: 45_000, revives: 1 });
     before.db.close();
 
     const after = new Accounts({ db: openDatabase(file) });
@@ -156,6 +213,7 @@ test('аккаунты и рекорды переживают перезапус
     assert.equal(entered.id, id);
     assert.equal(entered.name, 'Постоянный');
     assert.equal(after.records(id)[0].time, 19_000);
+    assert.equal(after.progress(id).chapters[0].chapterId, 'ch1');
     after.db.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

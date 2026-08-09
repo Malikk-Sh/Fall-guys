@@ -118,7 +118,12 @@ async function post(path, body, { fetchImpl = globalThis.fetch } = {}) {
 export async function createAccount(name, options) {
   const { ok, data } = await post('/account', { name }, options);
   if (!ok || !data?.account) return null;
-  return { ...data.account, secret: data.secret, records: data.records || [] };
+  return {
+    ...data.account,
+    secret: data.secret,
+    records: data.records || [],
+    progress: data.progress || null
+  };
 }
 
 export async function loginAccount(secret, options) {
@@ -127,7 +132,7 @@ export async function loginAccount(secret, options) {
   // втором — ни в коем случае, иначе потеря связи на минуту стёрла бы игроку код.
   if (status === 404) return { unknown: true };
   if (!ok || !data?.account) return null;
-  return { ...data.account, records: data.records || [] };
+  return { ...data.account, records: data.records || [], progress: data.progress || null };
 }
 
 export async function renameAccount(secret, name, options) {
@@ -169,7 +174,12 @@ export async function ensureAccount(options = {}) {
       forgetAccount(stored.id, storage);
     } else if (entered) {
       rememberAccount({ ...entered, secret: stored.secret }, storage);
-      return { account: { ...stored, name: entered.name }, records: entered.records, online: true };
+      return {
+        account: { ...stored, name: entered.name },
+        records: entered.records,
+        progress: entered.progress,
+        online: true
+      };
     } else {
       return { account: stored, records: [], online: false };
     }
@@ -178,5 +188,5 @@ export async function ensureAccount(options = {}) {
   const created = await quiet(() => createAccount(options.name, options));
   if (!created) return { account: currentAccount(storage), records: [], online: false };
   rememberAccount(created, storage);
-  return { account: created, records: created.records, online: true };
+  return { account: created, records: created.records, progress: created.progress, online: true };
 }

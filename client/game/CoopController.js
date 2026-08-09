@@ -36,8 +36,10 @@ export class CoopController {
 
     if (globalThis.addEventListener) {
       addEventListener('keydown', event => {
-        const input = globalThis.HTMLInputElement && event.target instanceof HTMLInputElement;
-        const select = globalThis.HTMLSelectElement && event.target instanceof HTMLSelectElement;
+        const input =
+          globalThis.HTMLInputElement && event.target instanceof globalThis.HTMLInputElement;
+        const select =
+          globalThis.HTMLSelectElement && event.target instanceof globalThis.HTMLSelectElement;
         if (input || select || !/^Digit[1-4]$/.test(event.code)) return;
         if (!this.signalControlsVisible()) return;
         event.preventDefault();
@@ -86,7 +88,8 @@ export class CoopController {
 
   ensureSignature() {
     if (this.game.mode !== 'coop' || !this.game.course?.spec?.chapterId) return false;
-    if (this.signatureCourse === this.game.course) return Boolean(this.signature?.core || this.signature?.signal);
+    if (this.signatureCourse === this.game.course)
+      return Boolean(this.signature?.core || this.signature?.signal);
 
     this.signatureCourse = this.game.course;
     this.signature = signatureLayout(this.game.course.spec.chapterId);
@@ -135,7 +138,14 @@ export class CoopController {
     const group = new THREE.Group();
     group.name = 'signature-coop';
     this.game.course.group.add(group);
-    const visuals = { group, core: null, socket: null, guide: null, operator: null, buttons: [] };
+    const visuals = {
+      group,
+      core: null,
+      socket: null,
+      guide: null,
+      operator: null,
+      buttons: []
+    };
 
     if (this.signature.core) {
       const coreMaterial = new THREE.MeshStandardMaterial({
@@ -161,8 +171,14 @@ export class CoopController {
         this.signature.core.socket.y - 0.55,
         this.signature.core.socket.z
       );
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.35, 0.35, 20), socketMaterial);
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.78, 0.13, 8, 24), socketMaterial);
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.2, 1.35, 0.35, 20),
+        socketMaterial
+      );
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.78, 0.13, 8, 24),
+        socketMaterial
+      );
       ring.position.y = 0.3;
       ring.rotation.x = Math.PI / 2;
       visuals.socket.add(base, ring);
@@ -179,7 +195,10 @@ export class CoopController {
       const makeTerminal = point => {
         const terminal = new THREE.Group();
         terminal.position.set(point.x, point.y, point.z);
-        const body = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.1, 0.65), panelMaterial.clone());
+        const body = new THREE.Mesh(
+          new THREE.BoxGeometry(2.8, 2.1, 0.65),
+          panelMaterial.clone()
+        );
         body.position.y = 0.65;
         terminal.add(body);
         group.add(terminal);
@@ -224,12 +243,16 @@ export class CoopController {
     if (!core || !layout) return null;
     if (core.insertedInto) return { ...layout.socket };
     if (core.carrier) {
-      const actor = core.carrier === this.game.net?.id ? this.game.player : this.game.remotes.get(core.carrier);
+      const actor =
+        core.carrier === this.game.net?.id
+          ? this.game.player
+          : this.game.remotes.get(core.carrier);
       const position = actor?.visualPosition || actor?.position;
       return position ? { x: position.x, y: position.y + 1.65, z: position.z } : core.position;
     }
 
-    const dt = Math.max(0, Math.min(3, (this.game.raceNow() - (core.at || this.game.raceNow())) / 1000));
+    const now = this.game.raceNow();
+    const dt = Math.max(0, Math.min(3, (now - (core.at || now)) / 1000));
     const floor = 1.05;
     return {
       x: core.position.x + (core.velocity?.x || 0) * dt,
@@ -244,12 +267,14 @@ export class CoopController {
     const player = this.game.player.position;
     if (core.insertedInto) return null;
     if (core.carrier === this.game.net?.id) {
-      return signatureDistance(player, this.signature.core.socket) <= this.signature.core.insertRadius + 0.4
+      return signatureDistance(player, this.signature.core.socket) <=
+        this.signature.core.insertRadius + 0.4
         ? 'insert'
         : 'throw';
     }
     if (core.carrier) return null;
-    return signatureDistance(player, this.localCorePosition()) <= this.signature.core.pickupRadius + 0.45
+    return signatureDistance(player, this.localCorePosition()) <=
+      this.signature.core.pickupRadius + 0.45
       ? 'pickup'
       : null;
   }
@@ -391,7 +416,8 @@ export class CoopController {
   }
 
   updateSignatureHud() {
-    if (!this.ensureSignature() || !globalThis.document || !this.game.player) return this.hideSignatureHud();
+    if (!this.ensureSignature() || !globalThis.document || !this.game.player)
+      return this.hideSignatureHud();
     const hud = this.ensureSignatureHud();
     const coreAction = this.coreAction();
     if (this.signature.core && coreAction) {
@@ -407,7 +433,11 @@ export class CoopController {
       return;
     }
 
-    if (this.signature.core && !this.signatureState?.core?.carrier && !this.signatureState?.core?.insertedInto) {
+    if (
+      this.signature.core &&
+      !this.signatureState?.core?.carrier &&
+      !this.signatureState?.core?.insertedInto
+    ) {
       const core = this.localCorePosition();
       const lost = core && signatureDistance(core, this.signature.core.spawn) > 7;
       if (lost) {
@@ -429,7 +459,10 @@ export class CoopController {
       const roles = this.signatureState.signal.roles;
       const myId = this.game.net?.id;
       if (myId === roles?.guide) {
-        if (signatureDistance(this.game.player.position, this.signature.signal.guide) > SIGNATURE_INTERACT_RADIUS + 1)
+        if (
+          signatureDistance(this.game.player.position, this.signature.signal.guide) >
+          SIGNATURE_INTERACT_RADIUS + 1
+        )
           return this.hideSignatureHud();
         const progress = this.signatureState.signal.progress || 0;
         hud.text.textContent = `ПОДСКАЗЧИК · ПОСЛЕДОВАТЕЛЬНОСТЬ: ${this.signature.signal.sequence.join('  ')} · ${progress}/${this.signature.signal.sequence.length}`;
@@ -455,7 +488,10 @@ export class CoopController {
   }
 
   updateSignatureVisuals() {
-    if (!this.ensureSignature() || !this.signatureVisuals) return;
+    if (!this.ensureSignature() || !this.signatureVisuals) {
+      this.hideSignatureHud();
+      return;
+    }
     if (this.signatureVisuals.core) {
       const position = this.localCorePosition();
       if (position) this.signatureVisuals.core.position.set(position.x, position.y, position.z);
@@ -479,14 +515,16 @@ export class CoopController {
   }
 
   sendPing(command) {
-    if (this.game.mode !== 'coop' || !COOP_PING_LABELS[command] || !this.game.net?.matchId) return false;
+    if (this.game.mode !== 'coop' || !COOP_PING_LABELS[command] || !this.game.net?.matchId)
+      return false;
     return this.game.net.send('coopPing', { matchId: this.game.net.matchId, command });
   }
 
   receivePing(message) {
     if (message.matchId !== this.game.net?.matchId || !COOP_PING_LABELS[message.command]) return;
     this.ping = { id: message.id, command: message.command, until: performance.now() + 1800 };
-    const actor = message.id === this.game.net.id ? this.game.player : this.game.remotes.get(message.id);
+    const actor =
+      message.id === this.game.net.id ? this.game.player : this.game.remotes.get(message.id);
     this.game.sfx.ping(actor?.visualPosition);
     this.game.settings.vibrate(0.3);
   }
@@ -497,7 +535,8 @@ export class CoopController {
       this.game.ui.updateCoopPing(null);
       return;
     }
-    const actor = this.ping.id === this.game.net?.id ? this.game.player : this.game.remotes.get(this.ping.id);
+    const actor =
+      this.ping.id === this.game.net?.id ? this.game.player : this.game.remotes.get(this.ping.id);
     if (!actor) return this.game.ui.updateCoopPing(null);
     const projected = this._marker
       .copy(actor.visualPosition)
@@ -507,7 +546,10 @@ export class CoopController {
     this.game.ui.updateCoopPing(
       COOP_PING_LABELS[this.ping.command],
       visible
-        ? { x: (projected.x * 0.5 + 0.5) * innerWidth, y: (-projected.y * 0.5 + 0.5) * innerHeight }
+        ? {
+            x: (projected.x * 0.5 + 0.5) * innerWidth,
+            y: (-projected.y * 0.5 + 0.5) * innerHeight
+          }
         : null
     );
   }
@@ -542,7 +584,11 @@ export class CoopController {
     const x = ((behind ? -projected.x : projected.x) * 0.5 + 0.5) * innerWidth;
     const y = ((behind ? -projected.y : -projected.y) * 0.5 + 0.5) * innerHeight;
     const onScreen =
-      !behind && projected.x > -0.92 && projected.x < 0.92 && projected.y > -0.92 && projected.y < 0.92;
+      !behind &&
+      projected.x > -0.92 &&
+      projected.x < 0.92 &&
+      projected.y > -0.92 &&
+      projected.y < 0.92;
     this.game.ui.updatePartnerMarker({
       screen: { x, y },
       visible: onScreen,
@@ -553,7 +599,9 @@ export class CoopController {
   }
 
   updateTetherVisual(partner) {
-    const enabled = Boolean(this.game.course?.spec?.mechanics?.tether && partner && this.game.player);
+    const enabled = Boolean(
+      this.game.course?.spec?.mechanics?.tether && partner && this.game.player
+    );
     if (!enabled) {
       if (this.tetherLine) this.tetherLine.visible = false;
       return;

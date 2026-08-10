@@ -28,7 +28,7 @@ function bestOf(...times) {
 }
 
 const $ = selector => document.querySelector(selector);
-const $ = selector => [...document.querySelectorAll(selector)];
+const selectAll = selector => [...document.querySelectorAll(selector)];
 const cssColor = (value, fallback = 0xff4f91) =>
   `#${Number(Number.isFinite(value) ? value : fallback)
     .toString(16)
@@ -48,7 +48,7 @@ export class UI {
       hud: $('#hud'),
       touch: $('#touch')
     };
-    $$('.mode-tab').forEach(button =>
+    selectAll('.mode-tab').forEach(button =>
       button.addEventListener('click', () => this.selectMode(button.dataset.mode))
     );
     this.selectMode('single');
@@ -193,7 +193,7 @@ export class UI {
   }
   selectMode(mode) {
     this.mode = mode;
-    $$('.mode-tab').forEach(b => {
+    selectAll('.mode-tab').forEach(b => {
       const active = b.dataset.mode === mode;
       b.classList.toggle('active', active);
       b.setAttribute('aria-selected', String(active));
@@ -218,7 +218,7 @@ export class UI {
       const chapter = chapters.find(item => item.id === select.value) || chapters[0];
       $('#coopHint').textContent = chapter.hint;
       this.coopProfile(chapter.id);
-      $$('.campaign-card').forEach(card =>
+      selectAll('.campaign-card').forEach(card =>
         card.classList.toggle('selected', card.dataset.chapter === chapter.id)
       );
       onChange?.(chapter);

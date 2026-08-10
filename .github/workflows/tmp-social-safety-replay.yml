@@ -31,13 +31,13 @@ jobs:
           server/socialSafety.test.mjs server/migrations.test.mjs server/socialProfile.test.mjs server/test.js
           server/index.js server/bootstrap.js client/core/account.js client/core/AccountFlow.js client/core/invite.js
           client/ui/UI.js client/ui/menuBindings.js client/net/networkBindings.js client/index.html client/styles.css
-          server/invite.test.mjs package.json package-lock.json
+          server/invite.test.mjs server/observability.test.mjs package.json package-lock.json
       - name: Lint social safety changes
         run: >-
           npx eslint
           server/socialSafety.js server/socialRoutes.js server/socialSafety.test.mjs server/index.js server/bootstrap.js
           client/core/account.js client/core/AccountFlow.js client/core/invite.js client/ui/UI.js client/ui/menuBindings.js
-          client/net/networkBindings.js server/invite.test.mjs server/test.js
+          client/net/networkBindings.js server/invite.test.mjs server/test.js server/observability.test.mjs
       - name: Run full test suite
         run: npm test
       - name: Commit permanent integration
@@ -48,7 +48,7 @@ jobs:
             server/socialSafety.test.mjs server/migrations.test.mjs server/socialProfile.test.mjs server/test.js \
             server/index.js server/bootstrap.js client/core/account.js client/core/AccountFlow.js client/core/invite.js \
             client/ui/UI.js client/ui/menuBindings.js client/net/networkBindings.js client/index.html client/styles.css \
-            server/invite.test.mjs package.json package-lock.json
+            server/invite.test.mjs server/observability.test.mjs package.json package-lock.json
           git diff --cached --quiet && exit 0
           git commit -m 'Social safety and better replay flow'
           git push origin HEAD:agent/social-safety-replay

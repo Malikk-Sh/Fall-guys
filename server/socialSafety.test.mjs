@@ -42,7 +42,10 @@ test('avoid хранит одну симметричную пару и не вл
   assert.deepEqual(created, { ok: true, avoided: true, created: true });
   assert.equal(context.social.shouldAvoid(first.id, second.id), true);
   assert.equal(context.social.shouldAvoid(second.id, first.id), true);
-  assert.equal(context.social.avoid({ accountId: second.id, targetAccountId: first.id, now: 300 }).created, false);
+  assert.equal(
+    context.social.avoid({ accountId: second.id, targetAccountId: first.id, now: 300 }).created,
+    false
+  );
   assert.equal(context.db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 1);
   context.db.close();
 });
@@ -53,7 +56,12 @@ test('report принимает только фиксированные прич
 
   assert.deepEqual(REPORT_REASONS, ['afk', 'griefing', 'offensive-name', 'exploit-cheat']);
   assert.deepEqual(
-    context.social.report({ accountId: first.id, targetAccountId: second.id, reason: 'free text', now: 1000 }),
+    context.social.report({
+      accountId: first.id,
+      targetAccountId: second.id,
+      reason: 'free text',
+      now: 1000
+    }),
     { ok: false, reason: 'invalid-reason' }
   );
 
@@ -83,7 +91,10 @@ test('social API payload не имеет канала свободного те�
     true
   );
   assert.equal(
-    keysOnly({ targetAccountId: 'p2', reason: 'afk', text: 'произвольный текст' }, new Set(['targetAccountId', 'reason'])),
+    keysOnly(
+      { targetAccountId: 'p2', reason: 'afk', text: 'произвольный текст' },
+      new Set(['targetAccountId', 'reason'])
+    ),
     false
   );
 });

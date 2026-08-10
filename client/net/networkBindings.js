@@ -73,6 +73,18 @@ export function bindNetwork(game) {
     document.querySelector('#ready').textContent = game.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
     game.ui.resetResultButtons();
     game.ui.lobby(message, game.net.id);
+    if (game.pendingReplayShare && message.mode === GAME_MODE.COOP && message.code) {
+      const pending = game.pendingReplayShare;
+      game.pendingReplayShare = null;
+      queueMicrotask(() =>
+        game.shareRoomInvite?.({
+          code: message.code,
+          mode: GAME_MODE.COOP,
+          automatic: true,
+          partnerName: pending.partnerName
+        })
+      );
+    }
   });
 
   // Сервер не принял финиш: по его данным черта ещё не пересечена. Разрешаем повтор и ставим

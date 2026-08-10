@@ -144,6 +144,21 @@ export class UI {
       const partner = this.serverProfile?.recentPartner;
       if (partner) this.onRecentPartnerInvite?.(partner);
     });
+    $('#recentPartnerAvoid').addEventListener('click', () => {
+      const partner = this.serverProfile?.recentPartner;
+      if (partner && !partner.avoided) this.onRecentPartnerAvoid?.(partner);
+    });
+    $('#recentPartnerReport').addEventListener('click', () =>
+      $('#recentPartnerReportReasons').classList.toggle('hidden')
+    );
+    selectAll('[data-social-report]').forEach(button =>
+      button.addEventListener('click', () => {
+        const partner = this.serverProfile?.recentPartner;
+        if (!partner) return;
+        $('#recentPartnerReportReasons').classList.add('hidden');
+        this.onRecentPartnerReport?.(partner, button.dataset.socialReport);
+      })
+    );
   }
 
   setServerProfile(profile) {
@@ -195,7 +210,13 @@ export class UI {
     $('#recentPartnerEmpty').classList.toggle('hidden', Boolean(partner));
     $('#recentPartnerCard').classList.toggle('hidden', !partner);
     const invite = $('#recentPartnerInvite');
+    const avoid = $('#recentPartnerAvoid');
+    const report = $('#recentPartnerReport');
     invite.disabled = !partner;
+    avoid.disabled = !partner || Boolean(partner?.avoided);
+    avoid.textContent = partner?.avoided ? 'НЕ БУДЕМ ПОДБИРАТЬ' : 'НЕ ПОДБИРАТЬ СНОВА';
+    report.disabled = !partner;
+    $('#recentPartnerReportReasons').classList.add('hidden');
     if (!partner) return;
     $('#recentPartnerName').textContent = partner.name || 'Wobbler';
     const chapter = this.coopChapters?.find(item => item.id === partner.lastChapterId);

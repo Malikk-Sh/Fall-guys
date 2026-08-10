@@ -196,6 +196,16 @@ export async function equipAccountCosmetic(slot, cosmeticId, options) {
   return ok ? data.inventory || null : null;
 }
 
+export async function avoidRecentPartner(targetAccountId, options) {
+  const { ok, data } = await post('/api/social/avoid', { targetAccountId }, options);
+  return ok ? data : null;
+}
+
+export async function reportRecentPartner(targetAccountId, reason, options) {
+  const { ok, data } = await post('/api/social/report', { targetAccountId, reason }, options);
+  return ok ? data : null;
+}
+
 export async function ensureAccount(options = {}) {
   const { storage } = options;
   const stored = currentAccount(storage);

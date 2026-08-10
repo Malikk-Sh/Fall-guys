@@ -281,8 +281,27 @@
             Завершите кооперативную главу — последний напарник появится здесь.
           </p>
           <div id="recentPartnerCard" class="recent-partner-card hidden">
-            <div><strong id="recentPartnerName">Wobbler</strong><small id="recentPartnerMeta"></small></div>
-            <button id="recentPartnerInvite" class="button button-primary" disabled>ПРИГЛАСИТЬ СНОВА</button>
+            <div class="recent-partner-copy">
+              <strong id="recentPartnerName">Wobbler</strong><small id="recentPartnerMeta"></small>
+            </div>
+            <div class="recent-partner-actions">
+              <button id="recentPartnerInvite" class="button button-primary" disabled>ИГРАТЬ СНОВА</button>
+              <button id="recentPartnerAvoid" class="button button-secondary" disabled>
+                НЕ ПОДБИРАТЬ СНОВА
+              </button>
+              <button id="recentPartnerReport" class="button button-secondary" disabled>ПОЖАЛОВАТЬСЯ</button>
+            </div>
+            <div
+              id="recentPartnerReportReasons"
+              class="social-report-reasons hidden"
+              role="group"
+              aria-label="Причина жалобы"
+            >
+              <button type="button" data-social-report="afk">AFK</button>
+              <button type="button" data-social-report="griefing">МЕШАЕТ ПРОХОЖДЕНИЮ</button>
+              <button type="button" data-social-report="offensive-name">ОСКОРБИТЕЛЬНОЕ ИМЯ</button>
+              <button type="button" data-social-report="exploit-cheat">ЭКСПЛОЙТЫ / ЧИТ</button>
+            </div>
           </div>
         </section>
       </div>

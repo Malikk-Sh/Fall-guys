@@ -3,6 +3,7 @@
 import {
   ensureAccount,
   accountProfile,
+  avoidRecentPartner,
   listAccounts,
   currentAccount as accountForRecords,
   authConfig,
@@ -12,6 +13,7 @@ import {
   loginGoogle,
   renameAccount,
   rememberAccount,
+  reportRecentPartner,
   sessionAccount,
   switchAccount,
   submitRecord
@@ -30,6 +32,8 @@ export class AccountFlow {
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
     setServerCosmeticEquipHandler((slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId));
     this.game.ui.onProfileRefresh = () => this.refreshProfile();
+    this.game.ui.onRecentPartnerAvoid = partner => this.avoidPartner(partner);
+    this.game.ui.onRecentPartnerReport = (partner, reason) => this.reportPartner(partner, reason);
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
@@ -78,6 +82,35 @@ export class AccountFlow {
       if (profile) this.game.ui.setServerProfile(profile);
       return profile;
     } catch {
+      return null;
+    }
+  }
+
+  async avoidPartner(partner) {
+    if (!partner?.id) return null;
+    try {
+      const result = await avoidRecentPartner(partner.id);
+      if (!result) return this.game.ui.toast('Не удалось сохранить исключение — попробуйте ещё раз.');
+      await this.refreshProfile();
+      this.game.ui.toast('Этого игрока больше не подберёт вам быстрый поиск.');
+      return result;
+    } catch {
+      this.game.ui.toast('Не удалось сохранить исключение — попробуйте ещё раз.');
+      return null;
+    }
+  }
+
+  async reportPartner(partner, reason) {
+    if (!partner?.id || !reason) return null;
+    try {
+      const result = await reportRecentPartner(partner.id, reason);
+      if (!result) return this.game.ui.toast('Жалобу не удалось отправить.');
+      this.game.ui.toast(
+        result.duplicate ? 'Такая жалоба уже отправлена недавно.' : 'Жалоба отправлена. Спасибо.'
+      );
+      return result;
+    } catch {
+      this.game.ui.toast('Жалобу не удалось отправить.');
       return null;
     }
   }

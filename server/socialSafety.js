@@ -84,7 +84,9 @@ function prepare(db) {
     recentPartner: db.prepare(
       'SELECT 1 AS present FROM recent_partners WHERE account_id = ? AND partner_account_id = ?'
     ),
-    avoidPair: db.prepare('SELECT 1 AS present FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'),
+    avoidPair: db.prepare(
+      'SELECT 1 AS present FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'
+    ),
     insertAvoid: db.prepare(`
       INSERT OR IGNORE INTO matchmaking_avoids
         (account_a, account_b, created_by_account_id, created_at)

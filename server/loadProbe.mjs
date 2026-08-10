@@ -11,7 +11,7 @@
 // использовать WOBBLE_WS_URL и WOBBLE_HTTP_URL.
 
 import { WebSocket } from 'ws';
-import { loadTargets } from './loadProbeConfig.mjs';
+import { loadStateMessage, loadTargets } from './loadProbeConfig.mjs';
 
 const { wsUrl, httpUrl } = loadTargets();
 const ROOMS = Math.max(1, Number(process.argv[2] || 12));
@@ -63,11 +63,9 @@ class Client {
 
   sendState(z) {
     this.sequence += 1;
-    this.send('state', {
-      matchId: this.matchId,
-      sequence: this.sequence,
-      state: { x: 0, y: 1.2, z, ry: 0, vx: 0, vz: -7, state: 'ground' }
-    });
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(loadStateMessage({ matchId: this.matchId, sequence: this.sequence, z })));
+    }
   }
 
   close() {

@@ -58,16 +58,20 @@ async function main() {
       offsiteIntervalMs: numberEnv('BACKUP_OFFSITE_EVERY_SECONDS', 86400) * 1000,
       offsiteKeep: numberEnv('BACKUP_OFFSITE_KEEP', 30)
     });
+    const health = backupHealthStatus({ ...config });
+    const fresh = backupFresh(health);
     console.log(
       JSON.stringify({
-        ok: true,
+        ok: fresh,
         backup: result.backupFile,
         schemaVersion: result.status.local.schemaVersion,
         bytes: result.status.local.bytes,
         offsiteConfigured: result.status.offsite.configured,
+        offsiteRequired: health.offsite.required,
         offsiteLastSuccessAt: result.status.offsite.lastSuccessAt
       })
     );
+    if (!fresh) process.exitCode = 2;
     return;
   }
 

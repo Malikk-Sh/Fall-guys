@@ -101,10 +101,16 @@ test('систематическое движение быстрее физик�
   const player = playerAt(initial);
   room.players.set(player.id, player);
 
-  const { findings } = feed(room, player, bounceStates(piece, 18, 75));
+  const fastStates = Array.from({ length: 75 }, (_, index) =>
+    stateAt({
+      z: piece.z + 3 - ((index + 1) * 18 * SEND_MS) / 1000,
+      vz: -18
+    })
+  );
+  const { findings } = feed(room, player, fastStates);
   assert.equal(findings.has('coop-reported-speed'), false, '18 оставлено ниже шумного мгновенного потолка');
   assert.equal(findings.has('coop-observed-speed'), false, '18 оставлено ниже шумного observed потолка');
-  assert.equal(findings.has('coop-sustained-speed'), true, 'средняя скорость обязана поймать систематику');
+  assert.equal(findings.has('coop-sustained-speed'), true, 'быстрое продвижение обязано пойматься окном');
 });
 
 test('стоять и зависать там, где в общей разметке нет опоры, нельзя', () => {
@@ -239,4 +245,38 @@ test('финальный участок тоже имеет физический
     'coop-finish-too-fast'
   );
   assert.equal(verifyCoopFinish(player, spec, stateAt({ z: spec.finishZ }), START_MS + 10_000), null);
+});
+
+test('редкие state-пакеты не позволяют обойти sustained-speed audit', () => {
+  const room = roomFor('ch1');
+  const piece = firstLongFloor('ch1');
+  const player = playerAt(stateAt({ z: piece.z + 5, vz: -8 }));
+  room.players.set(player.id, player);
+  const findings = new Set();
+  let z = piece.z + 5;
+  let now = START_MS;
+  for (let index = 0; index < 10; index++) {
+    now += 500; // всего 2 пакета/с — намеренно ниже обычных ~15/s
+    z -= 10; // 20 ед/с при заявленных безопасных vx/vz
+    const state = stateAt({ z, vz: -8 });
+    for (const reason of auditCoopMovement(room, player, state, now)) findings.add(reason);
+    player.last = { ...state };
+    player.lastAt = now;
+  }
+  assert.equal(findings.has('coop-sustained-speed'), true);
+});
+
+test('tether exception не действует далеко за физической длиной троса', () => {
+  const room = roomFor('ch10');
+  const piece = firstLongFloor('ch10');
+  const player = playerAt(stateAt({ x: -5, z: piece.z }));
+  const partner = { id: 'p2', last: stateAt({ x: 5, z: piece.z }), disconnectedAt: null };
+  room.players.set(player.id, player);
+  room.players.set(partner.id, partner);
+  assert.equal(tetherActive(room, player, stateAt({ x: -5, z: piece.z })), true);
+  assert.equal(
+    tetherActive(room, player, stateAt({ x: -30, z: piece.z })),
+    false,
+    'игрок далеко за maxLength не получает бесконечное исключение'
+  );
 });

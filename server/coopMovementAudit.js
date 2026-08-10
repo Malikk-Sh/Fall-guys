@@ -10,7 +10,7 @@
 const { chapterLayout, LANE_WIDTH } = require('../shared/coopChapters.js');
 
 const WINDOW_MS = 2000;
-const WINDOW_MIN_SAMPLES = 18;
+const WINDOW_MIN_SAMPLES = 2;
 const HISTORY_LIMIT = 64;
 const FREE_FALL_MS = 1500;
 
@@ -145,7 +145,10 @@ function tetherActive(room, player, state) {
   );
   if (!partner) return false;
   const maxLength = Number(tether.maxLength) || 11;
-  return distance(state, partner.last) >= maxLength - 1.5;
+  const length = distance(state, partner.last);
+  // Трос даёт исключение только рядом с собственной предельной длиной. Условие «всё, что дальше
+  // maxLength» превращало бы оторвавшегося на полкарты читера в вечный tether-exception.
+  return length >= maxLength - 1.5 && length <= maxLength + 4;
 }
 
 function auditCoopMovement(room, player, state, now = Date.now()) {
@@ -169,12 +172,18 @@ function auditCoopMovement(room, player, state, now = Date.now()) {
   // threshold: otherwise один законный быстрый эпизод отравлял бы ещё две секунды после него.
   if (launched || tethered) history.length = 0;
   else {
-    history.push({ at: now, x: state.x, z: state.z, speed: observed });
+    history.push({ at: now, x: state.x, z: state.z });
     while (history.length > HISTORY_LIMIT) history.shift();
     while (history.length > 1 && now - history[0].at > WINDOW_MS) history.shift();
     if (history.length >= WINDOW_MIN_SAMPLES && now - history[0].at >= WINDOW_MS * 0.72) {
-      const average = history.reduce((sum, item) => sum + item.speed, 0) / history.length;
-      if (average > MAX_SUSTAINED_SPEED) note(player, 'coop-sustained-speed', findings);
+      const first = history[0];
+      const last = history.at(-1);
+      const elapsed = Math.max(0.001, (last.at - first.at) / 1000);
+      // Net displacement, а не среднее по пакетам: так проверка не зависит от того, шлёт
+      // модифицированный клиент 15 state/s или намеренно опускается до 2–4 state/s. Боковое
+      // движение moving platform/fan учитывается, но их реальные скорости далеко ниже порога.
+      const sustained = Math.hypot(last.x - first.x, last.z - first.z) / elapsed;
+      if (sustained > MAX_SUSTAINED_SPEED) note(player, 'coop-sustained-speed', findings);
     }
   }
 

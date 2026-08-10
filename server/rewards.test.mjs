@@ -85,7 +85,11 @@ test('reward pool использует только server-owned cosmetics ре�
 
   assert.equal(result.ok, true);
   assert.ok(inventory.owns(account.id, result.cosmeticId));
-  assert.ok(['visor', 'antenna'].includes(inventory.owned(account.id).find(item => item.id === result.cosmeticId)?.slot));
+  assert.ok(
+    ['visor', 'antenna'].includes(
+      inventory.owned(account.id).find(item => item.id === result.cosmeticId)?.slot
+    )
+  );
   const after = db.prepare('SELECT * FROM account_stats WHERE account_id = ?').get(account.id);
   assert.deepEqual(after, before, 'reward не меняет race/gameplay stats');
   db.close();

@@ -36,6 +36,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add ci-network-auth-failure.log
+          git add -f ci-network-auth-failure.log
           git commit -m "Capture network auth test diagnostics"
           git push origin HEAD:agent/network-auth-hardening

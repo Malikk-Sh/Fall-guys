@@ -208,10 +208,20 @@ else
   fi
 fi
 
-say "Служба"
+say "Служба и резервные копии"
 cp "$APP_DIR/deploy/wobble.service" /etc/systemd/system/wobble.service
+cp "$APP_DIR/deploy/wobble-backup.service" /etc/systemd/system/wobble-backup.service
+cp "$APP_DIR/deploy/wobble-backup.timer" /etc/systemd/system/wobble-backup.timer
+cp "$APP_DIR/deploy/wobble-backup-watch.service" /etc/systemd/system/wobble-backup-watch.service
+cp "$APP_DIR/deploy/wobble-backup-watch.timer" /etc/systemd/system/wobble-backup-watch.timer
 systemctl daemon-reload
 systemctl enable wobble >/dev/null
+systemctl enable wobble-backup.timer wobble-backup-watch.timer >/dev/null
+
+# Existing production DB is snapshotted before the restart can run newer migrations.
+# On first install the DB does not exist yet, and backup.sh intentionally skips this one call.
+say "Преддеплойная резервная копия"
+systemctl start wobble-backup.service
 systemctl restart wobble
 
 say "Nginx"
@@ -326,11 +336,27 @@ fi
 
 say "Проверка"
 sleep 2
-if curl -fsS --max-time 5 http://127.0.0.1:3000/health >/dev/null; then
-  echo "сервер отвечает"
-else
+if ! curl -fsS --max-time 5 http://127.0.0.1:3000/health/live >/dev/null; then
   warn "сервер не отвечает — смотрите: journalctl -u wobble -n 50 --no-pager"
   exit 1
+fi
+
+# First install gets its first snapshot here; updates also get a verified post-migration copy.
+say "Проверенная резервная копия после запуска"
+systemctl start wobble-backup.service
+systemctl start wobble-backup.timer wobble-backup-watch.timer
+
+say "Deploy smoke"
+if bash "$APP_DIR/deploy/smoke.sh" --require-backup; then
+  echo "server, health, WebSocket and fresh backup verified"
+else
+  warn "deploy smoke не прошёл — смотрите journalctl -u wobble -n 100 --no-pager"
+  exit 1
+fi
+
+if ! grep -Eq "^[[:space:]]*BACKUP_OFFSITE_DIR=.+" /etc/wobble.env; then
+  warn "off-server backup ещё не настроен: нужна отдельная машина/remote storage, не папка этого VPS."
+  warn "Инструкция: $APP_DIR/deploy/PRODUCTION-SAFETY.md"
 fi
 
 # Запоминаем настройки только теперь, когда развёртывание доказанно удалось. Сохранять их раньше
@@ -379,4 +405,6 @@ fi
 echo
 echo "Логи:        journalctl -u wobble -f"
 echo "Перезапуск:  systemctl restart wobble"
+echo "Backup:      systemctl start wobble-backup.service"
+echo "Restore:     sudo bash ${APP_DIR}/deploy/restore.sh /path/to/backup.db"
 echo "Обновление:  bash ${APP_DIR}/deploy/install.sh"

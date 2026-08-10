@@ -27,7 +27,8 @@ function ageSeconds(value, now) {
 }
 
 function trackedFileExists(root, storedFile) {
-  if (!root || typeof storedFile !== 'string' || !storedFile.trim() || path.isAbsolute(storedFile)) return false;
+  if (!root || typeof storedFile !== 'string' || !storedFile.trim() || path.isAbsolute(storedFile))
+    return false;
   const base = path.resolve(root);
   const target = path.resolve(base, storedFile);
   if (target !== base && !target.startsWith(`${base}${path.sep}`)) return false;

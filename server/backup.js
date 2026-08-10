@@ -28,7 +28,10 @@ function ensureDirectory(dir) {
 }
 
 function timestamp(now = Date.now()) {
-  return new Date(now).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+  return new Date(now)
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
 }
 
 function readStatusFile(file) {
@@ -49,7 +52,10 @@ function writeStatusFile(file, value) {
 }
 
 function verificationRows(db) {
-  return db.prepare('PRAGMA integrity_check').all().map(row => String(Object.values(row)[0] || ''));
+  return db
+    .prepare('PRAGMA integrity_check')
+    .all()
+    .map(row => String(Object.values(row)[0] || ''));
 }
 
 function verifyBackup(file, { maxSchemaVersion = CURRENT_SCHEMA_VERSION } = {}) {

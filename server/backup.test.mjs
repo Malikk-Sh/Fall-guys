@@ -207,7 +207,11 @@ test('missing remote mount never becomes a fake offsite directory on the VPS', (
     assert.equal(health.offsite.available, false);
     assert.equal(health.offsite.stale, true);
     assert.equal(health.stale, true);
-    assert.equal(JSON.stringify(health).includes(f.dir), false, 'public health must not expose internal paths');
+    assert.equal(
+      JSON.stringify(health).includes(f.dir),
+      false,
+      'public health must not expose internal paths'
+    );
   } finally {
     f.db.close();
     rmSync(f.dir, { recursive: true, force: true });

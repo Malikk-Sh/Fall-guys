@@ -69,13 +69,20 @@ BACKUP_OFFSITE_MAX_AGE_SECONDS=129600
 
 Examples of suitable mounts are a second server over SSHFS, an S3-compatible bucket mounted with rclone, or provider backup storage mounted into the host. A second directory on the same VPS is **not** an off-server backup.
 
-The backup service runs as the unprivileged `wobble` user, so the mounted directory must be writable by that user. After configuring the mount:
+The backup service runs as the unprivileged `wobble` user, so the mounted directory must be writable by that user. It also requires a sentinel file on the mounted filesystem. This prevents a disappeared mount from silently turning `/mnt/wobble-offsite` into an ordinary local directory on the VPS.
+
+Create the sentinel **while the remote storage is definitely mounted**. The default name is `.wobble-offsite`; it can be changed with `BACKUP_OFFSITE_SENTINEL`.
+
+After configuring the mount:
 
 ```bash
 sudo -u wobble test -w /mnt/wobble-offsite
+sudo -u wobble touch /mnt/wobble-offsite/.wobble-offsite
 systemctl start wobble-backup.service
 systemctl start wobble-backup-watch.service
 ```
+
+If the mount or sentinel disappears, the backup code does **not** recreate the directory. Local backup continues, while required offsite freshness becomes stale and the watch alerts.
 
 `BACKUP_REQUIRE_OFFSITE=1` makes stale/missing offsite copies an alert condition. Keep it `0` only while external storage is being commissioned.
 

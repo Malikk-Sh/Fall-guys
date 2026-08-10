@@ -8,6 +8,7 @@ Type=oneshot
 User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
+StateDirectory=wobble
 EnvironmentFile=/etc/wobble.env
 ExecStart=/bin/bash /opt/wobble/deploy/check-backup.sh
 UMask=0077

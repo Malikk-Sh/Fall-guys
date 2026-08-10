@@ -79,7 +79,9 @@ async function main() {
 
   if (command === 'snapshot') {
     if (!args[0] || !args[1]) throw new Error('snapshot requires source and output paths');
-    console.log(JSON.stringify({ ok: true, ...createSnapshot({ databaseFile: args[0], outputFile: args[1] }) }));
+    console.log(
+      JSON.stringify({ ok: true, ...createSnapshot({ databaseFile: args[0], outputFile: args[1] }) })
+    );
     return;
   }
 

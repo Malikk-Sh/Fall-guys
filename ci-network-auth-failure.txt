@@ -1,0 +1,122 @@
+1842-  type: 'test'
+1843-  ...
+1844-# Subtest: начальная оценка не перетирает уже собранные замеры
+1845-ok 126 - начальная оценка не перетирает уже собранные замеры
+1846-  ---
+1847-  duration_ms: 0.145252
+1848-  type: 'test'
+1849-  ...
+1850-# (node:2738) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+1851-# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+1852-# (Use `node --trace-warnings ...` to show where the warning was created)
+1853-# (node:2738) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/shared/protocol.js is not specified and it doesn't parse as CommonJS.
+1854-# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+1855-# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+1856-# (Use `node --trace-warnings ...` to show where the warning was created)
+1857-# Subtest: обычное подключение сразу принимает выданную личность
+1858-ok 127 - обычное подключение сразу принимает выданную личность
+1859-  ---
+1860-  duration_ms: 49.972305
+1861-  type: 'test'
+1862-  ...
+1863-# Subtest: во время восстановления сессии временная личность не принимается
+1864-ok 128 - во время восстановления сессии временная личность не принимается
+1865-  ---
+1866-  duration_ms: 1.043583
+1867-  type: 'test'
+1868-  ...
+1869-# Subtest: успешный resume возвращает прежний id и сохраняет присланный токен
+1870-ok 129 - успешный resume возвращает прежний id и сохраняет присланный токен
+1871-  ---
+1872-  duration_ms: 0.327753
+1873-  type: 'test'
+1874-  ...
+1875-# Subtest: второй обрыв подряд восстанавливается тем же путём
+1876-ok 130 - второй обрыв подряд восстанавливается тем же путём
+1877-  ---
+1878-  duration_ms: 0.236973
+1879-  type: 'test'
+1880-  ...
+1881-# Subtest: неудачный resume чистит токен и не отправляет накопленное
+1882:not ok 131 - неудачный resume чистит токен и не отправляет накопленное
+1883-  ---
+1884-  duration_ms: 1.545382
+1885-  type: 'test'
+1886-  location: '/home/runner/work/Fall-guys/Fall-guys/server/network.test.mjs:129:1'
+1887-  failureType: 'testCodeFailure'
+1888-  error: |-
+1889-    после отказа личность нового сокета становится настоящей
+1890-    
+1891-    null !== 'temp-id'
+1892-    
+1893-  code: 'ERR_ASSERTION'
+1894-  name: 'AssertionError'
+1895-  expected: 'temp-id'
+1896-  actual: ~
+1897-  operator: 'strictEqual'
+1898-  stack: |-
+1899-    TestContext.<anonymous> (file:///home/runner/work/Fall-guys/Fall-guys/server/network.test.mjs:143:10)
+1900-    Test.runInAsyncScope (node:async_hooks:214:14)
+1901-    Test.run (node:internal/test_runner/test:1047:25)
+1902-    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+1903-    Test.postRun (node:internal/test_runner/test:1173:19)
+1904-    Test.run (node:internal/test_runner/test:1101:12)
+1905-    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+1906-  ...
+1907-# Subtest: финиш несёт финальную позицию внутри себя
+1908-ok 132 - финиш несёт финальную позицию внутри себя
+1909-  ---
+1910-  duration_ms: 0.530874
+1911-  type: 'test'
+1912-  ...
+1913-# Subtest: состояния нумеруются, а resume продолжает серверную последовательность
+1914-ok 133 - состояния нумеруются, а resume продолжает серверную последовательность
+1915-  ---
+1916-  duration_ms: 0.507359
+1917-  type: 'test'
+1918-  ...
+1919-# Subtest: клиент отбрасывает повторные и запоздавшие серверные snapshots
+1920-ok 134 - клиент отбрасывает повторные и запоздавшие серверные snapshots
+1921-  ---
+1922-  duration_ms: 0.697455
+1923-  type: 'test'
+1924-  ...
+1925-# Subtest: после финиша состояние больше не отправляется
+1926-ok 135 - после финиша состояние больше не отправляется
+1927-  ---
+1928-  duration_ms: 0.602016
+1929-  type: 'test'
+1930-  ...
+1931-# Subtest: финиш отправляется один раз за матч и снова разрешается в новом
+1932-ok 136 - финиш отправляется один раз за матч и снова разрешается в новом
+1933-  ---
+1934-  duration_ms: 0.738723
+1935-  type: 'test'
+1936-  ...
+1937-# Subtest: отказ сервера разрешает повторить финиш
+1938-ok 137 - отказ сервера разрешает повторить финиш
+1939-  ---
+1940-  duration_ms: 0.362118
+1941-  type: 'test'
+1942-  ...
+1943-# Subtest: вне матча состояние и кооп-события не отправляются вовсе
+1944-ok 138 - вне матча состояние и кооп-события не отправляются вовсе
+1945-  ---
+1946-  duration_ms: 0.271107
+1947-  type: 'test'
+1948-  ...
+1949-# Subtest: пока сокет закрыт, транзиентные пакеты не копятся
+1950-ok 139 - пока сокет закрыт, транзиентные пакеты не копятся
+1951-  ---
+1952-  duration_ms: 0.420156
+1953-  type: 'test'
+1954-  ...
+1955-# Subtest: до подтверждения возврата не отправляется ничего
+1956-ok 140 - до подтверждения возврата не отправляется ничего
+1957-  ---
+1958-  duration_ms: 0.300012
+1959-  type: 'test'
+1960-  ...
+1961-# Subtest: несовпадение версий заставляет клиента замолчать
+1962-ok 141 - несовпадение версий заставляет клиента замолчать
+exit_code=1

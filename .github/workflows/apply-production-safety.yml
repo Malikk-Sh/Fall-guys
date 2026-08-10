@@ -28,6 +28,7 @@ jobs:
       - name: Format supported files
         run: >-
           npx prettier --write
+          tools/apply-production-safety.cjs
           server/index.js
           server/backup.js
           server/backupStatus.js

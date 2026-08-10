@@ -46,3 +46,7 @@ NGINX
 fi
 
 echo 'shared-443 deploy config: ok'
+
+# Node 22 may call custom lookup functions with options.all=true during
+# network-family autoselection. Keep the production WebSocket smoke compatible.
+node deploy/verify-loopback-lookup.cjs

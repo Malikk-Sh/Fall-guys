@@ -26,7 +26,8 @@ ORIGIN="${ORIGIN:-http://127.0.0.1:${PORT}}"
 curl -fsS --max-time 5 "$BASE_URL/health/live" >/dev/null
 curl -fsS --max-time 5 "$BASE_URL/health/ready" >/dev/null
 health="$(curl -fsS --max-time 5 "$BASE_URL/health")"
-curl -fsS --max-time 5 "$BASE_URL/" | grep -q 'WOBBLE'
+html="$(curl -fsS --max-time 5 "$BASE_URL/")"
+grep -q 'WOBBLE' <<<"$html"
 
 /usr/bin/node - "$health" "$REQUIRE_BACKUP" <<'NODE'
 const health = JSON.parse(process.argv[2]);

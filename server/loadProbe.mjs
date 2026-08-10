@@ -61,10 +61,12 @@ class Client {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type, ...data }));
   }
 
-  sendState(z) {
+  sendState(z, vz) {
     this.sequence += 1;
     if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(loadStateMessage({ matchId: this.matchId, sequence: this.sequence, z })));
+      this.ws.send(
+        JSON.stringify(loadStateMessage({ matchId: this.matchId, sequence: this.sequence, z, vz }))
+      );
     }
   }
 
@@ -106,12 +108,16 @@ await sleep(3200);
 const before = await health();
 console.log(`шлю позиции ${SECONDS} с…`);
 let z = 10;
+let direction = -1;
 const timer = setInterval(() => {
-  z -= 0.4;
-  if (z < -180) z = 10;
+  const stepDirection = direction;
+  z += stepDirection * 0.4;
+  const vz = stepDirection * 7;
   for (const pair of rooms) {
-    for (const client of pair) client.sendState(z);
+    for (const client of pair) client.sendState(z, vz);
   }
+  if (z <= -120) direction = 1;
+  else if (z >= 10) direction = -1;
 }, 66);
 
 await sleep(SECONDS * 1000);

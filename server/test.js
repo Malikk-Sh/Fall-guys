@@ -23,7 +23,8 @@ const {
   rotateEventLoopWindow,
   createEventCounters,
   trackEvent,
-  matchmakingStatus
+  matchmakingStatus,
+  addVerificationFindings
 } = require('./index');
 const { coopSpec } = require('../shared/coopChapters.js');
 const { validateCoopEvent, findCatapult } = require('./coopRules');
@@ -433,4 +434,16 @@ test('оперативный matchmaking status показывает очере�
     oldestWaitMs: 0,
     matchedSinceStart: 7
   });
+});
+
+test('co-op verification findings снимают competitive trust так же, как race', () => {
+  const room = { mode: 'coop', code: 'AUDIT', matchId: 'm-coop' };
+  const player = { id: 'p1', verificationReasons: [] };
+  assert.equal(addVerificationFindings(room, player, ['coop-sustained-speed']), true);
+  assert.deepEqual(player.verificationReasons, ['coop-sustained-speed']);
+  assert.equal(
+    addVerificationFindings(room, player, ['coop-sustained-speed']),
+    false,
+    'reason дедуплицируется'
+  );
 });

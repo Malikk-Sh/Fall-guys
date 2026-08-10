@@ -51,6 +51,13 @@ const { socialCosmetics } = require('./socialCosmetics');
 const { backupHealthStatus } = require('./backupStatus');
 const { buildIdentity } = require('./buildInfo');
 const { trackSignatureMetrics } = require('./signatureMetrics');
+const {
+  auditCoopMovement,
+  verifyCoopCheckpoint,
+  verifyCoopFinish,
+  noteAuthoritativeLaunch,
+  resetCoopMotionHistory
+} = require('./coopMovementAudit');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -364,9 +371,10 @@ app.get('/leaderboard', (req, res) => {
 // у главы — идентификатором, и склеивать два разных набора параметров в один маршрут значило бы
 // проверять их вперемешку.
 //
-// Времена здесь мерил сервер — от старта комнаты до финиша, по своим часам. Движение он не
-// проверял: разметка главы рукотворная, и коридоров, по которым проверяется гонка, у неё нет.
-// Клиенту это сообщается полем movementVerified, чтобы интерфейс не обещал больше, чем есть.
+// Время и движение здесь проверяет сервер. Для рукотворных глав используется отдельный
+// CoopMovementAudit: он читает ту же data-driven разметку, что строит клиент, и проверяет
+// систематическую скорость, опоры, высоту, checkpoint regions и физические минимумы, сохраняя
+// узкие исключения только для серверно подтверждённых механик.
 app.get('/leaderboard/coop', (req, res) => {
   const chapterId = typeof req.query.chapter === 'string' ? req.query.chapter : '';
   if (!COOP_CHAPTER_IDS.includes(chapterId))
@@ -378,7 +386,7 @@ app.get('/leaderboard/coop', (req, res) => {
     ok: true,
     mode: GAME_MODE.COOP,
     chapter: chapterId,
-    movementVerified: false,
+    movementVerified: true,
     verificationVersion: VERIFICATION_VERSION,
     entries: verifiedLeaderboard.get(GAME_MODE.COOP, key, req.query.limit, playerId),
     standing: verifiedLeaderboard.standing(GAME_MODE.COOP, key, playerId)
@@ -1100,7 +1108,7 @@ function markUnranked(room, reason) {
 }
 
 function addVerificationFindings(room, player, findings, details = {}) {
-  if (room.mode !== GAME_MODE.RACE || !findings?.length) return false;
+  if (!findings?.length) return false;
   let added = false;
   for (const reason of findings) {
     if (player.verificationReasons.includes(reason)) continue;
@@ -1130,15 +1138,17 @@ function dims(room, player, detail) {
   };
 }
 
-// Геометрия трассы известна серверу только в гонке: кооперативная глава — рукотворная разметка с
-// другими опорами, и мерить её теми же коридорами нельзя.
-function raceSpec(room) {
-  return room.mode === GAME_MODE.RACE ? room.spec : null;
+function verificationFindingsForState(room, player, state, now) {
+  return room.mode === GAME_MODE.COOP
+    ? auditCoopMovement(room, player, state, now)
+    : verifyMovement(player, state, now, room.spec);
 }
 
-function verifyPlayerProgress(room, player, checkpoint, now) {
-  if (room.mode !== GAME_MODE.RACE) return null;
-  const verification = verifyCheckpointTime(player, checkpoint, now, room.spec);
+function verifyPlayerProgress(room, player, checkpoint, state, now) {
+  const verification =
+    room.mode === GAME_MODE.COOP
+      ? verifyCoopCheckpoint(player, room.spec, checkpoint, state, now)
+      : verifyCheckpointTime(player, checkpoint, now, room.spec);
   if (!verification) return null;
   addVerificationFindings(room, player, [verification.reason], verification);
   return verification;
@@ -1212,6 +1222,13 @@ function beginCountdown(room) {
       movementAnomalies: {},
       movementHistory: [],
       freeFallSince: null,
+      // Независимая история co-op audit. Она сбрасывается на каждый matchId так же, как race
+      // verification, чтобы реванш не наследовал аномалии предыдущего забега.
+      coopMovementAnomalies: {},
+      coopMovementHistory: [],
+      coopFreeFallSince: null,
+      coopLastCheckpointAt: room.startedAt,
+      coopMotionException: null,
       // Готовность снимается: следующий выход в лобби не должен начинаться с чужого «готов»
       // прошлого забега. На реванш это не влияет — он идёт мимо лобби.
       ready: false,
@@ -1324,10 +1341,9 @@ function finishMatch(room) {
     // Время забега — единственная величина, которую стоит усреднять: по ней видно, стала ли
     // трасса проходиться быстрее после правки, и на каком устройстве она даётся тяжелее.
     //
-    // Отметка проверки идёт отдельным измерением, а не фильтром. Выбросить непроверенные времена
-    // значило бы потерять и те, где виноват не игрок: в кооперативе движение вообще не проверяется,
-    // а в гонке зачёт снимает и чужой обрыв связи. Смешать их с проверенными — испортить среднее
-    // одним забегом на три секунды. Разными строками читаются и те и другие.
+    // Отметка проверки идёт отдельным измерением, а не фильтром. Непроверенный забег всё равно
+    // полезен для продуктовой аналитики: он показывает длительность попытки, но не участвует в
+    // competitive leaderboard и не смешивается со средним подтверждённых прохождений.
     gameplay.observe(
       'finish_time',
       entry.time,
@@ -1353,12 +1369,9 @@ function finishMatch(room) {
     unranked: room.unranked || (verificationFailed ? 'verification' : null),
     trusted: !room.unranked && !verificationFailed
   };
-  // В таблицу идут оба режима — но только те, где время мерил сервер.
-  //
-  // В гонке проверено и время, и каждое положение игрока. В коопе геометрия главы серверу
-  // неизвестна, и движение он не проверяет, — зато время меряет сам, по своим часам, от старта
-  // комнаты до финиша. Подделать его клиент не может, и этого достаточно, чтобы таблица глав
-  // означала то, что обещает. Соло в таблицу не идёт и идти не может: там сервера нет вовсе.
+  // В публичную таблицу идут только trusted online-забеги. В race движение проверяется по
+  // процедурной геометрии, в coop — отдельным data-driven CoopMovementAudit с известными
+  // исключениями механик. Соло в таблицу не идёт: сервера там нет, и подтвердить движение некому.
   if (room.results.trusted) {
     verifiedLeaderboard.record({
       matchId: room.matchId,
@@ -1762,11 +1775,11 @@ wss.on('connection', (ws, req) => {
         }
         return;
       }
-      addVerificationFindings(room, player, verifyMovement(player, result.state, now, raceSpec(room)));
+      addVerificationFindings(room, player, verificationFindingsForState(room, player, result.state, now));
+      verifyPlayerProgress(room, player, result.checkpoint, result.state, now);
       player.last = { ...result.state, id: player.id };
       player.lastAt = now;
       player.lastSequence = message.sequence;
-      verifyPlayerProgress(room, player, result.checkpoint, now);
       trackCheckpointDuration(room, player, result.checkpoint, now);
       if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
       player.checkpoint = result.checkpoint;
@@ -1794,6 +1807,12 @@ wss.on('connection', (ws, req) => {
       if (!result.ok) return;
       trackSignatureMetrics({ room, player, message, result, gameplay, dimensions: dims });
       if (result.relay) {
+        if (result.relay.action === 'launch') {
+          // Исключение выдаёт сервер и только тому, кого действительно подбросила прошедшая все
+          // проверки катапульта. Клиент сам объявить себе «режим быстрого полёта» не может.
+          const target = room.players.get(result.relay.target);
+          if (target) noteAuthoritativeLaunch(target);
+        }
         if (result.relay.action === 'revive') {
           room.coopRevives = (room.coopRevives || 0) + 1;
           player.coopRevives = (player.coopRevives || 0) + 1;
@@ -1831,6 +1850,7 @@ wss.on('connection', (ws, req) => {
         }
         const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
         resetHistory(player);
+        resetCoopMotionHistory(player);
         player.last = {
           ...point,
           ry: 0,
@@ -1886,22 +1906,25 @@ wss.on('connection', (ws, req) => {
       const now = Date.now();
       const result = validateState(player, message.state, room.spec, now);
       if (result.ok) {
-        addVerificationFindings(room, player, verifyMovement(player, result.state, now, raceSpec(room)));
+        addVerificationFindings(room, player, verificationFindingsForState(room, player, result.state, now));
+        verifyPlayerProgress(room, player, result.checkpoint, result.state, now);
         player.last = { ...result.state, id: player.id };
         player.lastAt = now;
         player.receivedAt = now;
-        verifyPlayerProgress(room, player, result.checkpoint, now);
         trackCheckpointDuration(room, player, result.checkpoint, now);
         if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
         player.checkpoint = result.checkpoint;
         player.lastSequence = message.sequence;
       }
 
-      // Последний отрезок — от арки до ленты — до сих пор не проверял никто.
-      if (room.mode === GAME_MODE.RACE) {
-        const tail = verifyFinishTime(player, now);
-        if (tail) addVerificationFindings(room, player, [tail.reason], tail);
-      }
+      // Последний отрезок тоже входит в verification boundary. У гонки и коопа разные
+      // геометрия и физические исключения, но итог один: мгновенный выход к ленте не становится
+      // подтверждённым результатом.
+      const tail =
+        room.mode === GAME_MODE.COOP
+          ? verifyCoopFinish(player, room.spec, player.last, now)
+          : verifyFinishTime(player, now);
+      if (tail) addVerificationFindings(room, player, [tail.reason], tail);
 
       if (!canFinish(player, room.spec)) {
         metrics.finishRejected++;
@@ -2191,6 +2214,9 @@ module.exports = {
   loadStatus,
   health,
   matchmakingStatus,
+  addVerificationFindings,
+  verificationFindingsForState,
+  verifyPlayerProgress,
   rotateEventLoopWindow,
   EVENT_LOOP_WINDOW_MS,
   createEventCounters,

@@ -363,3 +363,30 @@ test('поток гоночных трасс не вытесняет коопе�
   assert.deepEqual(board.get('race', '1:normal'), [], 'а давняя гоночная трасса вытеснена');
   board.close();
 });
+
+test('новая co-op verification version не повышает старые server-timed строки задним числом', () => {
+  const db = openDatabase(':memory:');
+  const legacy = new VerifiedLeaderboard({ db, verificationVersion: 2 });
+  legacy.record({
+    matchId: 'legacy-coop',
+    mode: 'coop',
+    courseKey: 'ch1',
+    entries: [{ playerId: 'coop-old', name: 'Старый кооп', time: 9000, verified: true }]
+  });
+  legacy.record({
+    matchId: 'legacy-race',
+    mode: 'race',
+    courseKey: '1:easy',
+    entries: [{ playerId: 'race-old', name: 'Старая гонка', time: 12000, verified: true }]
+  });
+  assert.equal(legacy.get('coop', 'ch1').length, 1, 'подготовка: legacy co-op строка существует');
+  const current = new VerifiedLeaderboard({ db });
+  assert.equal(current.staleCoopPruned, 1);
+  assert.deepEqual(
+    current.get('coop', 'ch1'),
+    [],
+    'movement-unverified co-op v2 удалён из competitive board'
+  );
+  assert.equal(current.get('race', '1:easy').length, 1, 'race v2 не затронут co-op migration');
+  db.close();
+});

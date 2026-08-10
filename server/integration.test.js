@@ -1000,8 +1000,9 @@ test('финишировавший возвращается в ожидание,
 // израсходованный запас и терял зачёт ни за что. Найдено чтением кода: сброс полей игрока в
 // beginCountdown перечислял всё, кроме этого.
 //
-// Проверяется на кооперативе, потому что там до реванша можно дойти быстро. Сам сброс от режима не
-// зависит: это один и тот же beginCountdown.
+// Проверяется на кооперативе, потому что там до реванша можно дойти быстро. После появления
+// CoopMovementAudit у режимов независимые буферы аномалий, но жизненный цикл у них общий:
+// beginCountdown обязан очищать co-op историю так же строго, как race.
 test('запас отклонений сбрасывается при старте нового забега', async t => {
   await listen();
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
@@ -1019,16 +1020,24 @@ test('запас отклонений сбрасывается при старт
 
   const player = [...rooms.get(code).players.values()][0];
   assert.ok(
-    Object.values(player.movementAnomalies || {}).some(count => count > 0),
-    'подготовка: забег обязан оставить отклонения'
+    Object.values(player.coopMovementAnomalies || {}).some(count => count > 0),
+    'подготовка: быстрый co-op прогон обязан оставить audit-отклонения'
   );
 
   host.send('rematch', { matchId: started.matchId });
   guest.send('rematch', { matchId: started.matchId });
   await guest.wait('start', m => m.matchId !== started.matchId, WAIT_MS);
 
-  assert.deepEqual(player.movementAnomalies, {}, 'новый забег обязан начинаться с полным запасом');
-  assert.deepEqual(player.movementHistory, [], 'история движения прошлого забега к новому не относится');
+  assert.deepEqual(
+    player.coopMovementAnomalies,
+    {},
+    'новый co-op забег обязан начинаться с полным запасом audit-бюджета'
+  );
+  assert.deepEqual(
+    player.coopMovementHistory,
+    [],
+    'co-op история движения прошлого забега к новому не относится'
+  );
 });
 
 // Потерянный пакет не должен останавливать забег насовсем.
@@ -1284,13 +1293,10 @@ test('падение записывается на том препятствии
   assert.equal(row.device, 'desktop', 'устройство определено, а не оставлено пустым');
 });
 
-// Кооперативная глава попадает в общую таблицу — и это единственный режим, кроме гонки, где она
-// вообще имеет смысл.
-//
-// Движение в коопе сервер не проверяет: разметка главы рукотворная, коридоров и потолков скорости
-// у неё нет. Зато время он меряет сам, по своим часам, от старта комнаты до финиша, — подделать
-// его клиент не может. Проверяется именно это: строка появляется, время в ней серверное, а не
-// присланное, и оба напарника получают своё место.
+// Кооперативная глава попадает в competitive-таблицу только после server-side movement audit.
+// Этот тест намеренно использует runHonestly, а не быстрый функциональный runToFinish: последний
+// движется примерно в семь раз быстрее персонажа и теперь правильно снимает зачёт. Проверяется
+// полный production boundary: серверное время + допустимое движение + строки обоих напарников.
 test('пройденная кооп-глава попадает в таблицу глав', async t => {
   await listen();
   const port = server.address().port;
@@ -1340,8 +1346,8 @@ test('пройденная кооп-глава попадает в таблиц�
   await waitForStart(started.at);
 
   await Promise.all([
-    runToFinish(host, started.spec, started.matchId),
-    runToFinish(guest, started.spec, started.matchId)
+    runHonestly(host, started.spec, started.matchId),
+    runHonestly(guest, started.spec, started.matchId)
   ]);
   const results = await host.wait('results', () => true, WAIT_MS);
   assert.equal(results.mode, 'coop');
@@ -1362,8 +1368,8 @@ test('пройденная кооп-глава попадает в таблиц�
   assert.equal(board.mode, 'coop');
   assert.equal(
     board.movementVerified,
-    false,
-    'интерфейсу честно сообщается, что движение здесь не проверялось'
+    true,
+    'competitive co-op board обязан сообщать о server-side movement verification'
   );
 
   // Проверяется своя пара, а не размер таблицы: база — общий синглтон на весь набор, и главу до

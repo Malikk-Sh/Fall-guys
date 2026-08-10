@@ -23,7 +23,7 @@ grep -Fq 'ufw delete allow "${HTTPS_PORT}/tcp"' "$install"
 grep -Fq 'shared HTTPS 443 + public WebSocket verified' "$install"
 
 # If nginx + the dynamic stream module are available (CI installs them), validate the actual
-# stream syntax after rendering placeholders. No TLS cert is needed: stream only prereads SNI.
+# stream syntax after rendering placeholders. Use an unprivileged test port so CI needs no root.
 if command -v nginx >/dev/null 2>&1 && [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
@@ -32,6 +32,8 @@ if command -v nginx >/dev/null 2>&1 && [ -f /usr/lib/nginx/modules/ngx_stream_mo
     -e 's/server_name_placeholder/wobbles.example/g' \
     -e 's/127\.0\.0\.1:8443/127.0.0.1:18443/g' \
     -e 's/fallback_placeholder/127.0.0.1:14443/g' \
+    -e 's/listen 443;/listen 19443;/' \
+    -e 's/listen \[::\]:443;/listen [::]:19443;/' \
     "$tmp/stream.conf"
   cat >"$tmp/nginx.conf" <<NGINX
 load_module /usr/lib/nginx/modules/ngx_stream_module.so;

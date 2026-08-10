@@ -2039,7 +2039,8 @@ const heartbeatTimer = setInterval(() => {
   gameplay.flush();
   expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
-  for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
+  ipRoomOps.cleanup(now, { force: true });
+  for (const [, limiter] of Object.values(httpLimits)) limiter.cleanup(now, { force: true });
 }, 15000);
 heartbeatTimer.unref();
 

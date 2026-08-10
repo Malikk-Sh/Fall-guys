@@ -1,0 +1,59 @@
+name: Apply production safety
+
+on:
+  push:
+    branches:
+      - agent/production-safety
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/production-safety
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply production safety integration
+        run: node tools/apply-production-safety.cjs
+      - name: Format supported files
+        run: >-
+          npx prettier --write
+          server/index.js
+          server/backup.js
+          server/backupStatus.js
+          server/backupCli.mjs
+          server/backup.test.mjs
+          package.json
+          .github/workflows/ci.yml
+          deploy/PRODUCTION-SAFETY.md
+      - name: Validate shell scripts
+        run: bash -n deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh deploy/install.sh
+      - name: Check formatting and lint
+        run: |
+          npm run format:check
+          npm run check
+      - name: Run backup and migration regressions
+        run: node --test server/backup.test.mjs server/migrations.test.mjs
+      - name: Run full unit and integration suite
+        run: npm test
+      - name: Commit production changes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server deploy package.json .github/workflows/ci.yml
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Add verified production backups and restore safety"
+          git push origin HEAD:agent/production-safety

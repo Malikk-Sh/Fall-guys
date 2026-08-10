@@ -1,5 +1,6 @@
 const express = require('express');
 const { SESSION_COOKIE, parseCookies, cookieForSession, clearSessionCookie } = require('./auth');
+const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 
 const AUTH_WINDOW_MS = 10 * 60 * 1000;
 
@@ -16,21 +17,14 @@ function installAuthRoutes({
 }) {
   const json = express.json({ limit: '20kb' });
   const attempts = {
-    recovery: [40, new Map()],
-    google: [80, new Map()]
+    recovery: [40, new BoundedIpRateLimiter({ windowMs: AUTH_WINDOW_MS })],
+    google: [80, new BoundedIpRateLimiter({ windowMs: AUTH_WINDOW_MS })]
   };
 
   const rateLimited = (kind, ip) => {
     if (!ip) return false;
-    const [max, hits] = attempts[kind];
-    const now = Date.now();
-    const entry = hits.get(ip);
-    if (!entry || now - entry.start > AUTH_WINDOW_MS) {
-      hits.set(ip, { start: now, count: 1 });
-      return false;
-    }
-    entry.count++;
-    return entry.count > max;
+    const [max, limiter] = attempts[kind];
+    return limiter.limited(ip, max);
   };
 
   const tokenFrom = req => parseCookies(req.headers.cookie)[SESSION_COOKIE] || '';

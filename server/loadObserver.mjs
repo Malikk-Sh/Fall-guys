@@ -3,20 +3,20 @@
 // Запускается НА САМОМ VPS, пока один или несколько loadProbe работают с других машин:
 //   WOBBLE_SERVER_PID=$(systemctl show -p MainPID --value wobble) npm run load:observe -- 1800
 //
-// Если PID не передан, пытаемся найти production entrypoint `node server/bootstrap.js`.
+// PID передаётся явно: observer не угадывает production-процесс по строке команды и поэтому не
+// зависит от того, запускается Node как `node`, `/usr/bin/node` или через другой service wrapper.
 
-import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { loadTargets } from './loadProbeConfig.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const { httpUrl, serverPid } = loadTargets();
 const seconds = Math.max(1, Number(process.argv[2] || 30));
-const pid = serverPid || detectServerPid();
+const pid = serverPid;
 
-if (!pid) {
+if (!pid || !/^[1-9]\d*$/.test(pid)) {
   throw new Error(
-    'Не найден PID Wobble. Передайте WOBBLE_SERVER_PID или запустите production server/bootstrap.js.'
+    'Передайте PID сервера: WOBBLE_SERVER_PID=$(systemctl show -p MainPID --value wobble) npm run load:observe'
   );
 }
 
@@ -56,19 +56,9 @@ for (let second = 1; second <= seconds; second++) {
 }
 
 console.log('\n--- ПИКИ НА СЕРВЕРЕ ---');
-console.log(`RSS:           ${peakRssMb.toFixed(1)} МБ`);
+console.log(`RSS:             ${peakRssMb.toFixed(1)} МБ`);
 console.log(`CPU одного ядра: ${peakCpuPercent.toFixed(1)} %`);
 console.log(`event-loop p95:  ${peakEventLoopP95Ms.toFixed(1)} мс`);
-
-function detectServerPid() {
-  try {
-    return execFileSync('pgrep', ['-f', '^node server/bootstrap.js'], { encoding: 'utf8' })
-      .trim()
-      .split(/\s+/)[0];
-  } catch {
-    return null;
-  }
-}
 
 async function pidStat(targetPid) {
   const [rawStat, rawStatus] = await Promise.all([

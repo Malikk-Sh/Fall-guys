@@ -9,6 +9,7 @@ const CURRENT_SCHEMA_VERSION = MIGRATIONS.at(-1)?.version || 0;
 const DEFAULT_RETENTION = Object.freeze({ hourly: 48, daily: 7, weekly: 4, monthly: 3 });
 const DEFAULT_OFFSITE_KEEP = 30;
 const DEFAULT_OFFSITE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_OFFSITE_SENTINEL = '.wobble-offsite';
 
 function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
@@ -162,8 +163,7 @@ function ensureTierCopy(source, root, tier, now) {
 }
 
 function applyRetention(root, source, now, retention = DEFAULT_RETENTION) {
-  const tiers = {};
-  tiers.hourly = source;
+  const tiers = { hourly: source };
   for (const tier of ['daily', 'weekly', 'monthly']) tiers[tier] = ensureTierCopy(source, root, tier, now);
   for (const [tier, keep] of Object.entries(retention))
     pruneDirectory(path.join(root, tier), Math.max(1, Number(keep) || DEFAULT_RETENTION[tier]));
@@ -175,8 +175,34 @@ function offsiteDue(status, now, intervalMs) {
   return !last || now - last >= intervalMs;
 }
 
-function copyOffsite({ source, offsiteDir, now, keep = DEFAULT_OFFSITE_KEEP }) {
-  const dir = ensureDirectory(offsiteDir);
+function safeSentinelName(value) {
+  const sentinel = String(value || DEFAULT_OFFSITE_SENTINEL).trim();
+  if (!sentinel || sentinel === '.' || sentinel === '..' || path.basename(sentinel) !== sentinel) {
+    throw new Error('BACKUP_OFFSITE_SENTINEL must be a single file name');
+  }
+  return sentinel;
+}
+
+function requireOffsiteMount(offsiteDir, sentinel = DEFAULT_OFFSITE_SENTINEL) {
+  const dir = path.resolve(String(offsiteDir || ''));
+  const stat = fs.statSync(dir);
+  if (!stat.isDirectory()) throw new Error('BACKUP_OFFSITE_DIR is not a directory');
+  const marker = path.join(dir, safeSentinelName(sentinel));
+  const markerStat = fs.statSync(marker);
+  if (!markerStat.isFile()) throw new Error('offsite sentinel is not a file');
+  return dir;
+}
+
+function copyOffsite({
+  source,
+  offsiteDir,
+  offsiteSentinel = DEFAULT_OFFSITE_SENTINEL,
+  now,
+  keep = DEFAULT_OFFSITE_KEEP
+}) {
+  // Never mkdir the configured offsite path. If a remote mount disappears, creating its mountpoint
+  // and writing there would silently turn an "off-server" backup into another copy on this VPS.
+  const dir = requireOffsiteMount(offsiteDir, offsiteSentinel);
   const target = path.join(dir, path.basename(source));
   if (!fs.existsSync(target)) fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
   const verified = verifyBackup(target);
@@ -193,6 +219,7 @@ function createBackup({
   backupDir,
   statusFile,
   offsiteDir = '',
+  offsiteSentinel = DEFAULT_OFFSITE_SENTINEL,
   now = Date.now(),
   retention = DEFAULT_RETENTION,
   offsiteKeep = DEFAULT_OFFSITE_KEEP,
@@ -240,7 +267,13 @@ function createBackup({
 
     if (offsite && offsiteDue(previous, now, Math.max(60_000, Number(offsiteIntervalMs) || 0))) {
       try {
-        const copied = copyOffsite({ source: snapshot.file, offsiteDir: offsite, now, keep: offsiteKeep });
+        const copied = copyOffsite({
+          source: snapshot.file,
+          offsiteDir: offsite,
+          offsiteSentinel,
+          now,
+          keep: offsiteKeep
+        });
         next = {
           ...next,
           offsite: {
@@ -253,14 +286,17 @@ function createBackup({
             lastError: null
           }
         };
-        writeStatusFile(statusPath, next);
       } catch (error) {
-        next.offsite.lastError = safeError(error);
-        next.lastFailureAt = now;
-        next.lastError = `offsite: ${safeError(error)}`;
-        writeStatusFile(statusPath, next);
-        throw error;
+        // A remote-store outage must never erase the fact that the local snapshot succeeded.
+        // Freshness policy decides whether missing offsite is fatal (BACKUP_REQUIRE_OFFSITE=1).
+        next = {
+          ...next,
+          offsite: { ...next.offsite, configured: true, lastError: safeError(error) },
+          lastFailureAt: now,
+          lastError: `offsite: ${safeError(error)}`
+        };
       }
+      writeStatusFile(statusPath, next);
     }
 
     return { backupFile: snapshot.file, statusFile: statusPath, status: next };
@@ -309,6 +345,7 @@ module.exports = {
   DEFAULT_RETENTION,
   DEFAULT_OFFSITE_KEEP,
   DEFAULT_OFFSITE_INTERVAL_MS,
+  DEFAULT_OFFSITE_SENTINEL,
   readStatusFile,
   writeStatusFile,
   verifyBackup,
@@ -316,5 +353,6 @@ module.exports = {
   createBackup,
   restoreDatabaseFile,
   pruneDirectory,
-  tierKey
+  tierKey,
+  requireOffsiteMount
 };

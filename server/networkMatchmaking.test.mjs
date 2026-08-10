@@ -9,7 +9,7 @@ const stubUi = () => ({
   toast: () => {}
 });
 
-test('findCoop передаёт accountToken в quick matchmaking', () => {
+test('findCoop не передаёт account credential в quick matchmaking', () => {
   const previousStorage = globalThis.sessionStorage;
   const previousWebSocket = globalThis.WebSocket;
   const storage = new Map();
@@ -32,10 +32,12 @@ test('findCoop передаёт accountToken в quick matchmaking', () => {
     net.handshakeReady = true;
     net.connect = () => {};
 
+    // Даже если старый вызывающий код попытается подложить accountToken, новый NetworkManager
+    // намеренно не принимает его в своей сигнатуре и не сериализует в FIND_COOP.
     net.findCoop({
       name: 'Malik',
       playerId: 'player-1',
-      accountToken: 'account-secret',
+      accountToken: 'must-not-leave-socket-auth',
       chapterId: 'ch7'
     });
 
@@ -44,11 +46,11 @@ test('findCoop передаёт accountToken в quick matchmaking', () => {
         type: C2S.FIND_COOP,
         name: 'Malik',
         playerId: 'player-1',
-        accountToken: 'account-secret',
         chapterId: 'ch7',
         protocolVersion: PROTOCOL_VERSION
       }
     ]);
+    assert.equal(Object.hasOwn(sent[0], 'accountToken'), false);
   } finally {
     if (previousStorage === undefined) delete globalThis.sessionStorage;
     else globalThis.sessionStorage = previousStorage;

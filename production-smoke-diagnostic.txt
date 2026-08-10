@@ -1,0 +1,470 @@
+ready=1
+ready_at=3
+backup_code=0
+health_code=0
+smoke_code=0
+--- backup stdout ---
+{"ok":true,"backup":"/tmp/tmp.QTeysG8Be5/backups/hourly/wobble-20260810T134504Z-2249.db","schemaVersion":6,"bytes":184320,"offsiteConfigured":false,"offsiteRequired":false,"offsiteLastSuccessAt":null}
+--- backup stderr ---
+(node:2249) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+--- health stdout ---
+{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":10,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:45:04.719Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}--- health stderr ---
+--- smoke stdout ---
+deploy smoke: ok
+--- smoke stderr ---
++ set -euo pipefail
++++ dirname -- deploy/smoke.sh
+++ cd -- deploy
+++ pwd
++ SCRIPT_DIR=/home/runner/work/Fall-guys/Fall-guys/deploy
+++ cd /home/runner/work/Fall-guys/Fall-guys/deploy/..
+++ pwd
++ APP_DIR=/home/runner/work/Fall-guys/Fall-guys
++ ENV_FILE=/etc/wobble.env
++ REQUIRE_BACKUP=0
++ '[' --require-backup = --require-backup ']'
++ REQUIRE_BACKUP=1
++ '[' -r /etc/wobble.env ']'
+++ command -v node
++ NODE_BIN=/opt/hostedtoolcache/node/22.23.1/x64/bin/node
++ '[' -z /opt/hostedtoolcache/node/22.23.1/x64/bin/node ']'
++ '[' '!' -x /opt/hostedtoolcache/node/22.23.1/x64/bin/node ']'
++ PORT=3100
++ BASE_URL=http://127.0.0.1:3100
++ ORIGIN=http://127.0.0.1:3100
++ '[' -z http://127.0.0.1:3100 ']'
++ ORIGIN=http://127.0.0.1:3100
++ curl -fsS --max-time 5 http://127.0.0.1:3100/health/live
++ curl -fsS --max-time 5 http://127.0.0.1:3100/health/ready
+++ curl -fsS --max-time 5 http://127.0.0.1:3100/health
++ health='{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":10,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:45:04.719Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}'
+++ curl -fsS --max-time 5 http://127.0.0.1:3100/
++ html='<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#4b35b7" />
+    <meta
+      name="description"
+      content="Wobble Rush 3D — яркая полоса препятствий для компьютеров и мобильных устройств."
+    />
+    <title>Wobble Rush 3D</title>
+    <!-- Фавикон встроен как data-URI: в проекте принципиально нет файлов-ассетов,
+         и заводить один-единственный ради иконки не хочется. Заодно это убирает 404 на /favicon.ico. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='\''http://www.w3.org/2000/svg'\'' viewBox='\''0 0 32 32'\''%3E%3Crect width='\''32'\'' height='\''32'\'' rx='\''8'\'' fill='\''%236546d8'\''/%3E%3Ccircle cx='\''16'\'' cy='\''14'\'' r='\''7'\'' fill='\''%23ff4f91'\''/%3E%3Cellipse cx='\''16'\'' cy='\''12'\'' rx='\''4.4'\'' ry='\''2.6'\'' fill='\''%23dffcff'\''/%3E%3Crect x='\''13'\'' y='\''21'\'' width='\''2.4'\'' height='\''6'\'' rx='\''1.2'\'' fill='\''%23ff4f91'\''/%3E%3Crect x='\''16.6'\'' y='\''21'\'' width='\''2.4'\'' height='\''6'\'' rx='\''1.2'\'' fill='\''%23ff4f91'\''/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <!--
+      Import map вместо сборщика. Дополнения Three.js (постобработка и её шейдеры) импортируют
+      движок по голому имени '\''three'\''. Без этой карты браузер не смог бы их разрешить, а если бы
+      мы оставили в своих файлах прямые пути на /vendor/three.module.js, движок загрузился бы
+      дважды — двумя независимыми копиями, у которых ломаются проверки instanceof.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "/vendor/three.module.js",
+          "three/addons/": "/vendor/addons/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="game" aria-label="Игровая сцена Wobble Rush 3D"></canvas>
+    <div id="vignette"></div>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <div id="error" class="toast toast-error hidden" role="alert"></div>
+
+    <main id="menu" class="screen screen-menu">
+      <div class="brand" aria-label="Wobble Rush 3D">
+        <span class="brand-kicker">ИСПЫТАНИЕ В НЕБЕСНОМ ПАРКЕ</span>
+        <h1>WOBBLE <em>RUSH</em></h1>
+        <p>Новые трассы. Весёлый хаос. Один отважный бегун.</p>
+      </div>
+
+      <section class="menu-card glass">
+        <div class="account-bar">
+          <button id="accountChip" class="account-chip" aria-haspopup="dialog" aria-expanded="false">
+            <span class="account-dot" aria-hidden="true"></span>
+            <b id="accountName">…</b>
+            <small>сменить</small>
+          </button>
+          <button id="profileOpen" class="profile-chip" aria-haspopup="dialog" aria-expanded="false">
+            <b>ПРОФИЛЬ</b><small>статы · награды</small>
+          </button>
+        </div>
+
+        <div class="mode-tabs" role="tablist" aria-label="Режим игры">
+          <button class="mode-tab active" data-mode="single" role="tab" aria-selected="true">
+            ОДИНОЧНАЯ
+          </button>
+          <button class="mode-tab" data-mode="multi" role="tab" aria-selected="false">ГОНКА ОНЛАЙН</button>
+          <button class="mode-tab mode-tab-hero" data-mode="coop" role="tab" aria-selected="false">
+            КООП НА ДВОИХ
+          </button>
+        </div>
+
+        <div id="single" class="mode-panel">
+          <div class="field-grid">
+            <label class="field"
+              ><span>Трасса</span
+              ><select id="runType">
+                <option value="daily">Испытание дня</option>
+                <option value="random">Новая трасса</option>
+              </select></label
+            >
+            <label class="field"
+              ><span>Сложность</span
+              ><select id="difficulty">
+                <option value="easy">Легко</option>
+                <option value="normal" selected>Забег</option>
+                <option value="chaos">Хаос</option>
+              </select></label
+            >
+          </div>
+          <div class="run-summary">
+            <span id="courseName">ОБЛАЧНАЯ ТРАССА</span><strong id="bestTime">РЕКОРД —:—</strong>
+          </div>
+          <div id="challengeRule" class="challenge-rule" role="status">
+            <strong>ЧАС ПИК</strong><span>Препятствия движутся быстрее · цель: без падений</span>
+          </div>
+          <div class="profile-strip" aria-label="Локальный прогресс">
+            <span>ЗАБЕГИ <b id="profileRuns">0</b></span>
+            <span>БЕЗ ПАДЕНИЙ <b id="profileFlawless">0</b></span>
+            <span>СЕРИЯ ДНЯ <b id="profileStreak">0</b></span>
+          </div>
+          <button id="play" class="button button-primary" data-testid="play-single">
+            <span>НАЧАТЬ ЗАБЕГ</span><b>▶</b>
+          </button>
+        </div>
+
+        <div id="multi" class="mode-panel hidden">
+          <button id="create" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
+          <div class="join-row">
+            <input
+              id="code"
+              maxlength="5"
+              inputmode="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              aria-label="Код комнаты"
+              placeholder="КОД"
+            /><button id="join" class="button button-secondary">ВОЙТИ</button>
+          </div>
+          <p id="connectStatus" class="status-line">Создайте комнату или введите код из пяти символов.</p>
+        </div>
+
+        <div id="coop" class="mode-panel hidden">
+          <p class="coop-lead">
+            Одна цель на двоих. Плиты, качели и пролёты требуют, чтобы кто-то держал, пока другой идёт.
+            Персонажи одинаковые — договаривайтесь на ходу и меняйтесь ролями.
+          </p>
+          <section class="coop-campaign" aria-labelledby="coopCampaignTitle">
+            <div class="campaign-heading">
+              <span id="coopCampaignTitle">ПРИКЛЮЧЕНИЕ 1–10</span>
+              <small>Все главы открыты · рекомендуем идти по порядку</small>
+            </div>
+            <div id="coopCampaign" class="campaign-grid"></div>
+          </section>
+          <label class="field field-full"
+            ><span>Глава</span
+            ><select id="coopChapter"></select
+          ></label>
+          <p id="coopHint" class="coop-hint"></p>
+          <label class="toggle-row">
+            <input id="coopAnyChapter" type="checkbox" />
+            <span>Для быстрой игры подойдёт любая глава</span>
+          </label>
+          <div class="profile-strip coop-profile" aria-label="Прогресс кооперативной пары">
+            <span>ГЛАВЫ <b id="coopProfileChapters">0</b></span>
+            <span>СПАСЕНИЯ <b id="coopProfileRevives">0</b></span>
+            <span>РЕКОРД <b id="coopProfileBest">—</b></span>
+          </div>
+          <button id="coopFind" class="button button-primary"><span>НАЙТИ НАПАРНИКА</span><b>⚡</b></button>
+          <button id="coopCreate" class="button button-primary"><span>СОЗДАТЬ КОМНАТУ</span><b>＋</b></button>
+          <div class="join-row">
+            <input
+              id="coopCode"
+              maxlength="5"
+              inputmode="text"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              aria-label="Код комнаты"
+              placeholder="КОД"
+            /><button id="coopJoin" class="button button-secondary">ВОЙТИ</button>
+          </div>
+          <p id="coopStatus" class="status-line">Создайте комнату и позовите напарника.</p>
+        </div>
+
+        <div class="audio-panel" role="group" aria-label="Громкость">
+          <label class="audio-row">
+            <span>ОБЩАЯ</span>
+            <input id="vol-master" type="range" min="0" max="100" value="80" aria-label="Общая громкость" />
+          </label>
+          <label class="audio-row">
+            <span>ЭФФЕКТЫ</span>
+            <input id="vol-sfx" type="range" min="0" max="100" value="90" aria-label="Громкость эффектов" />
+          </label>
+          <label class="audio-row">
+            <span>МУЗЫКА</span>
+            <input id="vol-music" type="range" min="0" max="100" value="50" aria-label="Громкость музыки" />
+          </label>
+        </div>
+
+        <div class="menu-footer">
+          <button id="quality" class="icon-button" aria-label="Изменить качество графики">
+            АВТО КАЧЕСТВО
+          </button>
+          <button id="openSettings" class="icon-button" aria-label="Настройки управления">УПРАВЛЕНИЕ</button>
+          <span id="controlHint">WASD · ПРОБЕЛ · SHIFT · МЫШЬ — КАМЕРА</span>
+        </div>
+      </section>
+
+      <div class="feature-pills" aria-hidden="true">
+        <span>ПРОЦЕДУРНЫЕ ТРАССЫ</span><span>1–16 ИГРОКОВ</span><span>СЕНСОРНОЕ УПРАВЛЕНИЕ</span>
+      </div>
+    </main>
+
+    <section id="account" class="screen center-screen hidden">
+      <div class="account-card glass" role="dialog" aria-label="Аккаунт">
+        <button id="accountClose" class="close-button" aria-label="Закрыть">×</button>
+        <span class="eyebrow">АККАУНТ</span>
+
+        <div class="account-section">
+          <label class="field"
+            ><span>Имя игрока</span><input id="accountRename" maxlength="16" autocomplete="nickname"
+          /></label>
+          <button id="accountSave" class="button button-secondary">СОХРАНИТЬ</button>
+        </div>
+
+        <div class="account-section">
+          <small class="account-legend">МОИ АККАУНТЫ</small>
+          <div id="accountList" class="account-list" aria-label="Мои аккаунты"></div>
+          <button id="accountNew" class="button button-secondary">СОЗДАТЬ НОВЫЙ</button>
+        </div>
+
+        <div class="account-section">
+          <small class="account-legend">НАГРАДЫ ЗА ИГРУ · БЕЗ МАГАЗИНА</small>
+          <div id="cosmeticGrid" class="cosmetic-grid" aria-label="Полученная косметика"></div>
+          <p id="cosmeticGoal" class="cosmetic-goal"></p>
+        </div>
+
+        <div class="account-section">
+          <small class="account-legend">ВХОД С ДРУГОГО УСТРОЙСТВА</small>
+          <div class="account-row">
+            <label class="field"
+              ><span>Код входа</span><input id="accountCodeInput" placeholder="WOBBLE-…" autocomplete="off"
+            /></label>
+            <button id="accountEnter" class="button button-primary">ВОЙТИ</button>
+          </div>
+          <button id="accountShowCode" class="button button-secondary">ПОКАЗАТЬ МОЙ КОД</button>
+          <div id="accountCode" class="account-code hidden">
+            <small>Этим кодом входят на другом устройстве. Никому его не показывайте.</small>
+            <code id="accountCodeValue"></code>
+            <button id="accountCopy" class="button button-secondary">СКОПИРОВАТЬ</button>
+          </div>
+        </div>
+
+        <p id="accountStatus" class="status-line" role="status"></p>
+      </div>
+    </section>
+
+    <section id="profile" class="screen center-screen hidden">
+      <div class="profile-card glass" role="dialog" aria-label="Профиль игрока">
+        <button id="profileClose" class="close-button" aria-label="Закрыть">×</button>
+        <span class="eyebrow">ПРОФИЛЬ</span>
+        <div class="profile-hero">
+          <div id="profileBadge" class="profile-badge" aria-hidden="true">◇</div>
+          <div class="profile-identity">
+            <small id="profileTitle">ИСКАТЕЛЬ НЕБЕС</small>
+            <h2 id="profileName">Wobbler</h2>
+            <p id="profileCampaign">ПРИКЛЮЧЕНИЕ · 0/10 ГЛАВ</p>
+          </div>
+        </div>
+        <div class="profile-stats" aria-label="Серверная статистика">
+          <span><small>КООП-МАТЧИ</small><b id="profileStatMatches">0</b></span>
+          <span><small>ГЛАВЫ</small><b id="profileStatChapters">0</b></span>
+          <span><small>СПАСЕНИЯ</small><b id="profileStatRevives">0</b></span>
+          <span><small>БЕЗ ПАДЕНИЙ</small><b id="profileStatFlawless">0</b></span>
+        </div>
+        <section class="profile-section" aria-labelledby="profileAchievementsTitle">
+          <div class="profile-section-head">
+            <small id="profileAchievementsTitle">ДОСТИЖЕНИЯ</small><span>SERVER VERIFIED</span>
+          </div>
+          <div id="profileAchievements" class="profile-achievements"></div>
+        </section>
+        <section class="profile-section" aria-labelledby="recentPartnerTitle">
+          <div class="profile-section-head">
+            <small id="recentPartnerTitle">НЕДАВНИЙ НАПАРНИК</small><span>СЫГРАТЬ СНОВА</span>
+          </div>
+          <p id="recentPartnerEmpty" class="recent-partner-empty">
+            Завершите кооперативную главу — последний напарник появится здесь.
+          </p>
+          <div id="recentPartnerCard" class="recent-partner-card hidden">
+            <div><strong id="recentPartnerName">Wobbler</strong><small id="recentPartnerMeta"></small></div>
+            <button id="recentPartnerInvite" class="button button-primary" disabled>ПРИГЛАСИТЬ СНОВА</button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Экран настроек управления. Содержимое собирается из схемы в client/core/settings.js —
+         добавление настройки не требует правки этой разметки. -->
+    <section id="settings" class="screen center-screen hidden">
+      <div class="settings-card glass" role="dialog" aria-label="Настройки управления">
+        <button id="settingsClose" class="close-button" aria-label="Закрыть">×</button>
+        <span class="eyebrow">УПРАВЛЕНИЕ</span>
+        <div id="settingsBody" class="settings-body"></div>
+        <p id="settingsStatus" class="status-line" role="status"></p>
+        <button id="settingsReset" class="button button-secondary">СБРОСИТЬ ВСЁ</button>
+      </div>
+    </section>
+
+    <section id="lobby" class="screen center-screen hidden">
+      <div class="lobby-card glass">
+        <button class="close-button back" aria-label="Покинуть комнату">×</button>
+        <span class="eyebrow">КОМНАТА ИГРОКОВ</span>
+        <div class="room-heading">
+          <div>
+            <small>КОД КОМНАТЫ</small>
+            <h2 id="roomCode">----</h2>
+          </div>
+          <button id="copyCode" class="copy-button">КОД</button>
+          <button id="copyInvite" class="copy-button">ССЫЛКА</button>
+        </div>
+        <div class="lobby-course">
+          <div><small>ТРАССА</small><strong id="lobbyCourse">Облачная трасса</strong></div>
+          <label id="lobbyDifficultyWrap"
+            ><small>СЛОЖНОСТЬ</small
+            ><select id="lobbyDifficulty">
+              <option value="easy">Легко</option>
+              <option value="normal">Забег</option>
+              <option value="chaos">Хаос</option>
+            </select></label
+          >
+        </div>
+        <div id="players" class="player-list"></div>
+        <div id="verifiedTop" class="verified-top" role="status">
+          <div class="verified-top-head">
+            <small>ПРОВЕРЕНО АВТОМАТИЧЕСКИ</small><small id="verifiedTopCount"></small>
+          </div>
+          <ol id="verifiedTopList" class="verified-top-list"></ol>
+          <p id="verifiedTopStanding" class="verified-top-standing"></p>
+        </div>
+        <button id="ready" class="button button-primary">Я ГОТОВ</button>
+        <button id="start" class="button button-start hidden">НАЧАТЬ ГОНКУ</button>
+        <p id="lobbyHint" class="status-line">Отметьтесь готовым, пока хост выбирает трассу.</p>
+      </div>
+    </section>
+
+    <header id="hud" class="hud hidden">
+      <!-- Выход из идущего матча. Раньше его не было вовсе: из забега выходили только через финиш,
+           а в кооперативе, где напарник мог уйти посреди главы, оставшийся запирался навсегда —
+           перезагрузка страницы возвращает в тот же матч. -->
+      <button id="leaveMatch" class="hud-leave" type="button">ВЫЙТИ</button>
+      <div class="hud-card"><small>ВРЕМЯ</small><strong id="timer">00:00.00</strong></div>
+      <div class="hud-progress">
+        <div class="hud-progress-label">
+          <span id="stageName">СТАРТОВАЯ ПЛОЩАДКА</span><b id="checks">0 / 6</b>
+        </div>
+        <div class="progress-track"><i id="progressFill"></i></div>
+      </div>
+      <div id="placeBox" class="hud-card"><small>МЕСТО</small><strong id="place">1</strong></div>
+      <div id="pingBox" class="hud-card compact hidden"><small>СВЯЗЬ</small><strong id="ping">—</strong></div>
+    </header>
+
+    <!-- Указатель на напарника за краем экрана и его состояние. Без него в коопе постоянно
+         непонятно, где второй и не ждёт ли он помощи. -->
+    <div id="partnerHud" class="partner-hud hidden">
+      <i id="partnerArrow" class="partner-arrow"></i>
+      <span id="partnerLabel">НАПАРНИК</span>
+    </div>
+
+    <div id="coopIntro" class="coop-intro hidden">
+      <span class="eyebrow" id="coopIntroRole">ИСКРА</span>
+      <h2 id="coopIntroTitle">ПЕРВЫЕ ШАГИ</h2>
+      <p id="coopIntroHint">Подсказка</p>
+    </div>
+
+    <div id="coopLesson" class="coop-lesson hidden" role="status" aria-live="polite">
+      <p id="coopLessonText"></p>
+    </div>
+
+    <button id="coopPingButton" class="coop-ping-button hidden" aria-label="Быстрые команды">●</button>
+    <div id="coopPingMenu" class="coop-ping-menu hidden" role="menu" aria-label="Быстрые команды">
+      <button data-ping="here">СЮДА</button><button data-ping="wait">ЖДИ</button>
+      <button data-ping="go">ИДИ</button><button data-ping="help">ПОМОГИ</button>
+      <button data-ping="ready">ГОТОВ</button><button data-ping="thanks">👍</button>
+    </div>
+    <div id="coopPingBubble" class="coop-ping-bubble hidden" role="status"></div>
+
+    <div id="countdown" class="countdown hidden"><span>3</span></div>
+    <div id="checkpointBanner" class="checkpoint-banner hidden">
+      <small>КОНТРОЛЬНАЯ ТОЧКА</small><strong>1 / 6</strong>
+    </div>
+
+    <div id="touch" class="touch-ui hidden">
+      <!-- Зона плавающего джойстика: ловит касание там, где его сделали, и ставит джойстик под
+           палец. У фиксированного джойстика зона прозрачна для касаний, и всё работает как раньше. -->
+      <div id="stickZone" class="stick-zone" aria-hidden="true"></div>
+      <div id="stick" class="stick" aria-label="Джойстик движения"><i></i><span>БЕГ</span></div>
+      <button id="recenter" class="recenter" aria-label="Посмотреть за спину">⌖</button>
+      <button id="cameraMode" class="recenter camera-mode" aria-label="Режим камеры">◲</button>
+      <button id="dive" class="action-button dive-button"><i>➤</i><span>РЫВОК</span></button>
+      <button id="jump" class="action-button jump-button"><i>↑</i><span>ПРЫЖОК</span></button>
+      <div id="lookHint" class="look-hint">ПРОВЕДИТЕ ДЛЯ ОБЗОРА</div>
+    </div>
+
+    <section id="finish" class="screen center-screen hidden">
+      <div class="finish-card glass">
+        <div id="medal" class="medal">★</div>
+        <span id="finishEyebrow" class="eyebrow">ТРАССА ПРОЙДЕНА</span>
+        <h2 id="finishTitle">ЗОЛОТОЙ ЗАБЕГ!</h2>
+        <p id="finishTime">00:00.00</p>
+        <div id="unrankedNote" class="unranked-note hidden" role="status"></div>
+        <div id="finishStats" class="finish-stats"></div>
+        <div id="finishHighlights" class="finish-highlights" aria-live="polite"></div>
+        <div id="board" class="leaderboard"></div>
+        <button id="again" class="button button-primary">ПОВТОРИТЬ ТРАССУ</button>
+        <button id="newCourse" class="button button-secondary">НОВАЯ ТРАССА</button>
+        <button id="nextChapter" class="button button-primary hidden">ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ</button>
+        <button id="rematch" class="button button-secondary hidden">ЕЩЁ РАЗ</button>
+        <button id="returnLobby" class="button button-secondary hidden">В ЛОББИ</button>
+        <div id="resultsTimer" class="results-timer" role="status" aria-live="polite"></div>
+        <button class="text-button back">В ГЛАВНОЕ МЕНЮ</button>
+      </div>
+    </section>
+
+    <div id="linkOverlay" class="link-overlay hidden" role="status" aria-live="polite">
+      <div class="link-card glass">
+        <div class="link-spinner"></div>
+        <strong id="linkTitle">Подключение…</strong>
+        <p id="linkDetail">Устанавливаем связь с сервером.</p>
+        <button id="linkAction" class="button button-secondary hidden">В МЕНЮ</button>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">
+      <div class="loader-orb"></div>
+      <strong>СТРОИМ НЕБЕСНЫЙ ПАРК…</strong><span>Настраиваем физику забега</span>
+    </div>
+    <script type="module" src="main.js"></script>
+  </body>
+</html>'
++ grep -q WOBBLE
++ /opt/hostedtoolcache/node/22.23.1/x64/bin/node - '{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":10,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:45:04.719Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}' 1
++ cd /home/runner/work/Fall-guys/Fall-guys
++ /opt/hostedtoolcache/node/22.23.1/x64/bin/node - http://127.0.0.1:3100 http://127.0.0.1:3100
++ echo 'deploy smoke: ok'
+--- server log ---
+(node:2232) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"level":"info","event":"server_started","port":3100,"host":"127.0.0.1","authV2":true,"socketAuth":true,"serverInventory":true,"socialCosmetics":true,"rewardPlatform":true,"devRewards":false,"google":false}
+{"level":"info","event":"shutdown_started","ts":"2026-08-10T13:45:04.862Z","signal":"SIGTERM","rooms":0,"sessions":0}
+{"level":"info","event":"shutdown_complete","ts":"2026-08-10T13:45:05.165Z"}

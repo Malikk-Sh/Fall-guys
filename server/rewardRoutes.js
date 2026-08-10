@@ -1,12 +1,7 @@
 const express = require('express');
 const { SESSION_COOKIE, parseCookies } = require('./auth');
 
-function installRewardRoutes({
-  app,
-  auth,
-  rewards,
-  enabled = process.env.ENABLE_DEV_REWARDS === '1'
-}) {
+function installRewardRoutes({ app, auth, rewards, enabled = process.env.ENABLE_DEV_REWARDS === '1' }) {
   const json = express.json({ limit: '10kb' });
 
   app.post('/api/rewards/dev', json, (req, res) => {

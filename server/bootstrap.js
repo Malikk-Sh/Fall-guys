@@ -28,6 +28,7 @@ const { installAuthRoutes } = require('./authRoutes');
 const { InventoryService } = require('./inventory');
 const { RewardService } = require('./rewards');
 const { installRewardRoutes } = require('./rewardRoutes');
+const { networkIdentity } = require('./networkIdentity');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
@@ -35,12 +36,9 @@ const inventory = new InventoryService({ db: core.accounts.db, accounts: core.ac
 const rewards = new RewardService({ db: core.accounts.db, inventory });
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 
-// Recovery code — только HTTP credential. Игровой WebSocket получает короткий WST ticket,
-// выпущенный из HttpOnly session; старый recovery code нельзя использовать как сетевой bearer.
-core.accounts.login = credential => {
-  const ticket = auth.resolveSocketTicket(credential);
-  return ticket ? core.accounts.get(ticket.accountId) : null;
-};
+// WST принадлежит только рукопожатию WebSocket. NetworkIdentity поглощает его один раз и дальше
+// игровой протокол использует уже ws.accountId; CREATE/JOIN/FIND не видят credential вообще.
+networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
 
 const accountPayload = account => ({
   ok: true,
@@ -87,6 +85,7 @@ if (require.main === module) {
         port: Number(port),
         host,
         authV2: true,
+        socketAuth: true,
         serverInventory: true,
         rewardPlatform: true,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',

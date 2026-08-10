@@ -48,6 +48,10 @@ export default defineConfig({
       HOST: '127.0.0.1',
       PORT: '4173',
       COOKIE_SECURE: '0',
+      // Fake rewarded provider разрешён только локальному Playwright-серверу. Production остаётся
+      // выключенным по умолчанию; тест использует его, чтобы получить настоящую server-owned
+      // косметику без тестового backdoor в inventory.
+      ENABLE_DEV_REWARDS: '1',
       // Только локальный Playwright-сервер доверяет тестовому X-Forwarded-For. Production по
       // умолчанию по-прежнему использует реальный remoteAddress и те же защитные лимиты.
       TRUST_PROXY: '1',

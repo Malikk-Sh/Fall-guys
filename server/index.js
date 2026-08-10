@@ -47,6 +47,7 @@ const { Accounts } = require('./accounts');
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
+const { socialCosmetics } = require('./socialCosmetics');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -660,7 +661,8 @@ const publicPlayer = ({
   color,
   disconnectedAt,
   slot,
-  away
+  away,
+  loadout
 }) => ({
   id,
   name,
@@ -674,6 +676,9 @@ const publicPlayer = ({
   // навсегда, и выглядело это как поломка: обе кнопки погашены, ничего не происходит.
   choice: resultChoice || null,
   color,
+  // Публичный профиль всегда проходит повторную нормализацию перед отправкой. Даже если объект
+  // игрока случайно испортит внутренний код, неизвестный ID не пересечёт сетевую границу.
+  loadout: socialCosmetics.sanitize(loadout),
   slot: slot ?? 0,
   online: !disconnectedAt,
   // `online` и `away` — разные вещи. Первое означает «связь оборвалась», второе — «игра свёрнута,
@@ -875,6 +880,9 @@ function addPlayer(room, ws, name, playerId = null) {
     // Серверный прогресс никогда не доверяет присланному playerId: только identity,
     // которая была подтверждена один раз и привязана к этому WebSocket.
     accountId: authenticated?.id || null,
+    // Никакой loadout не принимается из CREATE/JOIN/FIND. Он разрешается по уже привязанному
+    // ws.accountId через server inventory и дальше становится частью публичного room profile.
+    loadout: socialCosmetics.forAccount(authenticated?.id),
     color,
     slot: 0,
     joinOrder: room.nextJoinOrder++,

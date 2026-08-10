@@ -26,6 +26,7 @@ import { RaceSession } from './game/RaceSession.js';
 import { CoopSession } from './game/CoopSession.js';
 import { CoopController } from './game/CoopController.js';
 import { AccountFlow } from './core/AccountFlow.js';
+import { cosmeticLoadoutFromIds } from './core/cosmetics.js';
 import { Settings } from './core/settings.js';
 import { SettingsPanel } from './ui/settingsPanel.js';
 
@@ -452,22 +453,31 @@ class Game {
     if (!this.net || !this.course) return;
     const active = new Set(this.net.snapshots.activeIds());
     for (const id of active) {
-      if (id === this.net.id || this.remotes.has(id)) continue;
+      if (id === this.net.id) continue;
       const info = this.room?.players.find(p => p.id === id);
-      this.remotes.set(
-        id,
-        new Player(this.scene, this.course, this.effects, {
-          remote: true,
-          color:
-            this.mode === 'coop'
-              ? this.coop.slotFor(id) === 1
-                ? COLORS.orange
-                : COLORS.cyan
-              : info?.color || COLORS.cyan,
-          accent: COLORS.yellow,
-          name: info?.name || 'Wobbler'
-        })
-      );
+      const cosmeticKey = JSON.stringify(info?.loadout || null);
+      const current = this.remotes.get(id);
+      // На resume MATCH_START может прийти раньше ROOM_STATE. Если модель успела создаться без
+      // public profile, пересобираем её один раз, когда authoritative loadout доедет следом.
+      if (current && current.socialCosmeticKey !== cosmeticKey) {
+        current.dispose();
+        this.remotes.delete(id);
+      }
+      if (this.remotes.has(id)) continue;
+      const remote = new Player(this.scene, this.course, this.effects, {
+        remote: true,
+        color:
+          this.mode === 'coop'
+            ? this.coop.slotFor(id) === 1
+              ? COLORS.orange
+              : COLORS.cyan
+            : info?.color || COLORS.cyan,
+        accent: COLORS.yellow,
+        cosmetics: cosmeticLoadoutFromIds(info?.loadout),
+        name: info?.name || 'Wobbler'
+      });
+      remote.socialCosmeticKey = cosmeticKey;
+      this.remotes.set(id, remote);
     }
     for (const [id, remote] of this.remotes) {
       if (active.has(id)) continue;

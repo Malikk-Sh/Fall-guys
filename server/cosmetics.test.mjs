@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cosmeticLoadout,
+  cosmeticLoadoutFromIds,
   equipCosmetic,
   nextCosmeticGoal,
   unlockedCosmetics
@@ -50,6 +51,32 @@ test('locked reward cannot be equipped and unlocked loadout persists', () => {
   };
   equipCosmetic('sky-hero', null, earned, storage);
   assert.equal(cosmeticLoadout(null, earned, storage).body.id, 'sky-hero');
+});
+
+test('remote loadout resolves only canonical IDs and refuses cross-slot injection', () => {
+  const safe = cosmeticLoadoutFromIds({
+    body: 'sky-hero',
+    visor: 'neon-visor',
+    antenna: 'party-antenna',
+    trail: null,
+    finish: null
+  });
+  assert.equal(safe.body.id, 'sky-hero');
+  assert.equal(safe.visor.id, 'neon-visor');
+  assert.equal(safe.antenna.id, 'party-antenna');
+
+  const hostile = cosmeticLoadoutFromIds({
+    body: 'neon-visor',
+    visor: 'sky-hero',
+    antenna: '<script>alert(1)</script>',
+    trail: 'party-antenna',
+    finish: 'classic'
+  });
+  assert.equal(hostile.body.id, 'classic');
+  assert.equal(hostile.visor, null);
+  assert.equal(hostile.antenna, null);
+  assert.equal(hostile.trail, null);
+  assert.equal(hostile.finish, null);
 });
 
 test('next reward reports concrete progress', () => {

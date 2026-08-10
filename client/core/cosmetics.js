@@ -1,4 +1,9 @@
-import { COSMETIC_CATALOG, DEFAULT_COSMETIC_LOADOUT } from '/shared/cosmetics.js';
+import {
+  COSMETIC_CATALOG,
+  COSMETIC_BY_ID,
+  DEFAULT_COSMETIC_LOADOUT,
+  publicCosmeticLoadout
+} from '/shared/cosmetics.js';
 
 const STORAGE_KEY = 'wobble-cosmetics-v1';
 
@@ -6,6 +11,15 @@ export const COSMETICS = COSMETIC_CATALOG;
 const defaults = DEFAULT_COSMETIC_LOADOUT;
 let serverInventory = null;
 let serverEquip = null;
+
+// Remote player metadata contains IDs only. Never let room payloads provide materials/colors
+// directly: normalize every slot against the shared canonical catalog, then resolve the known item.
+export function cosmeticLoadoutFromIds(loadout) {
+  const safe = publicCosmeticLoadout(loadout);
+  return Object.fromEntries(
+    Object.entries(safe).map(([slot, id]) => [slot, id ? COSMETIC_BY_ID[id] || null : null])
+  );
+}
 
 export function setServerInventory(inventory) {
   serverInventory = inventory || null;

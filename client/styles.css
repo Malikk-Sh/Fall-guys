@@ -2158,3 +2158,54 @@ body.large-ui .finish-card {
 body.large-ui .menu-card {
   max-height: calc((100vh - 52px - var(--safe-top) - var(--safe-bottom)) / var(--ui-scale));
 }
+
+/* Social cosmetics: миниатюра в комнате повторяет canonical body/visor/antenna персонажа. */
+.player-avatar {
+  position: relative;
+  display: block;
+  background: var(--body-color, #ff4f91) !important;
+}
+.player-avatar::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 8px;
+  height: 7px;
+  border: 1px solid #fff9;
+  border-radius: 50%;
+  background: var(--visor-color, #dffcff);
+  box-shadow: 0 1px 3px #24175055;
+}
+.player-avatar::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  left: 50%;
+  top: -6px;
+  transform: translateX(-50%);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--antenna-color, #ffde59);
+}
+.player-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.player-copy > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-cosmetics {
+  overflow: hidden;
+  color: #83eee5;
+  font-size: 8px;
+  font-weight: 850;
+  letter-spacing: 0.035em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

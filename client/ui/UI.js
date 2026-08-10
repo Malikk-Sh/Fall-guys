@@ -12,6 +12,7 @@ import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profi
 import {
   COSMETICS,
   cosmeticLoadout,
+  cosmeticLoadoutFromIds,
   equipCosmetic,
   nextCosmeticGoal,
   readCosmetics,
@@ -27,7 +28,12 @@ function bestOf(...times) {
 }
 
 const $ = selector => document.querySelector(selector);
-const $$ = selector => [...document.querySelectorAll(selector)];
+const selectAll = selector => [...document.querySelectorAll(selector)];
+const cssColor = (value, fallback = 0xff4f91) =>
+  `#${Number(Number.isFinite(value) ? value : fallback)
+    .toString(16)
+    .padStart(6, '0')
+    .slice(-6)}`;
 
 export class UI {
   constructor() {
@@ -42,7 +48,7 @@ export class UI {
       hud: $('#hud'),
       touch: $('#touch')
     };
-    $$('.mode-tab').forEach(button =>
+    selectAll('.mode-tab').forEach(button =>
       button.addEventListener('click', () => this.selectMode(button.dataset.mode))
     );
     this.selectMode('single');
@@ -187,7 +193,7 @@ export class UI {
   }
   selectMode(mode) {
     this.mode = mode;
-    $$('.mode-tab').forEach(b => {
+    selectAll('.mode-tab').forEach(b => {
       const active = b.dataset.mode === mode;
       b.classList.toggle('active', active);
       b.setAttribute('aria-selected', String(active));
@@ -212,7 +218,7 @@ export class UI {
       const chapter = chapters.find(item => item.id === select.value) || chapters[0];
       $('#coopHint').textContent = chapter.hint;
       this.coopProfile(chapter.id);
-      $$('.campaign-card').forEach(card =>
+      selectAll('.campaign-card').forEach(card =>
         card.classList.toggle('selected', card.dataset.chapter === chapter.id)
       );
       onChange?.(chapter);
@@ -532,17 +538,40 @@ export class UI {
     for (const player of data.players) {
       const row = document.createElement('div');
       row.className = 'player-row';
+      const loadout = cosmeticLoadoutFromIds(player.loadout);
+      row.dataset.playerId = player.id;
+      for (const slot of ['body', 'visor', 'antenna', 'trail', 'finish']) {
+        row.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = loadout[slot]?.id || 'none';
+      }
+
       const avatar = document.createElement('i');
       avatar.className = 'player-avatar';
-      avatar.style.background = `#${Number(player.color || 0xff4f91)
-        .toString(16)
-        .padStart(6, '0')}`;
+      const bodyColor = loadout.body?.colors?.body ?? player.color ?? 0xff4f91;
+      const accentColor = loadout.body?.colors?.accent ?? 0xffde59;
+      avatar.style.setProperty('--body-color', cssColor(bodyColor));
+      avatar.style.setProperty('--visor-color', cssColor(loadout.visor?.color, 0xdffcff));
+      avatar.style.setProperty('--antenna-color', cssColor(loadout.antenna?.color, accentColor));
+
+      const copy = document.createElement('div');
+      copy.className = 'player-copy';
       const name = document.createElement('span');
       name.textContent = `${player.id === data.host ? '♛ ' : ''}${player.name}${player.id === selfId ? ' (вы)' : ''}`;
+      const cosmetics = document.createElement('small');
+      cosmetics.className = 'player-cosmetics';
+      cosmetics.textContent =
+        [
+          loadout.body?.id !== 'classic' ? loadout.body?.name : null,
+          loadout.visor?.name,
+          loadout.antenna?.name
+        ]
+          .filter(Boolean)
+          .join(' · ') || 'КЛАССИКА';
+      copy.append(name, cosmetics);
+
       const state = document.createElement('b');
       state.className = player.ready ? 'ready' : '';
       state.textContent = player.ready ? 'ГОТОВ' : 'ОЖИДАНИЕ';
-      row.append(avatar, name, state);
+      row.append(avatar, copy, state);
       list.append(row);
     }
     // Таблица показывается там, где время мерил сервер: в гонке и в кооперативе. У соло сервера

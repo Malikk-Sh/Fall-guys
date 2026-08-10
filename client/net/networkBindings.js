@@ -89,6 +89,12 @@ export function bindNetwork(game) {
 
   // Сервер не принял финиш: по его данным черта ещё не пересечена. Разрешаем повтор и ставим
   // игрока туда, где сервер его видит, — иначе он навсегда останется в «Подтверждаем результат…».
+  game.net.on('error', () => {
+    // Pending replay intent exists only while CREATE_ROOM is awaiting an authoritative
+    // lobby. Any server error means that request did not produce the room we intended.
+    game.pendingReplayShare = null;
+  });
+
   game.net.on('finishRejected', message => {
     game.net.allowFinishRetry();
     game.session.reopenFinish();
@@ -119,6 +125,7 @@ export function bindNetwork(game) {
   // Вернуться в комнату не удалось: её уже нет или истёк срок. Это не «сеть лежит», а «идти
   // некуда», и вести себя надо иначе — увести в меню, а не крутить переподключение.
   game.net.on('sessionExpired', () => {
+    game.pendingReplayShare = null;
     game.ui.error('Комната больше не существует. Возвращаемся в меню.');
     game.goHome();
   });
@@ -172,6 +179,7 @@ export function bindNetwork(game) {
   game.net.on('linkState', ({ state }) => game.showLinkState(state));
   game.net.on('connectionLost', () => game.showLinkState('reconnecting'));
   game.net.on('disconnect', () => {
+    game.pendingReplayShare = null;
     game.showLinkState('failed');
     game.fallbackToSolo();
   });

@@ -75,6 +75,12 @@ function installAuthRoutes({
     );
   });
 
+  app.post('/api/auth/profile', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    return res.json({ ok: true, profile: accounts.profile(session.accountId) });
+  });
+
   app.post('/api/auth/recovery', json, (req, res) => {
     if (rateLimited('recovery', clientIp(req)))
       return res.status(429).json({ ok: false, error: 'rate-limited' });

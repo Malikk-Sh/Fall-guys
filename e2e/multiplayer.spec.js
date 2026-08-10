@@ -65,6 +65,18 @@ test('два браузера видят server-owned косметику дру�
     expect(await host.evaluate(() => navigator.maxTouchPoints)).toBeGreaterThan(0);
   }
   await setPlayerName(host, 'Хост E2E');
+  const profileResponsePromise = host.waitForResponse(response =>
+    response.url().endsWith('/api/auth/profile')
+  );
+  await host.locator('#profileOpen').click();
+  const profileResponse = await profileResponsePromise;
+  expect(profileResponse.status()).toBe(200);
+  await expect(host.locator('#profile')).toBeVisible();
+  await expect(host.locator('#profileName')).toHaveText('Хост E2E');
+  await expect(host.locator('#profileStatMatches')).toHaveText('0');
+  await expect(host.locator('#profileAchievements .profile-achievement')).toHaveCount(6);
+  await expect(host.locator('#recentPartnerInvite')).toBeDisabled();
+  await host.locator('#profileClose').click();
   const hostCosmetic = await equipServerCosmetic(host, `social-host-${testInfo.project.name}-${Date.now()}`);
   await host.locator('[data-mode="coop"]').click();
   await host.locator('#coopCreate').click();

@@ -12,6 +12,22 @@ import { courseSpec, dailyCourseSpec, randomSeed } from '../core/Config.js';
 
 export function bindMenu(game) {
   game.ui.onAccountAction = (action, value) => game.account.handleAction(action, value);
+  game.ui.onRecentPartnerInvite = async partner => {
+    await game.accountReady;
+    const chapter = COOP_CHAPTERS.find(item => item.id === partner?.lastChapterId) || COOP_CHAPTERS[0];
+    $('#coopChapter').value = chapter.id;
+    $('#coopChapter').dispatchEvent(new Event('change'));
+    game.ui.selectMode('coop');
+    game.ui.toggleProfileScreen?.(false);
+    game.ui.pendingRecentPartnerInviteName = partner?.name || 'напарника';
+    const net = game.ensureNetwork();
+    net.createRoom({
+      name: game.ui.coopName(),
+      playerId: game.ui.playerId(),
+      mode: GAME_MODE.COOP,
+      difficulty: chapter.id
+    });
+  };
   const $ = s => document.querySelector(s);
   const click = (selector, handler) =>
     $(selector).addEventListener('click', event => {

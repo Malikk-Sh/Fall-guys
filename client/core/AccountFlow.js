@@ -2,6 +2,7 @@
 
 import {
   ensureAccount,
+  accountProfile,
   listAccounts,
   currentAccount as accountForRecords,
   authConfig,
@@ -28,6 +29,7 @@ export class AccountFlow {
     // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
     setServerCosmeticEquipHandler((slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId));
+    this.game.ui.onProfileRefresh = () => this.refreshProfile();
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
@@ -64,9 +66,20 @@ export class AccountFlow {
     this.game.ui.setAccount(account, { online });
     this.game.ui.setAccountRecords(this.records);
     this.game.ui.setAccountProgress(progress);
+    this.game.ui.setServerProfile(online ? account?.profile || null : null);
     this.game.ui.setAccountList(listAccounts());
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
+  }
+
+  async refreshProfile() {
+    try {
+      const profile = await accountProfile();
+      if (profile) this.game.ui.setServerProfile(profile);
+      return profile;
+    } catch {
+      return null;
+    }
   }
 
   recordFor(mode, spec) {

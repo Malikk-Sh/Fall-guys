@@ -1348,8 +1348,10 @@ function finishMatch(room) {
       }))
     });
     if (room.mode === GAME_MODE.COOP && coopTime) {
+      const accountIds = [];
       for (const player of room.players.values()) {
         if (!player.accountId) continue;
+        accountIds.push(player.accountId);
         accounts.recordCoopCompletion({
           accountId: player.accountId,
           chapterId: room.chapterId,
@@ -1358,6 +1360,7 @@ function finishMatch(room) {
           falls: player.coopFalls || 0
         });
       }
+      accounts.recordCoopPartners({ accountIds, chapterId: room.chapterId });
     }
   }
   broadcast(room, room.results);

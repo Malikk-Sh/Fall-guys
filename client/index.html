@@ -51,6 +51,9 @@
             <b id="accountName">…</b>
             <small>сменить</small>
           </button>
+          <button id="profileOpen" class="profile-chip" aria-haspopup="dialog" aria-expanded="false">
+            <b>ПРОФИЛЬ</b><small>статы · награды</small>
+          </button>
         </div>
 
         <div class="mode-tabs" role="tablist" aria-label="Режим игры">
@@ -227,6 +230,45 @@
         </div>
 
         <p id="accountStatus" class="status-line" role="status"></p>
+      </div>
+    </section>
+
+    <section id="profile" class="screen center-screen hidden">
+      <div class="profile-card glass" role="dialog" aria-label="Профиль игрока">
+        <button id="profileClose" class="close-button" aria-label="Закрыть">×</button>
+        <span class="eyebrow">ПРОФИЛЬ</span>
+        <div class="profile-hero">
+          <div id="profileBadge" class="profile-badge" aria-hidden="true">◇</div>
+          <div class="profile-identity">
+            <small id="profileTitle">ИСКАТЕЛЬ НЕБЕС</small>
+            <h2 id="profileName">Wobbler</h2>
+            <p id="profileCampaign">ПРИКЛЮЧЕНИЕ · 0/10 ГЛАВ</p>
+          </div>
+        </div>
+        <div class="profile-stats" aria-label="Серверная статистика">
+          <span><small>КООП-МАТЧИ</small><b id="profileStatMatches">0</b></span>
+          <span><small>ГЛАВЫ</small><b id="profileStatChapters">0</b></span>
+          <span><small>СПАСЕНИЯ</small><b id="profileStatRevives">0</b></span>
+          <span><small>БЕЗ ПАДЕНИЙ</small><b id="profileStatFlawless">0</b></span>
+        </div>
+        <section class="profile-section" aria-labelledby="profileAchievementsTitle">
+          <div class="profile-section-head">
+            <small id="profileAchievementsTitle">ДОСТИЖЕНИЯ</small><span>SERVER VERIFIED</span>
+          </div>
+          <div id="profileAchievements" class="profile-achievements"></div>
+        </section>
+        <section class="profile-section" aria-labelledby="recentPartnerTitle">
+          <div class="profile-section-head">
+            <small id="recentPartnerTitle">НЕДАВНИЙ НАПАРНИК</small><span>СЫГРАТЬ СНОВА</span>
+          </div>
+          <p id="recentPartnerEmpty" class="recent-partner-empty">
+            Завершите кооперативную главу — последний напарник появится здесь.
+          </p>
+          <div id="recentPartnerCard" class="recent-partner-card hidden">
+            <div><strong id="recentPartnerName">Wobbler</strong><small id="recentPartnerMeta"></small></div>
+            <button id="recentPartnerInvite" class="button button-primary" disabled>ПРИГЛАСИТЬ СНОВА</button>
+          </div>
+        </section>
       </div>
     </section>
 

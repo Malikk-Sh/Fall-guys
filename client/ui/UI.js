@@ -19,6 +19,12 @@ import {
   unlockedCosmetics
 } from '../core/cosmetics.js';
 import { GAME_MODE } from '/shared/protocol.js';
+import {
+  ACHIEVEMENT_CATALOG,
+  CAMPAIGN_BADGE_GLYPH,
+  CAMPAIGN_PROFILE_TITLE,
+  DEFAULT_PROFILE_TITLE
+} from '/shared/achievements.js';
 
 // Лучшее из двух рекордов. Серверный и локальный могут разойтись: играли без связи, играли с
 // другого устройства, сбрасывали данные браузера. Показывать надо лучший — он и есть рекорд.
@@ -59,6 +65,7 @@ export class UI {
     );
     addEventListener('inputmethodchange', e => this.setInputMethod(e.detail));
     this.bindAccountPanel();
+    this.bindProfilePanel();
   }
 
   // --- аккаунт --------------------------------------------------------------------------------
@@ -114,6 +121,89 @@ export class UI {
     $('#accountStatus').textContent = text || '';
   }
 
+  bindProfilePanel() {
+    const screen = $('#profile');
+    const toggle = show => {
+      screen.classList.toggle('hidden', !show);
+      $('#profileOpen').setAttribute('aria-expanded', String(show));
+      if (show) {
+        this.renderServerProfile();
+        this.onProfileRefresh?.();
+      }
+    };
+    this.toggleProfileScreen = toggle;
+    $('#profileOpen').addEventListener('click', () => toggle(true));
+    $('#profileClose').addEventListener('click', () => toggle(false));
+    screen.addEventListener('click', event => {
+      if (event.target === screen) toggle(false);
+    });
+    addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !screen.classList.contains('hidden')) toggle(false);
+    });
+    $('#recentPartnerInvite').addEventListener('click', () => {
+      const partner = this.serverProfile?.recentPartner;
+      if (partner) this.onRecentPartnerInvite?.(partner);
+    });
+  }
+
+  setServerProfile(profile) {
+    this.serverProfile = profile || null;
+    this.renderServerProfile();
+  }
+
+  renderServerProfile() {
+    const screen = $('#profile');
+    if (!screen) return;
+    const profile = this.serverProfile;
+    const stats = profile?.stats || {};
+    const unlocked = new Map((profile?.achievements || []).map(item => [item.id, item]));
+    const campaignComplete = Boolean(profile?.campaign?.completed || unlocked.has('coop-campaign-complete'));
+    const completed = Math.min(10, Number(profile?.campaign?.chaptersCompleted || 0));
+
+    $('#profileName').textContent = this.account?.name || 'Wobbler';
+    $('#profileTitle').textContent = campaignComplete ? CAMPAIGN_PROFILE_TITLE : DEFAULT_PROFILE_TITLE;
+    $('#profileBadge').textContent = campaignComplete ? CAMPAIGN_BADGE_GLYPH : '◇';
+    $('#profileBadge').classList.toggle('completed', campaignComplete);
+    $('#profileCampaign').textContent = campaignComplete
+      ? 'КАМПАНИЯ ПРОЙДЕНА · 10/10'
+      : 'ПРИКЛЮЧЕНИЕ · ' + completed + '/10 ГЛАВ';
+    $('#profileStatMatches').textContent = Number(stats.coopMatchesCompleted || 0);
+    $('#profileStatChapters').textContent = Number(stats.coopChaptersCompleted || 0);
+    $('#profileStatRevives').textContent = Number(stats.coopRevives || 0);
+    $('#profileStatFlawless').textContent = Number(stats.coopFlawless || 0);
+
+    const achievements = $('#profileAchievements');
+    achievements.replaceChildren();
+    for (const item of ACHIEVEMENT_CATALOG) {
+      const earned = unlocked.get(item.id);
+      const card = document.createElement('div');
+      card.className = 'profile-achievement';
+      card.classList.toggle('locked', !earned);
+      const glyph = document.createElement('i');
+      glyph.textContent = earned ? item.glyph : '·';
+      const copy = document.createElement('span');
+      const name = document.createElement('strong');
+      name.textContent = item.name;
+      const detail = document.createElement('small');
+      detail.textContent = earned ? 'ПОЛУЧЕНО · ' + item.detail : item.detail;
+      copy.append(name, detail);
+      card.append(glyph, copy);
+      achievements.append(card);
+    }
+
+    const partner = profile?.recentPartner;
+    $('#recentPartnerEmpty').classList.toggle('hidden', Boolean(partner));
+    $('#recentPartnerCard').classList.toggle('hidden', !partner);
+    const invite = $('#recentPartnerInvite');
+    invite.disabled = !partner;
+    if (!partner) return;
+    $('#recentPartnerName').textContent = partner.name || 'Wobbler';
+    const chapter = this.coopChapters?.find(item => item.id === partner.lastChapterId);
+    const chapterName = chapter?.title || String(partner.lastChapterId || '').toUpperCase() || 'КООП';
+    $('#recentPartnerMeta').textContent =
+      'ВМЕСТЕ ' + Number(partner.matchesTogether || 0) + ' · ПОСЛЕДНЯЯ: ' + chapterName;
+  }
+
   // Показывает текущий аккаунт. `online: false` — сервер не ответил: аккаунт остаётся рабочим для
   // игры, но рекорды никуда не уедут, и говорить об этом надо вслух.
   setAccount(account, { online = true } = {}) {
@@ -121,6 +211,7 @@ export class UI {
     $('#accountName').textContent = account?.name || 'без аккаунта';
     $('#accountChip').classList.toggle('offline', !online);
     this.renderAccountPanel();
+    this.renderServerProfile();
     if (this.coopChapters) this.renderCoopCampaign(this.coopChapters);
   }
 
@@ -530,9 +621,24 @@ export class UI {
     $('#lobbyDifficulty').disabled = !host;
     $('#start').classList.toggle('hidden', !host);
     $('#start').disabled = !data.players.length || !data.players.every(p => p.ready);
-    $('#lobbyHint').textContent = host
-      ? 'Все игроки должны быть готовы перед стартом.'
-      : 'Отметьтесь готовым — гонку запустит хост.';
+    if (this.pendingRecentPartnerInviteName && data.mode === GAME_MODE.COOP) {
+      this.recentPartnerInviteRoomCode = data.code;
+      this.recentPartnerInviteName = this.pendingRecentPartnerInviteName;
+      this.pendingRecentPartnerInviteName = null;
+    }
+    if (this.recentPartnerInviteRoomCode === data.code && data.players.length > 1) {
+      this.recentPartnerInviteRoomCode = null;
+      this.recentPartnerInviteName = null;
+    }
+    const waitingRecentPartner =
+      data.mode === GAME_MODE.COOP &&
+      this.recentPartnerInviteRoomCode === data.code &&
+      data.players.length === 1;
+    $('#lobbyHint').textContent = waitingRecentPartner
+      ? 'Комната для ' + this.recentPartnerInviteName + ' готова — отправьте её кнопкой «ССЫЛКА».'
+      : host
+        ? 'Все игроки должны быть готовы перед стартом.'
+        : 'Отметьтесь готовым — гонку запустит хост.';
     const list = $('#players');
     list.replaceChildren();
     for (const player of data.players) {

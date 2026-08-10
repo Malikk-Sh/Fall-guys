@@ -11,9 +11,10 @@ const APP_SHELL = [
   '/pwa-entry.js',
   '/core/pwa.js',
   '/manifest.webmanifest',
-  '/icons/icon-192.svg',
-  '/icons/icon-512.svg',
-  '/icons/icon-maskable.svg'
+  '/icons/apple-touch-icon-180.png',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png'
 ];
 const NETWORK_ONLY_PREFIXES = ['/api/', '/account', '/health', '/metrics', '/ws'];
 const CACHEABLE_DESTINATIONS = new Set(['script', 'style', 'image', 'font', 'manifest', 'worker']);

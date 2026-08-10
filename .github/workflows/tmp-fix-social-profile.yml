@@ -34,7 +34,9 @@ jobs:
               r"(lastChapterId:\s*recent\.last_chapter_id,\s*\n\s*lastPlayedAt:\s*recent\.last_played_at)(\s*\n)"
           )
           source, count = profile_pattern.subn(
-              r"\1,\n            avoided: Boolean(recent.avoided)\2", source, count=1
+              lambda m: m.group(1) + ",\n            avoided: Boolean(recent.avoided)" + m.group(2),
+              source,
+              count=1,
           )
           if count != 1:
               raise SystemExit('profile anchor mismatch')
@@ -42,13 +44,15 @@ jobs:
           query_pattern = re.compile(
               r"(SELECT rp\.partner_account_id, a\.display_name, rp\.matches_together,\s*\n\s*rp\.last_chapter_id, rp\.last_played_at)(\s*\n\s*FROM recent_partners rp)"
           )
-          query_replacement = """\1,
+          def add_avoid_projection(match):
+              return match.group(1) + """,
              EXISTS (
                SELECT 1 FROM matchmaking_avoids ma
                WHERE (ma.account_a = rp.account_id AND ma.account_b = rp.partner_account_id)
                   OR (ma.account_a = rp.partner_account_id AND ma.account_b = rp.account_id)
-             ) AS avoided\2"""
-          source, count = query_pattern.subn(query_replacement, source, count=1)
+             ) AS avoided""" + match.group(2)
+
+          source, count = query_pattern.subn(add_avoid_projection, source, count=1)
           if count != 1:
               raise SystemExit('query anchor mismatch')
 

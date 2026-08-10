@@ -24,26 +24,33 @@ jobs:
       - run: npm ci
       - name: Apply co-op integrity patch
         run: node tools/apply-coop-integrity.cjs
+      - name: Update legacy integration scenarios
+        run: node tools/apply-coop-integrity-test-updates.cjs
       - name: Format permanent files
         run: >-
           npx prettier --write
-          server/index.js server/test.js server/coopMovementAudit.js server/coopMovementAudit.test.mjs
+          server/index.js server/test.js server/integration.test.js
+          server/coopMovementAudit.js server/coopMovementAudit.test.mjs
           server/verifiedLeaderboard.js server/verifiedLeaderboard.test.mjs server/observability.test.mjs
           package.json package-lock.json README.md
       - name: Lint co-op integrity changes
         run: >-
           npx eslint
-          server/index.js server/test.js server/coopMovementAudit.js server/coopMovementAudit.test.mjs
+          server/index.js server/test.js server/integration.test.js
+          server/coopMovementAudit.js server/coopMovementAudit.test.mjs
           server/verifiedLeaderboard.js server/verifiedLeaderboard.test.mjs server/observability.test.mjs
       - name: Run co-op integrity tests first
         run: node --test server/coopMovementAudit.test.mjs server/verifiedLeaderboard.test.mjs server/test.js
+      - name: Run competitive co-op integration
+        run: node --test --test-name-pattern='запас отклонений|пройденная кооп-глава' server/integration.test.js
       - name: Run full test suite
         run: npm test
       - name: Commit permanent integration
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add server/index.js server/test.js server/coopMovementAudit.js server/coopMovementAudit.test.mjs \
+          git add server/index.js server/test.js server/integration.test.js \
+            server/coopMovementAudit.js server/coopMovementAudit.test.mjs \
             server/verifiedLeaderboard.js server/verifiedLeaderboard.test.mjs server/observability.test.mjs \
             package.json package-lock.json README.md
           git diff --cached --quiet && exit 0

@@ -25,6 +25,7 @@ class Client {
     this.waiters = [];
     this.matchId = null;
     this.spec = null;
+    this.sequence = 0;
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
       if (message.type === 'hello') this.id = message.id;
@@ -32,6 +33,7 @@ class Client {
         this.matchId = message.matchId;
         this.spec = message.spec;
         this.startedAt = message.at;
+        this.sequence = 0;
       }
       for (const waiter of [...this.waiters]) {
         if (waiter.type !== message.type || !waiter.ok(message)) continue;
@@ -57,6 +59,15 @@ class Client {
 
   send(type, data = {}) {
     if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type, ...data }));
+  }
+
+  sendState(z) {
+    this.sequence += 1;
+    this.send('state', {
+      matchId: this.matchId,
+      sequence: this.sequence,
+      state: { x: 0, y: 1.2, z, ry: 0, vx: 0, vz: -7, state: 'ground' }
+    });
   }
 
   close() {
@@ -101,12 +112,7 @@ const timer = setInterval(() => {
   z -= 0.4;
   if (z < -180) z = 10;
   for (const pair of rooms) {
-    for (const client of pair) {
-      client.send('state', {
-        matchId: client.matchId,
-        state: { x: 0, y: 1.2, z, ry: 0, vx: 0, vz: -7, state: 'ground' }
-      });
-    }
+    for (const client of pair) client.sendState(z);
   }
 }, 66);
 

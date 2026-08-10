@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Wobble Rush SQLite backup hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=wobble-backup.service
+
+[Install]
+WantedBy=timers.target

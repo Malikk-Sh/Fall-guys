@@ -1,8 +1,8 @@
-// Production entrypoint for account sessions and external identities.
+// Production entrypoint for account sessions, external identities and server inventory.
 //
 // `index.js` remains directly importable by the existing unit/integration tests. This thin layer
-// extends CSP for Google Identity Services, installs Auth V2 on the exported Express app, then
-// starts the same HTTP/WebSocket server.
+// extends CSP for Google Identity Services, installs Auth V2 + inventory on the exported Express
+// app, then starts the same HTTP/WebSocket server.
 
 const http = require('http');
 
@@ -25,13 +25,15 @@ const core = require('./index');
 const { AuthService } = require('./auth');
 const { GoogleIdentityVerifier } = require('./googleIdentity');
 const { installAuthRoutes } = require('./authRoutes');
+const { InventoryService } = require('./inventory');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
+const inventory = new InventoryService({ db: core.accounts.db, accounts: core.accounts });
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 
-// Recovery code — только HTTP credential для /api/auth/recovery. В legacy-поле accountToken
-// игровая сеть принимает исключительно короткий WST ticket, выпущенный из HttpOnly session.
+// Recovery code — только HTTP credential. Игровой WebSocket получает короткий WST ticket,
+// выпущенный из HttpOnly session; старый recovery code нельзя использовать как сетевой bearer.
 core.accounts.login = credential => {
   const ticket = auth.resolveSocketTicket(credential);
   return ticket ? core.accounts.get(ticket.accountId) : null;
@@ -41,7 +43,8 @@ const accountPayload = account => ({
   ok: true,
   account: { id: account.id, name: account.name },
   records: core.accounts.records(account.id),
-  progress: core.accounts.progress(account.id)
+  progress: core.accounts.progress(account.id),
+  inventory: inventory.syncEntitlements(account.id)
 });
 
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
@@ -59,6 +62,7 @@ installAuthRoutes({
   recoveryLogin,
   auth,
   google,
+  inventory,
   clientIp,
   accountPayload,
   secureCookies: process.env.COOKIE_SECURE
@@ -78,6 +82,7 @@ if (require.main === module) {
         port: Number(port),
         host,
         authV2: true,
+        serverInventory: true,
         google: google.enabled
       })
     );
@@ -86,4 +91,4 @@ if (require.main === module) {
   process.on('SIGINT', () => core.shutdown('SIGINT'));
 }
 
-module.exports = { ...core, auth, google };
+module.exports = { ...core, auth, google, inventory };

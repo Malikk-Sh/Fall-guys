@@ -2,15 +2,16 @@ ready=1
 ready_at=3
 backup_code=0
 health_code=0
-smoke_code=127
+smoke_code=0
 --- backup stdout ---
-{"ok":true,"backup":"/tmp/tmp.2xMjKJGHNt/backups/hourly/wobble-20260810T134126Z-2324.db","schemaVersion":6,"bytes":184320,"offsiteConfigured":false,"offsiteRequired":false,"offsiteLastSuccessAt":null}
+{"ok":true,"backup":"/tmp/tmp.6IyKO6m4SO/backups/hourly/wobble-20260810T134403Z-2301.db","schemaVersion":6,"bytes":184320,"offsiteConfigured":false,"offsiteRequired":false,"offsiteLastSuccessAt":null}
 --- backup stderr ---
-(node:2324) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(node:2301) ExperimentalWarning: SQLite is an experimental feature and might change at any time
 (Use `node --trace-warnings ...` to show where the warning was created)
 --- health stdout ---
-{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":10,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:41:26.931Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}--- health stderr ---
+{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":10,"heapTotalMb":17,"rssMb":67,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:44:03.637Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}--- health stderr ---
 --- smoke stdout ---
+deploy smoke: ok
 --- smoke stderr ---
 + set -euo pipefail
 +++ dirname -- deploy/smoke.sh
@@ -25,6 +26,10 @@ smoke_code=127
 + '[' --require-backup = --require-backup ']'
 + REQUIRE_BACKUP=1
 + '[' -r /etc/wobble.env ']'
+++ command -v node
++ NODE_BIN=/opt/hostedtoolcache/node/22.23.1/x64/bin/node
++ '[' -z /opt/hostedtoolcache/node/22.23.1/x64/bin/node ']'
++ '[' '!' -x /opt/hostedtoolcache/node/22.23.1/x64/bin/node ']'
 + PORT=3100
 + BASE_URL=http://127.0.0.1:3100
 + ORIGIN=http://127.0.0.1:3100
@@ -33,7 +38,7 @@ smoke_code=127
 + curl -fsS --max-time 5 http://127.0.0.1:3100/health/live
 + curl -fsS --max-time 5 http://127.0.0.1:3100/health/ready
 ++ curl -fsS --max-time 5 http://127.0.0.1:3100/health
-+ health='{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":11,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:41:26.931Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}'
++ health='{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":11,"heapTotalMb":17,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:44:03.637Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}'
 ++ curl -fsS --max-time 5 http://127.0.0.1:3100/
 + html='<!doctype html>
 <html lang="ru">
@@ -453,11 +458,13 @@ smoke_code=127
   </body>
 </html>'
 + grep -q WOBBLE
-+ /usr/bin/node - '{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":11,"heapTotalMb":18,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:41:26.931Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}' 1
-deploy/smoke.sh: line 32: /usr/bin/node: No such file or directory
++ /opt/hostedtoolcache/node/22.23.1/x64/bin/node - '{"ok":true,"service":"wobble-rush-3d","version":"2.2.0","protocolVersion":10,"rooms":0,"players":0,"sessions":0,"capacity":{"socketCount":0,"activeMatches":0,"maxSockets":2000,"maxMatches":300,"socketsFull":false,"matchesFull":false},"load":{"eventLoopP95Ms":0,"heapUsedMb":11,"heapTotalMb":17,"rssMb":68,"overloaded":false},"events":{"roomCreated":0,"roomJoined":0,"matchStarted":0,"checkpointReached":0,"playerDowned":0,"matchCompleted":0,"matchAbandoned":0,"connectionRecovered":0},"uptime":0,"backup":{"required":true,"available":true,"stale":false,"ageSeconds":0,"maxAgeSeconds":7200,"lastSuccessAt":"2026-08-10T13:44:03.637Z","integrity":"ok","schemaVersion":6,"bytes":184320,"lastFailureAt":null,"offsite":{"configured":false,"required":false,"available":false,"stale":false,"ageSeconds":null,"maxAgeSeconds":129600,"lastSuccessAt":null,"integrity":null,"schemaVersion":null,"bytes":null}},"metrics":{"connections":0,"matchesStarted":0,"matchesFinished":0,"invalidMessages":0,"disconnectsForAbuse":0,"reconnects":0,"finishRejected":0,"latePacketsDropped":0,"resumeSucceeded":0,"resumeFailed":0,"socketSendFailures":0,"handlerErrors":0,"capacityRejected":0,"snapshotsSkippedForLoad":0,"verificationFailed":0}}' 1
++ cd /home/runner/work/Fall-guys/Fall-guys
++ /opt/hostedtoolcache/node/22.23.1/x64/bin/node - http://127.0.0.1:3100 http://127.0.0.1:3100
++ echo 'deploy smoke: ok'
 --- server log ---
-(node:2307) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(node:2284) ExperimentalWarning: SQLite is an experimental feature and might change at any time
 (Use `node --trace-warnings ...` to show where the warning was created)
 {"level":"info","event":"server_started","port":3100,"host":"127.0.0.1","authV2":true,"socketAuth":true,"serverInventory":true,"socialCosmetics":true,"rewardPlatform":true,"devRewards":false,"google":false}
-{"level":"info","event":"shutdown_started","ts":"2026-08-10T13:41:26.987Z","signal":"SIGTERM","rooms":0,"sessions":0}
-{"level":"info","event":"shutdown_complete","ts":"2026-08-10T13:41:27.291Z"}
+{"level":"info","event":"shutdown_started","ts":"2026-08-10T13:44:03.784Z","signal":"SIGTERM","rooms":0,"sessions":0}
+{"level":"info","event":"shutdown_complete","ts":"2026-08-10T13:44:04.087Z"}

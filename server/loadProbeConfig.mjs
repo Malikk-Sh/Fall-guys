@@ -16,3 +16,12 @@ export function loadTargets(env = process.env) {
     serverPid: String(env.WOBBLE_SERVER_PID || '').trim() || null
   };
 }
+
+export function loadStateMessage({ matchId, sequence, z }) {
+  return {
+    type: 'state',
+    matchId,
+    sequence,
+    state: { x: 0, y: 1.2, z, ry: 0, vx: 0, vz: -7, state: 'ground' }
+  };
+}

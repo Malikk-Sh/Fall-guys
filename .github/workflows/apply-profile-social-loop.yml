@@ -1,0 +1,61 @@
+name: Apply profile social loop
+
+on:
+  push:
+    branches:
+      - agent/profile-social-loop
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/profile-social-loop
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Apply narrow profile/social changes
+        run: node tools/apply-profile-social-loop.cjs
+      - name: Format touched files
+        run: >-
+          npx prettier --write
+          server/migrations/index.js
+          server/migrations.test.mjs
+          server/accounts.js
+          server/index.js
+          server/bootstrap.js
+          server/authRoutes.js
+          client/core/account.js
+          client/core/AccountFlow.js
+          client/ui/UI.js
+          client/ui/menuBindings.js
+          client/index.html
+          client/styles.css
+          e2e/multiplayer.spec.js
+          package.json
+          shared/achievements.js
+          server/migrations/006_recent_partners.js
+          server/socialProfile.test.mjs
+      - name: Fast verification
+        run: |
+          npx eslint server/accounts.js server/index.js server/bootstrap.js server/authRoutes.js client/core/account.js client/core/AccountFlow.js client/ui/UI.js client/ui/menuBindings.js shared/achievements.js server/socialProfile.test.mjs
+          node --test server/socialProfile.test.mjs server/migrations.test.mjs
+      - name: Commit production changes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server client shared package.json e2e
+          git reset .github/workflows/apply-profile-social-loop.yml tools/apply-profile-social-loop.cjs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Add profile and recent partner social loop"
+          git push origin HEAD:agent/profile-social-loop

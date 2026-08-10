@@ -25,7 +25,7 @@ jobs:
         run: >-
           npx prettier --write
           client/index.html client/manifest.webmanifest client/pwa.css client/pwa-entry.js
-          client/core/pwa.js client/service-worker.js client/offline.html client/icons/*.svg
+          client/core/pwa.js client/service-worker.js client/offline.html
           server/index.js server/pwa.test.mjs server/pwaClient.test.mjs e2e/pwa.spec.js package.json
       - name: Lint
         run: npm run lint

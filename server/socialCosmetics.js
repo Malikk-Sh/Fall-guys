@@ -1,7 +1,4 @@
-const {
-  DEFAULT_COSMETIC_LOADOUT,
-  publicCosmeticLoadout
-} = require('../shared/cosmetics.js');
+const { DEFAULT_COSMETIC_LOADOUT, publicCosmeticLoadout } = require('../shared/cosmetics.js');
 
 // Публичная косметика — это представление server inventory, а не данные клиента.
 //

@@ -65,10 +65,7 @@ test('два браузера видят server-owned косметику дру�
     expect(await host.evaluate(() => navigator.maxTouchPoints)).toBeGreaterThan(0);
   }
   await setPlayerName(host, 'Хост E2E');
-  const hostCosmetic = await equipServerCosmetic(
-    host,
-    `social-host-${testInfo.project.name}-${Date.now()}`
-  );
+  const hostCosmetic = await equipServerCosmetic(host, `social-host-${testInfo.project.name}-${Date.now()}`);
   await host.locator('[data-mode="coop"]').click();
   await host.locator('#coopCreate').click();
   await expect(host.locator('#lobby')).toBeVisible();

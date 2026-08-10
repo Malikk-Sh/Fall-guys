@@ -84,11 +84,15 @@ test.describe('одиночная игра и меню', () => {
     await page.locator('[data-mode="single"]').click();
     await expect(page.locator('#single')).toBeVisible();
 
-    // Окно аккаунта: открывается по чипу, закрывается Escape.
+    // Окно аккаунта: открывается по чипу, закрывается Escape. Не фиксируем общее число карточек:
+    // каталог растёт. Вместо этого проверяем базовую косметику и rewarded-предметы этой платформы.
     await page.locator('#accountChip').click();
     await expect(page.locator('#account')).toBeVisible();
     await expect(page.locator('#accountList')).toBeAttached();
-    await expect(page.locator('.cosmetic-card')).toHaveCount(6);
+    const cosmeticCards = page.locator('.cosmetic-card');
+    await expect(cosmeticCards.filter({ hasText: 'КЛАССИКА' })).toHaveCount(1);
+    await expect(cosmeticCards.filter({ hasText: 'НЕОНОВЫЙ ВИЗОР' })).toHaveCount(1);
+    await expect(cosmeticCards.filter({ hasText: 'КОНФЕТТИ-АНТЕННА' })).toHaveCount(1);
     await expect(page.locator('.cosmetic-card-equipped')).toContainText('КЛАССИКА');
     await page.keyboard.press('Escape');
     await expect(page.locator('#account')).toBeHidden();

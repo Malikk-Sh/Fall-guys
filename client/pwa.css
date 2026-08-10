@@ -1,0 +1,80 @@
+.pwa-connectivity,
+.pwa-update {
+  position: fixed;
+  z-index: 1200;
+  left: 50%;
+  width: min(560px, calc(100% - 24px));
+  transform: translateX(-50%);
+  border: 1px solid #ffffff30;
+  border-radius: 18px;
+  background: #18133ee8;
+  color: #fff;
+  box-shadow: 0 18px 60px #08051f70;
+  backdrop-filter: blur(14px);
+}
+.pwa-connectivity {
+  top: max(12px, env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 15px;
+  font-size: 13px;
+}
+.pwa-connectivity b {
+  color: #ffd56b;
+  white-space: nowrap;
+}
+.pwa-connectivity span {
+  color: #dedaff;
+}
+.pwa-update {
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 14px;
+  align-items: center;
+  padding: 14px 16px;
+}
+.pwa-update-copy {
+  min-width: 0;
+}
+.pwa-update-copy b {
+  display: block;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+.pwa-update-copy span {
+  display: block;
+  margin-top: 3px;
+  color: #c9c4ef;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.pwa-update .button {
+  margin: 0;
+  min-height: 42px;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+.pwa-update .button:disabled {
+  opacity: 0.75;
+}
+#installApp {
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .pwa-update {
+    grid-template-columns: 1fr;
+  }
+  .pwa-update .button {
+    width: 100%;
+  }
+  .pwa-connectivity {
+    align-items: flex-start;
+  }
+}
+@media (display-mode: standalone) {
+  #installApp {
+    display: none !important;
+  }
+}

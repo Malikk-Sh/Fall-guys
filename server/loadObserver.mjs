@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { loadTargets } from './loadProbeConfig.mjs';
 
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const { httpUrl, serverPid } = loadTargets();
 const seconds = Math.max(1, Number(process.argv[2] || 30));
 const pid = serverPid || detectServerPid();
@@ -78,5 +79,3 @@ async function pidStat(targetPid) {
   const rssKb = Number(rawStatus.match(/^VmRSS:\s+(\d+)\s+kB$/m)?.[1] || 0);
   return { cpuSeconds: (utime + stime) / 100, rssMb: rssKb / 1024 };
 }
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));

@@ -1,0 +1,24 @@
+[Unit]
+Description=Wobble Rush verified SQLite backup
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=wobble
+Group=wobble
+WorkingDirectory=/opt/wobble
+EnvironmentFile=/etc/wobble.env
+ExecStart=/bin/bash /opt/wobble/deploy/backup.sh
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true

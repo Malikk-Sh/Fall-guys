@@ -20,7 +20,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply PWA integration
-        run: node tools/apply-pwa.cjs
+        run: |
+          node tools/apply-pwa.cjs
+          node tools/fix-pwa-test.cjs
       - name: Format changed files
         run: >-
           npx prettier --write

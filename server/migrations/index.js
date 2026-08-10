@@ -4,13 +4,7 @@ const authSessions = require('./003_auth_sessions');
 const serverInventory = require('./004_server_inventory');
 const rewardPlatform = require('./005_reward_platform');
 
-const MIGRATIONS = Object.freeze([
-  initial,
-  accountProgress,
-  authSessions,
-  serverInventory,
-  rewardPlatform
-]);
+const MIGRATIONS = Object.freeze([initial, accountProgress, authSessions, serverInventory, rewardPlatform]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {
   if (!db) throw new Error('Для миграций нужна открытая база');

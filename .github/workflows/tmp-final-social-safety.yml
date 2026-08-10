@@ -22,7 +22,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Close replay and same-account edge cases
+      - name: Close replay lifecycle edge cases
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -64,33 +64,18 @@ jobs:
           if source.count(anchor) != 1:
               raise SystemExit('error listener anchor mismatch')
           path.write_text(source.replace(anchor, replacement))
-
-          path = Path('server/index.js')
-          source = path.read_text()
-          anchor = """function coopMatchCompatible(ws, entry, requested, safety = socialSafety) {
-              if (!entry?.ws || entry.ws.readyState !== 1 || entry.ws === ws) return false;
-              if (requested && entry.chapterId && entry.chapterId !== requested) return false;
-          """
-          replacement = """function coopMatchCompatible(ws, entry, requested, safety = socialSafety) {
-              if (!entry?.ws || entry.ws.readyState !== 1 || entry.ws === ws) return false;
-              if (ws.accountId && entry.ws.accountId && ws.accountId === entry.ws.accountId) return false;
-              if (requested && entry.chapterId && entry.chapterId !== requested) return false;
-          """
-          if source.count(anchor) != 1:
-              raise SystemExit('match compatibility anchor mismatch')
-          path.write_text(source.replace(anchor, replacement))
           PY
       - name: Format final files
-        run: npx prettier --write client/net/networkBindings.js server/index.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
+        run: npx prettier --write client/net/networkBindings.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
       - name: Lint final files
-        run: npx eslint client/net/networkBindings.js server/index.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
+        run: npx eslint client/net/networkBindings.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
       - name: Run full test suite
         run: npm test
       - name: Commit permanent fixes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add client/net/networkBindings.js server/index.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
+          git add client/net/networkBindings.js server/socialSafety.js server/socialSafety.test.mjs server/accounts.js
           git diff --cached --quiet && exit 0
           git commit -m 'Harden social safety and replay lifecycle edges'
           git push origin HEAD:agent/social-safety-replay

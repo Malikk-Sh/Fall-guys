@@ -1,5 +1,6 @@
 name: Temporary co-op integrity final review
 
+# Temporary rerun after directed-progress regression was corrected.
 on:
   push:
     branches:

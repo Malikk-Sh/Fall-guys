@@ -11,6 +11,7 @@ import {
   loginGoogle,
   renameAccount,
   rememberAccount,
+  sessionAccount,
   switchAccount,
   submitRecord
 } from './account.js';
@@ -23,8 +24,27 @@ export class AccountFlow {
     this.game = game;
     this.records = new Map();
     this.networkTicket = null;
-    this.game.ui.accountToken = () => this.networkTicket;
+    // NetworkManager забирает WST ровно для socket-auth. Ticket не остаётся в UI после выдачи;
+    // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
+    this.game.ui.accountToken = options => this.takeNetworkTicket(options);
     setServerCosmeticEquipHandler((slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId));
+  }
+
+  async takeNetworkTicket({ fresh = false } = {}) {
+    if (!fresh && this.networkTicket) {
+      const ticket = this.networkTicket;
+      this.networkTicket = null;
+      return ticket;
+    }
+
+    this.networkTicket = null;
+    try {
+      const session = await sessionAccount();
+      if (!session || session.missing) return null;
+      return session.networkTicket || null;
+    } catch {
+      return null;
+    }
   }
 
   async signIn() {

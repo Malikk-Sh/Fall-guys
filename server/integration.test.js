@@ -1306,17 +1306,29 @@ test('пройденная кооп-глава попадает в таблиц�
   await Promise.all([host.wait('hello'), guest.wait('hello')]);
   const hostAccount = accounts.create('Аня');
   const guestAccount = accounts.create('Боря');
+
+  // Auth V2 больше не принимает recovery credential внутри room-команд. Этот integration test
+  // повторяет настоящий production boundary: HttpOnly session выдаёт короткий WST, сокет один раз
+  // поглощает его, а CREATE/JOIN после этого вообще ничего не знают об account credential.
+  const { AuthService } = require('./auth');
+  const { networkIdentity } = require('./networkIdentity');
+  const socketAuth = new AuthService({ db: accounts.db });
+  networkIdentity.configure(ticket => socketAuth.consumeSocketTicket(ticket));
+  t.after(() => networkIdentity.reset());
+
+  host.send('auth', { ticket: socketAuth.createSocketTicket(hostAccount.id).token });
+  guest.send('auth', { ticket: socketAuth.createSocketTicket(guestAccount.id).token });
+  await Promise.all([host.wait('authenticated'), guest.wait('authenticated')]);
+
   host.send('create', {
     name: 'Аня',
     playerId: 'подменённый-id',
-    accountToken: hostAccount.secret,
     mode: 'coop'
   });
   const created = await host.wait('lobby', m => m.players.length === 1);
   guest.send('join', {
     name: 'Боря',
     playerId: 'ещё-один-подменённый-id',
-    accountToken: guestAccount.secret,
     code: created.code
   });
   await host.wait('lobby', m => m.players.length === 2);

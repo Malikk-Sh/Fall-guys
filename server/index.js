@@ -45,6 +45,8 @@ const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
 const { Accounts } = require('./accounts');
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
+const { BoundedIpRateLimiter } = require('./ipRateLimiter');
+const { networkIdentity } = require('./networkIdentity');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -390,19 +392,16 @@ const accountJson = express.json({ limit: '2kb' });
 // означал бы, что спам создания закрывает вход честному игроку с того же адреса — а за NAT это
 // целый дом.
 const HTTP_WINDOW_MS = 10 * 60 * 1000;
-const httpLimits = { create: [20, new Map()], login: [40, new Map()], record: [200, new Map()] };
+const httpLimits = {
+  create: [20, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })],
+  login: [40, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })],
+  record: [200, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })]
+};
 
 function httpRateLimited(kind, ip) {
   if (!ip) return false;
-  const [max, hits] = httpLimits[kind];
-  const now = Date.now();
-  const entry = hits.get(ip);
-  if (!entry || now - entry.start > HTTP_WINDOW_MS) {
-    hits.set(ip, { start: now, count: 1 });
-    return false;
-  }
-  entry.count++;
-  return entry.count > max;
+  const [max, limiter] = httpLimits[kind];
+  return limiter.limited(ip, max);
 }
 
 // Личные рекорды отдаются вместе с аккаунтом: клиенту они нужны сразу после входа, чтобы показать
@@ -517,19 +516,11 @@ function expireSessions(now = Date.now()) {
 const IP_WINDOW_MS = 60 * 1000;
 const IP_MAX_ROOM_OPS = 40;
 const MAX_CONNECTIONS_PER_IP = 24;
-const ipRoomOps = new Map();
+const ipRoomOps = new BoundedIpRateLimiter({ windowMs: IP_WINDOW_MS });
 const ipConnections = new Map();
 
 function ipRateLimited(ip) {
-  if (!ip) return false;
-  const now = Date.now();
-  const entry = ipRoomOps.get(ip);
-  if (!entry || now - entry.start > IP_WINDOW_MS) {
-    ipRoomOps.set(ip, { start: now, count: 1 });
-    return false;
-  }
-  entry.count++;
-  return entry.count > IP_MAX_ROOM_OPS;
+  return ipRoomOps.limited(ip, IP_MAX_ROOM_OPS);
 }
 
 // Проверка источника при апгрейде сокета: без неё игру можно встроить на чужой сайт и гонять
@@ -869,10 +860,10 @@ function handleDisconnect(ws) {
   emitLobby(room);
 }
 
-function addPlayer(room, ws, name, playerId = null, accountToken = null) {
+function addPlayer(room, ws, name, playerId = null) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
-  const authenticated = accountToken ? accounts.login(accountToken) : null;
+  const authenticated = networkIdentity.accountForSocket(ws, accounts);
   room.players.set(ws.id, {
     id: ws.id,
     name: safeName(name),
@@ -881,7 +872,8 @@ function addPlayer(room, ws, name, playerId = null, accountToken = null) {
     anonymousId:
       authenticated?.id ||
       (typeof playerId === 'string' && playerId.trim() ? playerId.trim().slice(0, 64) : null),
-    // Серверный прогресс никогда не доверяет присланному playerId: только проверенному коду.
+    // Серверный прогресс никогда не доверяет присланному playerId: только identity,
+    // которая была подтверждена один раз и привязана к этому WebSocket.
     accountId: authenticated?.id || null,
     color,
     slot: 0,
@@ -948,7 +940,6 @@ function enqueueCoop(ws, message) {
       ws,
       name: message.name,
       playerId: message.playerId,
-      accountToken: message.accountToken,
       chapterId: requested,
       queuedAt: now
     });
@@ -959,8 +950,8 @@ function enqueueCoop(ws, message) {
   const [partner] = coopMatchmaking.splice(partnerIndex, 1);
   const chapterId = requested || partner.chapterId || COOP_CHAPTER_IDS[0];
   const room = createCoopRoom(chapterId, partner.ws.id);
-  addPlayer(room, partner.ws, partner.name, partner.playerId, partner.accountToken);
-  addPlayer(room, ws, message.name, message.playerId, message.accountToken);
+  addPlayer(room, partner.ws, partner.name, partner.playerId);
+  addPlayer(room, ws, message.name, message.playerId);
   for (const player of room.players.values()) player.ready = true;
   for (const player of room.players.values()) gameplay.count('match_found', dims(room, player));
   gameplay.observe(
@@ -987,6 +978,10 @@ function resume(ws, token) {
     sessions.delete(token);
     return false;
   }
+
+  // Resume token уже принадлежит конкретному серверному player. Обычный reconnect наследует
+  // accountId этого player; заранее привязанный другой account занять его место не может.
+  if (!networkIdentity.bindResumedPlayer(ws, player)) return false;
 
   // Занимаем прежнее место: идентификатор игрока сохраняется, поэтому напарник не увидит,
   // что кто-то «вышел и зашёл».
@@ -1399,6 +1394,7 @@ wss.on('connection', (ws, req) => {
   ws.id = crypto.randomBytes(8).toString('hex');
   ws.token = crypto.randomBytes(16).toString('hex');
   ws.ip = ip;
+  ws.accountId = null;
   ws.isAlive = true;
   ws.limiter = new RateLimiter();
   // По User-Agent, один раз при подключении: игрок его в середине матча не меняет.
@@ -1476,6 +1472,27 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.PING) {
       return send(ws, { type: S2C.PONG, at: message.at, serverTime: Date.now() });
     }
+
+    if (message.type === C2S.AUTH) {
+      const authenticated = networkIdentity.authenticate(ws, message.ticket);
+      if (!authenticated.ok) {
+        const code =
+          authenticated.reason === 'already-bound'
+            ? ERROR_CODES.AUTH_ALREADY_BOUND
+            : authenticated.reason === 'unavailable'
+              ? ERROR_CODES.AUTH_UNAVAILABLE
+              : ERROR_CODES.AUTH_FAILED;
+        const detail =
+          authenticated.reason === 'already-bound'
+            ? 'Аккаунт уже привязан к этому соединению.'
+            : authenticated.reason === 'unavailable'
+              ? 'Сетевая авторизация временно недоступна.'
+              : 'WebSocket ticket недействителен, истёк или уже использован.';
+        return sendError(ws, code, detail, false);
+      }
+      return send(ws, { type: S2C.AUTHENTICATED, accountId: authenticated.accountId });
+    }
+
     if (message.type === C2S.LEAVE_ROOM) return leave(ws);
 
     if (message.type === C2S.RESUME) {
@@ -1490,7 +1507,11 @@ wss.on('connection', (ws, req) => {
       message.type === C2S.JOIN_ROOM ||
       message.type === C2S.FIND_COOP
     ) {
-      if (message.protocolVersion !== undefined && message.protocolVersion !== PROTOCOL_VERSION) {
+      if (
+        message.protocolVersion !== undefined &&
+        message.protocolVersion !== PROTOCOL_VERSION &&
+        message.protocolVersion !== PROTOCOL_VERSION - 1
+      ) {
         return sendError(ws, ERROR_CODES.VERSION_MISMATCH, 'Версия игры устарела. Обновите страницу.', false);
       }
       if (ipRateLimited(ws.ip)) {
@@ -1577,7 +1598,7 @@ wss.on('connection', (ws, req) => {
       rooms.set(code, room);
       trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
-      return addPlayer(room, ws, message.name, message.playerId, message.accountToken);
+      return addPlayer(room, ws, message.name, message.playerId);
     }
 
     if (message.type === C2S.JOIN_ROOM) {
@@ -1591,7 +1612,7 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
       trackEvent(productEvents, 'roomJoined');
-      return addPlayer(room, ws, message.name, message.playerId, message.accountToken);
+      return addPlayer(room, ws, message.name, message.playerId);
     }
 
     const room = rooms.get(ws.room);
@@ -2018,7 +2039,8 @@ const heartbeatTimer = setInterval(() => {
   gameplay.flush();
   expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
-  for (const [ip, entry] of ipRoomOps) if (now - entry.start > IP_WINDOW_MS) ipRoomOps.delete(ip);
+  ipRoomOps.cleanup(now, { force: true });
+  for (const [, limiter] of Object.values(httpLimits)) limiter.cleanup(now, { force: true });
 }, 15000);
 heartbeatTimer.unref();
 
@@ -2109,6 +2131,7 @@ if (require.main === module) {
 function resetRateLimits() {
   ipRoomOps.clear();
   ipConnections.clear();
+  for (const [, limiter] of Object.values(httpLimits)) limiter.clear();
 }
 
 module.exports = {

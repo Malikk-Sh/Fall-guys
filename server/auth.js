@@ -95,15 +95,16 @@ class AuthService {
     return { token, accountId: id, expiresAt: now + SOCKET_TICKET_TTL_MS };
   }
 
-  resolveSocketTicket(token, now = Date.now()) {
+  // WST — не session и не bearer на две минуты. Он существует ровно до первого успешного
+  // socket-auth. Удаляем запись ДО возврата результата: повтор того же token уже в следующем
+  // синхронном вызове увидит пустой Map, поэтому replay невозможен даже в пределах TTL.
+  consumeSocketTicket(token, now = Date.now()) {
     if (typeof token !== 'string' || !token.startsWith('WST.')) return null;
     const hash = hashToken(token);
     const ticket = hash ? this.socketTickets.get(hash) : null;
     if (!ticket) return null;
-    if (ticket.expiresAt <= now) {
-      this.socketTickets.delete(hash);
-      return null;
-    }
+    this.socketTickets.delete(hash);
+    if (ticket.expiresAt <= now) return null;
     return { ...ticket };
   }
 

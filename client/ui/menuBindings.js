@@ -28,7 +28,6 @@ export function bindMenu(game) {
     net.createRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       difficulty: $('#difficulty').value
     });
   });
@@ -38,7 +37,6 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       code: $('#code').value.trim().toUpperCase()
     });
   });
@@ -197,7 +195,6 @@ export function bindMenu(game) {
     net.findCoop({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       chapterId: $('#coopAnyChapter').checked ? '' : game.ui.coopChapter()
     });
   });
@@ -207,7 +204,6 @@ export function bindMenu(game) {
     net.createRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       mode: GAME_MODE.COOP,
       difficulty: game.ui.coopChapter()
     });
@@ -218,7 +214,6 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       code: $('#coopCode').value.trim().toUpperCase()
     });
   });

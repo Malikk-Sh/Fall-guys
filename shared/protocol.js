@@ -10,11 +10,12 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
   RESUME: 'resume',
+  AUTH: 'auth',
   CREATE_ROOM: 'create',
   JOIN_ROOM: 'join',
   FIND_COOP: 'findCoop',
@@ -38,6 +39,7 @@ export const C2S = Object.freeze({
 // Сообщения сервер → клиент.
 export const S2C = Object.freeze({
   WELCOME: 'hello',
+  AUTHENTICATED: 'authenticated',
   RESUMED: 'resumed',
   RESUME_FAILED: 'resumeFailed',
   ROOM_STATE: 'lobby',
@@ -71,6 +73,9 @@ export const ERROR_CODES = Object.freeze({
   INVALID_MESSAGE: 'INVALID_MESSAGE',
   PROTOCOL_ERROR: 'PROTOCOL_ERROR',
   VERSION_MISMATCH: 'VERSION_MISMATCH',
+  AUTH_FAILED: 'AUTH_FAILED',
+  AUTH_ALREADY_BOUND: 'AUTH_ALREADY_BOUND',
+  AUTH_UNAVAILABLE: 'AUTH_UNAVAILABLE',
   ROOM_NOT_FOUND: 'ROOM_NOT_FOUND',
   ROOM_FULL: 'ROOM_FULL',
   MATCH_ALREADY_STARTED: 'MATCH_ALREADY_STARTED',
@@ -203,6 +208,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.PING]: { at: num(0, Number.MAX_SAFE_INTEGER) },
 
   [C2S.RESUME]: { token: str(64) },
+  [C2S.AUTH]: { ticket: str(64) },
 
   [C2S.CREATE_ROOM]: {
     // Ноль, а не общая единица: пустое имя сервер осмысленно заменяет на «Wobbler» (safeName), и
@@ -215,7 +221,6 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     // Это не средство от читерства. Придумать себе новый идентификатор ничего не стоит, но это
     // ровно то же, что прийти новым игроком, — то есть защищаться тут не от чего.
     playerId: optional(str(64)),
-    accountToken: optional(str(64)),
     difficulty: optional(str(16)),
     mode: optional(oneOf(Object.values(GAME_MODE))),
     protocolVersion: optional(num(0, 1000))
@@ -224,7 +229,6 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.JOIN_ROOM]: {
     name: optional(str(32, 0)), // ноль по той же причине, что и в CREATE_ROOM
     playerId: optional(str(64)),
-    accountToken: optional(str(64)),
     code: str(8),
     protocolVersion: optional(num(0, 1000))
   },
@@ -232,7 +236,6 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.FIND_COOP]: {
     name: optional(str(32, 0)),
     playerId: optional(str(64)),
-    accountToken: optional(str(64)),
     // Пустая строка означает «любая глава»; конкретная глава проверяется сервером по каталогу.
     chapterId: optional(str(16, 0)),
     protocolVersion: optional(num(0, 1000))
@@ -303,6 +306,7 @@ export const MESSAGE_SCHEMAS = Object.freeze({
 // Значения подобраны с запасом к штатному поведению: состояние шлётся раз в 66 мс, то есть
 // примерно 15 раз в секунду, — лимит 25 не мешает игре, но отсекает поток на порядок больший.
 export const RATE_LIMITS = Object.freeze({
+  [C2S.AUTH]: [4, 60_000],
   [C2S.CREATE_ROOM]: [5, 60_000],
   [C2S.JOIN_ROOM]: [20, 60_000],
   [C2S.FIND_COOP]: [10, 60_000],

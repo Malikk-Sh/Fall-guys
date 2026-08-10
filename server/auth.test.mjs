@@ -57,7 +57,7 @@ test('provider subject нельзя привязать к двум Wobble accoun
   db.close();
 });
 
-test('WebSocket получает короткий ticket, а не recovery code', () => {
+test('WebSocket получает одноразовый короткий ticket, а не recovery code', () => {
   const { db, accounts, auth } = setup();
   const created = accounts.create('Network');
   const now = 500_000;
@@ -65,7 +65,18 @@ test('WebSocket получает короткий ticket, а не recovery code'
 
   assert.match(ticket.token, /^WST\./);
   assert.notEqual(ticket.token, created.secret);
-  assert.equal(auth.resolveSocketTicket(ticket.token, now + SOCKET_TICKET_TTL_MS - 1).accountId, created.id);
-  assert.equal(auth.resolveSocketTicket(ticket.token, now + SOCKET_TICKET_TTL_MS + 1), null);
+  assert.equal(auth.consumeSocketTicket(ticket.token, now + 1).accountId, created.id);
+  assert.equal(auth.consumeSocketTicket(ticket.token, now + 2), null, 'повтор WST — replay и не проходит');
+  db.close();
+});
+
+test('просроченный WebSocket ticket уничтожается при первой попытке', () => {
+  const { db, accounts, auth } = setup();
+  const created = accounts.create('Expired Network');
+  const now = 800_000;
+  const ticket = auth.createSocketTicket(created.id, now);
+
+  assert.equal(auth.consumeSocketTicket(ticket.token, now + SOCKET_TICKET_TTL_MS + 1), null);
+  assert.equal(auth.consumeSocketTicket(ticket.token, now + 1), null, 'просроченный ticket нельзя оживить');
   db.close();
 });

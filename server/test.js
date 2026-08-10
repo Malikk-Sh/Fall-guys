@@ -22,7 +22,8 @@ const {
   loadStatus,
   rotateEventLoopWindow,
   createEventCounters,
-  trackEvent
+  trackEvent,
+  matchmakingStatus
 } = require('./index');
 const { coopSpec } = require('../shared/coopChapters.js');
 const { validateCoopEvent, findCatapult } = require('./coopRules');
@@ -416,4 +417,20 @@ test('анонимные продуктовые события ограниче�
   assert.equal(events.roomCreated, 1);
   assert.equal(events.checkpointReached, 3);
   assert.equal(Object.hasOwn(events, 'имя-игрока'), false);
+});
+
+test('оперативный matchmaking status показывает очередь и число найденных пар', () => {
+  const events = createEventCounters();
+  assert.equal(Object.hasOwn(events, 'matchmakingStarted'), true);
+  assert.equal(Object.hasOwn(events, 'matchmakingMatched'), true);
+  events.matchmakingMatched = 7;
+  assert.deepEqual(
+    matchmakingStatus({ queue: [{ queuedAt: 1000 }, { queuedAt: 1500 }], counters: events, now: 2500 }),
+    { waiting: 2, oldestWaitMs: 1500, matchedSinceStart: 7 }
+  );
+  assert.deepEqual(matchmakingStatus({ queue: [], counters: events, now: 2500 }), {
+    waiting: 0,
+    oldestWaitMs: 0,
+    matchedSinceStart: 7
+  });
 });

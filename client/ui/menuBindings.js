@@ -166,14 +166,18 @@ export function bindMenu(game) {
   // Режим камеры переключается внутри контроллера (клавиша C или кнопка на экране), а показать
   // это должен интерфейс. Событие вместо прямого вызова — чтобы контроллер камеры не знал про UI.
   addEventListener('camera-mode-change', event => {
+    const free = event.detail === 'free';
     game.ui.toast(
-      event.detail === 'free'
-        ? 'Свободная камера: обзор пальцем/мышью.'
-        : 'Камера снова следует за движением.'
+      free ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.' : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
     );
+    $('#cameraMode').classList.toggle('camera-free', free);
   });
+  $('#cameraMode').classList.toggle('camera-free', game.cameraController.mode === 'free');
 
-  // Быстрый поиск кооператива: выбранная глава либо любая, если включён чекбокс.
+  // Кооператив: выбор главы и вход в комнату.
+  game.ui.fillChapters(COOP_CHAPTERS, chapter => {
+    game.coopChapterId = chapter.id;
+  });
   click('#coopFind', async () => {
     await game.accountReady;
     const button = $('#coopFind');

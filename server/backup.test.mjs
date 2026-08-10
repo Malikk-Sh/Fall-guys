@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +20,7 @@ const { migrateDatabase } = require('./migrations');
 const { Accounts } = require('./accounts');
 const {
   CURRENT_SCHEMA_VERSION,
+  DEFAULT_OFFSITE_SENTINEL,
   createBackup,
   restoreDatabaseFile,
   verifyBackup
@@ -23,9 +32,17 @@ function fixture() {
   const databaseFile = join(dir, 'game.db');
   const backupDir = join(dir, 'backups');
   const statusFile = join(backupDir, 'status.json');
+  mkdirSync(backupDir, { recursive: true });
   const db = openDatabase(databaseFile);
   migrateDatabase(db, { now: 100 });
   return { dir, databaseFile, backupDir, statusFile, db };
+}
+
+function mountedOffsite(root) {
+  const offsiteDir = join(root, 'remote-mounted-storage');
+  mkdirSync(offsiteDir, { recursive: true });
+  writeFileSync(join(offsiteDir, DEFAULT_OFFSITE_SENTINEL), 'wobble offsite mount\n');
+  return offsiteDir;
 }
 
 test('live WAL database produces a verified snapshot plus retention tiers and offsite copy', () => {
@@ -40,7 +57,7 @@ test('live WAL database produces a verified snapshot plus retention tiers and of
       revives: 2,
       completedAt: 200
     });
-    const offsiteDir = join(f.dir, 'remote-mounted-storage');
+    const offsiteDir = mountedOffsite(f.dir);
     const now = Date.UTC(2026, 7, 10, 12, 0, 0);
 
     const result = createBackup({
@@ -53,8 +70,14 @@ test('live WAL database produces a verified snapshot plus retention tiers and of
 
     assert.equal(verifyBackup(result.backupFile).schemaVersion, CURRENT_SCHEMA_VERSION);
     const copy = new DatabaseSync(result.backupFile);
-    assert.equal(copy.prepare('SELECT display_name FROM accounts WHERE id = ?').get(player.id).display_name, 'Backup Player');
-    assert.equal(copy.prepare('SELECT COUNT(*) AS count FROM achievements WHERE account_id = ?').get(player.id).count, 2);
+    assert.equal(
+      copy.prepare('SELECT display_name FROM accounts WHERE id = ?').get(player.id).display_name,
+      'Backup Player'
+    );
+    assert.equal(
+      copy.prepare('SELECT COUNT(*) AS count FROM achievements WHERE account_id = ?').get(player.id).count,
+      2
+    );
     copy.close();
 
     for (const tier of ['hourly', 'daily', 'weekly', 'monthly']) {
@@ -154,29 +177,68 @@ test('verification rejects corruption and a database from a newer schema', () =>
   }
 });
 
-test('health reports local and required offsite backup age without leaking file paths', () => {
+test('missing remote mount never becomes a fake offsite directory on the VPS', () => {
+  const f = fixture();
+  try {
+    const now = 3_000_000;
+    const missingMount = join(f.dir, 'mount-disappeared');
+    const result = createBackup({
+      databaseFile: f.databaseFile,
+      backupDir: f.backupDir,
+      statusFile: f.statusFile,
+      offsiteDir: missingMount,
+      now
+    });
+
+    assert.equal(existsSync(result.backupFile), true, 'local verified backup still succeeds');
+    assert.equal(existsSync(missingMount), false, 'backup code must not mkdir a missing remote mountpoint');
+    assert.equal(result.status.offsite.lastSuccessAt, null);
+    assert.equal(result.status.lastFailureAt, now);
+
+    const health = backupHealthStatus({
+      databaseFile: f.databaseFile,
+      backupDir: f.backupDir,
+      statusFile: f.statusFile,
+      offsiteDir: missingMount,
+      requireOffsite: true,
+      now
+    });
+    assert.equal(health.available, true);
+    assert.equal(health.offsite.available, false);
+    assert.equal(health.offsite.stale, true);
+    assert.equal(health.stale, true);
+    assert.equal(JSON.stringify(health).includes(f.dir), false, 'public health must not expose internal paths');
+  } finally {
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('health checks timestamp and actual tracked files without leaking internal errors or paths', () => {
   const f = fixture();
   try {
     const now = 10_000_000;
-    writeFileSync(
-      f.statusFile,
-      JSON.stringify({
-        version: 1,
-        local: { lastSuccessAt: now - 30_000, integrity: 'ok', schemaVersion: CURRENT_SCHEMA_VERSION, bytes: 123 },
-        offsite: {
-          configured: true,
-          lastSuccessAt: now - 200_000,
-          integrity: 'ok',
-          schemaVersion: CURRENT_SCHEMA_VERSION,
-          bytes: 123
-        }
-      })
-    );
+    const offsiteDir = mountedOffsite(f.dir);
+    createBackup({
+      databaseFile: f.databaseFile,
+      backupDir: f.backupDir,
+      statusFile: f.statusFile,
+      offsiteDir,
+      now
+    });
+    const stored = JSON.parse(readFileSync(f.statusFile, 'utf8'));
+    stored.local.lastSuccessAt = now - 30_000;
+    stored.offsite.lastSuccessAt = now - 200_000;
+    stored.lastFailureAt = now - 1_000;
+    stored.lastError = `private filesystem path: ${f.dir}/secret`;
+    stored.offsite.lastError = `private remote path: ${offsiteDir}`;
+    writeFileSync(f.statusFile, JSON.stringify(stored));
+
     const fresh = backupHealthStatus({
       databaseFile: f.databaseFile,
       backupDir: f.backupDir,
       statusFile: f.statusFile,
-      offsiteDir: join(f.dir, 'remote'),
+      offsiteDir,
       requireOffsite: true,
       localMaxAgeSeconds: 60,
       offsiteMaxAgeSeconds: 300,
@@ -186,21 +248,24 @@ test('health reports local and required offsite backup age without leaking file 
     assert.equal(fresh.ageSeconds, 30);
     assert.equal(fresh.offsite.ageSeconds, 200);
     assert.equal(backupFresh(fresh), true);
-    assert.equal(JSON.stringify(fresh).includes(f.dir), false, 'health не раскрывает пути файловой системы');
+    assert.equal(JSON.stringify(fresh).includes(f.dir), false);
+    assert.equal(Object.hasOwn(fresh, 'lastError'), false);
+    assert.equal(Object.hasOwn(fresh.offsite, 'lastError'), false);
 
-    const stale = backupHealthStatus({
+    rmSync(join(f.backupDir, stored.local.file));
+    const missingLocal = backupHealthStatus({
       databaseFile: f.databaseFile,
       backupDir: f.backupDir,
       statusFile: f.statusFile,
-      offsiteDir: join(f.dir, 'remote'),
+      offsiteDir,
       requireOffsite: true,
-      localMaxAgeSeconds: 10,
-      offsiteMaxAgeSeconds: 100,
+      localMaxAgeSeconds: 60,
+      offsiteMaxAgeSeconds: 300,
       now
     });
-    assert.equal(stale.stale, true);
-    assert.equal(stale.offsite.stale, true);
-    assert.equal(backupFresh(stale), false);
+    assert.equal(missingLocal.available, false);
+    assert.equal(missingLocal.stale, true);
+    assert.equal(backupFresh(missingLocal), false);
   } finally {
     f.db.close();
     rmSync(f.dir, { recursive: true, force: true });

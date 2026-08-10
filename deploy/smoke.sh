@@ -49,8 +49,8 @@ cd "$APP_DIR"
 /usr/bin/node - "$BASE_URL" "$ORIGIN" <<'NODE'
 const WebSocket = require('ws');
 const [base, origin] = process.argv.slice(2);
-const wsUrl = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-const socket = new WebSocket(wsUrl, { headers: { Origin: origin } });
+const wsBase = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:').replace(/\/$/, '');
+const socket = new WebSocket(`${wsBase}/ws`, { headers: { Origin: origin } });
 let opened = false;
 const timeout = setTimeout(() => {
   socket.terminate();

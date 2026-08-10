@@ -36,15 +36,23 @@ BACKUP="$(readlink -f "$BACKUP")"
 say "Verify requested backup"
 /usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$BACKUP"
 
+# Prepare all rollback storage before touching the running service.
+mkdir -p "$BACKUP_DIR/restore-rollback"
+chown "$APP_USER:$APP_GROUP" "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
+chmod 700 "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
+
 say "Stop application"
 systemctl stop wobble
-mkdir -p "$BACKUP_DIR/restore-rollback"
 rollback=""
 if [ -f "$DB" ]; then
   rollback="$BACKUP_DIR/restore-rollback/pre-restore-$(date -u +%Y%m%dT%H%M%SZ)-$$.db"
-  /usr/bin/node "$APP_DIR/server/backupCli.mjs" snapshot "$DB" "$rollback"
-  chown "$APP_USER:$APP_GROUP" "$rollback"
-  chmod 600 "$rollback"
+  if ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" snapshot "$DB" "$rollback" ||
+    ! chown "$APP_USER:$APP_GROUP" "$rollback" ||
+    ! chmod 600 "$rollback"; then
+    warn "pre-restore rollback snapshot failed; original database has not been replaced"
+    systemctl start wobble || warn "could not restart the untouched server"
+    exit 1
+  fi
   echo "rollback snapshot: $rollback"
 fi
 
@@ -56,10 +64,13 @@ rollback_previous() {
     return 1
   fi
   systemctl stop wobble >/dev/null 2>&1 || true
-  /usr/bin/node "$APP_DIR/server/backupCli.mjs" restore-file "$rollback" "$DB"
-  chown "$APP_USER:$APP_GROUP" "$DB"
-  chmod 600 "$DB"
-  systemctl start wobble
+  if ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" restore-file "$rollback" "$DB"; then
+    warn "automatic rollback restore-file failed"
+    return 1
+  fi
+  chown "$APP_USER:$APP_GROUP" "$DB" || return 1
+  chmod 600 "$DB" || return 1
+  systemctl start wobble || return 1
   sleep 2
   systemctl start wobble-backup.service >/dev/null 2>&1 || true
   bash "$APP_DIR/deploy/smoke.sh" --require-backup >/dev/null 2>&1 || true
@@ -68,12 +79,12 @@ rollback_previous() {
 }
 
 say "Install restored database atomically"
-if ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" restore-file "$BACKUP" "$DB"; then
-  rollback_previous "restore-file failed" || true
+if ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" restore-file "$BACKUP" "$DB" ||
+  ! chown "$APP_USER:$APP_GROUP" "$DB" ||
+  ! chmod 600 "$DB"; then
+  rollback_previous "restored database could not be installed safely" || true
   exit 1
 fi
-chown "$APP_USER:$APP_GROUP" "$DB"
-chmod 600 "$DB"
 
 say "Start server and migrate if backup schema is older"
 if ! systemctl start wobble; then

@@ -447,13 +447,12 @@ if [ "$SHARED_HTTPS_443" = "1" ] && [ "$have_cert" -eq 1 ]; then
 
   node - "$DOMAIN" <<'NODE'
 const WebSocket = require('ws');
+const loopbackLookup = require('./deploy/loopbackLookup.cjs');
 const domain = process.argv[2];
 const socket = new WebSocket(`wss://${domain}/ws`, {
   headers: { Origin: `https://${domain}` },
   servername: domain,
-  lookup(_hostname, _options, callback) {
-    callback(null, '127.0.0.1', 4);
-  },
+  lookup: loopbackLookup,
 });
 let opened = false;
 const timer = setTimeout(() => {

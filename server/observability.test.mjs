@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { loadTargets, httpBaseFromWebSocket } from './loadProbeConfig.mjs';
+import { validateMessage } from '../shared/validation.js';
+import { loadStateMessage, loadTargets, httpBaseFromWebSocket } from './loadProbeConfig.mjs';
 
 const require = createRequire(import.meta.url);
 const { buildIdentity, normalizeCommit } = require('./buildInfo.js');
@@ -62,6 +63,13 @@ test('load targets разделяют WebSocket, HTTP и PID наблюдате�
     }
   );
   assert.equal(loadTargets({ WOBBLE_URL: 'ws://legacy.example/ws' }).httpUrl, 'http://legacy.example');
+});
+
+test('load probe snapshots соответствуют текущей state-схеме протокола', () => {
+  const message = loadStateMessage({ matchId: 'load-match', sequence: 17, z: -24.5 });
+  assert.deepEqual(validateMessage(message), { ok: true });
+  assert.equal(message.sequence, 17);
+  assert.equal(message.state.z, -24.5);
 });
 
 test('Energy Core metrics считаются только по принятому сервером lifecycle', () => {

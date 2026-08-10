@@ -59,6 +59,9 @@ const ERROR_TEXT = {
   INVALID_MESSAGE: 'Игра отправила некорректный запрос. Обновите страницу.',
   PROTOCOL_ERROR: 'Соединение закрыто из-за ошибок протокола.',
   VERSION_MISMATCH: 'Версия игры устарела. Обновите страницу.',
+  AUTH_FAILED: 'Не удалось подтвердить аккаунт для сетевой игры.',
+  AUTH_ALREADY_BOUND: 'Аккаунт уже привязан к этому соединению.',
+  AUTH_UNAVAILABLE: 'Авторизация сети временно недоступна.',
   ROOM_NOT_FOUND: 'Комната не найдена. Проверьте код.',
   ROOM_FULL: 'В комнате нет свободных мест.',
   MATCH_ALREADY_STARTED: 'Игра в этой комнате уже началась.',
@@ -110,6 +113,8 @@ export class NetworkManager {
     this.pendingWelcome = null;
     this.resumeInFlight = false;
     this.resumeToken = null;
+    this.authInFlight = false;
+    this.authRetryCount = 0;
     this.handshakeReady = false;
     // Клиент старее сервера: говорить с ним бессмысленно, страницу надо обновить.
     this.versionMismatch = false;
@@ -222,16 +227,17 @@ export class NetworkManager {
       this.pingCount = 0;
       this.lastPing = 0;
       this.gapTimes.length = 0;
+      this.handshakeReady = false;
+      this.authInFlight = false;
+      this.authRetryCount = 0;
       this.setLinkState(LINK_STATE.ONLINE);
-      this.ui.status('Подключено — создайте комнату или войдите по коду.');
-      // Если у нас есть токен прошлой сессии, сначала пробуем вернуться в свою комнату — и до
-      // ответа сервера не отправляем ничего, кроме самого запроса на возврат. Иначе очередь
-      // уйдёт от имени игрока, которого в комнате ещё нет.
+      this.ui.status('Подключено — подтверждаем сетевую сессию…');
+      // Возврат в уже существующую комнату сильнее нового WST: resume token уже связан сервером
+      // с конкретным player/account. Только если возвращаться некуда, делаем отдельный socket-auth.
       this.resumeToken = this.sessionToken;
       this.resumeInFlight = !!this.resumeToken;
-      this.handshakeReady = !this.resumeInFlight;
       if (this.resumeInFlight) this.raw({ type: C2S.RESUME, token: this.resumeToken });
-      else this.flushQueue();
+      else this.authenticateSocket();
     });
 
     this.ws.addEventListener('message', event => {
@@ -250,6 +256,8 @@ export class NetworkManager {
 
     this.ws.addEventListener('close', () => {
       if (this.intentionalClose) return;
+      this.authInFlight = false;
+      this.handshakeReady = false;
       this.emit('connectionLost', {});
       // После предупреждения о перезапуске счётчик попыток начинаем заново: сервер поднимется
       // через несколько секунд, а исчерпанные попытки прошлого обрыва отправили бы игрока прямо
@@ -268,17 +276,43 @@ export class NetworkManager {
       this.rttSamples.reduce((sum, value) => sum + Math.abs(value - mean), 0) / this.rttSamples.length;
   }
 
-  // Принять личность, выданную сервером новому сокету. Вызывается либо сразу (обычное
-  // подключение), либо после неудачного восстановления сессии.
+  async authenticateSocket({ fresh = false } = {}) {
+    const socket = this.ws;
+    if (!socket || socket.readyState !== WebSocket.OPEN || this.resumeInFlight) return;
+    this.authInFlight = true;
+
+    let ticket = null;
+    try {
+      ticket = await this.ui.accountToken?.({ fresh });
+    } catch {
+      ticket = null;
+    }
+
+    // Пока ждали HttpOnly session, соединение могло уже смениться. Ticket не отправляем в другой
+    // сокет: тот сам запросит свежий WST и тем самым сохранит одноразовую семантику.
+    if (socket !== this.ws || socket.readyState !== WebSocket.OPEN) return;
+    if (!ticket) {
+      this.authInFlight = false;
+      this.authRetryCount = 0;
+      this.adoptWelcome();
+      return;
+    }
+    this.raw({ type: C2S.AUTH, ticket });
+  }
+
+  // Принять личность, выданную сервером новому сокету. Вызывается после socket-auth либо когда
+  // аккаунт офлайн/отсутствует и соединение сознательно остаётся анонимным.
   adoptWelcome() {
     const welcome = this.pendingWelcome;
     this.pendingWelcome = null;
     if (!welcome) return;
     this.id = welcome.id;
     if (welcome.token) this.saveSession(welcome.token);
+    this.authInFlight = false;
     this.handshakeReady = true;
     // Рукопожатие завершилось — соединение рабочее, счётчик попыток можно обнулить.
     this.reconnectAttempt = 0;
+    this.ui.status('Подключено — создайте комнату или войдите по коду.');
     this.flushQueue();
   }
 
@@ -302,10 +336,17 @@ export class NetworkManager {
           return;
         }
         this.pendingWelcome = { id: message.id, token: message.token };
-        // Пока восстановление в полёте, эта личность — запасная: настоящую пришлёт `resumed`.
-        if (!this.resumeInFlight) this.adoptWelcome();
+        // Пока resume или AUTH в полёте, hello — только транспортная личность. Если ни того, ни
+        // другого нет (анонимный/offline account), handshake можно завершить сразу.
+        if (!this.resumeInFlight && !this.authInFlight) this.adoptWelcome();
         // Грубая начальная оценка: настоящие замеры приедут с первыми pong.
         this.clock.seed(message.serverTime);
+        break;
+
+      case S2C.AUTHENTICATED:
+        this.authInFlight = false;
+        this.authRetryCount = 0;
+        this.adoptWelcome();
         break;
 
       case S2C.PONG:
@@ -361,6 +402,8 @@ export class NetworkManager {
         this.pendingWelcome = null;
         this.resumeInFlight = false;
         this.resumeToken = null;
+        this.authInFlight = false;
+        this.authRetryCount = 0;
         this.handshakeReady = true;
         this.reconnectAttempt = 0;
         this.setLinkState(LINK_STATE.ONLINE);
@@ -384,7 +427,9 @@ export class NetworkManager {
         this.finishSentFor = null;
         // Транзиентные пакеты прошлой жизни отправлять некуда и незачем.
         this.queue.length = 0;
-        this.adoptWelcome();
+        // Старый room session ничего не доказал. Перед новой комнатой подтверждаем HttpOnly account
+        // свежим одноразовым WST, а не продолжаем от временного hello как будто auth уже был.
+        this.authenticateSocket({ fresh: true });
         if (hadSession) this.emit('sessionExpired', message);
         break;
       }
@@ -400,6 +445,7 @@ export class NetworkManager {
         this.saveSession(null);
         this.resumeToken = null;
         this.resumeInFlight = false;
+        this.authInFlight = false;
         this.matchId = null;
         this.roomCode = null;
         this.finishSentFor = null;
@@ -408,6 +454,30 @@ export class NetworkManager {
         break;
 
       case S2C.ERROR:
+        if (this.authInFlight && message.code === 'AUTH_FAILED' && this.authRetryCount < 1) {
+          // WST мог быть поглощён соединением, которое оборвалось ровно между AUTH и ответом.
+          // HttpOnly session всё ещё жива: один раз просим новый ticket и не replay-им старый.
+          this.authRetryCount += 1;
+          this.authInFlight = false;
+          this.authenticateSocket({ fresh: true });
+          return;
+        }
+        if (this.authInFlight && message.code === 'AUTH_ALREADY_BOUND') {
+          // Сервер уже связал socket с account; повторный AUTH ничего не должен менять.
+          this.authInFlight = false;
+          this.authRetryCount = 0;
+          this.adoptWelcome();
+          break;
+        }
+        if (this.authInFlight && ['AUTH_FAILED', 'AUTH_UNAVAILABLE'].includes(message.code)) {
+          this.authInFlight = false;
+          this.authRetryCount = 0;
+          this.ui.error(ERROR_TEXT[message.code] || 'Не удалось подтвердить сетевую сессию.');
+          this.emit('authFailed', message);
+          // Аккаунт не подтверждён — но гостевая сеть остаётся доступной, как и до Auth V2.
+          this.adoptWelcome();
+          break;
+        }
         this.ui.error(ERROR_TEXT[message.code] || message.message || 'Сетевой запрос не удался.');
         break;
     }
@@ -466,26 +536,24 @@ export class NetworkManager {
     return false;
   }
 
-  createRoom({ name, playerId, accountToken, difficulty, mode }) {
+  createRoom({ name, playerId, difficulty, mode }) {
     this.send(C2S.CREATE_ROOM, {
       name,
       playerId,
-      accountToken,
       difficulty,
       mode,
       protocolVersion: PROTOCOL_VERSION
     });
   }
 
-  joinRoom({ name, playerId, accountToken, code }) {
-    this.send(C2S.JOIN_ROOM, { name, playerId, accountToken, code, protocolVersion: PROTOCOL_VERSION });
+  joinRoom({ name, playerId, code }) {
+    this.send(C2S.JOIN_ROOM, { name, playerId, code, protocolVersion: PROTOCOL_VERSION });
   }
 
-  findCoop({ name, playerId, accountToken, chapterId = '' }) {
+  findCoop({ name, playerId, chapterId = '' }) {
     this.send(C2S.FIND_COOP, {
       name,
       playerId,
-      accountToken,
       chapterId,
       protocolVersion: PROTOCOL_VERSION
     });
@@ -579,6 +647,8 @@ export class NetworkManager {
     this.pendingWelcome = null;
     this.resumeInFlight = false;
     this.resumeToken = null;
+    this.authInFlight = false;
+    this.authRetryCount = 0;
     this.handshakeReady = false;
     this.rttSamples.length = 0;
     this.setLinkState(LINK_STATE.OFFLINE);

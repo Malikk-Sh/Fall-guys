@@ -12,7 +12,15 @@ function stateFor(room) {
   return room.signatureMetricsState;
 }
 
-function trackSignatureMetrics({ room, player, message, result, gameplay, dimensions, now = Date.now() } = {}) {
+function trackSignatureMetrics({
+  room,
+  player,
+  message,
+  result,
+  gameplay,
+  dimensions,
+  now = Date.now()
+} = {}) {
   if (!room || !result?.ok || !result.relay?.signature || !gameplay || typeof dimensions !== 'function') {
     return false;
   }

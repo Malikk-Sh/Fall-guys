@@ -49,6 +49,8 @@ const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
 const { backupHealthStatus } = require('./backupStatus');
+const { buildIdentity } = require('./buildInfo');
+const { trackSignatureMetrics } = require('./signatureMetrics');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -206,6 +208,8 @@ eventLoopTimer.unref();
 const PRODUCT_EVENT_NAMES = Object.freeze([
   'roomCreated',
   'roomJoined',
+  'matchmakingStarted',
+  'matchmakingMatched',
   'matchStarted',
   'checkpointReached',
   'playerDowned',
@@ -225,6 +229,7 @@ function trackEvent(counters, name, amount = 1) {
 }
 
 const productEvents = createEventCounters();
+const build = buildIdentity();
 
 function loadStatus({ lagMs = eventLoopWindowP95Ms, memory = process.memoryUsage() } = {}) {
   const normalizedLag = Number.isFinite(lagMs) ? Math.round(lagMs * 10) / 10 : 0;
@@ -281,14 +286,17 @@ const metrics = {
 const health = () => ({
   ok: true,
   service: 'wobble-rush-3d',
-  version: '2.2.0',
+  version: build.version,
+  commit: build.commit,
   protocolVersion: PROTOCOL_VERSION,
+  startedAt: build.startedAt,
   rooms: rooms.size,
   players: [...rooms.values()].reduce((sum, room) => sum + room.players.size, 0),
   sessions: sessions.size,
   capacity: capacityStatus(),
   load: loadStatus(),
   events: productEvents,
+  matchmaking: matchmakingStatus(),
   uptime: Math.round(process.uptime()),
   backup: backupHealthStatus({ databaseFile }),
   metrics
@@ -477,6 +485,19 @@ const MAX_PLAYERS = { [GAME_MODE.RACE]: 16, [GAME_MODE.COOP]: 2 };
 // Простая FIFO-очередь для одного процесса. Запись живёт только пока открыт сокет и игрок не
 // находится в комнате; регионы и MMR здесь намеренно отсутствуют.
 const coopMatchmaking = [];
+
+function matchmakingStatus({ queue = coopMatchmaking, counters = productEvents, now = Date.now() } = {}) {
+  let oldestQueuedAt = Infinity;
+  for (const item of queue) {
+    if (Number.isFinite(item?.queuedAt)) oldestQueuedAt = Math.min(oldestQueuedAt, item.queuedAt);
+  }
+  return {
+    waiting: queue.length,
+    oldestWaitMs: Number.isFinite(oldestQueuedAt) ? Math.max(0, now - oldestQueuedAt) : 0,
+    matchedSinceStart: Number(counters.matchmakingMatched || 0)
+  };
+}
+
 const ROOM_TTL = 45 * 60 * 1000;
 const COUNTDOWN_MS = 2800;
 
@@ -1771,6 +1792,7 @@ wss.on('connection', (ws, req) => {
       // Отклонённое кооп-действие — чаще всего рассинхрон на долю секунды, а не обман,
       // поэтому штрафа здесь нет: игрока не за что наказывать.
       if (!result.ok) return;
+      trackSignatureMetrics({ room, player, message, result, gameplay, dimensions: dims });
       if (result.relay) {
         if (result.relay.action === 'revive') {
           room.coopRevives = (room.coopRevives || 0) + 1;
@@ -2135,7 +2157,9 @@ function shutdown(signal, { exitProcess = true } = {}) {
 }
 
 if (require.main === module) {
-  server.listen(port, host, () => log('info', 'server_started', { port, host }));
+  server.listen(port, host, () =>
+    log('info', 'server_started', { port, host, version: build.version, commit: build.commit })
+  );
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
@@ -2165,6 +2189,8 @@ module.exports = {
   positiveInt,
   capacityStatus,
   loadStatus,
+  health,
+  matchmakingStatus,
   rotateEventLoopWindow,
   EVENT_LOOP_WINDOW_MS,
   createEventCounters,

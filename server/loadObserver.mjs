@@ -15,7 +15,9 @@ const seconds = Math.max(1, Number(process.argv[2] || 30));
 const pid = serverPid || detectServerPid();
 
 if (!pid) {
-  throw new Error('Не найден PID Wobble. Передайте WOBBLE_SERVER_PID или запустите production server/bootstrap.js.');
+  throw new Error(
+    'Не найден PID Wobble. Передайте WOBBLE_SERVER_PID или запустите production server/bootstrap.js.'
+  );
 }
 
 const first = await pidStat(pid);

@@ -116,14 +116,18 @@ clearInterval(timer);
 const after = await health();
 
 console.log('\n--- РЕЗУЛЬТАТ ГЕНЕРАТОРА ---');
-console.log(`build:                 ${after.version} · ${after.commit || 'unknown'} · protocol ${after.protocolVersion}`);
+console.log(
+  `build:                 ${after.version} · ${after.commit || 'unknown'} · protocol ${after.protocolVersion}`
+);
 console.log(`игроков онлайн:        ${after.players}`);
 console.log(`комнат:                ${after.rooms}`);
 console.log(`matchmaking waiting:   ${after.matchmaking?.waiting ?? '—'}`);
 console.log(`event-loop p95:        ${after.load?.eventLoopP95Ms ?? '—'} мс`);
 console.log(`RSS по health:         ${after.load?.rssMb ?? '—'} МБ`);
 console.log(`некорректных сообщений: ${after.metrics.invalidMessages - before.metrics.invalidMessages}`);
-console.log(`сбоев отправки:         ${after.metrics.socketSendFailures - before.metrics.socketSendFailures}`);
+console.log(
+  `сбоев отправки:         ${after.metrics.socketSendFailures - before.metrics.socketSendFailures}`
+);
 console.log(`ошибок обработчика:     ${after.metrics.handlerErrors - before.metrics.handlerErrors}`);
 
 for (const [host, guest] of rooms) {

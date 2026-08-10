@@ -20,20 +20,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Repair query-all helper if needed
+      - name: Repair query-all helper
         run: node tools/fix-social-ui-dollar.cjs
-      - name: Apply narrow patches
-        run: node tools/apply-social-cosmetics.cjs
-      - name: Format touched files
-        run: npx prettier --write server/index.js client/main.js client/ui/UI.js client/styles.css
-      - name: Commit production changes
+      - name: Format repaired UI
+        run: npx prettier --write client/ui/UI.js
+      - name: Commit repair
         shell: bash
         run: |
-          if git diff --quiet -- server/index.js client/main.js client/ui/UI.js client/styles.css; then
+          if git diff --quiet -- client/ui/UI.js; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/index.js client/main.js client/ui/UI.js client/styles.css
+          git add client/ui/UI.js
           git commit -m "Repair social cosmetics UI helper"
           git push origin HEAD:agent/social-cosmetics

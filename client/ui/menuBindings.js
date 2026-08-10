@@ -28,7 +28,6 @@ export function bindMenu(game) {
     net.createRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       difficulty: $('#difficulty').value
     });
   });
@@ -38,7 +37,6 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.playerName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       code: $('#code').value.trim().toUpperCase()
     });
   });
@@ -168,18 +166,14 @@ export function bindMenu(game) {
   // Режим камеры переключается внутри контроллера (клавиша C или кнопка на экране), а показать
   // это должен интерфейс. Событие вместо прямого вызова — чтобы контроллер камеры не знал про UI.
   addEventListener('camera-mode-change', event => {
-    const free = event.detail === 'free';
     game.ui.toast(
-      free ? 'КАМЕРА: СВОБОДНАЯ — смотрит, куда повернули.' : 'КАМЕРА: СЛЕЖЕНИЕ — сама встаёт за спину.'
+      event.detail === 'free'
+        ? 'Свободная камера: обзор пальцем/мышью.'
+        : 'Камера снова следует за движением.'
     );
-    $('#cameraMode').classList.toggle('camera-free', free);
   });
-  $('#cameraMode').classList.toggle('camera-free', game.cameraController.mode === 'free');
 
-  // Кооператив: выбор главы и вход в комнату.
-  game.ui.fillChapters(COOP_CHAPTERS, chapter => {
-    game.coopChapterId = chapter.id;
-  });
+  // Быстрый поиск кооператива: выбранная глава либо любая, если включён чекбокс.
   click('#coopFind', async () => {
     await game.accountReady;
     const button = $('#coopFind');
@@ -197,7 +191,6 @@ export function bindMenu(game) {
     net.findCoop({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       chapterId: $('#coopAnyChapter').checked ? '' : game.ui.coopChapter()
     });
   });
@@ -207,7 +200,6 @@ export function bindMenu(game) {
     net.createRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       mode: GAME_MODE.COOP,
       difficulty: game.ui.coopChapter()
     });
@@ -218,7 +210,6 @@ export function bindMenu(game) {
     net.joinRoom({
       name: game.ui.coopName(),
       playerId: game.ui.playerId(),
-      accountToken: game.ui.accountToken(),
       code: $('#coopCode').value.trim().toUpperCase()
     });
   });

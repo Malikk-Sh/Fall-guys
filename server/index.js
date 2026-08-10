@@ -87,6 +87,7 @@ app.use((_req, res, next) => {
     [
       "default-src 'self'",
       ["script-src 'self'", ...INLINE_SCRIPT_HASHES].join(' '),
+      "worker-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data:",
       "connect-src 'self' ws: wss:",
@@ -111,7 +112,7 @@ const NO_CACHE = 'no-cache, must-revalidate';
 app.use(
   express.static(clientPath, {
     setHeaders: (res, file) => {
-      if (/\.(js|css|html)$/.test(file)) res.setHeader('Cache-Control', NO_CACHE);
+      if (/\.(js|css|html|webmanifest)$/.test(file)) res.setHeader('Cache-Control', NO_CACHE);
     }
   })
 );

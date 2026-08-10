@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Wobble Rush">
+  <rect width="512" height="512" fill="#4b35b7"/>
+  <circle cx="256" cy="225" r="102" fill="#ff4f91"/>
+  <ellipse cx="256" cy="202" rx="68" ry="42" fill="#dffcff"/>
+  <ellipse cx="232" cy="201" rx="15" ry="21" fill="#27315f"/><ellipse cx="280" cy="201" rx="15" ry="21" fill="#27315f"/>
+  <path d="M232 326v70M280 326v70" stroke="#ff4f91" stroke-width="34" stroke-linecap="round"/>
+  <path d="M351 111l10 24 24 10-24 10-10 24-10-24-24-10 24-10z" fill="#fff7c7"/>
+</svg>

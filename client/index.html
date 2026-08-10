@@ -4,6 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
     <meta name="theme-color" content="#4b35b7" />
+    <meta name="application-name" content="Wobble Rush" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/icon-192.svg" />
     <meta
       name="description"
       content="Wobble Rush 3D — яркая полоса препятствий для компьютеров и мобильных устройств."
@@ -16,6 +21,7 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236546d8'/%3E%3Ccircle cx='16' cy='14' r='7' fill='%23ff4f91'/%3E%3Cellipse cx='16' cy='12' rx='4.4' ry='2.6' fill='%23dffcff'/%3E%3Crect x='13' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3Crect x='16.6' y='21' width='2.4' height='6' rx='1.2' fill='%23ff4f91'/%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="pwa.css" />
     <!--
       Import map вместо сборщика. Дополнения Three.js (постобработка и её шейдеры) импортируют
       движок по голому имени 'three'. Без этой карты браузер не смог бы их разрешить, а если бы
@@ -36,6 +42,15 @@
     <div id="vignette"></div>
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
     <div id="error" class="toast toast-error hidden" role="alert"></div>
+    <div id="offlineBanner" class="pwa-connectivity hidden" role="status" aria-live="polite">
+      <b>НЕТ СЕТИ</b><span>Офлайн-режим активен · сетевые функции восстановятся автоматически.</span>
+    </div>
+    <div id="updateBanner" class="pwa-update hidden" role="status" aria-live="polite">
+      <div class="pwa-update-copy">
+        <b>ДОСТУПНО ОБНОВЛЕНИЕ</b><span>Новая версия не перезагрузит игру посреди забега.</span>
+      </div>
+      <button id="applyUpdate" class="button button-secondary" type="button">ОБНОВИТЬ ПОСЛЕ ЗАБЕГА</button>
+    </div>
 
     <main id="menu" class="screen screen-menu">
       <div class="brand" aria-label="Wobble Rush 3D">
@@ -176,6 +191,7 @@
         </div>
 
         <div class="menu-footer">
+          <button id="installApp" class="icon-button hidden" type="button">УСТАНОВИТЬ</button>
           <button id="quality" class="icon-button" aria-label="Изменить качество графики">
             АВТО КАЧЕСТВО
           </button>
@@ -413,5 +429,6 @@
       <strong>СТРОИМ НЕБЕСНЫЙ ПАРК…</strong><span>Настраиваем физику забега</span>
     </div>
     <script type="module" src="main.js"></script>
+    <script type="module" src="pwa-entry.js"></script>
   </body>
 </html>

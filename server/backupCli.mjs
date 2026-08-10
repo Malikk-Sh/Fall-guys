@@ -6,9 +6,11 @@ const {
   CURRENT_SCHEMA_VERSION,
   DEFAULT_OFFSITE_SENTINEL,
   createBackup,
+  createLegacySnapshot,
   createSnapshot,
   restoreDatabaseFile,
-  verifyBackup
+  verifyBackup,
+  verifyLegacyBackup
 } = require('./backup');
 const { backupFresh, backupHealthStatus } = require('./backupStatus');
 
@@ -34,6 +36,8 @@ function usage() {
 Commands:
   create
   verify <backup.db>
+  legacy-check <database.db>
+  legacy-snapshot <source.db> <output.db>
   snapshot <source.db> <output.db>
   restore-file <backup.db> <target.db>
   status
@@ -78,6 +82,25 @@ async function main() {
   if (command === 'verify') {
     if (!args[0]) throw new Error('verify requires a backup path');
     console.log(JSON.stringify({ ok: true, file: path.resolve(args[0]), ...verifyBackup(args[0]) }));
+    return;
+  }
+
+  if (command === 'legacy-check') {
+    if (!args[0]) throw new Error('legacy-check requires a database path');
+    console.log(
+      JSON.stringify({ ok: true, file: path.resolve(args[0]), ...verifyLegacyBackup(args[0]) })
+    );
+    return;
+  }
+
+  if (command === 'legacy-snapshot') {
+    if (!args[0] || !args[1]) throw new Error('legacy-snapshot requires source and output paths');
+    console.log(
+      JSON.stringify({
+        ok: true,
+        ...createLegacySnapshot({ databaseFile: args[0], outputFile: args[1] })
+      })
+    );
     return;
   }
 

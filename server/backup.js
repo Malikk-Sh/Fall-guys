@@ -58,6 +58,37 @@ function verificationRows(db) {
     .map(row => String(Object.values(row)[0] || ''));
 }
 
+function verifyIntegrity(db) {
+  const integrity = verificationRows(db);
+  if (integrity.length !== 1 || integrity[0].toLowerCase() !== 'ok') {
+    throw new Error(`SQLite integrity_check failed: ${integrity.join('; ') || 'no result'}`);
+  }
+}
+
+function migrationTableExists(db) {
+  return Boolean(
+    db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
+      .get()
+  );
+}
+
+function verifyLegacyBackup(file) {
+  const target = path.resolve(String(file || ''));
+  const stat = fs.statSync(target);
+  if (!stat.isFile() || stat.size < 1) throw new Error('backup file is empty');
+
+  const db = new DatabaseSync(target);
+  try {
+    db.exec('PRAGMA query_only = ON');
+    verifyIntegrity(db);
+    if (migrationTableExists(db)) throw new Error('database already has schema_migrations table');
+    return { ok: true, integrity: 'ok', schemaVersion: 0, bytes: stat.size, legacy: true };
+  } finally {
+    db.close();
+  }
+}
+
 function verifyBackup(file, { maxSchemaVersion = CURRENT_SCHEMA_VERSION } = {}) {
   const target = path.resolve(String(file || ''));
   const stat = fs.statSync(target);
@@ -66,14 +97,8 @@ function verifyBackup(file, { maxSchemaVersion = CURRENT_SCHEMA_VERSION } = {}) 
   const db = new DatabaseSync(target);
   try {
     db.exec('PRAGMA query_only = ON');
-    const integrity = verificationRows(db);
-    if (integrity.length !== 1 || integrity[0].toLowerCase() !== 'ok') {
-      throw new Error(`SQLite integrity_check failed: ${integrity.join('; ') || 'no result'}`);
-    }
-    const hasMigrations = db
-      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
-      .get();
-    if (!hasMigrations) throw new Error('backup has no schema_migrations table');
+    verifyIntegrity(db);
+    if (!migrationTableExists(db)) throw new Error('backup has no schema_migrations table');
     const schemaVersion = Number(
       db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version || 0
     );
@@ -111,6 +136,35 @@ function createSnapshot({ databaseFile, outputFile }) {
     db.close();
   }
   return { file: output, ...verifyBackup(output) };
+}
+
+function createLegacySnapshot({ databaseFile, outputFile }) {
+  const sourceFile = ensureFileDatabase(databaseFile);
+  if (!fs.existsSync(sourceFile)) throw new Error(`database does not exist: ${sourceFile}`);
+
+  // This path exists only for a one-time transition from releases predating schema_migrations.
+  // It must never become a weaker replacement for normal verified production backups.
+  verifyLegacyBackup(sourceFile);
+
+  const output = path.resolve(String(outputFile || ''));
+  ensureDirectory(path.dirname(output));
+  if (fs.existsSync(output)) throw new Error(`backup already exists: ${output}`);
+
+  const db = new DatabaseSync(sourceFile);
+  try {
+    db.exec('PRAGMA busy_timeout = 5000');
+    db.exec(`VACUUM INTO ${sqlString(output)}`);
+    return { file: output, ...verifyLegacyBackup(output) };
+  } catch (error) {
+    try {
+      fs.rmSync(output, { force: true });
+    } catch {
+      // Preserve the original SQLite error.
+    }
+    throw error;
+  } finally {
+    db.close();
+  }
 }
 
 function isoWeekKey(now) {
@@ -354,7 +408,9 @@ module.exports = {
   DEFAULT_OFFSITE_SENTINEL,
   readStatusFile,
   writeStatusFile,
+  verifyLegacyBackup,
   verifyBackup,
+  createLegacySnapshot,
   createSnapshot,
   createBackup,
   restoreDatabaseFile,

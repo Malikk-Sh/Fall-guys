@@ -228,9 +228,40 @@ systemctl enable wobble >/dev/null
 systemctl enable wobble-backup.timer wobble-backup-watch.timer >/dev/null
 
 # Existing production DB is snapshotted before the restart can run newer migrations.
-# On first install the DB does not exist yet, and backup.sh intentionally skips this one call.
+#
+# Releases predating schema_migrations need a separate one-time path. The normal backup service
+# deliberately rejects such a database, because accepting schema-less snapshots forever would hide
+# a damaged or accidentally downgraded production DB. Here, and only here, the installer detects a
+# healthy legacy database, creates a transactionally consistent integrity-checked snapshot under a
+# dedicated pre-migration directory, and then lets the new server migrate it. The strict verified
+# backup below after startup still has to succeed before the deploy is considered healthy.
 say "Преддеплойная резервная копия"
-systemctl start wobble-backup.service
+database_file="$(
+  # shellcheck source=/dev/null
+  . /etc/wobble.env
+  printf '%s' "${LEADERBOARD_DB:-:memory:}"
+)"
+backup_root="$(
+  # shellcheck source=/dev/null
+  . /etc/wobble.env
+  printf '%s' "${BACKUP_DIR:-/var/lib/wobble/backups}"
+)"
+
+if [ "$database_file" != ":memory:" ] && [ -f "$database_file" ] &&
+  sudo -u "$APP_USER" /usr/bin/node "$APP_DIR/server/backupCli.mjs" legacy-check "$database_file" \
+    >/dev/null 2>&1; then
+  legacy_dir="${backup_root%/}/pre-migration"
+  install -d -m 0700 -o "$APP_USER" -g "$APP_USER" "$legacy_dir"
+  legacy_output="${legacy_dir}/wobble-legacy-$(date -u +%Y%m%dT%H%M%SZ)-${build_sha:0:12}-$$.db"
+  warn "обнаружена старая БД без schema_migrations — сохраняю проверенный снимок перед миграцией"
+  sudo -u "$APP_USER" /usr/bin/node "$APP_DIR/server/backupCli.mjs" legacy-snapshot \
+    "$database_file" "$legacy_output"
+  echo "legacy pre-migration backup: $legacy_output"
+else
+  # First install reaches backup.sh before the database exists; backup.sh intentionally skips it.
+  # Already migrated production databases continue to use the strict verified backup service.
+  systemctl start wobble-backup.service
+fi
 systemctl restart wobble
 
 say "Nginx"

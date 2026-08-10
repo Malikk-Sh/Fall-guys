@@ -10,9 +10,12 @@ const { networkIdentity } = require('./networkIdentity');
 
 const waitFor = (ws, type, timeout = 5_000) =>
   new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${type}`)), timeout);
+    const timer = setTimeout(() => {
+      ws.off('message', listener);
+      reject(new Error(`Timed out waiting for ${type}`));
+    }, timeout);
     const listener = raw => {
-      const message = JSON.parse(raw);
+      const message = JSON.parse(raw.toString());
       if (message.type !== type) return;
       clearTimeout(timer);
       ws.off('message', listener);
@@ -43,6 +46,7 @@ const closeClient = ws =>
   });
 
 test('real WebSocket AUTH consumes WST and room messages no longer carry credentials', async t => {
+  core.resetRateLimits();
   const auth = new AuthService({ db: core.accounts.db });
   networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
   const account = core.accounts.create('Socket Integration');
@@ -58,20 +62,20 @@ test('real WebSocket AUTH consumes WST and room messages no longer carry credent
     networkIdentity.reset();
   });
 
-  const firstHello = waitFor(first, 'hello');
-  const secondHello = waitFor(second, 'hello');
-  await Promise.all([firstHello, secondHello]);
-
+  const authReply = waitFor(first, 'authenticated');
   first.send(JSON.stringify({ type: 'auth', ticket }));
-  const authenticated = await waitFor(first, 'authenticated');
+  const authenticated = await authReply;
   assert.equal(authenticated.accountId, account.id);
 
+  const lobbyReply = waitFor(first, 'lobby');
   first.send(JSON.stringify({ type: 'create', name: 'Bound', protocolVersion: 10 }));
-  const lobby = await waitFor(first, 'lobby');
+  const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
-  assert.equal(room.players.get(authenticated.id || [...room.players.keys()][0])?.accountId ?? [...room.players.values()][0].accountId, account.id);
+  assert.ok(room);
+  assert.equal([...room.players.values()][0].accountId, account.id);
 
+  const replayReply = waitFor(second, 'error');
   second.send(JSON.stringify({ type: 'auth', ticket }));
-  const replay = await waitFor(second, 'error');
+  const replay = await replayReply;
   assert.equal(replay.code, 'AUTH_FAILED');
 });

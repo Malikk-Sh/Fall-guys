@@ -26,20 +26,32 @@ function ageSeconds(value, now) {
   return Math.max(0, Math.floor((now - timestamp) / 1000));
 }
 
-function publicEntry(entry, now, maxAgeSeconds, required) {
+function trackedFileExists(root, storedFile) {
+  if (!root || typeof storedFile !== 'string' || !storedFile.trim() || path.isAbsolute(storedFile)) return false;
+  const base = path.resolve(root);
+  const target = path.resolve(base, storedFile);
+  if (target !== base && !target.startsWith(`${base}${path.sep}`)) return false;
+  try {
+    return fs.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function publicEntry(entry, now, maxAgeSeconds, required, fileExists) {
   const age = ageSeconds(entry?.lastSuccessAt, now);
-  const available = age !== null;
+  const available = age !== null && Boolean(fileExists);
   return {
     required: Boolean(required),
     available,
     stale: Boolean(required) && (!available || age > maxAgeSeconds),
     ageSeconds: age,
     maxAgeSeconds,
-    lastSuccessAt: available ? new Date(Number(entry.lastSuccessAt)).toISOString() : null,
+    lastSuccessAt: age !== null ? new Date(Number(entry.lastSuccessAt)).toISOString() : null,
     integrity: available ? entry?.integrity || null : null,
-    schemaVersion: available && Number.isSafeInteger(Number(entry?.schemaVersion)) ? Number(entry.schemaVersion) : null,
-    bytes: available && Number.isFinite(Number(entry?.bytes)) ? Number(entry.bytes) : null,
-    lastError: typeof entry?.lastError === 'string' && entry.lastError ? entry.lastError.slice(0, 200) : null
+    schemaVersion:
+      available && Number.isSafeInteger(Number(entry?.schemaVersion)) ? Number(entry.schemaVersion) : null,
+    bytes: available && Number.isFinite(Number(entry?.bytes)) ? Number(entry.bytes) : null
   };
 }
 
@@ -57,17 +69,24 @@ function backupHealthStatus({
   now = Date.now()
 } = {}) {
   const persistent = Boolean(databaseFile && databaseFile !== ':memory:');
-  const file = path.resolve(statusFile || path.join(backupDir, 'status.json'));
+  const root = path.resolve(backupDir);
+  const file = path.resolve(statusFile || path.join(root, 'status.json'));
   const status = persistent ? readStatus(file) : null;
-  const local = publicEntry(status?.local, now, localMaxAgeSeconds, persistent);
-  const offsiteConfigured = Boolean(String(offsiteDir || '').trim() || status?.offsite?.configured);
+  const localExists = persistent && trackedFileExists(root, status?.local?.file);
+  const local = publicEntry(status?.local, now, localMaxAgeSeconds, persistent, localExists);
+
+  const offsiteRoot = String(offsiteDir || '').trim();
+  const offsiteConfigured = Boolean(offsiteRoot);
+  const offsiteExists =
+    persistent && offsiteConfigured && trackedFileExists(path.resolve(offsiteRoot), status?.offsite?.file);
   const offsite = {
     configured: offsiteConfigured,
     ...publicEntry(
       status?.offsite,
       now,
       offsiteMaxAgeSeconds,
-      persistent && Boolean(requireOffsite)
+      persistent && Boolean(requireOffsite),
+      offsiteExists
     )
   };
 
@@ -85,10 +104,6 @@ function backupHealthStatus({
       persistent && Number.isFinite(Number(status?.lastFailureAt)) && Number(status.lastFailureAt) > 0
         ? new Date(Number(status.lastFailureAt)).toISOString()
         : null,
-    lastError:
-      persistent && typeof status?.lastError === 'string' && status.lastError
-        ? status.lastError.slice(0, 200)
-        : null,
     offsite
   };
 }
@@ -101,5 +116,6 @@ module.exports = {
   DEFAULT_LOCAL_MAX_AGE_SECONDS,
   DEFAULT_OFFSITE_MAX_AGE_SECONDS,
   backupHealthStatus,
-  backupFresh
+  backupFresh,
+  trackedFileExists
 };

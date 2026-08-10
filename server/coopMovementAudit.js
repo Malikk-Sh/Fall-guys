@@ -140,7 +140,9 @@ function distance(a, b) {
 function tetherActive(room, player, state) {
   const tether = room?.spec?.mechanics?.tether;
   if (!tether || !room?.players) return false;
-  const partner = [...room.players.values()].find(item => item.id !== player.id && item.last && !item.disconnectedAt);
+  const partner = [...room.players.values()].find(
+    item => item.id !== player.id && item.last && !item.disconnectedAt
+  );
   if (!partner) return false;
   const maxLength = Number(tether.maxLength) || 11;
   return distance(state, partner.last) >= maxLength - 1.5;
@@ -244,10 +246,36 @@ function verifyCoopCheckpoint(player, spec, checkpoint, state, now = Date.now())
   return null;
 }
 
+function minimumFinishMs(spec) {
+  if (!spec?.chapterId) return 0;
+  const fromZ = spec.checkpoints.at(-1) ?? spec.start.z;
+  const distanceToFinish = Math.abs(fromZ - spec.finishZ);
+  const maxForwardSpeed = spec.mechanics?.tether ? 22 : 15.5;
+  return Math.max(350, Math.round((distanceToFinish / maxForwardSpeed) * 1000));
+}
+
+function verifyCoopFinish(player, spec, state, now = Date.now()) {
+  if (!spec?.chapterId || !state) return null;
+  if (Math.abs(state.x) > LANE_WIDTH / 2 + 1.5 || state.y < -2 || state.y > 10) {
+    return {
+      reason: 'coop-finish-region',
+      x: Math.round(state.x * 100) / 100,
+      y: Math.round(state.y * 100) / 100
+    };
+  }
+  const previousAt = player.coopLastCheckpointAt || player.matchStartedAt || now;
+  const elapsed = now - previousAt;
+  const minimum = minimumFinishMs(spec);
+  if (elapsed < minimum) return { reason: 'coop-finish-too-fast', elapsed, minimum };
+  return null;
+}
+
 module.exports = {
   auditCoopMovement,
   verifyCoopCheckpoint,
+  verifyCoopFinish,
   minimumCheckpointMs,
+  minimumFinishMs,
   checkpointWindow,
   supportAt,
   tetherActive,

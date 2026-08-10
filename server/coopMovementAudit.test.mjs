@@ -8,7 +8,9 @@ const require = createRequire(import.meta.url);
 const {
   auditCoopMovement,
   verifyCoopCheckpoint,
+  verifyCoopFinish,
   minimumCheckpointMs,
+  minimumFinishMs,
   supportAt,
   tetherActive,
   noteAuthoritativeLaunch,
@@ -112,7 +114,11 @@ test('стоять и зависать там, где в общей размет
   const player = playerAt(ground);
   room.players.set(player.id, player);
 
-  const groundRun = feed(room, player, Array.from({ length: 5 }, () => ({ ...ground })));
+  const groundRun = feed(
+    room,
+    player,
+    Array.from({ length: 5 }, () => ({ ...ground }))
+  );
   assert.equal(groundRun.findings.has('coop-off-platform'), true);
 
   resetCoopMovement(player, { full: true });
@@ -217,4 +223,20 @@ test('у каждой главы каждый checkpoint получает кон
       assert.ok(minimum < 15_000, `${chapterId}/cp${checkpoint}: minimum=${minimum}`);
     }
   }
+});
+
+test('финальный участок тоже имеет физический минимум и игровую область', () => {
+  const spec = coopSpec('ch10');
+  const player = playerAt(stateAt({ z: spec.checkpoints.at(-1) }));
+  player.coopLastCheckpointAt = START_MS;
+  assert.ok(minimumFinishMs(spec) >= 350);
+  assert.equal(
+    verifyCoopFinish(player, spec, stateAt({ x: 10, z: spec.finishZ }), START_MS + 10_000)?.reason,
+    'coop-finish-region'
+  );
+  assert.equal(
+    verifyCoopFinish(player, spec, stateAt({ z: spec.finishZ }), START_MS + 100)?.reason,
+    'coop-finish-too-fast'
+  );
+  assert.equal(verifyCoopFinish(player, spec, stateAt({ z: spec.finishZ }), START_MS + 10_000), null);
 });

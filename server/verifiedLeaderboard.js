@@ -18,12 +18,11 @@ const { openDatabase } = require('./db');
 // поднимается при любом изменении правил в verifyMovement/verifyCheckpointTime, после которого
 // прежние результаты уже не считаются подтверждёнными по текущим меркам.
 //
-// 2 — проверка узнала геометрию трассы и обзавелась историей пакетов: свои потолки скорости на
-// каждое состояние персонажа, коридор опоры и полоса высоты стояния, средняя скорость за окно в две
-// секунды, правило «вне досягаемости препятствий работает только гравитация», минимальное время
-// сегмента по его типу вместо общих 300 мс. Записи версии 1 приняты правилами, которые ничего из
-// этого не знали.
-const VERIFICATION_VERSION = 2;
+// 2 — race-проверка узнала геометрию трассы и историю пакетов.
+// 3 — competitive co-op получил собственный CoopMovementAudit по общей разметке глав: sustained
+// speed, support/height, checkpoint regions, минимумы участков и серверные исключения механик.
+// Старые co-op строки версии 2 были только server-timed и не могут считаться проверенными v3.
+const VERIFICATION_VERSION = 3;
 
 // Сколько записей хранить на трассу и сколько отдавать по умолчанию.
 //
@@ -119,6 +118,11 @@ class VerifiedLeaderboard {
     this.db = db || openDatabase(file);
     this.migrated = migrate(this.db);
     this.db.exec(SCHEMA);
+    this.staleCoopPruned = Number(
+      this.db
+        .prepare("DELETE FROM leaderboard_entries WHERE mode = 'coop' AND verification_version < ?")
+        .run(this.verificationVersion).changes || 0
+    );
     this.statements = prepare(this.db);
   }
 

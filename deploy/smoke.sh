@@ -51,12 +51,14 @@ const WebSocket = require('ws');
 const [base, origin] = process.argv.slice(2);
 const wsUrl = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
 const socket = new WebSocket(wsUrl, { headers: { Origin: origin } });
+let opened = false;
 const timeout = setTimeout(() => {
   socket.terminate();
   console.error('WebSocket smoke timed out');
   process.exit(1);
 }, 5000);
 socket.once('open', () => {
+  opened = true;
   clearTimeout(timeout);
   socket.close(1000, 'deploy smoke');
 });
@@ -65,7 +67,14 @@ socket.once('error', error => {
   console.error(error.message);
   process.exit(1);
 });
-socket.once('close', () => process.exit(0));
+socket.once('close', () => {
+  clearTimeout(timeout);
+  if (!opened) {
+    console.error('WebSocket smoke closed before the upgrade completed');
+    process.exit(1);
+  }
+  process.exit(0);
+});
 NODE
 
 echo "deploy smoke: ok"

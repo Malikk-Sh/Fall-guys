@@ -49,6 +49,7 @@ const accountPayload = account => ({
   account: { id: account.id, name: account.name },
   records: core.accounts.records(account.id),
   progress: core.accounts.progress(account.id),
+  profile: core.accounts.profile(account.id),
   inventory: inventory.syncEntitlements(account.id)
 });
 

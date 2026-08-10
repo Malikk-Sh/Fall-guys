@@ -8,7 +8,7 @@ const { migrateDatabase } = require('./migrations');
 
 test('миграции поднимают чистую базу по порядку и повторно ничего не делают', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5]);
+  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6]);
   const applied = db
     .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version')
     .all()
@@ -18,7 +18,8 @@ test('миграции поднимают чистую базу по поряд�
     { version: 2, applied_at: 123 },
     { version: 3, applied_at: 123 },
     { version: 4, applied_at: 123 },
-    { version: 5, applied_at: 123 }
+    { version: 5, applied_at: 123 },
+    { version: 6, applied_at: 123 }
   ]);
   assert.deepEqual(migrateDatabase(db, { now: 999 }), []);
   for (const table of [
@@ -27,7 +28,8 @@ test('миграции поднимают чистую базу по поряд�
     'account_sessions',
     'account_cosmetics',
     'account_loadout',
-    'reward_grants'
+    'reward_grants',
+    'recent_partners'
   ]) {
     assert.equal(
       db.prepare('SELECT COUNT(*) AS count FROM sqlite_master WHERE name = ?').get(table).count,
@@ -72,6 +74,7 @@ test('миграции прогресса, Auth V2, inventory и rewards сох�
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM account_cosmetics').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM account_loadout').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM reward_grants').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM recent_partners').get().count, 0);
   db.close();
 });
 

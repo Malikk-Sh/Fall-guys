@@ -125,6 +125,7 @@ function serverAccount(data, fallbackSecret = '') {
     identities: data.identities || [],
     records: data.records || [],
     progress: data.progress || null,
+    profile: data.profile || null,
     inventory: data.inventory || null
   };
 }
@@ -133,6 +134,11 @@ export async function sessionAccount(options) {
   const { ok, status, data } = await post('/api/auth/session', {}, options);
   if (status === 401) return { missing: true };
   return ok ? serverAccount(data) : null;
+}
+
+export async function accountProfile(options) {
+  const { ok, data } = await post('/api/auth/profile', {}, options);
+  return ok ? data.profile || null : null;
 }
 
 export async function authConfig(options) {

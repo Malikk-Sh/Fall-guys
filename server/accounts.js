@@ -158,6 +158,68 @@ class Accounts {
     };
   }
 
+  // Последний напарник записывается только после завершённого сервером кооперативного матча.
+  // Клиент не присылает partner id, поэтому сам подделать эту историю не может.
+  recordCoopPartners({ accountIds, chapterId, playedAt = Date.now() }) {
+    const chapter = String(chapterId || '');
+    if (!/^ch(?:10|[1-9])$/.test(chapter)) return 0;
+    const ids = [
+      ...new Set(
+        (Array.isArray(accountIds) ? accountIds : [])
+          .map(id => String(id || ''))
+          .filter(id => id && this.statements.byId.get(id))
+      )
+    ];
+    if (ids.length < 2) return 0;
+    const at = Number.isFinite(playedAt) && playedAt >= 0 ? Math.round(playedAt) : Date.now();
+    let writes = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const accountId of ids) {
+        for (const partnerId of ids) {
+          if (accountId === partnerId) continue;
+          this.statements.upsertRecentPartner.run(accountId, partnerId, chapter, at);
+          writes++;
+        }
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return writes;
+  }
+
+  profile(accountId) {
+    const id = String(accountId || '');
+    if (!this.statements.byId.get(id)) return null;
+    const progress = this.progress(id);
+    const campaignAchievement = progress.achievements.find(item => item.id === 'coop-campaign-complete');
+    const recent = this.statements.recentPartner.get(id);
+    return {
+      stats: {
+        ...progress.stats,
+        coopFlawless: Number(this.statements.flawlessCount.get(id)?.count || 0)
+      },
+      achievements: progress.achievements,
+      campaign: {
+        completed: Boolean(campaignAchievement),
+        completedAt: campaignAchievement?.unlockedAt || null,
+        chaptersCompleted: progress.stats.coopChaptersCompleted,
+        totalChapters: 10
+      },
+      recentPartner: recent
+        ? {
+            id: recent.partner_account_id,
+            name: recent.display_name,
+            matchesTogether: Number(recent.matches_together || 0),
+            lastChapterId: recent.last_chapter_id,
+            lastPlayedAt: recent.last_played_at
+          }
+        : null
+    };
+  }
+
   count() {
     return Number(this.statements.count.get().count);
   }
@@ -280,7 +342,25 @@ function prepare(db) {
     `),
     achievements: db.prepare(
       'SELECT achievement_id, unlocked_at FROM achievements WHERE account_id = ? ORDER BY unlocked_at'
-    )
+    ),
+    upsertRecentPartner: db.prepare(`
+      INSERT INTO recent_partners
+        (account_id, partner_account_id, matches_together, last_chapter_id, last_played_at)
+      VALUES (?, ?, 1, ?, ?)
+      ON CONFLICT (account_id, partner_account_id) DO UPDATE SET
+        matches_together = matches_together + 1,
+        last_chapter_id = excluded.last_chapter_id,
+        last_played_at = excluded.last_played_at
+    `),
+    recentPartner: db.prepare(`
+      SELECT rp.partner_account_id, a.display_name, rp.matches_together,
+             rp.last_chapter_id, rp.last_played_at
+      FROM recent_partners rp
+      JOIN accounts a ON a.id = rp.partner_account_id
+      WHERE rp.account_id = ?
+      ORDER BY rp.last_played_at DESC, rp.partner_account_id ASC
+      LIMIT 1
+    `)
   };
 }
 

@@ -30,12 +30,11 @@ const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 
-// Старый протокол до следующего protocol bump имеет поле `accountToken`. После Auth V2 в нём
-// больше НЕ едет recovery code: браузер получает короткий двухминутный network ticket из
-// HttpOnly-сессии. Сервер принимает ticket здесь, а recovery code оставляет только HTTP-входу.
+// Recovery code — только HTTP credential для /api/auth/recovery. В legacy-поле accountToken
+// игровая сеть принимает исключительно короткий WST ticket, выпущенный из HttpOnly session.
 core.accounts.login = credential => {
   const ticket = auth.resolveSocketTicket(credential);
-  return ticket ? core.accounts.get(ticket.accountId) : recoveryLogin(credential);
+  return ticket ? core.accounts.get(ticket.accountId) : null;
 };
 
 const accountPayload = account => ({
@@ -57,6 +56,7 @@ const clientIp = req => {
 installAuthRoutes({
   app: core.app,
   accounts: core.accounts,
+  recoveryLogin,
   auth,
   google,
   clientIp,

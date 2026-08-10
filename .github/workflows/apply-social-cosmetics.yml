@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Repair query-all helper if needed
+        run: node tools/fix-social-ui-dollar.cjs
       - name: Apply narrow patches
         run: node tools/apply-social-cosmetics.cjs
       - name: Format touched files
@@ -33,5 +35,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add server/index.js client/main.js client/ui/UI.js client/styles.css
-          git commit -m "Show authoritative cosmetics to other players"
+          git commit -m "Repair social cosmetics UI helper"
           git push origin HEAD:agent/social-cosmetics

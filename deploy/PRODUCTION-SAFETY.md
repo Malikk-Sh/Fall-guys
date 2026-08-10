@@ -137,3 +137,45 @@ The smoke checks:
 - a real WebSocket upgrade using the configured production Origin.
 
 A failed pre-deploy backup, post-deploy backup or smoke aborts the installer instead of printing a successful deployment message.
+
+## Sharing public TCP/443 with Xray/REALITY
+
+Production can expose Wobble at the normal `https://domain` address while a second TLS service such as Xray/REALITY keeps the same public TCP/443. The supported deployment mode is:
+
+```bash
+DOMAIN=wobbles.ru \
+HTTPS_PORT=8443 \
+SHARED_HTTPS_443=1 \
+SHARED_443_FALLBACK=127.0.0.1:14443 \
+bash /opt/wobble/deploy/install.sh
+```
+
+In this mode `HTTPS_PORT` is **internal only**. Nginx HTTP terminates Wobble TLS on loopback `127.0.0.1:8443`; Nginx stream owns public `:443`, reads only ClientHello SNI with `ssl_preread`, and routes:
+
+```text
+SNI = wobbles.ru  -> 127.0.0.1:8443 -> Wobble
+anything else     -> 127.0.0.1:14443 -> Xray/other TLS service
+```
+
+TLS for the fallback is not terminated or re-encrypted by Nginx stream; the original TCP connection is proxied to the selected backend. The installer installs Ubuntu/Debian's `libnginx-mod-stream`, keeps the Wobble backend loopback-only, opens public firewall port 443, and removes the old public Wobble alt-port rule.
+
+Before enabling the mode, move the other service's inbound away from public 443 to the configured fallback backend. The installer deliberately refuses to reload Nginx if 443 is still owned by a non-Nginx process or if a local fallback port is not listening. It does **not** edit Xray/x-ui configuration itself.
+
+The first successful shared-443 deploy persists these settings in `/etc/wobble-deploy.conf`, so later updates are again just:
+
+```bash
+bash /opt/wobble/deploy/install.sh
+```
+
+With a certificate present, the installer also verifies the public SNI route and a real `wss://domain/ws` upgrade through port 443. `http://domain` redirects to `https://domain` without exposing `:8443`.
+
+If no certificate exists yet, use HTTP-01 webroot mode; do not use `certbot --nginx`, because public 443 is a stream listener:
+
+```bash
+apt-get install -y certbot
+certbot certonly --webroot -w /var/www/certbot -d wobbles.ru \
+  --agree-tos --register-unsafely-without-email --non-interactive
+bash /opt/wobble/deploy/install.sh
+```
+
+The installer installs a Certbot deploy hook that validates and reloads Nginx after renewal. Keep the fallback backend port closed in UFW unless it has a separate reason to be public.

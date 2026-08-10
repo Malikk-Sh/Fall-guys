@@ -57,6 +57,48 @@ jobs:
       - name: Run gameplay and multiplayer tests
         run: npm test
 
+      - name: Run production backup and deploy smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          server_log="$tmp_dir/server.log"
+          export LEADERBOARD_DB="$tmp_dir/game.db"
+          export BACKUP_DIR="$tmp_dir/backups"
+          export BACKUP_STATUS_FILE="$tmp_dir/backups/status.json"
+          export PORT=3100
+          export HOST=127.0.0.1
+          export ALLOWED_ORIGINS=http://127.0.0.1:3100
+          node server/bootstrap.js >"$server_log" 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" >/dev/null 2>&1 || true
+            wait "$server_pid" >/dev/null 2>&1 || true
+            rm -rf "$tmp_dir"
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in {1..50}; do
+            if curl -fsS --max-time 1 http://127.0.0.1:3100/health/live >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat "$server_log"
+            exit 1
+          fi
+
+          node server/backupCli.mjs create
+          if ! SMOKE_URL=http://127.0.0.1:3100 \
+            SMOKE_ORIGIN=http://127.0.0.1:3100 \
+            bash deploy/smoke.sh --require-backup; then
+            cat "$server_log"
+            exit 1
+          fi
+
       - name: Install Chromium for browser tests
         run: npx playwright install --with-deps chromium
 

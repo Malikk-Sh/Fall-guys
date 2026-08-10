@@ -22,7 +22,8 @@ class SocialSafety {
   isRecentPartner(accountId, targetAccountId) {
     const pair = pairFor(accountId, targetAccountId);
     if (!pair) return false;
-    return Boolean(this.statements.recentPartner.get(String(accountId), String(targetAccountId)));
+    const latest = this.statements.latestPartner.get(String(accountId));
+    return latest?.partner_account_id === String(targetAccountId);
   }
 
   shouldAvoid(firstAccountId, secondAccountId) {
@@ -81,9 +82,13 @@ class SocialSafety {
 function prepare(db) {
   return {
     account: db.prepare('SELECT 1 AS present FROM accounts WHERE id = ?'),
-    recentPartner: db.prepare(
-      'SELECT 1 AS present FROM recent_partners WHERE account_id = ? AND partner_account_id = ?'
-    ),
+    latestPartner: db.prepare(`
+      SELECT partner_account_id
+      FROM recent_partners
+      WHERE account_id = ?
+      ORDER BY last_played_at DESC, partner_account_id ASC
+      LIMIT 1
+    `),
     avoidPair: db.prepare(
       'SELECT 1 AS present FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'
     ),

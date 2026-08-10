@@ -17,11 +17,11 @@ export function loadTargets(env = process.env) {
   };
 }
 
-export function loadStateMessage({ matchId, sequence, z }) {
+export function loadStateMessage({ matchId, sequence, z, vz = -7 }) {
   return {
     type: 'state',
     matchId,
     sequence,
-    state: { x: 0, y: 1.2, z, ry: 0, vx: 0, vz: -7, state: 'ground' }
+    state: { x: 0, y: 1.2, z, ry: vz > 0 ? Math.PI : 0, vx: 0, vz, state: 'ground' }
   };
 }

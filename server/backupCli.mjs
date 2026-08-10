@@ -4,6 +4,7 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const {
   CURRENT_SCHEMA_VERSION,
+  DEFAULT_OFFSITE_SENTINEL,
   createBackup,
   createSnapshot,
   restoreDatabaseFile,
@@ -22,7 +23,8 @@ function pathsFromEnv() {
     databaseFile: process.env.LEADERBOARD_DB || ':memory:',
     backupDir,
     statusFile: process.env.BACKUP_STATUS_FILE || path.join(backupDir, 'status.json'),
-    offsiteDir: process.env.BACKUP_OFFSITE_DIR || ''
+    offsiteDir: process.env.BACKUP_OFFSITE_DIR || '',
+    offsiteSentinel: process.env.BACKUP_OFFSITE_SENTINEL || DEFAULT_OFFSITE_SENTINEL
   };
 }
 
@@ -38,8 +40,8 @@ Commands:
 
 Environment:
   LEADERBOARD_DB, BACKUP_DIR, BACKUP_STATUS_FILE, BACKUP_OFFSITE_DIR,
-  BACKUP_OFFSITE_EVERY_SECONDS, BACKUP_OFFSITE_KEEP, BACKUP_MAX_AGE_SECONDS,
-  BACKUP_OFFSITE_MAX_AGE_SECONDS, BACKUP_REQUIRE_OFFSITE
+  BACKUP_OFFSITE_SENTINEL, BACKUP_OFFSITE_EVERY_SECONDS, BACKUP_OFFSITE_KEEP,
+  BACKUP_MAX_AGE_SECONDS, BACKUP_OFFSITE_MAX_AGE_SECONDS, BACKUP_REQUIRE_OFFSITE
 
 Current schema version: ${CURRENT_SCHEMA_VERSION}`);
 }

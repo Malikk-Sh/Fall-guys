@@ -48,6 +48,9 @@ jobs:
             exit 1
           fi
 
+      - name: Validate production scripts
+        run: bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh
+
       - name: Lint source
         run: npm run check
 

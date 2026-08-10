@@ -1,0 +1,501 @@
+# (node:2638) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/core/Config.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: профиль считает завершённые забеги и выполненные цели
+ok 158 - профиль считает завершённые забеги и выполненные цели
+  ---
+  duration_ms: 2.805675
+  type: 'test'
+  ...
+# Subtest: ежедневная серия растёт один раз в сутки и запоминает лучший результат
+ok 159 - ежедневная серия растёт один раз в сутки и запоминает лучший результат
+  ---
+  duration_ms: 1.639788
+  type: 'test'
+  ...
+# Subtest: забег без зачёта не продлевает ежедневную серию
+ok 160 - забег без зачёта не продлевает ежедневную серию
+  ---
+  duration_ms: 0.35719
+  type: 'test'
+  ...
+# Subtest: повреждённое и недоступное хранилище не ломает профиль
+ok 161 - повреждённое и недоступное хранилище не ломает профиль
+  ---
+  duration_ms: 0.436208
+  type: 'test'
+  ...
+# Subtest: кооперативный профиль хранит лучшие главы и спасения без дубля после reconnect
+ok 162 - кооперативный профиль хранит лучшие главы и спасения без дубля после reconnect
+  ---
+  duration_ms: 0.876635
+  type: 'test'
+  ...
+# Subtest: кампания хранит flawless и безопасно читает старый профиль без статистики глав
+ok 163 - кампания хранит flawless и безопасно читает старый профиль без статистики глав
+  ---
+  duration_ms: 0.267472
+  type: 'test'
+  ...
+# Subtest: кооператив без зачёта считается пройденным, но не обновляет рекорд
+ok 164 - кооператив без зачёта считается пройденным, но не обновляет рекорд
+  ---
+  duration_ms: 0.308338
+  type: 'test'
+  ...
+# Subtest: анонимный идентификатор заводится один раз и больше не меняется
+ok 165 - анонимный идентификатор заводится один раз и больше не меняется
+  ---
+  duration_ms: 4.170587
+  type: 'test'
+  ...
+# Subtest: два игрока получают разные идентификаторы
+ok 166 - два игрока получают разные идентификаторы
+  ---
+  duration_ms: 0.539162
+  type: 'test'
+  ...
+# Subtest: испорченный идентификатор заменяется новым, а не тянется дальше
+ok 167 - испорченный идентификатор заменяется новым, а не тянется дальше
+  ---
+  duration_ms: 0.642125
+  type: 'test'
+  ...
+# (node:2646) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2646) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/shared/protocol.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: у каждого клиентского сообщения есть схема и ограничение частоты
+ok 168 - у каждого клиентского сообщения есть схема и ограничение частоты
+  ---
+  duration_ms: 1.409796
+  type: 'test'
+  ...
+# Subtest: типы сообщений клиента и сервера не конфликтуют по смыслу
+ok 169 - типы сообщений клиента и сервера не конфликтуют по смыслу
+  ---
+  duration_ms: 0.173956
+  type: 'test'
+  ...
+# Subtest: валидатор принимает корректные сообщения
+ok 170 - валидатор принимает корректные сообщения
+  ---
+  duration_ms: 0.506901
+  type: 'test'
+  ...
+# Subtest: сообщения забега без matchId отклоняются
+ok 171 - сообщения забега без matchId отклоняются
+  ---
+  duration_ms: 0.359815
+  type: 'test'
+  ...
+# Subtest: состояние и финиш требуют порядковый номер
+ok 172 - состояние и финиш требуют порядковый номер
+  ---
+  duration_ms: 0.220273
+  type: 'test'
+  ...
+# Subtest: валидатор отклоняет некорректные сообщения
+ok 173 - валидатор отклоняет некорректные сообщения
+  ---
+  duration_ms: 0.23447
+  type: 'test'
+  ...
+# Subtest: схемы закрыты для лишних полей на любом уровне
+ok 174 - схемы закрыты для лишних полей на любом уровне
+  ---
+  duration_ms: 0.348484
+  type: 'test'
+  ...
+# Subtest: валидатор отсекает NaN и Infinity в координатах
+ok 175 - валидатор отсекает NaN и Infinity в координатах
+  ---
+  duration_ms: 1.086319
+  type: 'test'
+  ...
+# Subtest: вложенные объекты проверяются рекурсивно
+ok 176 - вложенные объекты проверяются рекурсивно
+  ---
+  duration_ms: 0.382408
+  type: 'test'
+  ...
+# Subtest: поля из Object.prototype не считаются описанными в схеме
+ok 177 - поля из Object.prototype не считаются описанными в схеме
+  ---
+  duration_ms: 0.469281
+  type: 'test'
+  ...
+# Subtest: пустые строки не проходят там, где значение обязано быть
+ok 178 - пустые строки не проходят там, где значение обязано быть
+  ---
+  duration_ms: 0.173506
+  type: 'test'
+  ...
+# Subtest: валидатор не падает ни на каком мусоре
+ok 179 - валидатор не падает ни на каком мусоре
+  ---
+  duration_ms: 22.524123
+  type: 'test'
+  ...
+# Subtest: ограничитель частоты работает скользящим окном
+ok 180 - ограничитель частоты работает скользящим окном
+  ---
+  duration_ms: 0.323557
+  type: 'test'
+  ...
+# Subtest: счётчик нарушений отключает нарушителя и прощает случайные сбои
+ok 181 - счётчик нарушений отключает нарушителя и прощает случайные сбои
+  ---
+  duration_ms: 0.31419
+  type: 'test'
+  ...
+# Subtest: переходы состояний комнаты ограничены таблицей
+ok 182 - переходы состояний комнаты ограничены таблицей
+  ---
+  duration_ms: 0.203491
+  type: 'test'
+  ...
+# Subtest: действия разрешены только в подходящих состояниях комнаты
+ok 183 - действия разрешены только в подходящих состояниях комнаты
+  ---
+  duration_ms: 2.27548
+  type: 'test'
+  ...
+# (node:2652) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2652) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/core/Quality.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: догадка по железу занижает качество только на слабых устройствах
+ok 184 - догадка по железу занижает качество только на слабых устройствах
+  ---
+  duration_ms: 1.606605
+  type: 'test'
+  ...
+# Subtest: выбор игрока сильнее и замеров, и догадки
+ok 185 - выбор игрока сильнее и замеров, и догадки
+  ---
+  duration_ms: 0.343374
+  type: 'test'
+  ...
+# Subtest: подстройка снижает качество по плохим кадрам и возвращает по хорошим
+ok 186 - подстройка снижает качество по плохим кадрам и возвращает по хорошим
+  ---
+  duration_ms: 0.530436
+  type: 'test'
+  ...
+# Subtest: в меню и при неизменном вердикте не меняется ничего
+ok 187 - в меню и при неизменном вердикте не меняется ничего
+  ---
+  duration_ms: 0.218811
+  type: 'test'
+  ...
+# Subtest: неудачный возврат к высокому качеству запоминается
+ok 188 - неудачный возврат к высокому качеству запоминается
+  ---
+  duration_ms: 0.379642
+  type: 'test'
+  ...
+# Subtest: подпись отличает автоматический выбор от ручного
+ok 189 - подпись отличает автоматический выбор от ручного
+  ---
+  duration_ms: 0.208731
+  type: 'test'
+  ...
+# (node:2662) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2662) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/game/RaceSession.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: RaceSession хранит время и делает финиш идемпотентным
+ok 190 - RaceSession хранит время и делает финиш идемпотентным
+  ---
+  duration_ms: 1.048658
+  type: 'test'
+  ...
+# Subtest: RaceSession возобновляет часы после отклонённого финиша
+ok 191 - RaceSession возобновляет часы после отклонённого финиша
+  ---
+  duration_ms: 0.187913
+  type: 'test'
+  ...
+# Subtest: RaceSession сохраняет elapsed при смене серверных часов на локальные
+ok 192 - RaceSession сохраняет elapsed при смене серверных часов на локальные
+  ---
+  duration_ms: 0.257584
+  type: 'test'
+  ...
+# Subtest: RaceSession отклоняет неполное описание старта
+ok 193 - RaceSession отклоняет неполное описание старта
+  ---
+  duration_ms: 0.444374
+  type: 'test'
+  ...
+# (node:2670) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2670) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/core/records.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: первое время сохраняется и помечается как первое
+ok 194 - первое время сохраняется и помечается как первое
+  ---
+  duration_ms: 1.679481
+  type: 'test'
+  ...
+# Subtest: рекорд обновляется только лучшим временем
+ok 195 - рекорд обновляется только лучшим временем
+  ---
+  duration_ms: 0.255189
+  type: 'test'
+  ...
+# Subtest: забег без зачёта рекорд не переписывает
+ok 196 - забег без зачёта рекорд не переписывает
+  ---
+  duration_ms: 0.230603
+  type: 'test'
+  ...
+# Subtest: без зачёта и без прошлого рекорда ничего не сохраняется
+ok 197 - без зачёта и без прошлого рекорда ничего не сохраняется
+  ---
+  duration_ms: 0.350287
+  type: 'test'
+  ...
+# Subtest: мусорное или нулевое время игнорируется
+ok 198 - мусорное или нулевое время игнорируется
+  ---
+  duration_ms: 0.350749
+  type: 'test'
+  ...
+# Subtest: битое значение в хранилище читается как отсутствие рекорда
+ok 199 - битое значение в хранилище читается как отсутствие рекорда
+  ---
+  duration_ms: 0.256752
+  type: 'test'
+  ...
+# Subtest: недоступное хранилище не роняет финиш
+ok 200 - недоступное хранилище не роняет финиш
+  ---
+  duration_ms: 0.410882
+  type: 'test'
+  ...
+# Subtest: ключи гонки и кооператива не пересекаются
+ok 201 - ключи гонки и кооператива не пересекаются
+  ---
+  duration_ms: 0.238999
+  type: 'test'
+  ...
+# (node:2676) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2676) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/core/settings.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: умолчания попадают в объявленные границы и типы
+ok 202 - умолчания попадают в объявленные границы и типы
+  ---
+  duration_ms: 3.270077
+  type: 'test'
+  ...
+# Subtest: мусор в хранилище заменяется умолчаниями, а не роняет игру
+ok 203 - мусор в хранилище заменяется умолчаниями, а не роняет игру
+  ---
+  duration_ms: 0.384561
+  type: 'test'
+  ...
+# Subtest: битый JSON читается как чистые настройки
+ok 204 - битый JSON читается как чистые настройки
+  ---
+  duration_ms: 0.627157
+  type: 'test'
+  ...
+# Subtest: сохранённое переживает перезагрузку
+ok 205 - сохранённое переживает перезагрузку
+  ---
+  duration_ms: 0.382598
+  type: 'test'
+  ...
+# Subtest: недоступное хранилище не мешает играть
+ok 206 - недоступное хранилище не мешает играть
+  ---
+  duration_ms: 0.652113
+  type: 'test'
+  ...
+# Subtest: назначенная клавиша отбирается у прежнего действия
+ok 207 - назначенная клавиша отбирается у прежнего действия
+  ---
+  duration_ms: 0.40512
+  type: 'test'
+  ...
+# Subtest: действие не остаётся без единой клавиши
+ok 208 - действие не остаётся без единой клавиши
+  ---
+  duration_ms: 0.349055
+  type: 'test'
+  ...
+# Subtest: перебор клавиш вытесняет самую старую, а не копится
+ok 209 - перебор клавиш вытесняет самую старую, а не копится
+  ---
+  duration_ms: 0.356028
+  type: 'test'
+  ...
+# Subtest: сброс возвращает всё разом
+ok 210 - сброс возвращает всё разом
+  ---
+  duration_ms: 0.529434
+  type: 'test'
+  ...
+# Subtest: уменьшенная анимация выключает тряску поверх регулятора
+ok 211 - уменьшенная анимация выключает тряску поверх регулятора
+  ---
+  duration_ms: 0.641063
+  type: 'test'
+  ...
+# Subtest: явный выбор сильнее системного, а «авто» его слушает
+ok 212 - явный выбор сильнее системного, а «авто» его слушает
+  ---
+  duration_ms: 0.245481
+  type: 'test'
+  ...
+# Subtest: вибрация не зависит от звука и молчит там, где её нет
+ok 213 - вибрация не зависит от звука и молчит там, где её нет
+  ---
+  duration_ms: 0.378731
+  type: 'test'
+  ...
+# Subtest: устройство без вибрации и запрет браузера не роняют кадр
+ok 214 - устройство без вибрации и запрет браузера не роняют кадр
+  ---
+  duration_ms: 0.247665
+  type: 'test'
+  ...
+# Subtest: настройки переносятся в стили и разметку
+ok 215 - настройки переносятся в стили и разметку
+  ---
+  duration_ms: 0.561874
+  type: 'test'
+  ...
+# Subtest: нетронутая настройка не перебивает адаптивные правила
+ok 216 - нетронутая настройка не перебивает адаптивные правила
+  ---
+  duration_ms: 0.305474
+  type: 'test'
+  ...
+# Subtest: подписчик узнаёт, что именно изменилось
+ok 217 - подписчик узнаёт, что именно изменилось
+  ---
+  duration_ms: 0.311865
+  type: 'test'
+  ...
+# Subtest: неизвестная настройка игнорируется, а не заводится
+ok 218 - неизвестная настройка игнорируется, а не заводится
+  ---
+  duration_ms: 0.226585
+  type: 'test'
+  ...
+# Subtest: у каждого действия есть подпись для экрана настроек
+ok 219 - у каждого действия есть подпись для экрана настроек
+  ---
+  duration_ms: 0.17054
+  type: 'test'
+  ...
+# (node:2686) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2686) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/client/core/AppStates.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: StateRouter выполняет enter/exit и не перезапускает текущее состояние
+ok 220 - StateRouter выполняет enter/exit и не перезапускает текущее состояние
+  ---
+  duration_ms: 2.041631
+  type: 'test'
+  ...
+# Subtest: состояния приложения согласованно управляют экраном, HUD и вводом
+ok 221 - состояния приложения согласованно управляют экраном, HUD и вводом
+  ---
+  duration_ms: 0.369313
+  type: 'test'
+  ...
+# (node:2694) ExperimentalWarning: `--experimental-loader` may be removed in the future; instead use `register()`:
+# --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./server/client-loader.mjs", pathToFileURL("./"));'
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:2694) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///home/runner/work/Fall-guys/Fall-guys/shared/coopChapters.js is not specified and it doesn't parse as CommonJS.
+# Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+# To eliminate this warning, add "type": "module" to /home/runner/work/Fall-guys/Fall-guys/package.json.
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: глава 1: через первые ворота проходят оба
+ok 222 - глава 1: через первые ворота проходят оба
+  ---
+  duration_ms: 39.918583
+  type: 'test'
+  ...
+# Subtest: глава 1: узкую пропасть каждый берёт прыжком сам
+ok 223 - глава 1: узкую пропасть каждый берёт прыжком сам
+  ---
+  duration_ms: 7.034952
+  type: 'test'
+  ...
+# Subtest: глава 2: катапульта действительно подбрасывает напарника
+ok 224 - глава 2: катапульта действительно подбрасывает напарника
+  ---
+  duration_ms: 21.597731
+  type: 'test'
+  ...
+# Subtest: вдоль всей дорожки нет провалов в местах, где должен быть пол
+ok 225 - вдоль всей дорожки нет провалов в местах, где должен быть пол
+  ---
+  duration_ms: 62.09544
+  type: 'test'
+  ...
+# Subtest: на стыках отрезков пол не пропадает
+ok 226 - на стыках отрезков пол не пропадает
+  ---
+  duration_ms: 34.895058
+  type: 'test'
+  ...
+# Subtest: каждая катапульта перебрасывает через свою пропасть
+ok 227 - каждая катапульта перебрасывает через свою пропасть
+  ---
+  duration_ms: 66.787085
+  type: 'test'
+  ...
+# Subtest: каждая глава проходима двумя ботами от начала до конца
+ok 228 - каждая глава проходима двумя ботами от начала до конца
+  ---
+  duration_ms: 216.208113
+  type: 'test'
+  ...
+# Subtest: в одиночку ни одна глава не проходится
+ok 229 - в одиночку ни одна глава не проходится
+  ---
+  duration_ms: 183.573751
+  type: 'test'
+  ...
+# Subtest: любую голую пропасть берут обычным прыжком, и с запасом
+ok 230 - любую голую пропасть берут обычным прыжком, и с запасом
+  ---
+  duration_ms: 3.275267
+  type: 'test'
+  ...
+1..230
+# tests 230
+# suites 0
+# pass 229
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2965.075722
+exit_code=1

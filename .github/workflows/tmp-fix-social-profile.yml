@@ -1,0 +1,69 @@
+name: Temporary social profile projection fix
+
+on:
+  push:
+    branches:
+      - agent/social-safety-replay
+    paths:
+      - .github/workflows/tmp-fix-social-profile.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/social-safety-replay
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Patch Accounts recent-partner projection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('server/accounts.js')
+          source = path.read_text()
+          old = """            lastChapterId: recent.last_chapter_id,
+                      lastPlayedAt: recent.last_played_at
+          """
+          new = """            lastChapterId: recent.last_chapter_id,
+                      lastPlayedAt: recent.last_played_at,
+                      avoided: Boolean(recent.avoided)
+          """
+          if source.count(old) != 1:
+              raise SystemExit('profile anchor mismatch')
+          source = source.replace(old, new)
+          old = """      SELECT rp.partner_account_id, a.display_name, rp.matches_together,
+                     rp.last_chapter_id, rp.last_played_at
+              FROM recent_partners rp
+          """
+          new = """      SELECT rp.partner_account_id, a.display_name, rp.matches_together,
+                     rp.last_chapter_id, rp.last_played_at,
+                     EXISTS (
+                       SELECT 1 FROM matchmaking_avoids ma
+                       WHERE (ma.account_a = rp.account_id AND ma.account_b = rp.partner_account_id)
+                          OR (ma.account_a = rp.partner_account_id AND ma.account_b = rp.account_id)
+                     ) AS avoided
+              FROM recent_partners rp
+          """
+          if source.count(old) != 1:
+              raise SystemExit('query anchor mismatch')
+          path.write_text(source.replace(old, new))
+          PY
+      - run: npx prettier --write server/accounts.js
+      - run: npx eslint server/accounts.js
+      - name: Verify profile and social safety projection
+        run: node --test server/socialProfile.test.mjs server/socialSafety.test.mjs
+      - name: Commit permanent fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/accounts.js
+          git diff --cached --quiet && exit 0
+          git commit -m 'Expose matchmaking avoid state in recent partner profile'
+          git push origin HEAD:agent/social-safety-replay

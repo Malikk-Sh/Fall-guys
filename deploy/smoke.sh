@@ -15,6 +15,12 @@ if [ -r "$ENV_FILE" ]; then
   set +a
 fi
 
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+if [ -z "$NODE_BIN" ] || [ ! -x "$NODE_BIN" ]; then
+  echo "deploy smoke: node executable not found" >&2
+  exit 127
+fi
+
 PORT="${PORT:-3000}"
 BASE_URL="${SMOKE_URL:-http://127.0.0.1:${PORT}}"
 ORIGIN="${SMOKE_ORIGIN:-}"
@@ -29,7 +35,7 @@ health="$(curl -fsS --max-time 5 "$BASE_URL/health")"
 html="$(curl -fsS --max-time 5 "$BASE_URL/")"
 grep -q 'WOBBLE' <<<"$html"
 
-/usr/bin/node - "$health" "$REQUIRE_BACKUP" <<'NODE'
+"$NODE_BIN" - "$health" "$REQUIRE_BACKUP" <<'NODE'
 const health = JSON.parse(process.argv[2]);
 const requireBackup = process.argv[3] === '1';
 if (health.ok !== true || health.service !== 'wobble-rush-3d') {
@@ -46,7 +52,7 @@ NODE
 # A successful HTTP page is not enough for this game: co-op depends on the WebSocket upgrade.
 # Connect through the local listener but send the production Origin so strict origin checks stay active.
 cd "$APP_DIR"
-/usr/bin/node - "$BASE_URL" "$ORIGIN" <<'NODE'
+"$NODE_BIN" - "$BASE_URL" "$ORIGIN" <<'NODE'
 const WebSocket = require('ws');
 const [base, origin] = process.argv.slice(2);
 const wsBase = base.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:').replace(/\/$/, '');

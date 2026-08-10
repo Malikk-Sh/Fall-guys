@@ -1,8 +1,8 @@
-// Production entrypoint for account sessions, external identities and server inventory.
+// Production entrypoint for account sessions, external identities, inventory and rewards.
 //
 // `index.js` remains directly importable by the existing unit/integration tests. This thin layer
-// extends CSP for Google Identity Services, installs Auth V2 + inventory on the exported Express
-// app, then starts the same HTTP/WebSocket server.
+// extends CSP for Google Identity Services, installs Auth V2 + inventory + rewards on the exported
+// Express app, then starts the same HTTP/WebSocket server.
 
 const http = require('http');
 
@@ -26,10 +26,13 @@ const { AuthService } = require('./auth');
 const { GoogleIdentityVerifier } = require('./googleIdentity');
 const { installAuthRoutes } = require('./authRoutes');
 const { InventoryService } = require('./inventory');
+const { RewardService } = require('./rewards');
+const { installRewardRoutes } = require('./rewardRoutes');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
 const inventory = new InventoryService({ db: core.accounts.db, accounts: core.accounts });
+const rewards = new RewardService({ db: core.accounts.db, inventory });
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 
 // Recovery code — только HTTP credential. Игровой WebSocket получает короткий WST ticket,
@@ -70,6 +73,8 @@ installAuthRoutes({
     : process.env.NODE_ENV === 'production'
 });
 
+installRewardRoutes({ app: core.app, auth, rewards });
+
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || '0.0.0.0';
 
@@ -83,6 +88,8 @@ if (require.main === module) {
         host,
         authV2: true,
         serverInventory: true,
+        rewardPlatform: true,
+        devRewards: process.env.ENABLE_DEV_REWARDS === '1',
         google: google.enabled
       })
     );
@@ -91,4 +98,4 @@ if (require.main === module) {
   process.on('SIGINT', () => core.shutdown('SIGINT'));
 }
 
-module.exports = { ...core, auth, google, inventory };
+module.exports = { ...core, auth, google, inventory, rewards };

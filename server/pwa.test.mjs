@@ -19,6 +19,7 @@ test('service worker не кэширует API/health/ws и не активир�
     source.includes("const NETWORK_ONLY_PREFIXES = ['/api/', '/account', '/health', '/metrics', '/ws'];")
   );
   assert.ok(source.includes("event.data?.type === 'SKIP_WAITING'"));
+  assert.ok(source.includes('self.clients.claim()'));
   const installBlock = source.slice(
     source.indexOf("addEventListener('install'"),
     source.indexOf("addEventListener('activate'")

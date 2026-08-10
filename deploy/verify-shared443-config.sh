@@ -35,6 +35,8 @@ if command -v nginx >/dev/null 2>&1 && [ -f /usr/lib/nginx/modules/ngx_stream_mo
     "$tmp/stream.conf"
   cat >"$tmp/nginx.conf" <<NGINX
 load_module /usr/lib/nginx/modules/ngx_stream_module.so;
+pid $tmp/nginx.pid;
+error_log $tmp/error.log;
 events {}
 include $tmp/stream.conf;
 NGINX

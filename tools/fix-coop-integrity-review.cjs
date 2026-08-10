@@ -47,6 +47,24 @@ replaceOnce(
     }`
 );
 
+replaceOnce(
+  'server/coopMovementAudit.test.mjs',
+  `  const { findings } = feed(room, player, bounceStates(piece, 18, 75));
+  assert.equal(findings.has('coop-reported-speed'), false, '18 оставлено ниже шумного мгновенного потолка');
+  assert.equal(findings.has('coop-observed-speed'), false, '18 оставлено ниже шумного observed потолка');
+  assert.equal(findings.has('coop-sustained-speed'), true, 'средняя скорость обязана поймать систематику');`,
+  `  const fastStates = Array.from({ length: 75 }, (_, index) =>
+    stateAt({
+      z: piece.z + 3 - ((index + 1) * 18 * SEND_MS) / 1000,
+      vz: -18
+    })
+  );
+  const { findings } = feed(room, player, fastStates);
+  assert.equal(findings.has('coop-reported-speed'), false, '18 оставлено ниже шумного мгновенного потолка');
+  assert.equal(findings.has('coop-observed-speed'), false, '18 оставлено ниже шумного observed потолка');
+  assert.equal(findings.has('coop-sustained-speed'), true, 'быстрое продвижение обязано пойматься окном');`
+);
+
 fs.appendFileSync(
   'server/coopMovementAudit.test.mjs',
   `\n\ntest('редкие state-пакеты не позволяют обойти sustained-speed audit', () => {\n` +

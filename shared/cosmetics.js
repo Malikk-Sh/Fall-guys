@@ -34,6 +34,22 @@ export const COSMETIC_CATALOG = Object.freeze([
     color: 0x68f4d2
   },
   {
+    id: 'neon-visor',
+    slot: 'visor',
+    name: 'НЕОНОВЫЙ ВИЗОР',
+    detail: 'Rewarded-награда',
+    rewardable: true,
+    color: 0x6cf7ff
+  },
+  {
+    id: 'party-antenna',
+    slot: 'antenna',
+    name: 'КОНФЕТТИ-АНТЕННА',
+    detail: 'Rewarded-награда',
+    rewardable: true,
+    color: 0xff79d1
+  },
+  {
     id: 'sunrise-trail',
     slot: 'trail',
     name: 'СЛЕД РАССВЕТА',

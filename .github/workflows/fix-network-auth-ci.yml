@@ -1,0 +1,36 @@
+name: Fix network auth CI compatibility
+
+on:
+  push:
+    branches:
+      - agent/network-auth-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/network-auth-hardening
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply exact fixes
+        run: node tools/fix-network-auth-ci.cjs
+      - name: Format touched files
+        run: npx prettier --write server/index.js server/integration.test.js
+      - name: Commit fixes
+        shell: bash
+        run: |
+          if git diff --quiet -- server/index.js server/integration.test.js; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/index.js server/integration.test.js
+          git commit -m "Fix socket auth integration compatibility"
+          git push origin HEAD:agent/network-auth-hardening

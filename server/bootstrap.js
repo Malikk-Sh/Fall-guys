@@ -29,6 +29,7 @@ const { InventoryService } = require('./inventory');
 const { RewardService } = require('./rewards');
 const { installRewardRoutes } = require('./rewardRoutes');
 const { networkIdentity } = require('./networkIdentity');
+const { socialCosmetics } = require('./socialCosmetics');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
@@ -39,6 +40,9 @@ const recoveryLogin = core.accounts.login.bind(core.accounts);
 // WST принадлежит только рукопожатию WebSocket. NetworkIdentity поглощает его один раз и дальше
 // игровой протокол использует уже ws.accountId; CREATE/JOIN/FIND не видят credential вообще.
 networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+// В публичный профиль комнаты loadout попадает только из server inventory. index.js знает лишь
+// этот узкий resolver и не получает доступ ни к HttpOnly session, ни к ownership-операциям.
+socialCosmetics.configure(accountId => inventory.publicLoadout(accountId));
 
 const accountPayload = account => ({
   ok: true,
@@ -87,6 +91,7 @@ if (require.main === module) {
         authV2: true,
         socketAuth: true,
         serverInventory: true,
+        socialCosmetics: true,
         rewardPlatform: true,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',
         google: google.enabled

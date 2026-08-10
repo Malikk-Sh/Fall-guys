@@ -46,14 +46,15 @@ class RewardService {
     if (used >= this.dailyLimit) return { ok: false, reason: 'daily-limit' };
     if (reward !== 'random_cosmetic') return { ok: false, reason: 'unknown-reward' };
 
-    this.inventory.syncEntitlements(id, now);
+    const inventoryProfile = this.inventory.syncEntitlements(id, now);
+    if (!inventoryProfile) return { ok: false, reason: 'unknown-account' };
     const owned = new Set(this.inventory.owned(id).map(item => item.id));
     const available = REWARDABLE_COSMETICS.filter(cosmeticId => !owned.has(cosmeticId));
     if (!available.length) {
       return {
         ok: false,
         reason: 'pool-exhausted',
-        inventory: this.inventory.profile(id)
+        inventory: inventoryProfile
       };
     }
     const cosmeticId = available[used % available.length];

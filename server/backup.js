@@ -67,9 +67,7 @@ function verifyIntegrity(db) {
 
 function migrationTableExists(db) {
   return Boolean(
-    db
-      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'")
-      .get()
+    db.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get()
   );
 }
 

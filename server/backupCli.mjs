@@ -87,9 +87,7 @@ async function main() {
 
   if (command === 'legacy-check') {
     if (!args[0]) throw new Error('legacy-check requires a database path');
-    console.log(
-      JSON.stringify({ ok: true, file: path.resolve(args[0]), ...verifyLegacyBackup(args[0]) })
-    );
+    console.log(JSON.stringify({ ok: true, file: path.resolve(args[0]), ...verifyLegacyBackup(args[0]) }));
     return;
   }
 

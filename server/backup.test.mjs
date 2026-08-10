@@ -98,16 +98,14 @@ test('live WAL database produces a verified snapshot plus retention tiers and of
   }
 });
 
-test(
-  'legacy database gets an integrity-checked pre-migration snapshot without weakening normal verification',
-  () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wobble-legacy-backup-'));
-    const databaseFile = join(dir, 'legacy.db');
-    const outputFile = join(dir, 'backups', 'pre-migration.db');
-    const db = new DatabaseSync(databaseFile);
-    try {
-      db.exec('PRAGMA journal_mode = WAL');
-      db.exec(`
+test('legacy database gets an integrity-checked pre-migration snapshot without weakening normal verification', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wobble-legacy-backup-'));
+  const databaseFile = join(dir, 'legacy.db');
+  const outputFile = join(dir, 'backups', 'pre-migration.db');
+  const db = new DatabaseSync(databaseFile);
+  try {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec(`
         CREATE TABLE legacy_records (
           id INTEGER PRIMARY KEY,
           name TEXT NOT NULL
@@ -115,26 +113,25 @@ test(
         INSERT INTO legacy_records (name) VALUES ('preserved');
       `);
 
-      assert.throws(() => verifyBackup(databaseFile), /no schema_migrations table/);
-      assert.equal(verifyLegacyBackup(databaseFile).legacy, true);
+    assert.throws(() => verifyBackup(databaseFile), /no schema_migrations table/);
+    assert.equal(verifyLegacyBackup(databaseFile).legacy, true);
 
-      const snapshot = createLegacySnapshot({ databaseFile, outputFile });
-      assert.equal(snapshot.legacy, true);
-      assert.equal(snapshot.schemaVersion, 0);
-      assert.equal(snapshot.integrity, 'ok');
-      const copy = new DatabaseSync(snapshot.file);
-      assert.equal(copy.prepare('SELECT name FROM legacy_records').get().name, 'preserved');
-      copy.close();
-      assert.throws(() => verifyBackup(snapshot.file), /no schema_migrations table/);
+    const snapshot = createLegacySnapshot({ databaseFile, outputFile });
+    assert.equal(snapshot.legacy, true);
+    assert.equal(snapshot.schemaVersion, 0);
+    assert.equal(snapshot.integrity, 'ok');
+    const copy = new DatabaseSync(snapshot.file);
+    assert.equal(copy.prepare('SELECT name FROM legacy_records').get().name, 'preserved');
+    copy.close();
+    assert.throws(() => verifyBackup(snapshot.file), /no schema_migrations table/);
 
-      migrateDatabase(db, { now: 500 });
-      assert.throws(() => verifyLegacyBackup(databaseFile), /already has schema_migrations table/);
-    } finally {
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
+    migrateDatabase(db, { now: 500 });
+    assert.throws(() => verifyLegacyBackup(databaseFile), /already has schema_migrations table/);
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
   }
-);
+});
 
 test('hourly retention is bounded while daily tier keeps only one copy for the same UTC day', () => {
   const f = fixture();

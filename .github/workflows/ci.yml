@@ -34,18 +34,6 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Canonicalize legacy backup patch for inspection
-        run: npx prettier --write server/backup.js server/backup.test.mjs server/backupCli.mjs
-
-      - name: Upload canonicalized legacy backup patch
-        uses: actions/upload-artifact@v4
-        with:
-          name: formatted-legacy-backup-files
-          path: |
-            server/backup.js
-            server/backup.test.mjs
-            server/backupCli.mjs
-
       # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
       # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
       # в успешную проверку и фактически отключал защиту от merge markers.

@@ -1,0 +1,22 @@
+[Unit]
+Description=Check Wobble Rush backup freshness
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=wobble
+Group=wobble
+WorkingDirectory=/opt/wobble
+StateDirectory=wobble
+EnvironmentFile=/etc/wobble.env
+ExecStart=/bin/bash /opt/wobble/deploy/check-backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true

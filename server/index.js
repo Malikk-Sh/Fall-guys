@@ -48,6 +48,7 @@ const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
+const { backupHealthStatus } = require('./backupStatus');
 
 const app = express();
 const clientPath = path.join(__dirname, '..', 'client');
@@ -146,7 +147,8 @@ const rooms = new Map();
 // Пустое значение и ':memory:' здесь не одно и то же по смыслу, но одно и то же по поведению, и
 // это осознанно: сервер, у которого забыли настроить путь, должен работать, а не падать на старте.
 // Одно соединение на весь процесс: таблица рекордов и аккаунты лежат в одном файле.
-const gameDb = openDatabase(process.env.LEADERBOARD_DB || ':memory:');
+const databaseFile = process.env.LEADERBOARD_DB || ':memory:';
+const gameDb = openDatabase(databaseFile);
 migrateDatabase(gameDb);
 const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
 const accounts = new Accounts({ db: gameDb });
@@ -287,6 +289,7 @@ const health = () => ({
   load: loadStatus(),
   events: productEvents,
   uptime: Math.round(process.uptime()),
+  backup: backupHealthStatus({ databaseFile }),
   metrics
 });
 

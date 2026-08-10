@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Wobble Rush backup freshness every 30 minutes
+
+[Timer]
+OnBootSec=10m
+OnUnitActiveSec=30m
+Persistent=true
+Unit=wobble-backup-watch.service
+
+[Install]
+WantedBy=timers.target

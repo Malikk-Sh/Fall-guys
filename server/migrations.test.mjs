@@ -136,7 +136,10 @@ test('migration 009 backfills the best available report evidence', () => {
   const report = db
     .prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports')
     .get();
-  assert.deepEqual({ ...report }, { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' });
+  assert.deepEqual(
+    { ...report },
+    { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' }
+  );
   db.close();
 });
 

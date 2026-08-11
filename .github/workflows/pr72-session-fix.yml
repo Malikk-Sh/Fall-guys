@@ -1,0 +1,52 @@
+name: Stage PR72 session expiry fix
+
+on:
+  push:
+    branches:
+      - feat/admin-mobile-polish
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply session generation fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('client/admin/admin.js')
+          s = p.read_text()
+          def one(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f'{label}: expected 1 match, found {n}')
+              s = s.replace(old, new, 1)
+          one("  currentPanel: 'overview',\n  refreshRevision: 0,", "  currentPanel: 'overview',\n  sessionGeneration: 0,\n  refreshRevision: 0,", 'state')
+          one("  state.refreshRevision += 1;\n  document.body.dataset.adminSession = 'login';", "  state.sessionGeneration += 1;\n  state.refreshRevision += 1;\n  document.body.dataset.adminSession = 'login';", 'showLogin generation')
+          one("  state.capabilities = new Set(payload.capabilities || []);\n  document.body.dataset.adminSession = 'active';", "  state.capabilities = new Set(payload.capabilities || []);\n  state.sessionGeneration += 1;\n  document.body.dataset.adminSession = 'active';", 'activate generation')
+          one("  const revision = ++state.refreshRevision;\n  const refresh = $('#refresh');", "  const revision = ++state.refreshRevision;\n  const sessionGeneration = state.sessionGeneration;\n  const refresh = $('#refresh');", 'capture generation')
+          one("  } catch (error) {\n    if (revision !== state.refreshRevision || panel !== state.currentPanel) return;\n    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');", "  } catch (error) {\n    if (error.status === 401 && sessionGeneration === state.sessionGeneration)\n      return showLogin('Сессия администратора завершена. Войдите снова.');\n    if (revision !== state.refreshRevision || panel !== state.currentPanel) return;", '401 ordering')
+          p.write_text(s)
+          PY
+      - name: Validate
+        run: |
+          npm ci --no-audit --no-fund
+          npx prettier --write client/admin/admin.js
+          node --check client/admin/admin.js
+          npx eslint client/admin/admin.js
+      - name: Commit fix and remove helper
+        shell: bash
+        run: |
+          rm .github/workflows/pr72-session-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client/admin/admin.js .github/workflows/pr72-session-fix.yml
+          git commit -m "Handle stale refresh session expiry safely"
+          git push origin HEAD:feat/admin-mobile-polish

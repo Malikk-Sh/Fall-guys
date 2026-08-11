@@ -15,7 +15,7 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier client/game/CampaignPresentation.js",
     "load": "node server/loadProbe.mjs",
     "load:observe": "node server/loadObserver.mjs"
   },

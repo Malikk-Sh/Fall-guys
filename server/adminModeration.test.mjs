@@ -77,6 +77,7 @@ test('admin moderation shows immutable evidence and writes moderation + admin au
 
   const before = control.moderationCase('target');
   assert.equal(before.status, 'open');
+  assert.match(before.revision, /^\d+:\d+$/);
   assert.equal(before.evidence.length, 1);
   assert.equal(before.evidence[0].targetNameSnapshot, 'Old Name');
   assert.equal(before.evidence[0].chapterIdSnapshot, 'ch4');
@@ -85,13 +86,13 @@ test('admin moderation shows immutable evidence and writes moderation + admin au
     targetAccountId: 'target',
     status: 'reviewing',
     note: 'Evidence checked.',
-    expectedStatus: before.status,
-    expectedLastReportedAt: before.lastReportedAt,
+    expectedRevision: before.revision,
     actor: moderator.user,
     now: 2000
   });
   assert.equal(result.ok, true);
   assert.equal(result.case.status, 'reviewing');
+  assert.notEqual(result.case.revision, before.revision);
   assert.equal(result.case.moderatorName, 'Moderator');
   assert.equal(result.case.history.at(-1).moderatorName, 'Moderator');
 
@@ -124,8 +125,7 @@ test('admin moderation shows immutable evidence and writes moderation + admin au
     targetAccountId: 'target',
     status: 'reviewing',
     note: 'Duplicate click',
-    expectedStatus: 'reviewing',
-    expectedLastReportedAt: result.case.lastReportedAt,
+    expectedRevision: result.case.revision,
     actor: moderator.user,
     now: 2100
   });
@@ -135,7 +135,7 @@ test('admin moderation shows immutable evidence and writes moderation + admin au
   db.close();
 });
 
-test('admin moderation rejects stale decisions when new evidence arrives after the case was opened', () => {
+test('case revision catches new evidence even when its report timestamp equals the prior report', () => {
   const { db, adminAuth, control } = prepareDatabase();
   const moderator = createModerator(adminAuth);
   const opened = control.moderationCase('target');
@@ -147,7 +147,7 @@ test('admin moderation rejects stale decisions when new evidence arrives after t
        last_reported_at, target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `
-  ).run('reporter-b', 'target', 'exploit-cheat', 1, 1100, 1100, 'New Snapshot', 'ch5');
+  ).run('reporter-b', 'target', 'exploit-cheat', 1, 1000, 1000, 'New Snapshot', 'ch5');
   db.prepare(
     `
     INSERT INTO social_report_evidence
@@ -155,26 +155,70 @@ test('admin moderation rejects stale decisions when new evidence arrives after t
        target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `
-  ).run('reporter-b', 'target', 'exploit-cheat', 1100, 1, 'New Snapshot', 'ch5');
+  ).run('reporter-b', 'target', 'exploit-cheat', 1000, 1, 'New Snapshot', 'ch5');
+
+  const current = control.moderationCase('target');
+  assert.equal(current.lastReportedAt, opened.lastReportedAt, 'wall-clock timestamp intentionally collides');
+  assert.notEqual(current.revision, opened.revision, 'evidence id still advances the case revision');
 
   const stale = control.moderationTransition({
     targetAccountId: 'target',
     status: 'resolved',
-    note: 'Would have closed old evidence only.',
-    expectedStatus: opened.status,
-    expectedLastReportedAt: opened.lastReportedAt,
+    note: 'Would have closed evidence that was never reviewed.',
+    expectedRevision: opened.revision,
     actor: moderator.user,
     now: 2000
   });
   assert.equal(stale.ok, false);
   assert.equal(stale.reason, 'case-changed');
-  assert.equal(stale.case.lastReportedAt, 1100);
   assert.equal(stale.case.evidence.length, 2);
+  assert.equal(stale.case.revision, current.revision);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_events').get().count, 0);
   assert.equal(
     adminAuth.recentAudit().filter(event => event.action === 'moderation.case.transition').length,
     0
   );
+  db.close();
+});
+
+test('case revision advances on every moderation event even if status later returns to the same value', () => {
+  const { db, adminAuth, control } = prepareDatabase();
+  const moderator = createModerator(adminAuth);
+  const opened = control.moderationCase('target');
+
+  const reviewing = control.moderationTransition({
+    targetAccountId: 'target',
+    status: 'reviewing',
+    note: '',
+    expectedRevision: opened.revision,
+    actor: moderator.user,
+    now: 2000
+  });
+  assert.equal(reviewing.ok, true);
+  const reopened = control.moderationTransition({
+    targetAccountId: 'target',
+    status: 'open',
+    note: '',
+    expectedRevision: reviewing.case.revision,
+    actor: moderator.user,
+    now: 2100
+  });
+  assert.equal(reopened.ok, true);
+  assert.equal(reopened.case.status, opened.status);
+  assert.equal(reopened.case.lastReportedAt, opened.lastReportedAt);
+  assert.notEqual(reopened.case.revision, opened.revision);
+
+  const stale = control.moderationTransition({
+    targetAccountId: 'target',
+    status: 'resolved',
+    note: 'Old view must not close a cycled case.',
+    expectedRevision: opened.revision,
+    actor: moderator.user,
+    now: 2200
+  });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.reason, 'case-changed');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_events').get().count, 2);
   db.close();
 });
 
@@ -197,8 +241,7 @@ test('moderation transition rolls back when mandatory admin audit cannot be stor
         targetAccountId: 'target',
         status: 'reviewing',
         note: 'Must roll back together.',
-        expectedStatus: opened.status,
-        expectedLastReportedAt: opened.lastReportedAt,
+        expectedRevision: opened.revision,
         actor: moderator.user,
         now: 2000
       }),
@@ -261,8 +304,7 @@ test('moderation routes derive actor from admin session and reject spoofed moder
       targetAccountId: 'target',
       status: 'reviewing',
       note: '',
-      expectedStatus: opened.status,
-      expectedLastReportedAt: opened.lastReportedAt,
+      expectedRevision: opened.revision,
       moderatorId: 'forged-admin'
     })
   });
@@ -279,8 +321,7 @@ test('moderation routes derive actor from admin session and reject spoofed moder
       targetAccountId: 'target',
       status: 'reviewing',
       note: '',
-      expectedStatus: opened.status,
-      expectedLastReportedAt: opened.lastReportedAt
+      expectedRevision: opened.revision
     })
   });
   assert.equal(accepted.status, 200);
@@ -299,8 +340,7 @@ test('moderation routes derive actor from admin session and reject spoofed moder
       targetAccountId: 'target',
       status: 'resolved',
       note: 'Viewer must never apply this.',
-      expectedStatus: acceptedCase.status,
-      expectedLastReportedAt: acceptedCase.lastReportedAt
+      expectedRevision: acceptedCase.revision
     })
   });
   assert.equal(forbidden.status, 403);

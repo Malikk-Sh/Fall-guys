@@ -10,12 +10,22 @@ import {
   authConfig,
   createAccount,
   equipAccountCosmetic,
+  forgetAccountChecked,
+  listAccountSessions,
   loginAccount,
   loginGoogle,
+  logoutAccount,
   renameAccount,
   rememberAccount,
   reportRecentPartner,
   restoreAvoidedPlayer,
+  revokeAccountSession,
+  revokeOtherAccountSessions,
+  prepareRecoveryCode,
+  confirmRecoveryCode,
+  stageRecoveryCode,
+  commitStagedRecoveryCode,
+  discardStagedRecoveryCode,
   sessionAccount,
   switchAccount,
   submitRecord
@@ -30,6 +40,7 @@ export class AccountFlow {
     this.records = new Map();
     this.networkTicket = null;
     this.profileRevision = 0;
+    this.online = false;
     // NetworkManager забирает WST ровно для socket-auth. Ticket не остаётся в UI после выдачи;
     // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
@@ -38,6 +49,366 @@ export class AccountFlow {
     this.game.ui.onRecentPartnerAvoid = partner => this.avoidPartner(partner);
     this.game.ui.onRecentPartnerReport = (partner, reason) => this.reportPartner(partner, reason);
     this.game.ui.onAvoidedPlayerRestore = player => this.restorePlayer(player);
+    this.installSelfServicePanel();
+  }
+
+  installSelfServicePanel() {
+    if (!globalThis.document) return;
+    const status = document.querySelector('#accountStatus');
+    if (!status || document.querySelector('#accountSecurity')) return;
+
+    const section = document.createElement('div');
+    section.id = 'accountSecurity';
+    section.className = 'account-section hidden';
+    section.innerHTML = `
+      <small class="account-legend">БЕЗОПАСНОСТЬ АККАУНТА</small>
+      <div id="accountSessions" class="account-list" aria-label="Активные сеансы"></div>
+      <button id="accountRevokeOthers" class="button button-secondary" type="button">
+        ЗАВЕРШИТЬ ДРУГИЕ СЕАНСЫ
+      </button>
+      <button id="accountRotateRecovery" class="button button-secondary" type="button">
+        СМЕНИТЬ КОД ВОССТАНОВЛЕНИЯ
+      </button>
+      <button id="accountLogoutDevice" class="button button-secondary" type="button">
+        ВЫЙТИ НА ЭТОМ УСТРОЙСТВЕ
+      </button>
+      <small>
+        Список не хранит IP-адреса и названия устройств — только время активности. Новый код
+        восстановления показывается один раз и сразу заменяет старый.
+      </small>
+    `;
+    status.before(section);
+
+    this.security = {
+      section,
+      sessions: section.querySelector('#accountSessions'),
+      revokeOthers: section.querySelector('#accountRevokeOthers'),
+      rotate: section.querySelector('#accountRotateRecovery'),
+      logout: section.querySelector('#accountLogoutDevice')
+    };
+
+    document.querySelector('#accountChip')?.addEventListener('click', () => {
+      queueMicrotask(() => this.refreshSessions());
+    });
+    this.security.revokeOthers.addEventListener('click', () => this.revokeOtherSessions());
+    this.security.rotate.addEventListener('click', () => {
+      if (this.security.rotate.dataset.confirm !== '1') {
+        this.security.rotate.dataset.confirm = '1';
+        this.security.rotate.textContent = 'ПОДТВЕРДИТЬ СМЕНУ КОДА';
+        this.game.ui.accountStatus(
+          'Новый код сначала будет сохранён на этом устройстве; после подтверждения старый перестанет работать, а остальные сеансы будут завершены.'
+        );
+        return;
+      }
+      this.rotateRecovery();
+    });
+    this.security.logout.addEventListener('click', () => {
+      if (this.security.logout.dataset.confirm !== '1') {
+        this.security.logout.dataset.confirm = '1';
+        this.security.logout.textContent = 'ПОДТВЕРДИТЬ ВЫХОД';
+        this.game.ui.accountStatus(
+          'Код этого аккаунта будет удалён с устройства. Сохраните его или подключите Google перед выходом.'
+        );
+        return;
+      }
+      this.logoutCurrentDevice();
+    });
+  }
+
+  resetSecurityConfirmations() {
+    if (!this.security) return;
+    this.security.rotate.dataset.confirm = '';
+    this.security.rotate.textContent = 'СМЕНИТЬ КОД ВОССТАНОВЛЕНИЯ';
+    this.security.logout.dataset.confirm = '';
+    this.security.logout.textContent = 'ВЫЙТИ НА ЭТОМ УСТРОЙСТВЕ';
+  }
+
+  updateSelfService(account, online) {
+    if (!this.security) return;
+    this.security.section.classList.toggle('hidden', !account);
+    for (const button of [this.security.revokeOthers, this.security.rotate, this.security.logout]) {
+      button.disabled = !account || !online;
+    }
+    this.resetSecurityConfirmations();
+    if (!account) this.security.sessions.replaceChildren();
+    else if (!online) this.renderSessions(null, 'Для управления сеансами нужен доступ к серверу.');
+  }
+
+  formatSessionTime(value) {
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return '—';
+    try {
+      return new Date(timestamp).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return '—';
+    }
+  }
+
+  renderSessions(sessions, message = '') {
+    if (!this.security?.sessions) return;
+    const list = this.security.sessions;
+    list.replaceChildren();
+    if (!Array.isArray(sessions)) {
+      const empty = document.createElement('small');
+      empty.textContent = message || 'Не удалось загрузить активные сеансы.';
+      list.append(empty);
+      this.security.revokeOthers.disabled = true;
+      return;
+    }
+    if (!sessions.length) {
+      const empty = document.createElement('small');
+      empty.textContent = 'Активных сеансов нет.';
+      list.append(empty);
+      this.security.revokeOthers.disabled = true;
+      return;
+    }
+
+    let otherCount = 0;
+    for (const session of sessions) {
+      if (!session.current) otherCount += 1;
+      const row = document.createElement('div');
+      row.className = 'account-item';
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px';
+      const copy = document.createElement('span');
+      copy.style.cssText = 'display:grid;gap:2px;text-align:left';
+      const title = document.createElement('strong');
+      title.textContent = session.current ? 'ЭТО УСТРОЙСТВО' : 'ДРУГОЙ СЕАНС';
+      const detail = document.createElement('small');
+      detail.textContent = `АКТИВНОСТЬ ${this.formatSessionTime(session.lastSeenAt)} · ДО ${this.formatSessionTime(
+        session.expiresAt
+      )}`;
+      copy.append(title, detail);
+      row.append(copy);
+
+      if (!session.current) {
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.className = 'button button-secondary';
+        revoke.textContent = 'ЗАВЕРШИТЬ';
+        revoke.addEventListener('click', () => this.revokeSession(session.id, revoke));
+        row.append(revoke);
+      }
+      list.append(row);
+    }
+    this.security.revokeOthers.disabled = !this.online || otherCount === 0;
+  }
+
+  async refreshSessions() {
+    if (!this.security || !this.game.ui.account || !this.online) return null;
+    const revision = this.profileRevision;
+    this.renderSessions(null, 'Загрузка активных сеансов…');
+    try {
+      const sessions = await listAccountSessions();
+      if (revision !== this.profileRevision) return null;
+      this.renderSessions(sessions);
+      return sessions;
+    } catch {
+      if (revision === this.profileRevision) this.renderSessions(null);
+      return null;
+    }
+  }
+
+  async revokeSession(sessionId, button) {
+    if (!sessionId) return null;
+    if (button) button.disabled = true;
+    try {
+      const result = await revokeAccountSession(sessionId);
+      if (!result) {
+        this.game.ui.accountStatus('Не удалось завершить этот сеанс.');
+        return null;
+      }
+      this.game.ui.accountStatus(result.removed ? 'Сеанс завершён.' : 'Этот сеанс уже был завершён.');
+      await this.refreshSessions();
+      return result;
+    } catch {
+      this.game.ui.accountStatus('Не удалось завершить этот сеанс.');
+      return null;
+    } finally {
+      if (button?.isConnected) button.disabled = false;
+    }
+  }
+
+  async revokeOtherSessions() {
+    if (!this.online) return null;
+    this.security.revokeOthers.disabled = true;
+    try {
+      const result = await revokeOtherAccountSessions();
+      if (!result) return this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
+      this.game.ui.accountStatus(
+        result.revoked ? `Завершено других сеансов: ${result.revoked}.` : 'Других активных сеансов уже нет.'
+      );
+      await this.refreshSessions();
+      return result;
+    } catch {
+      this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
+      return null;
+    } finally {
+      if (this.security?.revokeOthers?.isConnected)
+        this.security.revokeOthers.disabled = !this.online || !this.security.sessions.querySelector('button');
+    }
+  }
+
+  showRecoveryCode(secret) {
+    const code = document.querySelector('#accountCode');
+    const value = document.querySelector('#accountCodeValue');
+    code?.classList.remove('hidden');
+    if (value) value.textContent = secret;
+  }
+
+  async resumePendingRecovery() {
+    const stored = accountForRecords();
+    const pending = stored?.pendingRecovery;
+    if (!this.online || !stored?.id || !pending?.secret) return null;
+    const accountId = stored.id;
+    try {
+      const result = await confirmRecoveryCode(pending.secret);
+      if (result?.ok) {
+        const committed = commitStagedRecoveryCode(accountId);
+        if (this.game.ui.account?.id === accountId) {
+          const next = { ...this.game.ui.account, secret: pending.secret };
+          delete next.pendingRecovery;
+          this.game.ui.setAccount(next, { online: true });
+          this.game.ui.setAccountList(listAccounts());
+          this.showRecoveryCode(pending.secret);
+          this.game.ui.accountStatus(
+            committed.persisted
+              ? 'Смена кода восстановления завершена после повторного подключения.'
+              : 'Новый код уже активен на сервере, но браузер не смог обновить локальную запись. Сохраните показанный код вручную.'
+          );
+          await this.refreshSessions();
+        }
+        return result;
+      }
+
+      if (['rotation-expired', 'rotation-mismatch', 'rotation-not-prepared'].includes(result?.error)) {
+        discardStagedRecoveryCode(accountId);
+        if (this.game.ui.account?.id === accountId) {
+          this.game.ui.accountStatus('Незавершённая смена кода отменена; прежний код остался действующим.');
+        }
+      }
+      return null;
+    } catch {
+      if (this.game.ui.account?.id === accountId) {
+        this.game.ui.accountStatus(
+          'Смена кода ожидает подтверждения сервера. Старый и подготовленный новый код сохранены на устройстве; повторим автоматически.'
+        );
+      }
+      return null;
+    }
+  }
+
+  async rotateRecovery() {
+    const initiatingAccount = this.game.ui.account;
+    if (!this.online || !initiatingAccount?.id) return null;
+    const accountId = initiatingAccount.id;
+    const revision = this.profileRevision;
+    this.security.rotate.disabled = true;
+    try {
+      const prepared = await prepareRecoveryCode();
+      if (!prepared?.secret)
+        return this.game.ui.accountStatus('Не удалось подготовить новый код восстановления.');
+
+      // Prepare ничего не инвалидирует. Если игрок успел переключиться, просто оставляем server-side
+      // pending hash истечь: секрет другого аккаунта никогда не попадёт в текущую запись.
+      if (revision !== this.profileRevision || this.game.ui.account?.id !== accountId) return null;
+
+      const staged = stageRecoveryCode(accountId, prepared.secret, prepared.expiresAt);
+      if (!staged.persisted) {
+        this.game.ui.accountStatus(
+          'Браузер не смог безопасно сохранить новый код. Смена отменена, прежний код продолжает работать.'
+        );
+        return null;
+      }
+
+      let result;
+      try {
+        result = await confirmRecoveryCode(prepared.secret);
+      } catch {
+        this.resetSecurityConfirmations();
+        this.game.ui.accountStatus(
+          'Ответ подтверждения потерян. Старый и подготовленный новый код сохранены; Wobble повторит подтверждение при следующем подключении.'
+        );
+        return { pending: true };
+      }
+
+      if (!result?.ok) {
+        if (['rotation-expired', 'rotation-mismatch', 'rotation-not-prepared'].includes(result?.error)) {
+          discardStagedRecoveryCode(accountId);
+        }
+        this.game.ui.accountStatus('Смена кода не подтверждена; прежний код остался действующим.');
+        return null;
+      }
+
+      const committed = commitStagedRecoveryCode(accountId);
+      const stillCurrent = revision === this.profileRevision && this.game.ui.account?.id === accountId;
+      if (stillCurrent) {
+        const next = { ...this.game.ui.account, secret: prepared.secret };
+        delete next.pendingRecovery;
+        this.game.ui.setAccount(next, { online: true });
+        this.game.ui.setAccountList(listAccounts());
+        this.showRecoveryCode(prepared.secret);
+        this.resetSecurityConfirmations();
+        this.game.ui.accountStatus(
+          committed.persisted
+            ? `Новый код готов. Старый больше не работает. Завершено других сеансов: ${Number(
+                result.revokedSessions || 0
+              )}.`
+            : 'Новый код уже активен, но браузер не смог обновить локальную запись. Сохраните показанный код вручную.'
+        );
+        await this.refreshSessions();
+      }
+      return result;
+    } catch {
+      if (this.game.ui.account?.id === accountId) {
+        this.game.ui.accountStatus('Не удалось заменить код восстановления.');
+      }
+      return null;
+    } finally {
+      if (this.security?.rotate?.isConnected) this.security.rotate.disabled = false;
+    }
+  }
+
+  async logoutCurrentDevice() {
+    const account = this.game.ui.account;
+    if (!account?.id || !this.online) return null;
+    this.security.logout.disabled = true;
+    try {
+      const loggedOut = await logoutAccount();
+      if (!loggedOut) return this.game.ui.accountStatus('Не удалось завершить текущий сеанс.');
+      const forgotten = forgetAccountChecked(account.id);
+      this.networkTicket = null;
+      if (!forgotten.persisted) {
+        this.records = new Map();
+        this.apply(null, { online: false, records: [], progress: null });
+        this.game.ui.setAccountList([]);
+        this.game.ui.accountStatus(
+          'Сеанс на сервере завершён, но браузер не смог удалить сохранённый recovery code. Не перезагружайте страницу: очистите данные сайта вручную перед уходом.'
+        );
+        return false;
+      }
+      const remaining = listAccounts();
+      if (remaining.length) {
+        await this.signIn();
+        this.game.ui.accountStatus(`Вышли из ${account.name}. Выбран другой сохранённый аккаунт.`);
+      } else {
+        this.records = new Map();
+        this.apply(null, { online: false, records: [], progress: null });
+        this.game.ui.accountStatus(
+          'Вы вышли. Данные входа этого аккаунта удалены с устройства; вернуться можно по коду или Google.'
+        );
+      }
+      return true;
+    } catch {
+      this.game.ui.accountStatus('Не удалось завершить текущий сеанс.');
+      return null;
+    } finally {
+      if (this.security?.logout?.isConnected) this.security.logout.disabled = false;
+    }
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
@@ -67,6 +438,7 @@ export class AccountFlow {
 
   apply(account, { online = true, records = null, progress = null } = {}) {
     this.profileRevision += 1;
+    this.online = Boolean(online && account);
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
@@ -78,6 +450,11 @@ export class AccountFlow {
     this.game.ui.setServerProfile(online ? account?.profile || null : null);
     this.game.ui.setAvoidedPlayers(null);
     this.game.ui.setAccountList(listAccounts());
+    this.updateSelfService(account, this.online);
+    if (this.online) {
+      this.refreshSessions();
+      if (account?.pendingRecovery?.secret) this.resumePendingRecovery();
+    }
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }

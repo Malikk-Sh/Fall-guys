@@ -4,10 +4,21 @@ const { migrateDatabase } = require('./migrations');
 const SESSION_COOKIE = 'wobble_session';
 const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const SOCKET_TICKET_TTL_MS = 2 * 60 * 1000;
+const PUBLIC_SESSION_ID_LENGTH = 24;
 
 function hashToken(token) {
   if (typeof token !== 'string' || token.length < 24 || token.length > 256) return '';
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function publicSessionId(tokenHash) {
+  return /^[a-f0-9]{64}$/.test(String(tokenHash || ''))
+    ? String(tokenHash).slice(0, PUBLIC_SESSION_ID_LENGTH)
+    : '';
+}
+
+function validPublicSessionId(value) {
+  return new RegExp(`^[a-f0-9]{${PUBLIC_SESSION_ID_LENGTH}}$`).test(String(value || ''));
 }
 
 function parseCookies(header = '') {
@@ -84,6 +95,52 @@ class AuthService {
       },
       expiresAt
     };
+  }
+
+  listSessions(accountId, currentToken, now = Date.now()) {
+    const id = String(accountId || '');
+    if (!id || !this.statements.account.get(id)) return [];
+    const at = Number.isFinite(now) && now >= 0 ? Math.round(now) : Date.now();
+    this.statements.expireAccountSessions.run(id, at);
+    const currentHash = hashToken(currentToken);
+    return this.statements.sessions
+      .all(id)
+      .map(row => ({
+        id: publicSessionId(row.token_hash),
+        current: Boolean(currentHash && row.token_hash === currentHash),
+        createdAt: Number(row.created_at),
+        lastSeenAt: Number(row.last_seen_at),
+        expiresAt: Number(row.expires_at)
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt || a.id.localeCompare(b.id)
+      );
+  }
+
+  revokeAccountSession({ accountId, sessionId, currentToken } = {}) {
+    const id = String(accountId || '');
+    const requested = String(sessionId || '')
+      .trim()
+      .toLowerCase();
+    if (!id || !validPublicSessionId(requested)) return { ok: false, reason: 'invalid-session' };
+    const currentHash = hashToken(currentToken);
+    if (currentHash && publicSessionId(currentHash) === requested) {
+      return { ok: false, reason: 'current-session' };
+    }
+    const row = this.statements.sessionByPublicId.get(id, requested);
+    if (!row) return { ok: true, removed: false };
+    const removed = this.statements.deleteSessionForAccount.run(row.token_hash, id).changes > 0;
+    return { ok: true, removed };
+  }
+
+  revokeOtherSessions(accountId, currentToken, now = Date.now()) {
+    const id = String(accountId || '');
+    const currentHash = hashToken(currentToken);
+    if (!id || !currentHash) return 0;
+    const current = this.statements.session.get(currentHash);
+    if (!current || current.account_id !== id || current.expires_at <= now) return 0;
+    return this.statements.deleteOtherSessions.run(id, currentHash).changes;
   }
 
   createSocketTicket(accountId, now = Date.now()) {
@@ -172,12 +229,31 @@ function prepare(db) {
       JOIN accounts a ON a.id = s.account_id
       WHERE s.token_hash = ?
     `),
+    sessions: db.prepare(`
+      SELECT token_hash, created_at, last_seen_at, expires_at
+      FROM account_sessions
+      WHERE account_id = ?
+      ORDER BY last_seen_at DESC, created_at DESC, token_hash ASC
+    `),
     touchSession: db.prepare(
       'UPDATE account_sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?'
     ),
+    sessionByPublicId: db.prepare(`
+      SELECT token_hash
+      FROM account_sessions
+      WHERE account_id = ? AND substr(token_hash, 1, ${PUBLIC_SESSION_ID_LENGTH}) = ?
+      LIMIT 1
+    `),
     deleteSession: db.prepare('DELETE FROM account_sessions WHERE token_hash = ?'),
+    deleteSessionForAccount: db.prepare(
+      'DELETE FROM account_sessions WHERE token_hash = ? AND account_id = ?'
+    ),
+    deleteOtherSessions: db.prepare('DELETE FROM account_sessions WHERE account_id = ? AND token_hash <> ?'),
     deleteAccountSessions: db.prepare('DELETE FROM account_sessions WHERE account_id = ?'),
     expireSessions: db.prepare('DELETE FROM account_sessions WHERE expires_at <= ?'),
+    expireAccountSessions: db.prepare(
+      'DELETE FROM account_sessions WHERE account_id = ? AND expires_at <= ?'
+    ),
     identity: db.prepare(
       'SELECT provider, provider_subject, account_id FROM account_identities WHERE provider = ? AND provider_subject = ?'
     ),
@@ -196,7 +272,9 @@ module.exports = {
   SESSION_COOKIE,
   DEFAULT_SESSION_TTL_MS,
   SOCKET_TICKET_TTL_MS,
+  PUBLIC_SESSION_ID_LENGTH,
   hashToken,
+  publicSessionId,
   parseCookies,
   cookieForSession,
   clearSessionCookie

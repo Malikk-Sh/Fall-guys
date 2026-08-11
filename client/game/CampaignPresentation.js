@@ -80,9 +80,7 @@ export function campaignThemeFor(chapterId) {
 }
 
 const vectorFrom = position =>
-  position
-    ? new THREE.Vector3(position.x || 0, position.y || 0, position.z || 0)
-    : new THREE.Vector3();
+  position ? new THREE.Vector3(position.x || 0, position.y || 0, position.z || 0) : new THREE.Vector3();
 
 const disposeObject = object => {
   if (!object) return;
@@ -103,8 +101,7 @@ const setEmissive = (object, intensity) => {
   });
 };
 
-const velocityLength = velocity =>
-  Math.hypot(velocity?.x || 0, velocity?.y || 0, velocity?.z || 0);
+const velocityLength = velocity => Math.hypot(velocity?.x || 0, velocity?.y || 0, velocity?.z || 0);
 
 class CampaignPresentation {
   constructor({
@@ -458,8 +455,7 @@ class CampaignPresentation {
       }
 
       if (!wasCarrier && isCarrier) {
-        const handoff =
-          this.lastThrow && this.lastThrow.carrier !== isCarrier && now <= this.lastThrow.until;
+        const handoff = this.lastThrow && this.lastThrow.carrier !== isCarrier && now <= this.lastThrow.until;
         if (handoff) this.coreHandoff(game, visuals.core.position);
         else this.corePickup(game, visuals.core.position);
         this.lastThrow = null;

@@ -5,6 +5,8 @@ const { migrateDatabase } = require('./migrations');
 
 const ADMIN_SESSION_COOKIE = 'wobble_admin_session';
 const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_ADMIN_SESSIONS_PER_USER = 20;
+const MAX_AUDIT_DETAIL = 4000;
 const ADMIN_ROLES = Object.freeze(['owner', 'operator', 'moderator', 'analyst', 'viewer']);
 const ROLE_CAPABILITIES = Object.freeze({
   owner: Object.freeze([
@@ -34,9 +36,19 @@ function hashSession(token) {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
+function hasAsciiControl(value) {
+  const text = String(value || '');
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function normalizeName(value) {
-  const text = String(value || '').trim();
-  return text && text.length <= 80 ? text : null;
+  const raw = String(value || '');
+  const text = raw.trim();
+  return text && text.length <= 80 && !hasAsciiControl(raw) ? text : null;
 }
 
 function normalizeRole(value) {
@@ -67,7 +79,7 @@ function safeEqual(left, right) {
 function cookieForAdminSession(token, { secure = true, maxAgeMs = ADMIN_SESSION_TTL_MS } = {}) {
   const attributes = [
     `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(token)}`,
-    'Path=/',
+    'Path=/api/admin',
     'HttpOnly',
     'SameSite=Strict',
     `Max-Age=${Math.max(0, Math.floor(maxAgeMs / 1000))}`
@@ -77,7 +89,13 @@ function cookieForAdminSession(token, { secure = true, maxAgeMs = ADMIN_SESSION_
 }
 
 function clearAdminSessionCookie({ secure = true } = {}) {
-  const attributes = [`${ADMIN_SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
+  const attributes = [
+    `${ADMIN_SESSION_COOKIE}=`,
+    'Path=/api/admin',
+    'HttpOnly',
+    'SameSite=Strict',
+    'Max-Age=0'
+  ];
   if (secure) attributes.push('Secure');
   return attributes.join('; ');
 }
@@ -107,6 +125,31 @@ function hasCapability(role, capability) {
   return Boolean(ROLE_CAPABILITIES[role]?.includes(capability));
 }
 
+function serializeAuditDetail(detail) {
+  if (detail == null) return null;
+  let serialized;
+  try {
+    serialized = JSON.stringify(detail);
+  } catch {
+    return JSON.stringify({ unavailable: true, reason: 'not-json-serializable' });
+  }
+  if (serialized == null) return null;
+  if (serialized.length <= MAX_AUDIT_DETAIL) return serialized;
+  return JSON.stringify({
+    truncated: true,
+    originalLength: serialized.length
+  });
+}
+
+function parseAuditDetail(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { unavailable: true, reason: 'invalid-stored-json' };
+  }
+}
+
 class AdminAuthService {
   constructor({ db, sessionTtlMs = ADMIN_SESSION_TTL_MS } = {}) {
     if (!db) throw new Error('AdminAuthService requires an open database');
@@ -116,14 +159,29 @@ class AdminAuthService {
     this.statements = prepare(db);
   }
 
-  createUser({ name, role, now = Date.now() } = {}) {
+  createUser({ name, role, actor = null, now = Date.now() } = {}) {
     const displayName = normalizeName(name);
     const normalizedRole = normalizeRole(role);
     if (!displayName) return { ok: false, reason: 'invalid-name' };
     if (!normalizedRole) return { ok: false, reason: 'invalid-role', roles: ADMIN_ROLES };
     const id = crypto.randomUUID();
     const accessCode = generateAccessCode();
-    this.statements.insertUser.run(id, displayName, normalizedRole, hashSecret(accessCode), now);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.insertUser.run(id, displayName, normalizedRole, hashSecret(accessCode), now);
+      this.audit({
+        actor,
+        action: 'admin.user.create',
+        targetType: 'admin-user',
+        targetId: id,
+        detail: { role: normalizedRole },
+        now
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return {
       ok: true,
       user: { id, name: displayName, role: normalizedRole, createdAt: now, disabledAt: null },
@@ -141,7 +199,7 @@ class AdminAuthService {
     }));
   }
 
-  rotateAccessCode(adminUserId) {
+  rotateAccessCode(adminUserId, { actor = null, now = Date.now() } = {}) {
     const id = String(adminUserId || '').trim();
     const user = this.statements.user.get(id);
     if (!user) return { ok: false, reason: 'unknown-admin' };
@@ -150,6 +208,13 @@ class AdminAuthService {
     try {
       this.statements.updateSecret.run(hashSecret(accessCode), id);
       this.statements.deleteUserSessions.run(id);
+      this.audit({
+        actor,
+        action: 'admin.user.rotate-access',
+        targetType: 'admin-user',
+        targetId: id,
+        now
+      });
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -158,13 +223,20 @@ class AdminAuthService {
     return { ok: true, accessCode };
   }
 
-  setDisabled(adminUserId, disabled, now = Date.now()) {
+  setDisabled(adminUserId, disabled, { actor = null, now = Date.now() } = {}) {
     const id = String(adminUserId || '').trim();
     if (!this.statements.user.get(id)) return { ok: false, reason: 'unknown-admin' };
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.statements.setDisabled.run(disabled ? now : null, id);
       if (disabled) this.statements.deleteUserSessions.run(id);
+      this.audit({
+        actor,
+        action: disabled ? 'admin.user.disable' : 'admin.user.enable',
+        targetType: 'admin-user',
+        targetId: id,
+        now
+      });
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');
@@ -174,6 +246,7 @@ class AdminAuthService {
   }
 
   login(accessCode, now = Date.now()) {
+    this.cleanup(now);
     const secretHash = hashSecret(accessCode);
     if (!secretHash) return null;
     const user = this.statements.userBySecret.get(secretHash);
@@ -181,7 +254,15 @@ class AdminAuthService {
     const token = generateSessionToken();
     const tokenHash = hashSession(token);
     const expiresAt = now + this.sessionTtlMs;
-    this.statements.insertSession.run(tokenHash, user.id, now, now, expiresAt);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.insertSession.run(tokenHash, user.id, now, now, expiresAt);
+      this.statements.trimUserSessions.run(user.id, user.id, MAX_ADMIN_SESSIONS_PER_USER);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return {
       token,
       csrf: csrfFromSessionHash(tokenHash),
@@ -229,12 +310,8 @@ class AdminAuthService {
       .trim()
       .slice(0, 120);
     if (!safeAction) return false;
-    const actorName =
-      String(actor?.name || 'system')
-        .trim()
-        .slice(0, 80) || 'system';
+    const actorName = normalizeName(actor?.name) || 'system';
     const actorRole = ADMIN_ROLES.includes(actor?.role) ? actor.role : 'system';
-    const detailJson = detail == null ? null : JSON.stringify(detail).slice(0, 4000);
     this.statements.insertAudit.run(
       actor?.id || null,
       actorName,
@@ -242,7 +319,7 @@ class AdminAuthService {
       safeAction,
       targetType == null ? null : String(targetType).slice(0, 80),
       targetId == null ? null : String(targetId).slice(0, 160),
-      detailJson,
+      serializeAuditDetail(detail),
       now
     );
     return true;
@@ -258,7 +335,7 @@ class AdminAuthService {
       action: row.action,
       targetType: row.target_type || null,
       targetId: row.target_id || null,
-      detail: row.detail_json ? JSON.parse(row.detail_json) : null,
+      detail: parseAuditDetail(row.detail_json),
       createdAt: Number(row.created_at)
     }));
   }
@@ -297,6 +374,17 @@ function prepare(db) {
     deleteSession: db.prepare('DELETE FROM admin_sessions WHERE token_hash = ?'),
     deleteUserSessions: db.prepare('DELETE FROM admin_sessions WHERE admin_user_id = ?'),
     expireSessions: db.prepare('DELETE FROM admin_sessions WHERE expires_at <= ?'),
+    trimUserSessions: db.prepare(`
+      DELETE FROM admin_sessions
+      WHERE admin_user_id = ?
+        AND token_hash NOT IN (
+          SELECT token_hash
+          FROM admin_sessions
+          WHERE admin_user_id = ?
+          ORDER BY last_seen_at DESC, created_at DESC, token_hash DESC
+          LIMIT ?
+        )
+    `),
     insertAudit: db.prepare(`
       INSERT INTO admin_audit_events
         (admin_user_id, actor_name, actor_role, action, target_type, target_id, detail_json, created_at)
@@ -315,6 +403,7 @@ module.exports = {
   AdminAuthService,
   ADMIN_SESSION_COOKIE,
   ADMIN_SESSION_TTL_MS,
+  MAX_ADMIN_SESSIONS_PER_USER,
   ADMIN_ROLES,
   ROLE_CAPABILITIES,
   capabilitiesFor,

@@ -10,6 +10,7 @@ All notable public Wobble Rush changes are recorded here from the beta release p
 - Stronger Energy Core, Signals and finale feedback for the co-op campaign.
 - A private per-account list of excluded matchmaking partners with safe restore.
 - A verified tag-driven GitHub Release pipeline for future beta and stable releases.
+- A local-only human moderation queue with report evidence snapshots, auditable case statuses and automatic reopening when new reports arrive.
 
 ### Changed
 

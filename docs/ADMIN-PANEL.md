@@ -200,6 +200,23 @@ rate уникальных пользователей.
 агрегированную analytics response с текущими фильтрами. Они не получают account IDs, recovery data,
 session tokens или другие credentials.
 
+### Игроки / поддержка аккаунтов
+
+Раздел **Игроки** доступен `owner` и `operator`. Он предназначен для обычных вопросов поддержки:
+«почему не виден прогресс», «есть ли активный вход», «какая глава пройдена», «получена ли награда».
+
+Поиск принимает минимум два символа имени или часть account ID. Открытие полной карточки записывает
+`player.support.view` в admin audit с ID просмотренного аккаунта.
+
+Карточка показывает имя и ID, даты активности, безопасный summary сессий, названия identity providers,
+факт незавершённой recovery rotation, co-op прогресс, achievements, records, loadout, cosmetics,
+последние награды, недавних напарников, собственные avoid-решения игрока и агрегат жалоб.
+
+Control Plane намеренно не возвращает `accounts.secret_hash`, `pending_secret_hash`,
+`account_sessions.token_hash`, `account_identities.provider_subject`, `reward_grants.idempotency_key`
+или другие credentials. В этом PR карточка полностью read-only: восстановление, отзыв игровых sessions,
+forced rename и другие account mutations требуют отдельного дизайна прав и подтверждений.
+
 ### Модерация
 
 Статусы в UI дополнительно переводятся:
@@ -274,7 +291,7 @@ systemctl restart wobble
 
 1. ~~moderation case detail + безопасные status transitions~~;
 2. ~~analytics charts, фильтры, сравнение периодов и export~~;
-3. player/account support view без раскрытия credentials;
+3. ~~player/account support view без раскрытия credentials~~;
 4. privileged operations helper для backup/smoke/restart и позже deploy;
 5. system status: Nginx, certificate, disk, listeners и backup/offsite;
 6. confirmations, operation queue и расширенный audit для опасных действий.

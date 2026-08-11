@@ -7,6 +7,8 @@ const state = {
   currentPanel: 'overview',
   analytics: null,
   analyticsLoadRevision: 0,
+  playerDetailRevision: 0,
+  playerSearchQuery: '',
   moderationCase: null,
   moderationConfirmation: null,
   moderationLoadRevision: 0
@@ -50,7 +52,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'admin.user.rotate': 'Сменён код администратора',
   'admin.user.disable': 'Администратор отключён',
   'admin.user.enable': 'Администратор включён',
-  'moderation.case.transition': 'Изменён статус жалобы'
+  'moderation.case.transition': 'Изменён статус жалобы',
+  'player.support.view': 'Открыта карточка игрока'
 });
 
 function setStatus(text, tone = '') {
@@ -125,6 +128,7 @@ function switchPanel(name) {
   if (!button || button.hidden) name = 'overview';
   if (name !== 'moderation') closeModerationCase();
   if (name !== 'analytics') state.analyticsLoadRevision += 1;
+  if (name !== 'players') state.playerDetailRevision += 1;
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
   for (const item of $$('#tabs [data-panel]')) item.classList.toggle('active', item.dataset.panel === name);
@@ -543,6 +547,222 @@ function exportAnalytics(format) {
   setStatus('CSV со статистикой подготовлен.', 'good');
 }
 
+function fillDetailsElement(root, entries) {
+  root.replaceChildren();
+  for (const [label, value] of entries) {
+    appendText(root, 'dt', label);
+    appendText(root, 'dd', String(value ?? '—'));
+  }
+}
+
+function providerLabel(provider) {
+  if (provider === 'google') return 'Google';
+  return provider || '—';
+}
+
+function playerListItem(root, title, meta) {
+  const item = document.createElement('div');
+  item.className = 'rank-item support-list-item';
+  const copy = document.createElement('div');
+  appendText(copy, 'strong', title);
+  appendText(copy, 'span', meta, 'rank-meta');
+  item.append(copy);
+  root.append(item);
+}
+
+function renderSimpleList(selector, rows, formatter, emptyText) {
+  const root = $(selector);
+  root.replaceChildren();
+  for (const row of rows || []) {
+    const [title, meta] = formatter(row);
+    playerListItem(root, title, meta);
+  }
+  if (!rows?.length) appendText(root, 'p', emptyText, 'muted');
+}
+
+function hidePlayerDetail() {
+  state.playerDetailRevision += 1;
+  $('#player-detail').hidden = true;
+}
+
+function renderPlayerDetail(player) {
+  const account = player.account || {};
+  const login = player.login || {};
+  const sessions = login.sessions || {};
+  const progress = player.progress || {};
+  const stats = progress.stats || {};
+  const inventory = player.inventory || {};
+  const social = player.social || {};
+  const moderation = player.moderation;
+  const providers =
+    (login.providers || []).map(item => providerLabel(item.provider)).join(', ') || 'не привязан';
+
+  $('#player-detail-name').textContent = account.name || 'Wobbler';
+  $('#player-detail-id').textContent = `ID аккаунта: ${account.id}`;
+  $('#player-summary-cards').replaceChildren(
+    statCard('Активных входов', formatNumber(sessions.active), 'только количество, без token/IP'),
+    statCard(
+      'Пройдено глав',
+      `${formatNumber(stats.coopChaptersCompleted)} / 10`,
+      `${formatNumber(stats.coopMatchesCompleted)} завершённых co-op матчей`
+    ),
+    statCard(
+      'Получено жалоб',
+      formatNumber(social.reportsReceived?.total),
+      `${formatNumber(social.reportsReceived?.reporters)} разных жалобщиков`,
+      social.reportsReceived?.total ? 'warn' : ''
+    ),
+    statCard(
+      'Модерация',
+      moderation ? statusLabel(moderation.status) : 'Нет дела',
+      moderation ? `${formatNumber(moderation.totalReports)} жалоб в деле` : 'активного moderation case нет'
+    )
+  );
+
+  fillDetailsElement($('#player-account-details'), [
+    ['Создан', formatTime(account.createdAt)],
+    ['Последняя активность аккаунта', formatTime(account.lastSeenAt)],
+    ['Способы входа', providers],
+    ['Активных сессий', formatNumber(sessions.active)],
+    ['Всего сохранённых session rows', formatNumber(sessions.totalStored)],
+    ['Последняя активная сессия', formatTime(sessions.latestSeenAt)],
+    ['Ближайшее истечение сессии', formatTime(sessions.soonestActiveExpiresAt)],
+    [
+      'Смена recovery-кода ожидает подтверждения',
+      account.recoveryRotationPending ? `да, с ${formatTime(account.recoveryRotationStartedAt)}` : 'нет'
+    ]
+  ]);
+  fillDetailsElement($('#player-progress-details'), [
+    ['Завершено co-op матчей', formatNumber(stats.coopMatchesCompleted)],
+    ['Уникально пройдено глав', `${formatNumber(stats.coopChaptersCompleted)} / 10`],
+    ['Спасений напарника', formatNumber(stats.coopRevives)],
+    ['Достижений', formatNumber(progress.achievements?.length)],
+    ['Личных рекордов', formatNumber(progress.personalRecords?.length)]
+  ]);
+  fillDetailsElement($('#player-social-details'), [
+    ['Недавних напарников в карточке', formatNumber(social.recentPartners?.length)],
+    ['Сам исключил из подбора', formatNumber(social.avoidedByThisPlayer)],
+    ['Жалоб получил', formatNumber(social.reportsReceived?.total)],
+    ['Разных жалобщиков', formatNumber(social.reportsReceived?.reporters)],
+    ['Жалоб отправил', formatNumber(social.reportsSubmitted)],
+    ['Последняя жалоба на игрока', formatTime(social.reportsReceived?.lastReportedAt)]
+  ]);
+  const loadout = inventory.loadout || {};
+  fillDetailsElement($('#player-loadout-details'), [
+    ['Тело', loadout.body || 'classic'],
+    ['Визор', loadout.visor || 'не выбран'],
+    ['Антенна', loadout.antenna || 'не выбрана'],
+    ['След', loadout.trail || 'не выбран'],
+    ['Финишный эффект', loadout.finish || 'не выбран'],
+    ['Открыто предметов', formatNumber(inventory.cosmetics?.length)]
+  ]);
+
+  renderSimpleList(
+    '#player-chapters',
+    progress.chapters,
+    row => [
+      courseLabel(row.chapterId),
+      `${formatNumber(row.completions)} прохождений · лучшее время ${formatMilliseconds(row.bestTimeMs)} · ${row.flawless ? 'есть безошибочное прохождение' : 'безошибочного прохождения нет'} · последнее ${formatTime(row.lastCompletedAt)}`
+    ],
+    'Главы пока не пройдены.'
+  );
+  renderSimpleList(
+    '#player-achievements',
+    progress.achievements,
+    row => [row.id, `получено ${formatTime(row.unlockedAt)}`],
+    'Достижений пока нет.'
+  );
+  renderSimpleList(
+    '#player-records',
+    progress.personalRecords,
+    row => [
+      `${modeLabel(row.mode)} · ${courseLabel(row.courseKey)}`,
+      `${formatMilliseconds(row.timeMs)} · поставлен ${formatTime(row.achievedAt)}`
+    ],
+    'Личных рекордов пока нет.'
+  );
+  renderSimpleList(
+    '#player-inventory',
+    inventory.cosmetics,
+    row => [row.id, `открыто ${formatTime(row.unlockedAt)} · источник: ${row.source}`],
+    'Дополнительная косметика пока не открыта.'
+  );
+  for (const reward of inventory.recentRewards || []) {
+    playerListItem(
+      $('#player-inventory'),
+      `Награда: ${reward.reward}${reward.cosmeticId ? ` · ${reward.cosmeticId}` : ''}`,
+      `${formatTime(reward.grantedAt)} · источник: ${reward.source}`
+    );
+  }
+  renderSimpleList(
+    '#player-partners',
+    social.recentPartners,
+    row => [
+      `${row.name} · ${row.id}`,
+      `${formatNumber(row.matchesTogether)} матчей вместе · ${courseLabel(row.lastChapterId)} · ${formatTime(row.lastPlayedAt)}${row.avoidedByThisPlayer ? ' · этот игрок исключён из повторного подбора' : ''}`
+    ],
+    'Недавних напарников нет.'
+  );
+  $('#player-detail').hidden = false;
+  $('#player-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function openPlayerDetail(accountId) {
+  const revision = ++state.playerDetailRevision;
+  setStatus('Загружаю карточку игрока…');
+  try {
+    const payload = await api('/api/admin/players/detail', { accountId });
+    if (revision !== state.playerDetailRevision) return;
+    renderPlayerDetail(payload.player);
+    setStatus('Карточка игрока загружена', 'good');
+  } catch (error) {
+    if (revision !== state.playerDetailRevision) return;
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Не удалось открыть игрока: ${error.message}`, 'bad');
+  }
+}
+
+async function searchPlayers() {
+  const query = $('#player-search-query').value.trim();
+  if (query.length < 2) {
+    $('#player-search-meta').textContent = 'Введите хотя бы 2 символа.';
+    return false;
+  }
+  state.playerSearchQuery = query;
+  const payload = await api('/api/admin/players/search', { query, limit: 30 });
+  const body = $('#player-results-body');
+  body.replaceChildren();
+  for (const player of payload.results || []) {
+    const row = rowWithCells([
+      `${player.name} · ${player.id}`,
+      formatTime(player.lastSeenAt),
+      formatNumber(player.activeSessions),
+      player.hasExternalLogin ? 'есть' : 'нет'
+    ]);
+    const action = document.createElement('td');
+    const button = appendText(action, 'button', 'Открыть карточку', 'case-open');
+    button.type = 'button';
+    button.addEventListener('click', () => openPlayerDetail(player.id));
+    row.append(action);
+    body.append(row);
+  }
+  if (!payload.results?.length) {
+    const row = document.createElement('tr');
+    const cell = appendText(row, 'td', 'Игроки по этому запросу не найдены.', 'empty');
+    cell.colSpan = 5;
+    body.append(row);
+  }
+  $('#player-search-meta').textContent =
+    `Найдено: ${formatNumber(payload.results?.length)}. Поиск по имени может вернуть несколько совпадений.`;
+  return true;
+}
+
+async function loadPlayers() {
+  if (!state.playerSearchQuery) return true;
+  $('#player-search-query').value = state.playerSearchQuery;
+  return searchPlayers();
+}
+
 function reasonsText(reasons = {}) {
   return (
     Object.entries(reasons)
@@ -771,6 +991,7 @@ async function refreshCurrent() {
   const loaders = {
     overview: loadOverview,
     analytics: loadAnalytics,
+    players: loadPlayers,
     moderation: loadModeration,
     audit: loadAudit
   };
@@ -826,6 +1047,18 @@ $('#analytics-device').addEventListener('change', refreshCurrent);
 $('#analytics-trend-metric').addEventListener('change', renderAnalyticsTrend);
 $('#analytics-export-csv').addEventListener('click', () => exportAnalytics('csv'));
 $('#analytics-export-json').addEventListener('click', () => exportAnalytics('json'));
+$('#player-search-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  setStatus('Ищу игрока…');
+  try {
+    await searchPlayers();
+    setStatus('Поиск завершён', 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Ошибка поиска: ${error.message}`, 'bad');
+  }
+});
+$('#player-detail-close').addEventListener('click', hidePlayerDetail);
 $('#moderation-status').addEventListener('change', refreshCurrent);
 $('#case-close').addEventListener('click', closeModerationCase);
 $('#case-action').addEventListener('submit', submitModerationTransition);

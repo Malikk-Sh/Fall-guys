@@ -15,7 +15,7 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier client/game/CampaignPresentation.js",
+    "format:check": "mkdir -p playwright-report && prettier client/game/CampaignPresentation.js > playwright-report/CampaignPresentation.js && false",
     "load": "node server/loadProbe.mjs",
     "load:observe": "node server/loadObserver.mjs"
   },

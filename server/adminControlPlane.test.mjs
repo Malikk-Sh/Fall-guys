@@ -5,11 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const express = require('express');
 const { openDatabase } = require('./db');
-const {
-  AdminAuthService,
-  MAX_ADMIN_SESSIONS_PER_USER,
-  hasCapability
-} = require('./adminAuth');
+const { AdminAuthService, MAX_ADMIN_SESSIONS_PER_USER, hasCapability } = require('./adminAuth');
 const { installAdminRoutes } = require('./adminRoutes');
 
 test('admin access code is one-time visible, sessions are hashed and role capabilities stay bounded', () => {

@@ -50,8 +50,11 @@ certbot.timer
 - `127.0.0.1:$PORT` — внутренний Node listener.
 
 Проверка HTTPS делает настоящий TLS handshake с `127.0.0.1:443`, но передаёт production SNI из
-`ALLOWED_ORIGINS`. Поэтому она проверяет именно маршрут Wobble через Nginx stream и реально выдаваемый
-сертификат, а не просто наличие файла сертификата на диске.
+канонического `WOBBLE_PUBLIC_ORIGIN`, который поддерживает installer. Это отдельная generated-настройка:
+`ALLOWED_ORIGINS` может содержать несколько разрешённых browser origins и поэтому не является надёжным
+источником production hostname. В ручной/local установке допустим fallback только когда HTTPS origin в
+`ALLOWED_ORIGINS` ровно один. Поэтому проверяется именно маршрут Wobble через Nginx stream и реально
+выдаваемый сертификат, а не просто наличие файла сертификата на диске.
 
 ### HTTPS-сертификат
 

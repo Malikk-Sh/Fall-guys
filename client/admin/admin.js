@@ -185,6 +185,7 @@ function formatNumber(value) {
 }
 
 function formatBytes(value) {
+  if (value == null || value === '') return '—';
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return '—';
   const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
@@ -198,6 +199,7 @@ function formatBytes(value) {
 }
 
 function percent(value) {
+  if (value == null || value === '') return '—';
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%` : '—';
 }
@@ -1093,7 +1095,9 @@ function renderInfrastructure(payload) {
     statCard(
       'Диск',
       diskUsed == null ? 'НЕТ ДАННЫХ' : `${percent(diskUsed)} занято`,
-      `свободно ${formatBytes(infra.resources?.disk?.availableBytes)}`,
+      diskUsed == null
+        ? 'измерение файловой системы недоступно'
+        : `свободно ${formatBytes(infra.resources?.disk?.availableBytes)}`,
       diskUsed == null ? 'warn' : diskUsed >= 95 ? 'bad' : diskUsed >= 85 ? 'warn' : 'good'
     ),
     statCard(
@@ -1169,13 +1173,22 @@ function renderInfrastructure(payload) {
     ['Offsite доступен', offsite.configured ? (offsite.available ? 'Да' : 'Нет') : 'Не настроен']
   ]);
 
-  const tone = infrastructureTone(infra);
-  if (tone === 'good') setStatus('Серверные проверки не показывают явных проблем.', 'good');
+  return infrastructureTone(infra);
 }
 
 async function loadInfrastructure() {
   const payload = await api('/api/admin/infrastructure', {});
-  renderInfrastructure(payload);
+  const tone = renderInfrastructure(payload);
+  if (tone === 'bad') {
+    return {
+      statusText: 'Часть серверных проверок требует внимания. Посмотрите красные карточки ниже.',
+      tone
+    };
+  }
+  if (tone === 'warn') {
+    return { statusText: 'Сервер работает, но есть предупреждения, которые стоит проверить.', tone };
+  }
+  return { statusText: 'Серверные проверки не показывают явных проблем.', tone: 'good' };
 }
 
 function clearOperationConfirmation() {
@@ -1341,8 +1354,9 @@ async function refreshCurrent() {
   if (!loader) return;
   setStatus('Обновляю данные…');
   try {
-    await loader();
-    setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
+    const result = await loader();
+    if (result?.statusText) setStatus(result.statusText, result.tone || '');
+    else setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
   } catch (error) {
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
     setStatus(`Ошибка: ${error.message}`, 'bad');

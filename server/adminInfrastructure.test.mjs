@@ -71,10 +71,11 @@ test('canonical public origin wins over browser allowlist ordering and ambiguous
     }),
     { origin: 'https://wobbles.ru', hostname: 'wobbles.ru', port: 443 }
   );
-  assert.deepEqual(
-    publicTarget({ ALLOWED_ORIGINS: 'https://old.example,https://wobbles.ru' }),
-    { origin: null, hostname: null, port: 443 }
-  );
+  assert.deepEqual(publicTarget({ ALLOWED_ORIGINS: 'https://old.example,https://wobbles.ru' }), {
+    origin: null,
+    hostname: null,
+    port: 443
+  });
   assert.deepEqual(
     publicTarget({
       WOBBLE_PUBLIC_ORIGIN: 'http://unsafe.example',

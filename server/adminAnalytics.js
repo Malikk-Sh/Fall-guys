@@ -102,7 +102,7 @@ class AdminAnalytics {
     this.db = db;
     this.gameplay = gameplay;
     this.now = typeof now === 'function' ? now : typeof gameplay.now === 'function' ? gameplay.now : () => Date.now();
-    this.statements = prepare(db);
+    this.statements = null;
   }
 
   report({ days = 7, limit = 300, mode = 'all', course = 'all', device = 'all' } = {}) {
@@ -118,6 +118,7 @@ class AdminAnalytics {
     // admin report reads SQLite. The tiny limit is intentional: this call is for lifecycle semantics,
     // not for the returned rows.
     this.gameplay.summary({ days: periodDays, limit: 1 });
+    this.statements ||= prepare(this.db);
 
     const now = this.now();
     const from = dayKey(now - (periodDays - 1) * DAY_MS);

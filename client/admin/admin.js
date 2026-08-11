@@ -6,7 +6,8 @@ const state = {
   capabilities: new Set(),
   currentPanel: 'overview',
   moderationCase: null,
-  moderationConfirmation: null
+  moderationConfirmation: null,
+  moderationLoadRevision: 0
 };
 
 const $ = selector => document.querySelector(selector);
@@ -43,6 +44,7 @@ async function api(path, body = {}, { csrf = true } = {}) {
 }
 
 function closeModerationCase() {
+  state.moderationLoadRevision += 1;
   state.moderationCase = null;
   resetModerationConfirmation();
   const dialog = $('#moderation-dialog');
@@ -341,14 +343,17 @@ function renderModerationCase(item) {
 }
 
 async function openModerationCase(targetAccountId) {
+  const requestRevision = ++state.moderationLoadRevision;
   setStatus('Загрузка moderation case…');
   try {
     const payload = await api('/api/admin/moderation/case', { targetAccountId });
+    if (requestRevision !== state.moderationLoadRevision) return;
     renderModerationCase(payload.case);
     const dialog = $('#moderation-dialog');
     if (!dialog.open) dialog.showModal();
     setStatus('Дело загружено', 'good');
   } catch (error) {
+    if (requestRevision !== state.moderationLoadRevision) return;
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
     setStatus(`Не удалось открыть дело: ${error.message}`, 'bad');
   }
@@ -371,13 +376,7 @@ async function submitModerationTransition(event) {
     return;
   }
 
-  const signature = JSON.stringify([
-    item.targetAccountId,
-    item.status,
-    item.lastReportedAt,
-    nextStatus,
-    note
-  ]);
+  const signature = JSON.stringify([item.targetAccountId, item.revision, nextStatus, note]);
   const now = Date.now();
   if (
     !state.moderationConfirmation ||
@@ -398,8 +397,7 @@ async function submitModerationTransition(event) {
       targetAccountId: item.targetAccountId,
       status: nextStatus,
       note,
-      expectedStatus: item.status,
-      expectedLastReportedAt: item.lastReportedAt
+      expectedRevision: item.revision
     });
     renderModerationCase(payload.case);
     await loadModeration();
@@ -490,6 +488,7 @@ $('#case-action').addEventListener('submit', submitModerationTransition);
 $('#case-next-status').addEventListener('change', () => resetModerationConfirmation());
 $('#case-note').addEventListener('input', () => resetModerationConfirmation());
 $('#moderation-dialog').addEventListener('cancel', () => {
+  state.moderationLoadRevision += 1;
   state.moderationCase = null;
   resetModerationConfirmation();
 });

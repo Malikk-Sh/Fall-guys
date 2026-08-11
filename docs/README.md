@@ -20,7 +20,7 @@
 - [`OPERATIONS.md`](OPERATIONS.md) — production layout, systemd, Nginx, shared TCP/443, UFW, TLS,
   deploy, релизы, backup/restore и ежедневная эксплуатация.
 - [`ADMIN-PANEL.md`](ADMIN-PANEL.md) — Wobble Control Plane, отдельные admin credentials, роли,
-  audit trail, bootstrap первого owner и этапы безопасной автоматизации.
+  первый read-only operational dashboard, audit trail и этапы безопасной автоматизации.
 - [`ANALYTICS.md`](ANALYTICS.md) — семантика `/metrics/gameplay`, read-only SQL и шаблон регулярного
   продуктово-технического отчёта.
 - [`MODERATOR-GUIDE.md`](MODERATOR-GUIDE.md) — практический SOP модератора поверх локальной

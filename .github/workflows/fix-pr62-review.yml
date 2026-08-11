@@ -1,0 +1,45 @@
+name: Fix PR62 review
+
+on:
+  push:
+    branches: [agent/exact-release-deploy]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/exact-release-deploy
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Apply review fixes
+        run: |
+          python3 .github/fix-pr62-review.py
+          npx prettier --write server/releaseDeploy.test.mjs docs/DEPLOY.md docs/RELEASE-PROCESS.md
+
+      - name: Verify review fixes
+        run: |
+          bash -n deploy/install.sh deploy/smoke.sh
+          node --test server/releaseProcess.test.mjs server/releaseDeploy.test.mjs server/observability.test.mjs
+          npm run check
+
+      - name: Commit fixes and remove one-shot helpers
+        shell: bash
+        run: |
+          rm .github/workflows/fix-pr62-review.yml .github/fix-pr62-review.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/install.sh server/releaseDeploy.test.mjs docs/DEPLOY.md docs/RELEASE-PROCESS.md .github/workflows/fix-pr62-review.yml .github/fix-pr62-review.py
+          git commit -m "Harden exact release deployment guarantees"
+          git push origin HEAD:agent/exact-release-deploy

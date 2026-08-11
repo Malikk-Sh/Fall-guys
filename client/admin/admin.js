@@ -145,10 +145,8 @@ function formatTime(value) {
 }
 
 function formatDay(value) {
-  if (!value) return '—';
-  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(
-    new Date(`${value}T00:00:00Z`)
-  );
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
+  return match ? `${match[3]}.${match[2]}` : '—';
 }
 
 function formatDuration(seconds) {
@@ -323,9 +321,11 @@ function comparisonHint(current, previous, formatter = formatNumber) {
 
 function renderAnalyticsKpis(data) {
   const current = data.kpis?.current || {};
-  const previous = data.kpis?.previous || {};
+  const previous = data.kpis?.previous || null;
+  const comparisonAvailable = data.comparisonAvailable !== false;
   const completion = current.completionPercent == null ? '—' : `${current.completionPercent}%`;
-  const previousCompletion = previous.completionPercent == null ? '—' : `${previous.completionPercent}%`;
+  const previousCompletion = previous?.completionPercent == null ? '—' : `${previous.completionPercent}%`;
+  const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
   const cards = $('#analytics-kpis');
   cards.replaceChildren(
     statCard(
@@ -341,7 +341,7 @@ function renderAnalyticsKpis(data) {
     statCard(
       'Завершено / начато',
       completion,
-      `прошлый такой же период: ${previousCompletion} · это отношение событий, не уникальных игроков`
+      `${comparisonAvailable ? `прошлый такой же период: ${previousCompletion}` : comparisonUnavailableHint} · это отношение событий, не уникальных игроков`
     ),
     statCard(
       'Выходы до финиша',
@@ -358,7 +358,7 @@ function renderAnalyticsKpis(data) {
     statCard(
       'Среднее проверенное время',
       formatMilliseconds(current.verifiedAverageMs),
-      `прошлый период: ${formatMilliseconds(previous.verifiedAverageMs)} · проверенных финишей: ${formatNumber(current.verifiedFinishes)}`
+      `${comparisonAvailable ? `прошлый период: ${formatMilliseconds(previous?.verifiedAverageMs)}` : comparisonUnavailableHint} · проверенных финишей: ${formatNumber(current.verifiedFinishes)}`
     )
   );
 }
@@ -464,11 +464,13 @@ async function loadAnalytics() {
     deviceLabel
   );
   const limitNote = data.truncated ? ' · таблица ограничена первыми 1000 строками' : '';
+  const comparisonNote = data.comparisonAvailable
+    ? ` · сравнение с ${data.previousFrom}–${data.previousTo}`
+    : ` · предыдущий полный период не сравнивается: история хранится ${formatNumber(data.retentionDays)} дней`;
   const droppedNote = data.dropped
     ? ` · ВНИМАНИЕ: сервер отбросил ${formatNumber(data.dropped)} необычных ключей метрик`
     : ' · потерь метрик не обнаружено';
-  $('#analytics-meta').textContent =
-    `Период с ${data.from} · сравнение с ${data.previousFrom}–${data.previousTo}${limitNote}${droppedNote}`;
+  $('#analytics-meta').textContent = `Период с ${data.from}${comparisonNote}${limitNote}${droppedNote}`;
   renderAnalyticsKpis(data);
   renderAnalyticsTrend();
   renderHotspots('#fall-hotspots', data.hotspots?.falls, 'Падений по выбранным фильтрам нет.');
@@ -492,7 +494,10 @@ function downloadText(filename, content, type) {
 
 function csvCell(value) {
   const text = String(value ?? '');
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+  // Spreadsheet applications may interpret leading =,+,-,@ as a formula. Exported
+  // dimensions are data, never formulas, so neutralize them before CSV quoting.
+  const safe = /^[=+\-@]/.test(text) ? `'${text}` : text;
+  return /[",\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
 function exportAnalytics(format) {
@@ -526,7 +531,7 @@ function exportAnalytics(format) {
         .join(',')
     );
   }
-  downloadText(`wobble-analytics-${stamp}.csv`, `${lines.join('\n')}\n`, 'text/csv;charset=utf-8');
+  downloadText(`wobble-analytics-${stamp}.csv`, `\uFEFF${lines.join('\n')}\n`, 'text/csv;charset=utf-8');
   setStatus('CSV со статистикой подготовлен.', 'good');
 }
 

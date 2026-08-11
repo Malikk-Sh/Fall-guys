@@ -268,11 +268,7 @@ class CampaignPresentation {
     for (let index = 0; index < count; index++) {
       const side = index % 2 ? -1 : 1;
       const height = 2.5 + (index % 4) * 1.4;
-      dummy.position.set(
-        side * (15 + (index % 3) * 5),
-        -1 + height / 2,
-        8 - ((index * 17) % span)
-      );
+      dummy.position.set(side * (15 + (index % 3) * 5), -1 + height / 2, 8 - ((index * 17) % span));
       dummy.scale.set(1 + (index % 2) * 0.4, height, 1 + (index % 3) * 0.25);
       dummy.rotation.y = (index % 4) * 0.22;
       dummy.updateMatrix();
@@ -319,10 +315,7 @@ class CampaignPresentation {
     });
 
     for (const x of [-6.3, 6.3]) {
-      const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.12, length),
-        this.reactorMaterial
-      );
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, length), this.reactorMaterial);
       rail.position.set(x, 0.7, z);
       group.add(rail);
     }
@@ -355,21 +348,13 @@ class CampaignPresentation {
       metalness: 0.08
     });
     const count = course.quality === 'low' ? 8 : 18;
-    const debris = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(2.2, 0.45, 1.2),
-      debrisMaterial,
-      count
-    );
+    const debris = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.45, 1.2), debrisMaterial, count);
     const dummy = new THREE.Object3D();
     const span = Math.abs(course.spec.finishZ) + 20;
 
     for (let index = 0; index < count; index++) {
       const side = index % 2 ? -1 : 1;
-      dummy.position.set(
-        side * (11 + (index % 3) * 3.5),
-        -1 + (index % 4),
-        8 - ((index * 13) % span)
-      );
+      dummy.position.set(side * (11 + (index % 3) * 3.5), -1 + (index % 4), 8 - ((index * 13) % span));
       dummy.rotation.set((index % 3) * 0.18, index * 0.37, (index % 5) * 0.1);
       dummy.scale.set(0.8 + (index % 3) * 0.25, 1, 0.8 + (index % 2) * 0.35);
       dummy.updateMatrix();
@@ -380,10 +365,7 @@ class CampaignPresentation {
 
     for (const x of [-7.2, 7.2]) {
       for (const z of [4, course.spec.finishZ * 0.45, course.spec.finishZ * 0.8]) {
-        const beacon = new THREE.Mesh(
-          new THREE.SphereGeometry(0.3, 10, 8),
-          this.beaconMaterial
-        );
+        const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), this.beaconMaterial);
         beacon.position.set(x, 2.2, z);
         group.add(beacon);
       }
@@ -540,8 +522,7 @@ class CampaignPresentation {
       if (signal.progress > this.lastSignal.progress) {
         const index = Math.max(0, signal.progress - 1);
         const button = visuals.buttons?.[index];
-        const position =
-          button?.getWorldPosition?.(new THREE.Vector3()) || visuals.operator.position;
+        const position = button?.getWorldPosition?.(new THREE.Vector3()) || visuals.operator.position;
         game.effects?.burst?.(position, this.theme?.accent ?? 0x4dffcf, 8, 0.55);
         game.audio?.playTone?.({
           freq: 560 + signal.progress * 95,

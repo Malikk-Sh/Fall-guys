@@ -121,25 +121,24 @@ test('migration 009 backfills the best available report evidence', () => {
   db.prepare(
     'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
   ).run('target', 'Имя на миграции', 'hash-target', 1, 1);
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO recent_partners
       (account_id, partner_account_id, matches_together, last_chapter_id, last_played_at)
     VALUES (?, ?, 1, ?, ?)
-  `).run('reporter', 'target', 'ch7', 500);
-  db.prepare(`
+  `
+  ).run('reporter', 'target', 'ch7', 500);
+  db.prepare(
+    `
     INSERT INTO social_reports
       (reporter_account_id, target_account_id, reason, report_count, first_reported_at, last_reported_at)
     VALUES (?, ?, ?, 1, ?, ?)
-  `).run('reporter', 'target', 'offensive-name', 600, 600);
+  `
+  ).run('reporter', 'target', 'offensive-name', 600, 600);
 
   assert.deepEqual(migrateDatabase(db, { now: 200 }), [9]);
-  const report = db
-    .prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports')
-    .get();
-  assert.deepEqual(
-    { ...report },
-    { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' }
-  );
+  const report = db.prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports').get();
+  assert.deepEqual({ ...report }, { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' });
   db.close();
 });
 

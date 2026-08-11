@@ -5,9 +5,12 @@ const { AdminPlayerSupport } = require('./adminPlayerSupport');
 const { ModerationQueue } = require('./moderation');
 
 const ADMIN_MODERATOR_PREFIX = 'admin:';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MODERATOR_MAX_BAN_MS = 7 * DAY_MS;
+const OWNER_MAX_BAN_MS = 365 * DAY_MS;
 
 class AdminControlService {
-  constructor({ db, health, gameplay, adminAuth } = {}) {
+  constructor({ db, health, gameplay, adminAuth, sanctions = null, auth = null, disconnectAccount = null } = {}) {
     if (!db) throw new Error('AdminControlService requires an open database');
     if (typeof health !== 'function') throw new Error('AdminControlService requires health()');
     if (!gameplay || typeof gameplay.summary !== 'function') {
@@ -20,6 +23,9 @@ class AdminControlService {
     this.health = health;
     this.gameplay = gameplay;
     this.adminAuth = adminAuth;
+    this.sanctions = sanctions;
+    this.auth = auth;
+    this.disconnectAccount = typeof disconnectAccount === 'function' ? disconnectAccount : null;
     this.analyticsReport = new AdminAnalytics({ db, gameplay });
     this.playerSupport = new AdminPlayerSupport({ db });
     this.moderation = new ModerationQueue({ db });
@@ -75,11 +81,10 @@ class AdminControlService {
               lastReportedAt: moderation.lastReportedAt,
               reviewedThrough: moderation.reviewedThrough
             }
-          : null
+          : null,
+        sanctions: this.#sanctionContext(profile.account.id, now)
       }
     };
-    // Viewing account-level support data is more sensitive than aggregate analytics. Keep an audit
-    // record of the exact player whose card was opened, but never duplicate the card contents.
     this.adminAuth.audit({
       actor,
       action: 'player.support.view',
@@ -94,8 +99,9 @@ class AdminControlService {
     return this.moderation.queue({ status, limit });
   }
 
-  moderationCase(targetAccountId) {
-    return this.#decorateCase(this.moderation.get(targetAccountId));
+  moderationCase(targetAccountId, { now = Date.now() } = {}) {
+    const item = this.#decorateCase(this.moderation.get(targetAccountId));
+    return item ? { ...item, sanctions: this.#sanctionContext(targetAccountId, now) } : null;
   }
 
   moderationTransition({ targetAccountId, status, note, expectedRevision, actor, now = Date.now() } = {}) {
@@ -129,21 +135,143 @@ class AdminControlService {
     return { ...result, case: this.#decorateCase(result.case) };
   }
 
-  #adminName(moderatorId) {
+  sanctionApply({ targetAccountId, kind, reason, note, durationMs = null, permanent = false, actor, now = Date.now() } = {}) {
+    if (!this.sanctions) return { ok: false, reason: 'sanctions-unavailable' };
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    if (!['owner', 'moderator'].includes(actor.role)) return { ok: false, reason: 'sanctions-forbidden' };
+
+    const normalizedKind = String(kind || '').trim();
+    const isPermanent = normalizedKind === 'ban' && permanent === true;
+    const duration = durationMs == null ? null : Number(durationMs);
+    if (isPermanent && actor.role !== 'owner') {
+      return { ok: false, reason: 'permanent-sanction-owner-only' };
+    }
+    if (normalizedKind === 'ban' && !isPermanent) {
+      const max = actor.role === 'owner' ? OWNER_MAX_BAN_MS : MODERATOR_MAX_BAN_MS;
+      if (!Number.isSafeInteger(duration) || duration < 1 || duration > max) {
+        return { ok: false, reason: 'sanction-duration-forbidden', maxDurationMs: max };
+      }
+    }
+
+    const result = this.sanctions.apply({
+      accountId: targetAccountId,
+      kind: normalizedKind,
+      reason,
+      note,
+      createdByAdminId: actor.id,
+      durationMs: duration,
+      permanent: isPermanent,
+      now,
+      audit: sanction =>
+        this.adminAuth.audit({
+          actor,
+          action: 'player.sanction.apply',
+          targetType: 'player-account',
+          targetId: sanction.accountId,
+          detail: {
+            sanctionId: sanction.id,
+            kind: sanction.kind,
+            reason: sanction.reason,
+            permanent: sanction.permanent,
+            expiresAt: sanction.expiresAt,
+            notePresent: true
+          },
+          now: sanction.createdAt
+        })
+    });
+    if (!result.ok) return result;
+
+    let revokedSessions = 0;
+    let disconnectedSockets = 0;
+    if (result.sanction.kind === 'ban') {
+      try {
+        revokedSessions = Number(this.auth?.revokeAccountSessions?.(result.sanction.accountId) || 0);
+      } catch {
+        revokedSessions = 0;
+      }
+      try {
+        disconnectedSockets = Number(this.disconnectAccount?.(result.sanction.accountId) || 0);
+      } catch {
+        disconnectedSockets = 0;
+      }
+    }
+    return {
+      ...result,
+      sanction: this.#decorateSanction(result.sanction),
+      revokedSessions,
+      disconnectedSockets
+    };
+  }
+
+  sanctionRevoke({ sanctionId, note, actor, now = Date.now() } = {}) {
+    if (!this.sanctions) return { ok: false, reason: 'sanctions-unavailable' };
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    if (!['owner', 'moderator'].includes(actor.role)) return { ok: false, reason: 'sanctions-forbidden' };
+    const current = this.sanctions.get(sanctionId, { now });
+    if (!current) return { ok: false, reason: 'unknown-sanction' };
+    if (current.permanent && actor.role !== 'owner') {
+      return { ok: false, reason: 'permanent-sanction-owner-only' };
+    }
+    const result = this.sanctions.revoke({
+      sanctionId,
+      revokedByAdminId: actor.id,
+      note,
+      now,
+      audit: ({ before, after }) =>
+        this.adminAuth.audit({
+          actor,
+          action: 'player.sanction.revoke',
+          targetType: 'player-account',
+          targetId: before.accountId,
+          detail: {
+            sanctionId: before.id,
+            permanent: before.permanent,
+            previousExpiresAt: before.expiresAt,
+            notePresent: Boolean(after.revokeNote)
+          },
+          now: after.revokedAt
+        })
+    });
+    return result.ok ? { ...result, sanction: this.#decorateSanction(result.sanction) } : result;
+  }
+
+  #sanctionContext(accountId, now = Date.now()) {
+    if (!this.sanctions) return { active: null, history: [] };
+    return {
+      active: this.#decorateSanction(this.sanctions.active(accountId, { now })),
+      history: this.sanctions.history(accountId, { limit: 50, now }).map(item => this.#decorateSanction(item))
+    };
+  }
+
+  #adminName(adminId) {
+    const id = String(adminId || '');
+    if (!id) return null;
+    return this.statements.adminName.get(id)?.display_name || null;
+  }
+
+  #moderatorName(moderatorId) {
     const value = String(moderatorId || '');
     if (!value.startsWith(ADMIN_MODERATOR_PREFIX)) return null;
-    const id = value.slice(ADMIN_MODERATOR_PREFIX.length);
-    return this.statements.adminName.get(id)?.display_name || null;
+    return this.#adminName(value.slice(ADMIN_MODERATOR_PREFIX.length));
+  }
+
+  #decorateSanction(item) {
+    if (!item) return null;
+    return {
+      ...item,
+      createdByName: this.#adminName(item.createdByAdminId),
+      revokedByName: this.#adminName(item.revokedByAdminId)
+    };
   }
 
   #decorateCase(item) {
     if (!item) return null;
     return {
       ...item,
-      moderatorName: this.#adminName(item.moderatorId),
+      moderatorName: this.#moderatorName(item.moderatorId),
       history: item.history.map(event => ({
         ...event,
-        moderatorName: this.#adminName(event.moderatorId)
+        moderatorName: this.#moderatorName(event.moderatorId)
       }))
     };
   }
@@ -167,4 +295,9 @@ function prepare(db) {
   };
 }
 
-module.exports = { AdminControlService, ADMIN_MODERATOR_PREFIX };
+module.exports = {
+  AdminControlService,
+  ADMIN_MODERATOR_PREFIX,
+  MODERATOR_MAX_BAN_MS,
+  OWNER_MAX_BAN_MS
+};

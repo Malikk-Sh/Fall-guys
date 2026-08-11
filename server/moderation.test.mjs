@@ -262,11 +262,9 @@ test('moderation CLI refuses a missing database instead of creating an empty one
   const directory = mkdtempSync(join(tmpdir(), 'wobble-moderation-'));
   const missing = join(directory, 'typo.db');
   try {
-    const result = spawnSync(
-      process.execPath,
-      [join(here, 'moderationCli.mjs'), '--db', missing, 'queue'],
-      { encoding: 'utf8' }
-    );
+    const result = spawnSync(process.execPath, [join(here, 'moderationCli.mjs'), '--db', missing, 'queue'], {
+      encoding: 'utf8'
+    });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /does not exist/);
     assert.equal(existsSync(missing), false);

@@ -148,15 +148,18 @@ test('migration 009 backfills the best available report evidence', () => {
        FROM social_report_evidence`
     )
     .get();
-  assert.deepEqual({ ...evidence }, {
-    reporter_account_id: 'reporter',
-    target_account_id: 'target',
-    reason: 'offensive-name',
-    reported_at: 600,
-    occurrences: 3,
-    target_name_snapshot: 'Имя на миграции',
-    chapter_id_snapshot: 'ch7'
-  });
+  assert.deepEqual(
+    { ...evidence },
+    {
+      reporter_account_id: 'reporter',
+      target_account_id: 'target',
+      reason: 'offensive-name',
+      reported_at: 600,
+      occurrences: 3,
+      target_name_snapshot: 'Имя на миграции',
+      chapter_id_snapshot: 'ch7'
+    }
+  );
   db.close();
 });
 

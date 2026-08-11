@@ -56,7 +56,7 @@ class AdminPlayerSupport {
     const safeLimit = clampLimit(limit);
     const like = `%${escapeLike(normalized)}%`;
     const prefix = `${escapeLike(normalized)}%`;
-    const rows = this.statements.search.all(normalized, prefix, like, normalized, normalized, now, safeLimit);
+    const rows = this.statements.search.all(now, normalized, prefix, like, normalized, normalized, safeLimit);
     return {
       ok: true,
       query: normalized,
@@ -77,7 +77,7 @@ class AdminPlayerSupport {
     const account = this.statements.account.get(id);
     if (!account) return null;
 
-    const session = this.statements.sessions.get(now, now, now, id);
+    const session = this.statements.sessions.get(now, now, now, now, id);
     const stats = this.statements.stats.get(id);
     const loadout = this.statements.loadout.get(id);
     const reportSummary = this.statements.reportSummary.get(id);

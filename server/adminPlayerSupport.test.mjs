@@ -14,7 +14,15 @@ function seed() {
       (id, display_name, secret_hash, created_at, last_seen_at, pending_secret_hash, pending_secret_created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
-  insertAccount.run('player-main', 'Процент%_Игрок', 'SECRET-RECOVERY-HASH', 1000, 40_000, 'SECRET-PENDING-HASH', 45_000);
+  insertAccount.run(
+    'player-main',
+    'Процент%_Игрок',
+    'SECRET-RECOVERY-HASH',
+    1000,
+    40_000,
+    'SECRET-PENDING-HASH',
+    45_000
+  );
   insertAccount.run('partner-one', 'Напарник', 'PARTNER-HASH', 2000, 30_000, null, null);
   insertAccount.run('other-player', 'ПроцентXXИгрок', 'OTHER-HASH', 3000, 20_000, null, null);
 
@@ -57,7 +65,15 @@ function seed() {
     `INSERT INTO reward_grants
       (idempotency_key, account_id, source, reward, cosmetic_id, granted_at, day_key)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run('SECRET-IDEMPOTENCY-KEY', 'player-main', 'achievement:coop-first-clear', 'cosmetic', 'body-neon', 43_000, '2026-08-11');
+  ).run(
+    'SECRET-IDEMPOTENCY-KEY',
+    'player-main',
+    'achievement:coop-first-clear',
+    'cosmetic',
+    'body-neon',
+    43_000,
+    '2026-08-11'
+  );
 
   db.prepare(
     `INSERT INTO recent_partners
@@ -131,7 +147,10 @@ test('player support search escapes LIKE wildcards and returns only bounded summ
   const { db, now, support } = seed();
   const literal = support.search('%_', { now });
   assert.equal(literal.ok, true);
-  assert.deepEqual(literal.results.map(item => item.id), ['player-main']);
+  assert.deepEqual(
+    literal.results.map(item => item.id),
+    ['player-main']
+  );
   assert.equal(literal.results[0].activeSessions, 1);
   assert.equal(literal.results[0].hasExternalLogin, true);
 

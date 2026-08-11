@@ -132,6 +132,38 @@ function installAdminRoutes({
     });
   });
 
+  app.post('/api/admin/players/search', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'player-support.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['query', 'limit']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    const result = control.playerSearch(req.body?.query, { limit: req.body?.limit });
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: result.reason,
+        ...(result.minLength ? { minLength: result.minLength } : {}),
+        ...(result.maxLength ? { maxLength: result.maxLength } : {})
+      });
+    }
+    return res.json(result);
+  });
+
+  app.post('/api/admin/players/detail', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'player-support.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['accountId'])) || !req.body?.accountId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    const result = control.playerDetail(req.body.accountId, { actor: resolved.session.user });
+    if (!result.ok) {
+      const status = result.reason === 'unknown-account' ? 404 : 400;
+      return res.status(status).json({ ok: false, error: result.reason });
+    }
+    return res.json(result);
+  });
+
   app.post('/api/admin/moderation/queue', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'moderation.read');
     if (!resolved) return undefined;

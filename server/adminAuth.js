@@ -12,13 +12,20 @@ const ROLE_CAPABILITIES = Object.freeze({
   owner: Object.freeze([
     'dashboard.read',
     'analytics.read',
+    'player-support.read',
     'moderation.read',
     'moderation.write',
     'audit.read',
     'admin.manage',
     'ops.execute'
   ]),
-  operator: Object.freeze(['dashboard.read', 'analytics.read', 'moderation.read', 'audit.read']),
+  operator: Object.freeze([
+    'dashboard.read',
+    'analytics.read',
+    'player-support.read',
+    'moderation.read',
+    'audit.read'
+  ]),
   moderator: Object.freeze(['dashboard.read', 'moderation.read', 'moderation.write']),
   analyst: Object.freeze(['dashboard.read', 'analytics.read']),
   viewer: Object.freeze(['dashboard.read'])

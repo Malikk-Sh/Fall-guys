@@ -16,11 +16,17 @@ backup/deploy/restart и другие системные действия буд
 - администраторы живут в отдельных таблицах `admin_users` / `admin_sessions`;
 - access code генерируется сервером с высокой энтропией и показывается только при create/rotate;
 - в SQLite хранится только SHA-256 hash access code;
-- после входа браузер получает отдельную HttpOnly `wobble_admin_session` cookie;
+- после входа браузер получает отдельную HttpOnly `wobble_admin_session` cookie только для
+  `/api/admin`;
 - production cookie имеет `Secure` и `SameSite=Strict`;
 - все authenticated actions, кроме чтения собственной session metadata, требуют CSRF token;
-- login rate-limited по IP;
+- login throttling использует доверенный TCP peer, а не доступный клиенту `X-Forwarded-For`;
+- в shared-443 production исходный client IP не доходит до HTTP backend, поэтому этот guard
+  намеренно общий для admin login и не выдаётся за per-IP защиту;
+- expired admin sessions очищаются при следующем login, одновременно на одного администратора
+  хранится не больше 20 живых sessions;
 - роли проверяются на сервере, скрытая кнопка в UI не является проверкой прав;
+- admin mutations и соответствующие audit events фиксируются одной SQLite transaction;
 - admin actions пишутся в `admin_audit_events`;
 - recovery code игрока, player session bearer и VPN/Xray secrets к панели отношения не имеют.
 
@@ -136,7 +142,8 @@ Read-only queue со статусами `open`, `reviewing`, `resolved`, `dismis
 ### Audit
 
 Последние admin events: actor, role, action, target и timestamp. Access code и session token в audit
-не записываются.
+не записываются. Большие structured details заменяются валидным JSON-marker о truncation, поэтому
+одна слишком большая запись не может сломать просмотр всего журнала.
 
 ## Отключение панели при инциденте
 

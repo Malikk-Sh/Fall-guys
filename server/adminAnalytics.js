@@ -28,14 +28,7 @@ function normalizeFilter(value) {
 }
 
 function filterArgs(filters) {
-  return [
-    filters.mode,
-    filters.mode,
-    filters.course,
-    filters.course,
-    filters.device,
-    filters.device
-  ];
+  return [filters.mode, filters.mode, filters.course, filters.course, filters.device, filters.device];
 }
 
 function summarizeKpis(rows) {
@@ -55,14 +48,8 @@ function summarizeKpis(rows) {
     completionPercent: started > 0 ? Math.round((finished / started) * 1000) / 10 : null,
     abandoned: samples('match_abandoned'),
     falls: samples('fall'),
-    verifiedFinishes: finishRows('verified').reduce(
-      (sum, row) => sum + Number(row.samples || 0),
-      0
-    ),
-    unverifiedFinishes: finishRows('unverified').reduce(
-      (sum, row) => sum + Number(row.samples || 0),
-      0
-    ),
+    verifiedFinishes: finishRows('verified').reduce((sum, row) => sum + Number(row.samples || 0), 0),
+    unverifiedFinishes: finishRows('unverified').reduce((sum, row) => sum + Number(row.samples || 0), 0),
     verifiedAverageMs: average(finishRows('verified'))
   };
 }
@@ -101,7 +88,8 @@ class AdminAnalytics {
     }
     this.db = db;
     this.gameplay = gameplay;
-    this.now = typeof now === 'function' ? now : typeof gameplay.now === 'function' ? gameplay.now : () => Date.now();
+    this.now =
+      typeof now === 'function' ? now : typeof gameplay.now === 'function' ? gameplay.now : () => Date.now();
     this.statements = null;
   }
 
@@ -142,9 +130,7 @@ class AdminAnalytics {
     const previousKpiRows = this.statements.kpisBetween.all(previousFrom, previousTo, ...args);
     const trendRows = this.statements.trend.all(from, ...args);
     const fallHotspots = this.statements.hotspots.all(from, ...args, 'fall', 12).map(toHotspot);
-    const abandonHotspots = this.statements.hotspots
-      .all(from, ...args, 'match_abandoned', 12)
-      .map(toHotspot);
+    const abandonHotspots = this.statements.hotspots.all(from, ...args, 'match_abandoned', 12).map(toHotspot);
 
     const dimensions = this.statements.dimensions.all(from);
     const options = {

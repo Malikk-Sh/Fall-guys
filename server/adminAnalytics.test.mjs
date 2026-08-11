@@ -104,7 +104,13 @@ test('admin analytics explains the current period, previous period, trends, filt
   assert.equal(report.kpis.previous.finished, 1);
   assert.equal(report.kpis.previous.falls, 1);
   assert.deepEqual(
-    report.trend.map(point => [point.day, point.matchStarted, point.matchFinished, point.matchAbandoned, point.falls]),
+    report.trend.map(point => [
+      point.day,
+      point.matchStarted,
+      point.matchFinished,
+      point.matchAbandoned,
+      point.falls
+    ]),
     [
       ['2026-01-14', 3, 2, 1, 2],
       ['2026-01-15', 1, 1, 0, 1]

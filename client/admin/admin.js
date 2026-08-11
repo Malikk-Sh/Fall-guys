@@ -251,7 +251,12 @@ async function loadOverview() {
       `${formatBoundedCount(data.moderation?.reviewing, data.moderation?.reviewingTruncated)} уже в работе · ${formatNumber(data.moderation?.reports24h)} жалоб за 24ч`,
       data.moderation?.open ? 'warn' : 'good'
     ),
-    statCard('Резервные копии', backupLabel, backupHint, backupProblem ? 'bad' : backup.required ? 'good' : '')
+    statCard(
+      'Резервные копии',
+      backupLabel,
+      backupHint,
+      backupProblem ? 'bad' : backup.required ? 'good' : ''
+    )
   );
   fillDetails('#production-details', [
     ['Версия игры', health.version],
@@ -323,7 +328,11 @@ function renderAnalyticsKpis(data) {
   const previousCompletion = previous.completionPercent == null ? '—' : `${previous.completionPercent}%`;
   const cards = $('#analytics-kpis');
   cards.replaceChildren(
-    statCard('Начатые матчи', formatNumber(current.started), comparisonHint(current.started, previous.started)),
+    statCard(
+      'Начатые матчи',
+      formatNumber(current.started),
+      comparisonHint(current.started, previous.started)
+    ),
     statCard(
       'Завершённые матчи',
       formatNumber(current.finished),
@@ -408,7 +417,12 @@ function renderAnalyticsTable(data) {
   const body = $('#analytics-body');
   body.replaceChildren();
   for (const row of data.rows || []) {
-    const average = row.metric === 'finish_time' ? formatMilliseconds(row.average) : row.average == null ? '—' : formatNumber(row.average);
+    const average =
+      row.metric === 'finish_time'
+        ? formatMilliseconds(row.average)
+        : row.average == null
+          ? '—'
+          : formatNumber(row.average);
     body.append(
       rowWithCells([
         `${METRIC_LABELS[row.metric] || row.metric} (${row.metric})`,
@@ -453,11 +467,16 @@ async function loadAnalytics() {
   const droppedNote = data.dropped
     ? ` · ВНИМАНИЕ: сервер отбросил ${formatNumber(data.dropped)} необычных ключей метрик`
     : ' · потерь метрик не обнаружено';
-  $('#analytics-meta').textContent = `Период с ${data.from} · сравнение с ${data.previousFrom}–${data.previousTo}${limitNote}${droppedNote}`;
+  $('#analytics-meta').textContent =
+    `Период с ${data.from} · сравнение с ${data.previousFrom}–${data.previousTo}${limitNote}${droppedNote}`;
   renderAnalyticsKpis(data);
   renderAnalyticsTrend();
   renderHotspots('#fall-hotspots', data.hotspots?.falls, 'Падений по выбранным фильтрам нет.');
-  renderHotspots('#abandon-hotspots', data.hotspots?.abandons, 'Выходов до финиша по выбранным фильтрам нет.');
+  renderHotspots(
+    '#abandon-hotspots',
+    data.hotspots?.abandons,
+    'Выходов до финиша по выбранным фильтрам нет.'
+  );
   renderAnalyticsTable(data);
 }
 

@@ -1,0 +1,54 @@
+name: Polish avoid list restore
+
+on:
+  push:
+    branches: [agent/avoid-list-restore]
+    paths:
+      - .github/workflows/avoid-list-polish.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/avoid-list-restore
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: replacement target missing or duplicated')
+              p.write_text(text.replace(old, new, 1))
+
+          replace(
+            'client/ui/UI.js',
+            """      button.disabled = true;\n      this.onAvoidedPlayerRestore?.(player);""",
+            """      button.disabled = true;\n      Promise.resolve(this.onAvoidedPlayerRestore?.(player)).finally(() => {\n        if (!button.isConnected) return;\n        button.disabled = false;\n        button.dataset.confirmRestore = '';\n        button.textContent = 'ВЕРНУТЬ В ПОДБОР';\n      });"""
+          )
+          replace(
+            'client/core/AccountFlow.js',
+            """      if (!result) return this.game.ui.toast('Не удалось вернуть игрока в подбор.');\n      await this.refreshProfile();\n      this.game.ui.toast('Ваше исключение снято — игрок снова разрешён для быстрого подбора.');\n      return result;""",
+            """      if (!result) return this.game.ui.toast('Не удалось вернуть игрока в подбор.');\n      await this.refreshProfile();\n      this.game.ui.toast(\n        result.removed\n          ? 'Ваше исключение снято — игрок снова разрешён для быстрого подбора.'\n          : 'Это исключение уже было снято.'\n      );\n      return result;"""
+          )
+          PY
+          npx prettier --write client/ui/UI.js client/core/AccountFlow.js
+          npm run check
+          rm .github/workflows/avoid-list-polish.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep restore action retryable on request failure"
+          git push origin HEAD:agent/avoid-list-restore

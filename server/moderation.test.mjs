@@ -188,7 +188,7 @@ test('moderation input is bounded and no-report accounts cannot get fake cases',
     context.moderation.transition({
       targetAccountId: account.id,
       status: 'reviewing',
-      moderatorId: '\ninvalid'
+      moderatorId: 'bad\nid'
     }),
     { ok: false, reason: 'invalid-moderator' }
   );

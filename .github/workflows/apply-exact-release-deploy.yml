@@ -25,6 +25,8 @@ jobs:
 
       - name: Patch release-pinned deployment
         run: |
+          sed -i 's|old = "server/releaseProcess.test.mjs server/observability.test.mjs"|old = "server/coopMovementAudit.test.mjs server/releaseProcess.test.mjs"|' .github/exact-release-patch.py
+          sed -i 's|"server/releaseProcess.test.mjs server/releaseDeploy.test.mjs server/observability.test.mjs"|"server/coopMovementAudit.test.mjs server/releaseProcess.test.mjs server/releaseDeploy.test.mjs"|' .github/exact-release-patch.py
           python3 .github/exact-release-patch.py
           npx prettier --write package.json server/buildInfo.js server/index.js server/releaseDeploy.test.mjs docs/RELEASE-PROCESS.md
 

@@ -34,9 +34,27 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
-      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
-      # в успешную проверку и фактически отключал защиту от merge markers.
+      # Temporary formatter capture for PR #66. This commit is reverted after the formatted files
+      # are copied back to the branch; the final PR must use the normal check below from main.
+      - name: Capture Prettier output
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run format
+          tar -czf /tmp/prettier-formatted.tgz \
+            client/admin/admin.css \
+            client/admin/admin.js \
+            client/admin/index.html \
+            docs/ADMIN-PANEL.md \
+            server/adminAuth.js \
+            server/adminControlPlane.test.mjs \
+            server/adminRoutes.js
+          echo PRETTIER_BUNDLE_BEGIN
+          base64 -w0 /tmp/prettier-formatted.tgz
+          echo
+          echo PRETTIER_BUNDLE_END
+          exit 1
+
       - name: Check formatting and merge artifacts
         run: |
           npm run format:check

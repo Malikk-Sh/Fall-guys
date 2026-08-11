@@ -244,7 +244,8 @@ export class AccountFlow {
       this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
       return null;
     } finally {
-      if (this.security?.revokeOthers?.isConnected) this.security.revokeOthers.disabled = false;
+      if (this.security?.revokeOthers?.isConnected)
+        this.security.revokeOthers.disabled = !this.online || !this.security.sessions.querySelector('button');
     }
   }
 

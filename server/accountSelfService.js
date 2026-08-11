@@ -30,7 +30,7 @@ class AccountSelfService {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.rotate.run(hash, at, id);
-      const revokedSessions = this.auth.revokeOtherSessions(id, currentToken);
+      const revokedSessions = this.auth.revokeOtherSessions(id, currentToken, at);
       this.db.exec('COMMIT');
       return { secret, revokedSessions };
     } catch (error) {

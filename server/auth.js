@@ -134,10 +134,12 @@ class AuthService {
     return { ok: true, removed };
   }
 
-  revokeOtherSessions(accountId, currentToken) {
+  revokeOtherSessions(accountId, currentToken, now = Date.now()) {
     const id = String(accountId || '');
     const currentHash = hashToken(currentToken);
     if (!id || !currentHash) return 0;
+    const current = this.statements.session.get(currentHash);
+    if (!current || current.account_id !== id || current.expires_at <= now) return 0;
     return this.statements.deleteOtherSessions.run(id, currentHash).changes;
   }
 

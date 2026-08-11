@@ -29,6 +29,7 @@ export class AccountFlow {
     this.game = game;
     this.records = new Map();
     this.networkTicket = null;
+    this.profileRevision = 0;
     // NetworkManager забирает WST ровно для socket-auth. Ticket не остаётся в UI после выдачи;
     // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
@@ -65,6 +66,7 @@ export class AccountFlow {
   }
 
   apply(account, { online = true, records = null, progress = null } = {}) {
+    this.profileRevision += 1;
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
@@ -81,10 +83,14 @@ export class AccountFlow {
   }
 
   async refreshProfile() {
+    const revision = this.profileRevision;
     const [profile, avoidedPlayers] = await Promise.all([
       accountProfile().catch(() => null),
       listAvoidedPlayers().catch(() => null)
     ]);
+    // A response that started under another local/session account must never paint
+    // private profile data into the newly selected account UI.
+    if (revision !== this.profileRevision) return null;
     if (profile) this.game.ui.setServerProfile(profile);
     if (avoidedPlayers) this.game.ui.setAvoidedPlayers(avoidedPlayers);
     return profile;

@@ -79,6 +79,10 @@ function formatNumber(value) {
   return new Intl.NumberFormat('ru-RU').format(Number(value || 0));
 }
 
+function formatBoundedCount(value, truncated) {
+  return `${formatNumber(value)}${truncated ? '+' : ''}`;
+}
+
 function formatTime(value) {
   if (!value) return '—';
   return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium' }).format(
@@ -127,6 +131,14 @@ async function loadOverview() {
   const data = payload.overview;
   const health = data.health || {};
   const backup = health.backup || {};
+  const backupProblem = Boolean(backup.required && (!backup.available || backup.stale));
+  const backupLabel = backup.required ? (backupProblem ? 'ПРОБЛЕМА' : 'OK') : 'N/A';
+  const backupHint =
+    backup.ageSeconds != null
+      ? `возраст ${formatDuration(backup.ageSeconds)}`
+      : backup.required
+        ? 'нет подтверждённой копии'
+        : 'persistent backup не требуется';
   const cards = $('#overview-cards');
   cards.replaceChildren(
     statCard('Игроки сейчас', formatNumber(health.players), `${formatNumber(health.rooms)} комнат`),
@@ -137,18 +149,11 @@ async function loadOverview() {
     ),
     statCard(
       'Модерация',
-      formatNumber(data.moderation?.open),
-      `${formatNumber(data.moderation?.reviewing)} reviewing · ${formatNumber(data.moderation?.reports24h)} жалоб / 24ч`,
+      formatBoundedCount(data.moderation?.open, data.moderation?.openTruncated),
+      `${formatBoundedCount(data.moderation?.reviewing, data.moderation?.reviewingTruncated)} reviewing · ${formatNumber(data.moderation?.reports24h)} жалоб / 24ч`,
       data.moderation?.open ? 'warn' : 'good'
     ),
-    statCard(
-      'Backup',
-      backup.ok === false ? 'ПРОБЛЕМА' : 'OK',
-      backup.local?.ageSeconds != null
-        ? `возраст ${formatDuration(backup.local.ageSeconds)}`
-        : 'статус в /health',
-      backup.ok === false ? 'bad' : 'good'
-    )
+    statCard('Backup', backupLabel, backupHint, backupProblem ? 'bad' : backup.required ? 'good' : '')
   );
   fillDetails('#production-details', [
     ['Version', health.version],
@@ -300,8 +305,8 @@ $('#logout').addEventListener('click', async () => {
 });
 
 $('#refresh').addEventListener('click', refreshCurrent);
-$('#analytics-days').addEventListener('change', loadAnalytics);
-$('#moderation-status').addEventListener('change', loadModeration);
+$('#analytics-days').addEventListener('change', refreshCurrent);
+$('#moderation-status').addEventListener('change', refreshCurrent);
 for (const button of $$('#tabs [data-panel]')) {
   button.addEventListener('click', () => switchPanel(button.dataset.panel));
 }

@@ -23,12 +23,12 @@ Socket принадлежит `root:wobble`, имеет mode `0660` и акти�
 
 ## Разрешённые операции
 
-| Action ID        | Что запускается                       | От чьего имени выполняется полезная работа |
-| ---------------- | ------------------------------------- | ------------------------------------------ |
-| `backup.create`  | `wobble-backup.service`               | `wobble`                                   |
-| `backup.verify`  | `wobble-backup-verify.service`        | `wobble`                                   |
-| `smoke.run`      | `wobble-smoke.service`                | `wobble`                                   |
-| `wobble.restart` | restart `wobble.service`              | systemd; сама игра снова `User=wobble`     |
+| Action ID        | Что запускается                | От чьего имени выполняется полезная работа |
+| ---------------- | ------------------------------ | ------------------------------------------ |
+| `backup.create`  | `wobble-backup.service`        | `wobble`                                   |
+| `backup.verify`  | `wobble-backup-verify.service` | `wobble`                                   |
+| `smoke.run`      | `wobble-smoke.service`         | `wobble`                                   |
+| `wobble.restart` | restart `wobble.service`       | systemd; сама игра снова `User=wobble`     |
 
 Никакой action не принимает имя systemd unit, путь, команду или аргументы от браузера. HTTP передаёт только
 один из фиксированных action ID. Helper сам сопоставляет его с фиксированным unit.

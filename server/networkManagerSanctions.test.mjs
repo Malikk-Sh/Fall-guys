@@ -24,6 +24,8 @@ globalThis.WebSocket = FakeWebSocket;
 
 const { NetworkManager, LINK_STATE } = await import('../client/net/NetworkManager.js');
 
+// Regression guard for the moderation boundary: a known banned account must never inherit the
+// anonymous WELCOME identity merely because its authenticated session/ticket was revoked first.
 test('a sanctioned account cannot degrade to the ordinary anonymous handshake', async () => {
   const messages = [];
   const sanction = { reason: 'griefing', expiresAt: Date.now() + 60_000, permanent: false };

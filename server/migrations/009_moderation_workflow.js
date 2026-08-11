@@ -19,6 +19,45 @@ module.exports = {
     )
     WHERE chapter_id_snapshot IS NULL;
 
+    CREATE TABLE social_report_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      reporter_account_id TEXT NOT NULL,
+      target_account_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      reported_at INTEGER NOT NULL,
+      occurrences INTEGER NOT NULL DEFAULT 1,
+      target_name_snapshot TEXT,
+      chapter_id_snapshot TEXT,
+      CHECK (reporter_account_id <> target_account_id),
+      CHECK (reason IN ('afk', 'griefing', 'offensive-name', 'exploit-cheat')),
+      CHECK (occurrences >= 1)
+    );
+    CREATE INDEX idx_social_report_evidence_target_time
+      ON social_report_evidence (target_account_id, reported_at DESC, id DESC);
+
+    -- Pre-009 reports were aggregated in-place, so their individual historical snapshots no longer
+    -- exist. Preserve one explicitly aggregated legacy evidence row rather than pretending that we
+    -- can reconstruct each occurrence. Every report accepted after this migration gets its own row.
+    INSERT INTO social_report_evidence
+      (
+        reporter_account_id,
+        target_account_id,
+        reason,
+        reported_at,
+        occurrences,
+        target_name_snapshot,
+        chapter_id_snapshot
+      )
+    SELECT
+      reporter_account_id,
+      target_account_id,
+      reason,
+      last_reported_at,
+      report_count,
+      target_name_snapshot,
+      chapter_id_snapshot
+    FROM social_reports;
+
     CREATE TABLE moderation_cases (
       target_account_id TEXT PRIMARY KEY,
       status TEXT NOT NULL DEFAULT 'open',

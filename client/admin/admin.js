@@ -5,6 +5,7 @@ const state = {
   admin: null,
   capabilities: new Set(),
   currentPanel: 'overview',
+  analytics: null,
   moderationCase: null,
   moderationConfirmation: null,
   moderationLoadRevision: 0
@@ -12,6 +13,44 @@ const state = {
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+
+const METRIC_LABELS = Object.freeze({
+  match_started: 'Начатые матчи',
+  match_finished: 'Завершённые матчи',
+  match_abandoned: 'Выходы до финиша',
+  fall: 'Падения',
+  finish_time: 'Время прохождения'
+});
+const STATUS_LABELS = Object.freeze({
+  open: 'Новое',
+  reviewing: 'В работе',
+  resolved: 'Закрыто',
+  dismissed: 'Отклонено'
+});
+const REASON_LABELS = Object.freeze({
+  afk: 'Бездействие (AFK)',
+  griefing: 'Мешает другим игрокам',
+  'offensive-name': 'Оскорбительное имя',
+  exploitCheat: 'Читы / эксплуатация ошибки',
+  'exploit-cheat': 'Читы / эксплуатация ошибки',
+  offensiveName: 'Оскорбительное имя'
+});
+const ROLE_LABELS = Object.freeze({
+  owner: 'Владелец',
+  operator: 'Оператор',
+  moderator: 'Модератор',
+  analyst: 'Аналитик',
+  viewer: 'Наблюдатель'
+});
+const AUDIT_ACTION_LABELS = Object.freeze({
+  'admin.login': 'Вход в панель',
+  'admin.logout': 'Выход из панели',
+  'admin.user.create': 'Создан администратор',
+  'admin.user.rotate': 'Сменён код администратора',
+  'admin.user.disable': 'Администратор отключён',
+  'admin.user.enable': 'Администратор включён',
+  'moderation.case.transition': 'Изменён статус жалобы'
+});
 
 function setStatus(text, tone = '') {
   const node = $('#status-line');
@@ -56,6 +95,7 @@ function showLogin(message = '') {
   state.csrf = '';
   state.admin = null;
   state.capabilities = new Set();
+  state.analytics = null;
   $('#app-view').hidden = true;
   $('#identity').hidden = true;
   $('#login-view').hidden = false;
@@ -67,7 +107,8 @@ function activateSession(payload) {
   state.admin = payload.admin;
   state.capabilities = new Set(payload.capabilities || []);
   $('#admin-name').textContent = payload.admin.name;
-  $('#admin-role').textContent = payload.admin.role;
+  $('#admin-role').textContent = ROLE_LABELS[payload.admin.role] || payload.admin.role;
+  $('#admin-role').title = `Техническое название роли: ${payload.admin.role}`;
   $('#identity').hidden = false;
   $('#login-view').hidden = true;
   $('#app-view').hidden = false;
@@ -103,6 +144,13 @@ function formatTime(value) {
   );
 }
 
+function formatDay(value) {
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(
+    new Date(`${value}T00:00:00Z`)
+  );
+}
+
 function formatDuration(seconds) {
   const value = Math.max(0, Number(seconds || 0));
   const days = Math.floor(value / 86400);
@@ -111,6 +159,13 @@ function formatDuration(seconds) {
   if (days) return `${days}д ${hours}ч`;
   if (hours) return `${hours}ч ${minutes}м`;
   return `${minutes}м`;
+}
+
+function formatMilliseconds(value) {
+  if (value == null) return '—';
+  const ms = Math.max(0, Number(value || 0));
+  if (ms < 1000) return `${formatNumber(ms)} мс`;
+  return `${(ms / 1000).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} сек`;
 }
 
 function appendText(parent, tag, text, className = '') {
@@ -139,52 +194,82 @@ function fillDetails(selector, entries) {
   }
 }
 
+function statusLabel(value) {
+  return STATUS_LABELS[value] ? `${STATUS_LABELS[value]} (${value})` : value || '—';
+}
+
+function reasonLabel(value) {
+  return REASON_LABELS[value] || value || '—';
+}
+
+function deviceLabel(value) {
+  if (value === 'mobile') return 'Телефон / планшет';
+  if (value === 'desktop') return 'Компьютер';
+  if (value === '—') return 'Не указано';
+  return value;
+}
+
+function modeLabel(value) {
+  if (value === 'race') return 'Гонка';
+  if (value === 'coop') return 'Кооператив';
+  if (value === 'solo') return 'Одиночный';
+  if (value === '—') return 'Не указано';
+  return value;
+}
+
+function courseLabel(value) {
+  const text = String(value || '—');
+  const chapter = /^ch(\d+)$/i.exec(text);
+  if (chapter) return `Глава ${chapter[1]} (${text})`;
+  return text === '—' ? 'Не указано' : text;
+}
+
 async function loadOverview() {
   const payload = await api('/api/admin/dashboard');
   const data = payload.overview;
   const health = data.health || {};
   const backup = health.backup || {};
   const backupProblem = Boolean(backup.required && (!backup.available || backup.stale));
-  const backupLabel = backup.required ? (backupProblem ? 'ПРОБЛЕМА' : 'OK') : 'N/A';
+  const backupLabel = backup.required ? (backupProblem ? 'НУЖНО ПРОВЕРИТЬ' : 'В ПОРЯДКЕ') : 'НЕ ТРЕБУЕТСЯ';
   const backupHint =
     backup.ageSeconds != null
-      ? `возраст ${formatDuration(backup.ageSeconds)}`
+      ? `последняя подтверждённая копия: ${formatDuration(backup.ageSeconds)} назад`
       : backup.required
-        ? 'нет подтверждённой копии'
-        : 'persistent backup не требуется';
+        ? 'нет свежей подтверждённой копии'
+        : 'для этого запуска постоянный backup не обязателен';
   const cards = $('#overview-cards');
   cards.replaceChildren(
-    statCard('Игроки сейчас', formatNumber(health.players), `${formatNumber(health.rooms)} комнат`),
+    statCard('Игроки сейчас', formatNumber(health.players), `${formatNumber(health.rooms)} активных комнат`),
     statCard(
-      'Активные 24ч',
+      'Активные аккаунты за 24ч',
       formatNumber(data.accounts?.active24h),
-      `${formatNumber(data.accounts?.total)} аккаунтов`
+      `всего зарегистрировано: ${formatNumber(data.accounts?.total)}`
     ),
     statCard(
-      'Модерация',
+      'Новые дела модерации',
       formatBoundedCount(data.moderation?.open, data.moderation?.openTruncated),
-      `${formatBoundedCount(data.moderation?.reviewing, data.moderation?.reviewingTruncated)} reviewing · ${formatNumber(data.moderation?.reports24h)} жалоб / 24ч`,
+      `${formatBoundedCount(data.moderation?.reviewing, data.moderation?.reviewingTruncated)} уже в работе · ${formatNumber(data.moderation?.reports24h)} жалоб за 24ч`,
       data.moderation?.open ? 'warn' : 'good'
     ),
-    statCard('Backup', backupLabel, backupHint, backupProblem ? 'bad' : backup.required ? 'good' : '')
+    statCard('Резервные копии', backupLabel, backupHint, backupProblem ? 'bad' : backup.required ? 'good' : '')
   );
   fillDetails('#production-details', [
-    ['Version', health.version],
-    ['Commit', health.commit],
-    ['Release', health.release || 'branch mode'],
-    ['Protocol', health.protocolVersion],
-    ['Started', formatTime(health.startedAt)],
-    ['Uptime', formatDuration(health.uptime)],
-    ['Competitive records', formatNumber(data.competitiveRecords)]
+    ['Версия игры', health.version],
+    ['Сборка (commit)', health.commit],
+    ['Релиз', health.release || 'запуск из ветки, не из release tag'],
+    ['Версия сетевого протокола', health.protocolVersion],
+    ['Сервер запущен', formatTime(health.startedAt)],
+    ['Работает без перезапуска', formatDuration(health.uptime)],
+    ['Проверенных рекордов', formatNumber(data.competitiveRecords)]
   ]);
   fillDetails('#load-details', [
-    ['Event loop p95', `${health.load?.eventLoopP95Ms ?? 0} ms`],
-    ['RSS', `${health.load?.rssMb ?? 0} MB`],
-    ['Heap', `${health.load?.heapUsedMb ?? 0} / ${health.load?.heapTotalMb ?? 0} MB`],
-    ['Sockets', `${health.capacity?.socketCount ?? 0} / ${health.capacity?.maxSockets ?? 0}`],
-    ['Matches', `${health.capacity?.activeMatches ?? 0} / ${health.capacity?.maxMatches ?? 0}`],
-    ['Matchmaking', `${health.matchmaking?.waiting ?? 0} waiting`],
-    ['Overloaded', health.load?.overloaded ? 'YES' : 'no']
+    ['Задержка цикла сервера (p95)', `${health.load?.eventLoopP95Ms ?? 0} мс`],
+    ['Память процесса (RSS)', `${health.load?.rssMb ?? 0} МБ`],
+    ['Память JavaScript', `${health.load?.heapUsedMb ?? 0} / ${health.load?.heapTotalMb ?? 0} МБ`],
+    ['Подключения', `${health.capacity?.socketCount ?? 0} / ${health.capacity?.maxSockets ?? 0}`],
+    ['Активные матчи', `${health.capacity?.activeMatches ?? 0} / ${health.capacity?.maxMatches ?? 0}`],
+    ['Игроков в поиске матча', `${health.matchmaking?.waiting ?? 0}`],
+    ['Перегружен', health.load?.overloaded ? 'ДА — стоит проверить' : 'нет']
   ]);
 }
 
@@ -194,39 +279,243 @@ function rowWithCells(values) {
   return row;
 }
 
-async function loadAnalytics() {
-  const days = Number($('#analytics-days').value || 7);
-  const payload = await api('/api/admin/analytics', { days, limit: 300 });
-  const data = payload.analytics;
-  $('#analytics-meta').textContent = `С ${data.from} · dropped=${data.dropped} · ${data.rows.length} строк`;
+function analyticsRequest() {
+  return {
+    days: Number($('#analytics-days').value || 7),
+    limit: 1000,
+    mode: $('#analytics-mode').value || 'all',
+    course: $('#analytics-course').value || 'all',
+    device: $('#analytics-device').value || 'all'
+  };
+}
+
+function populateFilter(selector, allLabel, options, selected, labeler = value => value) {
+  const select = $(selector);
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = 'all';
+  all.textContent = allLabel;
+  select.append(all);
+  for (const value of options || []) {
+    if (!value || value === 'all') continue;
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = labeler(value);
+    select.append(option);
+  }
+  select.value = [...select.options].some(option => option.value === selected) ? selected : 'all';
+}
+
+function comparisonHint(current, previous, formatter = formatNumber) {
+  if (previous == null) return 'нет данных для прошлого периода';
+  const currentNumber = Number(current || 0);
+  const previousNumber = Number(previous || 0);
+  if (!previousNumber) return `прошлый такой же период: ${formatter(previousNumber)}`;
+  const percent = Math.round(((currentNumber - previousNumber) / previousNumber) * 100);
+  const sign = percent > 0 ? '+' : '';
+  return `прошлый период: ${formatter(previousNumber)} · изменение ${sign}${percent}%`;
+}
+
+function renderAnalyticsKpis(data) {
+  const current = data.kpis?.current || {};
+  const previous = data.kpis?.previous || {};
+  const completion = current.completionPercent == null ? '—' : `${current.completionPercent}%`;
+  const previousCompletion = previous.completionPercent == null ? '—' : `${previous.completionPercent}%`;
+  const cards = $('#analytics-kpis');
+  cards.replaceChildren(
+    statCard('Начатые матчи', formatNumber(current.started), comparisonHint(current.started, previous.started)),
+    statCard(
+      'Завершённые матчи',
+      formatNumber(current.finished),
+      comparisonHint(current.finished, previous.finished)
+    ),
+    statCard(
+      'Завершено / начато',
+      completion,
+      `прошлый такой же период: ${previousCompletion} · это отношение событий, не уникальных игроков`
+    ),
+    statCard(
+      'Выходы до финиша',
+      formatNumber(current.abandoned),
+      comparisonHint(current.abandoned, previous.abandoned),
+      current.abandoned > previous.abandoned ? 'warn' : ''
+    ),
+    statCard(
+      'Падения',
+      formatNumber(current.falls),
+      comparisonHint(current.falls, previous.falls),
+      current.falls > previous.falls ? 'warn' : ''
+    ),
+    statCard(
+      'Среднее проверенное время',
+      formatMilliseconds(current.verifiedAverageMs),
+      `прошлый период: ${formatMilliseconds(previous.verifiedAverageMs)} · проверенных финишей: ${formatNumber(current.verifiedFinishes)}`
+    )
+  );
+}
+
+function renderAnalyticsTrend() {
+  const data = state.analytics;
+  const root = $('#analytics-chart');
+  root.replaceChildren();
+  if (!data?.trend?.length) {
+    appendText(root, 'p', 'За выбранный период данных пока нет.', 'empty');
+    return;
+  }
+  const field = $('#analytics-trend-metric').value || 'matchStarted';
+  const values = data.trend.map(point => Number(point[field] || 0));
+  const max = Math.max(1, ...values);
+  for (const [index, point] of data.trend.entries()) {
+    const value = values[index];
+    const item = document.createElement('div');
+    item.className = 'bar-day';
+    item.title = `${point.day}: ${formatNumber(value)}`;
+    appendText(item, 'span', formatNumber(value), 'bar-value');
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+    const fill = document.createElement('span');
+    fill.className = 'bar-fill';
+    fill.style.height = `${Math.max(value ? 5 : 0, (value / max) * 100)}%`;
+    track.append(fill);
+    item.append(track);
+    appendText(item, 'span', formatDay(point.day), 'bar-label');
+    root.append(item);
+  }
+}
+
+function renderHotspots(selector, items, emptyText) {
+  const root = $(selector);
+  root.replaceChildren();
+  for (const [index, item] of (items || []).entries()) {
+    const card = document.createElement('div');
+    card.className = 'rank-item';
+    appendText(card, 'span', `${index + 1}`, 'rank-number');
+    const copy = document.createElement('div');
+    appendText(copy, 'strong', item.detail === '—' ? courseLabel(item.course) : item.detail);
+    appendText(
+      copy,
+      'span',
+      `${courseLabel(item.course)} · ${deviceLabel(item.device)} · ${formatNumber(item.samples)} событий`,
+      'rank-meta'
+    );
+    card.append(copy);
+    root.append(card);
+  }
+  if (!items?.length) appendText(root, 'p', emptyText, 'muted');
+}
+
+function renderAnalyticsTable(data) {
   const body = $('#analytics-body');
   body.replaceChildren();
-  for (const row of data.rows) {
+  for (const row of data.rows || []) {
+    const average = row.metric === 'finish_time' ? formatMilliseconds(row.average) : row.average == null ? '—' : formatNumber(row.average);
     body.append(
       rowWithCells([
+        `${METRIC_LABELS[row.metric] || row.metric} (${row.metric})`,
+        modeLabel(row.mode),
+        courseLabel(row.course),
+        row.detail,
+        deviceLabel(row.device),
+        formatNumber(row.samples),
+        average
+      ])
+    );
+  }
+  if (!data.rows?.length) {
+    const row = document.createElement('tr');
+    const cell = appendText(row, 'td', 'Нет данных с такими фильтрами за выбранный период.', 'empty');
+    cell.colSpan = 7;
+    body.append(row);
+  }
+}
+
+async function loadAnalytics() {
+  const request = analyticsRequest();
+  const payload = await api('/api/admin/analytics', request);
+  const data = payload.analytics;
+  state.analytics = data;
+  populateFilter('#analytics-mode', 'Все режимы', data.options?.modes, data.filters?.mode, modeLabel);
+  populateFilter(
+    '#analytics-course',
+    'Все трассы и главы',
+    data.options?.courses,
+    data.filters?.course,
+    courseLabel
+  );
+  populateFilter(
+    '#analytics-device',
+    'Все устройства',
+    data.options?.devices,
+    data.filters?.device,
+    deviceLabel
+  );
+  const limitNote = data.truncated ? ' · таблица ограничена первыми 1000 строками' : '';
+  const droppedNote = data.dropped
+    ? ` · ВНИМАНИЕ: сервер отбросил ${formatNumber(data.dropped)} необычных ключей метрик`
+    : ' · потерь метрик не обнаружено';
+  $('#analytics-meta').textContent = `Период с ${data.from} · сравнение с ${data.previousFrom}–${data.previousTo}${limitNote}${droppedNote}`;
+  renderAnalyticsKpis(data);
+  renderAnalyticsTrend();
+  renderHotspots('#fall-hotspots', data.hotspots?.falls, 'Падений по выбранным фильтрам нет.');
+  renderHotspots('#abandon-hotspots', data.hotspots?.abandons, 'Выходов до финиша по выбранным фильтрам нет.');
+  renderAnalyticsTable(data);
+}
+
+function downloadText(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function csvCell(value) {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function exportAnalytics(format) {
+  const data = state.analytics;
+  if (!data) return setStatus('Сначала загрузите статистику.', 'warn');
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (format === 'json') {
+    downloadText(
+      `wobble-analytics-${stamp}.json`,
+      `${JSON.stringify(data, null, 2)}\n`,
+      'application/json;charset=utf-8'
+    );
+    setStatus('JSON со статистикой подготовлен.', 'good');
+    return;
+  }
+  const header = ['metric', 'metric_label', 'mode', 'course', 'detail', 'device', 'samples', 'average'];
+  const lines = [header.join(',')];
+  for (const row of data.rows || []) {
+    lines.push(
+      [
         row.metric,
+        METRIC_LABELS[row.metric] || row.metric,
         row.mode,
         row.course,
         row.detail,
         row.device,
-        formatNumber(row.samples),
-        row.average == null ? '—' : formatNumber(row.average)
-      ])
+        row.samples,
+        row.average ?? ''
+      ]
+        .map(csvCell)
+        .join(',')
     );
   }
-  if (!data.rows.length) {
-    const row = document.createElement('tr');
-    const cell = appendText(row, 'td', 'Нет данных за выбранный период', 'empty');
-    cell.colSpan = 7;
-    body.append(row);
-  }
+  downloadText(`wobble-analytics-${stamp}.csv`, `${lines.join('\n')}\n`, 'text/csv;charset=utf-8');
+  setStatus('CSV со статистикой подготовлен.', 'good');
 }
 
 function reasonsText(reasons = {}) {
   return (
     Object.entries(reasons)
       .filter(([, count]) => Number(count) > 0)
-      .map(([reason, count]) => `${reason}: ${count}`)
+      .map(([reason, count]) => `${reasonLabel(reason)}: ${count}`)
       .join(' · ') || '—'
   );
 }
@@ -239,14 +528,14 @@ async function loadModeration() {
   for (const item of payload.cases || []) {
     const row = rowWithCells([
       `${item.currentName} · ${item.targetAccountId}`,
-      item.status,
+      statusLabel(item.status),
       item.uniqueReporters,
       item.totalReports,
       reasonsText(item.reasons),
       formatTime(item.lastReportedAt)
     ]);
     const action = document.createElement('td');
-    const button = appendText(action, 'button', 'Открыть', 'case-open');
+    const button = appendText(action, 'button', 'Открыть дело', 'case-open');
     button.type = 'button';
     button.addEventListener('click', () => openModerationCase(item.targetAccountId));
     row.append(action);
@@ -254,7 +543,7 @@ async function loadModeration() {
   }
   if (!payload.cases?.length) {
     const row = document.createElement('tr');
-    const cell = appendText(row, 'td', 'Очередь пуста', 'empty');
+    const cell = appendText(row, 'td', 'В этой категории дел сейчас нет.', 'empty');
     cell.colSpan = 7;
     body.append(row);
   }
@@ -296,40 +585,40 @@ function resetModerationConfirmation(message = '') {
 function renderModerationCase(item) {
   state.moderationCase = item;
   resetModerationConfirmation(
-    'Изменение статуса требует второго подтверждения и записывается в moderation history + admin audit.'
+    'Изменение будет записано и в историю дела, и в журнал действий администраторов.'
   );
   $('#case-title').textContent = item.currentName || 'Wobbler';
-  $('#case-id').textContent = item.targetAccountId;
+  $('#case-id').textContent = `ID игрока: ${item.targetAccountId}`;
   const status = $('#case-status');
-  status.textContent = item.status;
+  status.textContent = statusLabel(item.status);
   status.dataset.status = item.status;
   $('#case-reports').textContent =
-    `${formatNumber(item.uniqueReporters)} reporters · ${formatNumber(item.totalReports)} reports · ${reasonsText(item.reasons)}`;
+    `${formatNumber(item.uniqueReporters)} разных жалобщиков · ${formatNumber(item.totalReports)} жалоб · ${reasonsText(item.reasons)}`;
   $('#case-last').textContent = `Последняя жалоба: ${formatTime(item.lastReportedAt)}`;
 
   const evidenceRoot = $('#case-evidence');
   evidenceRoot.replaceChildren();
   for (const evidence of item.evidence || []) {
-    itemCard(evidenceRoot, evidence.reason, [
+    itemCard(evidenceRoot, reasonLabel(evidence.reason), [
       formatTime(evidence.reportedAt),
-      `reporter ${evidence.reporterAccountId}`,
-      evidence.chapterIdSnapshot ? `chapter ${evidence.chapterIdSnapshot}` : null,
-      evidence.targetNameSnapshot ? `name «${evidence.targetNameSnapshot}»` : null,
-      Number(evidence.occurrences) > 1 ? `${evidence.occurrences} legacy occurrences` : null
+      `ID жалобщика: ${evidence.reporterAccountId}`,
+      evidence.chapterIdSnapshot ? `глава: ${courseLabel(evidence.chapterIdSnapshot)}` : null,
+      evidence.targetNameSnapshot ? `имя тогда: «${evidence.targetNameSnapshot}»` : null,
+      Number(evidence.occurrences) > 1 ? `${evidence.occurrences} объединённых старых жалоб` : null
     ]);
   }
-  if (!item.evidence?.length) appendText(evidenceRoot, 'p', 'Evidence отсутствует.', 'muted');
+  if (!item.evidence?.length) appendText(evidenceRoot, 'p', 'Материалы жалоб отсутствуют.', 'muted');
 
   const historyRoot = $('#case-history');
   historyRoot.replaceChildren();
   for (const event of item.history || []) {
     itemCard(
       historyRoot,
-      `${event.fromStatus} → ${event.toStatus}`,
+      `${statusLabel(event.fromStatus)} → ${statusLabel(event.toStatus)}`,
       [
         formatTime(event.createdAt),
-        event.moderatorName || event.moderatorId,
-        event.reviewedThrough ? `reviewed through ${formatTime(event.reviewedThrough)}` : null
+        `модератор: ${event.moderatorName || event.moderatorId}`,
+        event.reviewedThrough ? `проверены жалобы до ${formatTime(event.reviewedThrough)}` : null
       ],
       event.note || ''
     );
@@ -344,7 +633,7 @@ function renderModerationCase(item) {
 
 async function openModerationCase(targetAccountId) {
   const requestRevision = ++state.moderationLoadRevision;
-  setStatus('Загрузка moderation case…');
+  setStatus('Загружаю дело…');
   try {
     const payload = await api('/api/admin/moderation/case', { targetAccountId });
     if (requestRevision !== state.moderationLoadRevision) return;
@@ -368,11 +657,11 @@ async function submitModerationTransition(event) {
   const hint = $('#case-action-hint');
   const button = $('#case-apply');
   if (nextStatus === item.status) {
-    resetModerationConfirmation('Выберите статус, отличный от текущего.');
+    resetModerationConfirmation('Выберите другой статус: текущее состояние дела уже такое.');
     return;
   }
   if ((nextStatus === 'resolved' || nextStatus === 'dismissed') && !note) {
-    resetModerationConfirmation('Для resolved и dismissed сервер требует заметку с обоснованием решения.');
+    resetModerationConfirmation('Для закрытия или отклонения дела обязательно напишите причину решения.');
     return;
   }
 
@@ -384,14 +673,15 @@ async function submitModerationTransition(event) {
     state.moderationConfirmation.expiresAt < now
   ) {
     state.moderationConfirmation = { signature, expiresAt: now + 10_000 };
-    button.textContent = `Подтвердить → ${nextStatus}`;
+    button.textContent = `Подтвердить: ${STATUS_LABELS[nextStatus] || nextStatus}`;
     button.classList.add('confirm');
-    hint.textContent = 'Проверьте evidence и решение ещё раз. Подтверждение действительно 10 секунд.';
+    hint.textContent =
+      'Это ещё не применено. Проверьте материалы и заметку ещё раз, затем подтвердите в течение 10 секунд.';
     return;
   }
 
   button.disabled = true;
-  hint.textContent = 'Сохраняем решение…';
+  hint.textContent = 'Сохраняю решение…';
   try {
     const payload = await api('/api/admin/moderation/transition', {
       targetAccountId: item.targetAccountId,
@@ -401,20 +691,25 @@ async function submitModerationTransition(event) {
     });
     renderModerationCase(payload.case);
     await loadModeration();
-    setStatus(`Moderation case: ${payload.case.status}`, 'good');
+    setStatus(`Статус дела изменён: ${STATUS_LABELS[payload.case.status] || payload.case.status}`, 'good');
   } catch (error) {
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
     if (error.status === 409 && error.payload?.case) {
       renderModerationCase(error.payload.case);
-      hint.textContent = 'Дело изменилось после открытия. Новые данные загружены — проверьте их заново.';
-      setStatus('Moderation case изменился — решение не применено', 'warn');
+      hint.textContent =
+        'Пока вы читали дело, появилась новая жалоба или другой модератор изменил его. Я загрузил свежие данные — проверьте их заново.';
+      setStatus('Дело изменилось — старое решение не применено', 'warn');
       return;
     }
     resetModerationConfirmation(`Ошибка: ${error.message}`);
-    setStatus(`Ошибка moderation: ${error.message}`, 'bad');
+    setStatus(`Не удалось изменить дело: ${error.message}`, 'bad');
   } finally {
     button.disabled = false;
   }
+}
+
+function auditActionLabel(action) {
+  return AUDIT_ACTION_LABELS[action] || action;
 }
 
 async function loadAudit() {
@@ -426,11 +721,17 @@ async function loadAudit() {
       rowWithCells([
         formatTime(event.createdAt),
         event.actorName,
-        event.actorRole,
-        event.action,
+        ROLE_LABELS[event.actorRole] || event.actorRole,
+        auditActionLabel(event.action),
         [event.targetType, event.targetId].filter(Boolean).join(': ') || '—'
       ])
     );
+  }
+  if (!payload.events?.length) {
+    const row = document.createElement('tr');
+    const cell = appendText(row, 'td', 'Журнал пока пуст.', 'empty');
+    cell.colSpan = 5;
+    body.append(row);
   }
 }
 
@@ -443,10 +744,10 @@ async function refreshCurrent() {
   };
   const loader = loaders[state.currentPanel];
   if (!loader) return;
-  setStatus('Обновление…');
+  setStatus('Обновляю данные…');
   try {
     await loader();
-    setStatus(`Обновлено ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
+    setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
   } catch (error) {
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
     setStatus(`Ошибка: ${error.message}`, 'bad');
@@ -464,10 +765,10 @@ $('#login-form').addEventListener('submit', async event => {
   } catch (error) {
     $('#login-error').textContent =
       error.status === 404
-        ? 'Admin panel отключена на сервере.'
+        ? 'Панель отключена на сервере. Сначала включите ADMIN_PANEL_ENABLED=1.'
         : error.status === 429
-          ? 'Слишком много попыток. Подождите и попробуйте снова.'
-          : 'Неверный access code.';
+          ? 'Слишком много попыток входа. Подождите и попробуйте снова.'
+          : 'Код администратора не подошёл.';
   }
 });
 
@@ -481,7 +782,18 @@ $('#logout').addEventListener('click', async () => {
 });
 
 $('#refresh').addEventListener('click', refreshCurrent);
-$('#analytics-days').addEventListener('change', refreshCurrent);
+$('#analytics-days').addEventListener('change', () => {
+  $('#analytics-mode').value = 'all';
+  $('#analytics-course').value = 'all';
+  $('#analytics-device').value = 'all';
+  refreshCurrent();
+});
+$('#analytics-mode').addEventListener('change', refreshCurrent);
+$('#analytics-course').addEventListener('change', refreshCurrent);
+$('#analytics-device').addEventListener('change', refreshCurrent);
+$('#analytics-trend-metric').addEventListener('change', renderAnalyticsTrend);
+$('#analytics-export-csv').addEventListener('click', () => exportAnalytics('csv'));
+$('#analytics-export-json').addEventListener('click', () => exportAnalytics('json'));
 $('#moderation-status').addEventListener('change', refreshCurrent);
 $('#case-close').addEventListener('click', closeModerationCase);
 $('#case-action').addEventListener('submit', submitModerationTransition);
@@ -501,6 +813,6 @@ for (const button of $$('#tabs [data-panel]')) {
     const payload = await api('/api/admin/session', {}, { csrf: false });
     activateSession(payload);
   } catch (error) {
-    showLogin(error.status === 404 ? 'Admin panel пока отключена на сервере.' : '');
+    showLogin(error.status === 404 ? 'Панель пока отключена на сервере.' : '');
   }
 })();

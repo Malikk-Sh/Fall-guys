@@ -23,12 +23,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: python3 .github/pr71-review-fixes.py
-      - name: Format changed files
+      - name: Validate shell syntax
+        run: bash -n deploy/install.sh
+      - name: Format changed source
         run: |
           npx prettier --write \
             client/admin/admin.js \
-            deploy/install.sh \
-            deploy/wobble.env.example \
             docs/INFRASTRUCTURE-STATUS.md \
             server/adminInfrastructure.js \
             server/adminInfrastructure.test.mjs

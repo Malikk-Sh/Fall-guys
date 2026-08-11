@@ -5,6 +5,7 @@ const state = {
   admin: null,
   capabilities: new Set(),
   currentPanel: 'overview',
+  sessionGeneration: 0,
   refreshRevision: 0,
   infrastructure: null,
   analytics: null,
@@ -145,6 +146,7 @@ function showLogin(message = '') {
   state.analytics = null;
   state.operations = null;
   clearOperationConfirmation();
+  state.sessionGeneration += 1;
   state.refreshRevision += 1;
   document.body.dataset.adminSession = 'login';
   const refresh = $('#refresh');
@@ -161,6 +163,7 @@ function activateSession(payload) {
   state.csrf = payload.csrf;
   state.admin = payload.admin;
   state.capabilities = new Set(payload.capabilities || []);
+  state.sessionGeneration += 1;
   document.body.dataset.adminSession = 'active';
   $('#admin-name').textContent = payload.admin.name;
   $('#admin-role').textContent = ROLE_LABELS[payload.admin.role] || payload.admin.role;
@@ -1374,6 +1377,7 @@ async function refreshCurrent() {
   if (!loader) return;
 
   const revision = ++state.refreshRevision;
+  const sessionGeneration = state.sessionGeneration;
   const refresh = $('#refresh');
   refresh.disabled = true;
   refresh.setAttribute('aria-busy', 'true');
@@ -1386,8 +1390,9 @@ async function refreshCurrent() {
     if (result?.statusText) setStatus(result.statusText, result.tone || '');
     else setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
   } catch (error) {
+    if (error.status === 401 && sessionGeneration === state.sessionGeneration)
+      return showLogin('Сессия администратора завершена. Войдите снова.');
     if (revision !== state.refreshRevision || panel !== state.currentPanel) return;
-    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
     setStatus(`Ошибка: ${error.message}`, 'bad');
   } finally {
     if (revision === state.refreshRevision) {

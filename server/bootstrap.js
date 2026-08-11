@@ -98,7 +98,9 @@ installAdminRoutes({
   adminAuth,
   control: adminControl,
   enabled: adminPanelEnabled,
-  clientIp,
+  // The shared-443 stream topology does not preserve the public client address to the HTTP
+  // backend. Admin login throttling therefore uses the trusted TCP peer and never X-Forwarded-For,
+  // which a public caller could forge before Nginx appends its own hop.
   secureCookies: process.env.ADMIN_COOKIE_SECURE
     ? process.env.ADMIN_COOKIE_SECURE !== '0'
     : process.env.NODE_ENV === 'production'

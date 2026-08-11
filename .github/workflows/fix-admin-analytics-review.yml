@@ -1,0 +1,265 @@
+name: Temporary apply admin analytics review fixes
+
+on:
+  push:
+    branches: [feat/admin-analytics-usability]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/admin-analytics-usability
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply review fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1. Frontend: discard stale analytics responses and explain unavailable comparison.
+          path = Path('client/admin/admin.js')
+          text = path.read_text()
+          text = text.replace(
+              "  analytics: null,\n  moderationCase: null,",
+              "  analytics: null,\n  analyticsLoadRevision: 0,\n  moderationCase: null,"
+          )
+          text = text.replace(
+              "  if (name !== 'moderation') closeModerationCase();\n  state.currentPanel = name;",
+              "  if (name !== 'moderation') closeModerationCase();\n  if (name !== 'analytics') state.analyticsLoadRevision += 1;\n  state.currentPanel = name;"
+          )
+          old = """  const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+            const compareHint = (currentValue, previousValue, formatter = formatNumber) =>"""
+          new = """  const comparisonUnavailableHint =
+              data.comparisonReason === 'current-day-incomplete'
+                ? 'сегодняшний день ещё идёт — не сравниваем его с полным вчерашним днём'
+                : `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+            const compareHint = (currentValue, previousValue, formatter = formatNumber) =>"""
+          if old not in text:
+              raise SystemExit('analytics comparison hint anchor not found')
+          text = text.replace(old, new)
+          old = """async function loadAnalytics() {
+            const request = analyticsRequest();
+            const payload = await api('/api/admin/analytics', request);
+            const data = payload.analytics;
+            state.analytics = data;"""
+          new = """async function loadAnalytics() {
+            const requestRevision = ++state.analyticsLoadRevision;
+            const request = analyticsRequest();
+            const payload = await api('/api/admin/analytics', request);
+            if (requestRevision !== state.analyticsLoadRevision) return false;
+            const data = payload.analytics;
+            state.analytics = data;"""
+          if old not in text:
+              raise SystemExit('loadAnalytics anchor not found')
+          text = text.replace(old, new)
+          old = """  const comparisonNote = data.comparisonAvailable
+              ? ` · сравнение с ${data.previousFrom}–${data.previousTo}`
+              : ` · предыдущий полный период не сравнивается: история хранится ${formatNumber(data.retentionDays)} дней`;"""
+          new = """  const comparisonNote = data.comparisonAvailable
+              ? ` · сравнение с ${data.previousFrom}–${data.previousTo}`
+              : data.comparisonReason === 'current-day-incomplete'
+                ? ' · сегодня показывается в реальном времени без сравнения со вчера'
+                : ` · предыдущий полный период не сравнивается: история хранится ${formatNumber(data.retentionDays)} дней`;"""
+          if old not in text:
+              raise SystemExit('analytics meta comparison anchor not found')
+          text = text.replace(old, new)
+          old = """  renderAnalyticsTable(data);
+          }
+
+          function downloadText"""
+          new = """  renderAnalyticsTable(data);
+            return true;
+          }
+
+          function downloadText"""
+          if old not in text:
+              raise SystemExit('loadAnalytics return anchor not found')
+          text = text.replace(old, new)
+          text = text.replace(
+              """    await loader();
+                setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');""",
+              """    const applied = await loader();
+                if (applied === false) return;
+                setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');"""
+          )
+          path.write_text(text)
+
+          # 2. HTML: make complete-day semantics explicit.
+          path = Path('client/admin/index.html')
+          text = path.read_text()
+          text = text.replace('<option value="1">Сегодня</option>', '<option value="1">Сегодня — в реальном времени</option>')
+          text = text.replace('<option value="7" selected>Последние 7 дней</option>', '<option value="7" selected>Последние 7 полных дней</option>')
+          text = text.replace('<option value="30">Последние 30 дней</option>', '<option value="30">Последние 30 полных дней</option>')
+          text = text.replace('<option value="90">Последние 90 дней</option>', '<option value="90">Последние 90 полных дней</option>')
+          path.write_text(text)
+
+          # 3. Gameplay semantics: disconnected players that never return are abandonments too.
+          path = Path('server/index.js')
+          text = path.read_text()
+          anchor = """  emitLobby(room);
+          }
+
+          function addPlayer(room, ws, name, playerId = null) {"""
+          insert = """  emitLobby(room);
+          }
+
+          function expireDisconnectedPlayers(now = Date.now()) {
+            for (const room of [...rooms.values()]) {
+              for (const player of [...room.players.values()]) {
+                if (!player.disconnectedAt || now - player.disconnectedAt <= RECONNECT_GRACE_MS) continue;
+                if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
+                  if (!room.abandonTracked) {
+                    room.abandonTracked = true;
+                    trackEvent(productEvents, 'matchAbandoned');
+                  }
+                  gameplay.count('match_abandoned', dims(room, player, `cp${player.checkpoint ?? 0}`));
+                }
+                dropPlayer(room, player.id);
+              }
+            }
+          }
+
+          function addPlayer(room, ws, name, playerId = null) {"""
+          if anchor not in text:
+              raise SystemExit('expireDisconnectedPlayers insertion anchor not found')
+          text = text.replace(anchor, insert, 1)
+
+          old = """  // Игроки, не вернувшиеся за отведённое время, освобождают слот.
+            for (const room of [...rooms.values()]) {
+              for (const player of [...room.players.values()]) {
+                if (player.disconnectedAt && now - player.disconnectedAt > RECONNECT_GRACE_MS) {
+                  if (
+                    (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) &&
+                    !room.abandonTracked
+                  ) {
+                    room.abandonTracked = true;
+                    trackEvent(productEvents, 'matchAbandoned');
+                  }
+                  dropPlayer(room, player.id);
+                }
+              }
+              if (room.state === ROOM_STATE.PLAYING && room.mode === GAME_MODE.COOP) {"""
+          new = """  // Игроки, не вернувшиеся за отведённое время, освобождают слот и считаются
+            // abandon только после истечения grace period — краткий обрыв с успешным resume им не является.
+            expireDisconnectedPlayers(now);
+            for (const room of [...rooms.values()]) {
+              if (room.state === ROOM_STATE.PLAYING && room.mode === GAME_MODE.COOP) {"""
+          if old not in text:
+              raise SystemExit('heartbeat disconnect expiry anchor not found')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              "  setResultsTimeout,\n  expireSessions,",
+              "  setResultsTimeout,\n  expireDisconnectedPlayers,\n  expireSessions,"
+          )
+          path.write_text(text)
+
+          # 4. Integration regression test for grace-period abandonment.
+          path = Path('server/integration.test.js')
+          text = path.read_text()
+          text = text.replace(
+              "  setResultsTimeout,\n  expireSessions,",
+              "  setResultsTimeout,\n  expireDisconnectedPlayers,\n  expireSessions,"
+          )
+          anchor = """  return { host, guest, started, code: created.code };
+          }
+
+          test('игрок возвращается в свою комнату после обрыва связи', async t => {"""
+          inserted = """  return { host, guest, started, code: created.code };
+          }
+
+          test('не вернувшийся после grace period игрок учитывается как abandonment', async t => {
+            await listen();
+            const url = `ws://127.0.0.1:${server.address().port}/ws`;
+            const { host, guest, started } = await startedRoom(url, 'coop');
+            t.after(async () => {
+              await Promise.all([host.close(), guest.close()]);
+              await shutdown();
+            });
+
+            const room = [...rooms.values()].find(item => item.matchId === started.matchId);
+            const guestId = guest.messages.find(message => message.type === 'hello').id;
+            const abandonSamples = () => {
+              gameplay.flush();
+              return gameplay
+                .summary({ days: 1, limit: 1000 })
+                .rows.filter(row => row.metric === 'match_abandoned' && row.mode === 'coop')
+                .reduce((sum, row) => sum + row.samples, 0);
+            };
+            const before = abandonSamples();
+
+            guest.ws.terminate();
+            const deadline = Date.now() + 2000;
+            while (!room.players.get(guestId)?.disconnectedAt && Date.now() < deadline) {
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            const disconnectedAt = room.players.get(guestId)?.disconnectedAt;
+            assert.ok(disconnectedAt, 'server noticed the socket disconnect');
+
+            expireDisconnectedPlayers(disconnectedAt + 30_001);
+            assert.equal(room.players.has(guestId), false);
+            assert.equal(abandonSamples(), before + 1);
+          });
+
+          test('игрок возвращается в свою комнату после обрыва связи', async t => {"""
+          if anchor not in text:
+              raise SystemExit('integration abandonment test anchor not found')
+          text = text.replace(anchor, inserted, 1)
+          path.write_text(text)
+
+          # 5. Documentation: explain complete days and disconnect semantics.
+          path = Path('docs/ADMIN-PANEL.md')
+          text = path.read_text()
+          text = text.replace(
+              "- период: сегодня / 7 / 30 / 90 дней;",
+              "- период: сегодня в реальном времени или последние 7 / 30 / 90 полных UTC-дней;"
+          )
+          text = text.replace(
+              "Для 90-дневного периода панель честно отключает сравнение с предыдущими 90 днями: gameplay metrics хранятся только 90 дней, поэтому полного предыдущего окна уже нет.",
+              "«Сегодня» показывается в реальном времени без процентного сравнения со вчера: текущий день ещё не завершён. Для 7 и 30 дней сравниваются только полные календарные дни одинаковой длины. Для 90-дневного периода панель честно отключает сравнение с предыдущими 90 днями: gameplay metrics хранятся только 90 дней, поэтому полного предыдущего окна уже нет."
+          )
+          text = text.replace(
+              "- выходы до финиша;",
+              "- выходы до финиша, включая отключение игрока, который не вернулся за reconnect grace period;"
+          )
+          path.write_text(text)
+
+          # Remove accidental no-op from the test tail if present.
+          path = Path('server/adminAnalytics.test.mjs')
+          text = path.read_text().replace("  db.close?.();\n", "")
+          path.write_text(text)
+          PY
+
+      - name: Format changed files
+        run: |
+          npx prettier --write \
+            client/admin/admin.js \
+            client/admin/index.html \
+            docs/ADMIN-PANEL.md \
+            server/index.js \
+            server/integration.test.js \
+            server/adminAnalytics.js \
+            server/adminAnalytics.test.mjs
+
+      - name: Commit review fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/admin/admin.js client/admin/index.html docs/ADMIN-PANEL.md server/index.js server/integration.test.js server/adminAnalytics.js server/adminAnalytics.test.mjs
+          git commit -m 'Address admin analytics review findings'
+          git push origin HEAD:feat/admin-analytics-usability

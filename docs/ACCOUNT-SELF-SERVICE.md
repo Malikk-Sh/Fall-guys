@@ -48,8 +48,10 @@ cookie. The account UI adds the important client-side half: after explicit confi
 removes that account's saved recovery credential from localStorage. This prevents the next page load
 from silently logging straight back in with the recovery code.
 
-If another saved local account exists, Wobble Rush selects it. Otherwise the UI stays signed out until
-the player signs in with a recovery code, Google, or creates a new account.
+If another saved local account exists, Wobble Rush selects it. Otherwise the current page stays signed
+out. On a later reload the existing first-run behavior may create a new, unrelated Wobble account;
+the signed-out account itself is not recovered again unless the player supplies its recovery code or
+signs in through its linked Google identity.
 
 ## Safety properties
 

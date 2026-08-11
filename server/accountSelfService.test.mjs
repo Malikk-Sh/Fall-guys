@@ -62,7 +62,11 @@ test('session self-service exposes opaque ids and can revoke only another sessio
   assert.equal(sessions[0].current, true);
   assert.match(sessions[0].id, /^[a-f0-9]{24}$/);
   assert.equal(sessions[0].id, publicSessionId(hashToken(current.token)));
-  assert.equal(sessions.some(item => item.id === current.token), false, 'raw bearer never leaves AuthService');
+  assert.equal(
+    sessions.some(item => item.id === current.token),
+    false,
+    'raw bearer never leaves AuthService'
+  );
 
   assert.deepEqual(
     context.auth.revokeAccountSession({
@@ -179,7 +183,10 @@ test('HTTP self-service requires the HttpOnly session and keeps the current brow
       body: '{}'
     });
     const afterSessions = (await after.json()).sessions;
-    assert.deepEqual(afterSessions.map(item => item.current), [true]);
+    assert.deepEqual(
+      afterSessions.map(item => item.current),
+      [true]
+    );
   } finally {
     await server.close();
     context.db.close();

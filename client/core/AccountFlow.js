@@ -236,9 +236,7 @@ export class AccountFlow {
       const result = await revokeOtherAccountSessions();
       if (!result) return this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
       this.game.ui.accountStatus(
-        result.revoked
-          ? `Завершено других сеансов: ${result.revoked}.`
-          : 'Других активных сеансов уже нет.'
+        result.revoked ? `Завершено других сеансов: ${result.revoked}.` : 'Других активных сеансов уже нет.'
       );
       await this.refreshSessions();
       return result;

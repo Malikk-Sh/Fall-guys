@@ -51,7 +51,10 @@ test('account client lists and revokes sessions without ever handling the cookie
   );
   assert.equal((await revokeOtherAccountSessions({ fetchImpl: server.fetchImpl })).revoked, 2);
   assert.ok(server.calls.every(call => call.credentials === 'same-origin'));
-  assert.equal(server.calls.some(call => 'token' in call.body || 'cookie' in call.body), false);
+  assert.equal(
+    server.calls.some(call => 'token' in call.body || 'cookie' in call.body),
+    false
+  );
 });
 
 test('recovery rotation returns the one-time replacement code and logout stays session-only', async () => {

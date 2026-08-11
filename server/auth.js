@@ -112,12 +112,17 @@ class AuthService {
         lastSeenAt: Number(row.last_seen_at),
         expiresAt: Number(row.expires_at)
       }))
-      .sort((a, b) => Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt || a.id.localeCompare(b.id));
+      .sort(
+        (a, b) =>
+          Number(b.current) - Number(a.current) || b.lastSeenAt - a.lastSeenAt || a.id.localeCompare(b.id)
+      );
   }
 
   revokeAccountSession({ accountId, sessionId, currentToken } = {}) {
     const id = String(accountId || '');
-    const requested = String(sessionId || '').trim().toLowerCase();
+    const requested = String(sessionId || '')
+      .trim()
+      .toLowerCase();
     if (!id || !validPublicSessionId(requested)) return { ok: false, reason: 'invalid-session' };
     const currentHash = hashToken(currentToken);
     if (currentHash && publicSessionId(currentHash) === requested) {
@@ -241,9 +246,7 @@ function prepare(db) {
     deleteSessionForAccount: db.prepare(
       'DELETE FROM account_sessions WHERE token_hash = ? AND account_id = ?'
     ),
-    deleteOtherSessions: db.prepare(
-      'DELETE FROM account_sessions WHERE account_id = ? AND token_hash <> ?'
-    ),
+    deleteOtherSessions: db.prepare('DELETE FROM account_sessions WHERE account_id = ? AND token_hash <> ?'),
     deleteAccountSessions: db.prepare('DELETE FROM account_sessions WHERE account_id = ?'),
     expireSessions: db.prepare('DELETE FROM account_sessions WHERE expires_at <= ?'),
     expireAccountSessions: db.prepare(

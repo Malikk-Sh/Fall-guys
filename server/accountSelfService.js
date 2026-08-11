@@ -16,9 +16,7 @@ class AccountSelfService {
     this.db = db;
     this.auth = auth;
     this.account = db.prepare('SELECT id FROM accounts WHERE id = ?');
-    this.rotate = db.prepare(
-      'UPDATE accounts SET secret_hash = ?, last_seen_at = ? WHERE id = ?'
-    );
+    this.rotate = db.prepare('UPDATE accounts SET secret_hash = ?, last_seen_at = ? WHERE id = ?');
   }
 
   rotateRecoveryCode({ accountId, currentToken, now = Date.now() } = {}) {

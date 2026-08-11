@@ -55,7 +55,8 @@ test('recent partner is server-owned, directional and keeps the latest chapter',
     name: 'Напарник',
     matchesTogether: 2,
     lastChapterId: 'ch4',
-    lastPlayedAt: 2000
+    lastPlayedAt: 2000,
+    avoided: false
   });
   assert.equal(accounts.profile(second.id).recentPartner.id, first.id);
   assert.equal(

@@ -214,7 +214,8 @@ class Accounts {
             name: recent.display_name,
             matchesTogether: Number(recent.matches_together || 0),
             lastChapterId: recent.last_chapter_id,
-            lastPlayedAt: recent.last_played_at
+            lastPlayedAt: recent.last_played_at,
+            avoided: Boolean(recent.avoided)
           }
         : null
     };
@@ -354,7 +355,12 @@ function prepare(db) {
     `),
     recentPartner: db.prepare(`
       SELECT rp.partner_account_id, a.display_name, rp.matches_together,
-             rp.last_chapter_id, rp.last_played_at
+             rp.last_chapter_id, rp.last_played_at,
+   EXISTS (
+     SELECT 1 FROM matchmaking_avoids ma
+     WHERE (ma.account_a = rp.account_id AND ma.account_b = rp.partner_account_id)
+        OR (ma.account_a = rp.partner_account_id AND ma.account_b = rp.account_id)
+   ) AS avoided
       FROM recent_partners rp
       JOIN accounts a ON a.id = rp.partner_account_id
       WHERE rp.account_id = ?

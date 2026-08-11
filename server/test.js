@@ -24,6 +24,7 @@ const {
   createEventCounters,
   trackEvent,
   matchmakingStatus,
+  coopMatchCompatible,
   addVerificationFindings
 } = require('./index');
 const { coopSpec } = require('../shared/coopChapters.js');
@@ -446,4 +447,13 @@ test('co-op verification findings снимают competitive trust так же, 
     false,
     'reason дедуплицируется'
   );
+});
+
+test('quick matchmaking не соединяет account pair после avoid', () => {
+  const requester = { readyState: 1, accountId: 'a' };
+  const candidate = { ws: { readyState: 1, accountId: 'b' }, chapterId: 'ch4' };
+  const safety = { shouldAvoid: (a, b) => a === 'a' && b === 'b' };
+  assert.equal(coopMatchCompatible(requester, candidate, 'ch4', safety), false);
+  assert.equal(coopMatchCompatible(requester, candidate, 'ch3', { shouldAvoid: () => false }), false);
+  assert.equal(coopMatchCompatible(requester, candidate, null, { shouldAvoid: () => false }), true);
 });

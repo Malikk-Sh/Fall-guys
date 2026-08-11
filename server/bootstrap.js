@@ -28,6 +28,7 @@ const { installAuthRoutes } = require('./authRoutes');
 const { InventoryService } = require('./inventory');
 const { RewardService } = require('./rewards');
 const { installRewardRoutes } = require('./rewardRoutes');
+const { installSocialRoutes } = require('./socialRoutes');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
 
@@ -62,7 +63,7 @@ const clientIp = req => {
   return req.socket.remoteAddress || 'unknown';
 };
 
-installAuthRoutes({
+const authRoutes = installAuthRoutes({
   app: core.app,
   accounts: core.accounts,
   recoveryLogin,
@@ -76,6 +77,11 @@ installAuthRoutes({
     : process.env.NODE_ENV === 'production'
 });
 
+installSocialRoutes({
+  app: core.app,
+  socialSafety: core.socialSafety,
+  requireSession: authRoutes.requireSession
+});
 installRewardRoutes({ app: core.app, auth, rewards });
 
 const port = process.env.PORT || 3000;
@@ -93,6 +99,7 @@ if (require.main === module) {
         socketAuth: true,
         serverInventory: true,
         socialCosmetics: true,
+        socialSafety: true,
         rewardPlatform: true,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',
         google: google.enabled

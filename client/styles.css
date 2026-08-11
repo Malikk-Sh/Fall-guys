@@ -2433,3 +2433,31 @@ body.large-ui .menu-card {
     width: 100%;
   }
 }
+
+/* #55 — compact social safety actions inside the existing recent-partner card. */
+.recent-partner-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, auto));
+  gap: 7px;
+}
+.social-report-reasons {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.social-report-reasons button {
+  min-height: 34px;
+  border: 1px solid #ffffff24;
+  border-radius: 9px;
+  color: #fff;
+  background: #ffffff0d;
+  font-size: 8px;
+  font-weight: 900;
+  cursor: pointer;
+}
+@media (max-width: 760px) {
+  .recent-partner-actions {
+    grid-template-columns: 1fr;
+  }
+}

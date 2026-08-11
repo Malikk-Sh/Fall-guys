@@ -21,6 +21,30 @@ export function buildInviteLink(baseUrl, code, mode) {
   return url.toString();
 }
 
+// Web Share требует transient user activation не во всех браузерах одинаково. Для обычной кнопки
+// share почти всегда проходит; автоматическая попытка после ответа сервера иногда получает
+// NotAllowedError. В таком случае безопасно пробуем clipboard и оставляем кнопку «ССЫЛКА» как
+// последний fallback. AbortError — это явная отмена системного share sheet пользователем, её не
+// превращаем в неожиданное копирование.
+export async function shareInvite({ title, url, navigatorRef = globalThis.navigator } = {}) {
+  if (!url) return { ok: false, reason: 'missing-url' };
+  if (typeof navigatorRef?.share === 'function') {
+    try {
+      await navigatorRef.share({ title, url });
+      return { ok: true, shared: true, copied: false };
+    } catch (error) {
+      if (error?.name === 'AbortError') return { ok: false, cancelled: true, reason: 'cancelled' };
+    }
+  }
+  try {
+    if (typeof navigatorRef?.clipboard?.writeText !== 'function') throw new Error('clipboard unavailable');
+    await navigatorRef.clipboard.writeText(url);
+    return { ok: true, shared: false, copied: true };
+  } catch {
+    return { ok: false, cancelled: false, reason: 'manual', url };
+  }
+}
+
 export function readInvite(urlValue) {
   try {
     const url = new URL(urlValue);

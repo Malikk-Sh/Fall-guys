@@ -9,6 +9,7 @@ import { COOP_CHAPTERS } from '/shared/coopChapters.js';
 import { COOP_PING_LABELS } from '../game/CoopController.js';
 import { GAME_MODE } from '/shared/protocol.js';
 import { courseSpec, dailyCourseSpec, randomSeed } from '../core/Config.js';
+import { shareInvite } from '../core/invite.js';
 
 export function bindMenu(game) {
   game.ui.onAccountAction = (action, value) => game.account.handleAction(action, value);
@@ -19,7 +20,7 @@ export function bindMenu(game) {
     $('#coopChapter').dispatchEvent(new Event('change'));
     game.ui.selectMode('coop');
     game.ui.toggleProfileScreen?.(false);
-    game.ui.pendingRecentPartnerInviteName = partner?.name || 'напарника';
+    game.pendingReplayShare = { partnerName: partner?.name || 'напарника' };
     const net = game.ensureNetwork();
     net.createRoom({
       name: game.ui.coopName(),
@@ -124,20 +125,27 @@ export function bindMenu(game) {
       sendPing(pingCommands[Number(event.code.at(-1)) - 1]);
     }
   });
-  $('#copyInvite').addEventListener('click', async () => {
-    const mode = game.room?.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
-    const link = game.ui.inviteLink($('#roomCode').textContent.trim(), mode);
-    try {
-      // На телефоне системное «Поделиться» удобнее буфера обмена: ссылка сразу уходит в
-      // мессенджер, а не требует переключения приложений вручную.
-      if (navigator.share) {
-        const title = mode === GAME_MODE.COOP ? 'Wobble Rush — кооп' : 'Wobble Rush — гонка';
-        await navigator.share({ title, url: link });
-      } else await navigator.clipboard.writeText(link);
-      game.ui.toast('Ссылка-приглашение готова!');
-    } catch {
-      game.ui.toast(link);
+  game.shareRoomInvite = async ({ code, mode, automatic = false, partnerName = '' } = {}) => {
+    const roomMode = mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
+    const link = game.ui.inviteLink(code || $('#roomCode').textContent.trim(), roomMode);
+    const title = roomMode === GAME_MODE.COOP ? 'Wobble Rush — кооп' : 'Wobble Rush — гонка';
+    const result = await shareInvite({ title, url: link });
+    if (result.shared) {
+      game.ui.toast(
+        automatic && partnerName
+          ? 'Приглашение для ' + partnerName + ' открыто.'
+          : 'Ссылка-приглашение готова!'
+      );
+    } else if (result.copied) {
+      game.ui.toast(automatic ? 'Комната готова — ссылка скопирована.' : 'Ссылка-приглашение скопирована!');
+    } else if (!result.cancelled) {
+      game.ui.toast(automatic ? 'Комната готова — нажмите «ССЫЛКА», чтобы отправить приглашение.' : link);
     }
+    return result;
+  };
+  $('#copyInvite').addEventListener('click', () => {
+    const mode = game.room?.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
+    game.shareRoomInvite({ code: $('#roomCode').textContent.trim(), mode });
   });
   $('#copyCode').addEventListener('click', async () => {
     try {

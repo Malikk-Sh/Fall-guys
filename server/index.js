@@ -51,6 +51,7 @@ const { socialCosmetics } = require('./socialCosmetics');
 const { backupHealthStatus } = require('./backupStatus');
 const { buildIdentity } = require('./buildInfo');
 const { trackSignatureMetrics } = require('./signatureMetrics');
+const { SocialSafety } = require('./socialSafety');
 const {
   auditCoopMovement,
   verifyCoopCheckpoint,
@@ -163,6 +164,7 @@ migrateDatabase(gameDb);
 const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
 const accounts = new Accounts({ db: gameDb });
 const gameplay = new GameplayMetrics({ db: gameDb });
+const socialSafety = new SocialSafety({ db: gameDb });
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
@@ -967,15 +969,18 @@ function createCoopRoom(chapterId, hostId) {
   return room;
 }
 
+function coopMatchCompatible(ws, entry, requested, safety = socialSafety) {
+  if (!entry?.ws || entry.ws.readyState !== 1 || entry.ws === ws) return false;
+  if (requested && entry.chapterId && entry.chapterId !== requested) return false;
+  return !safety.shouldAvoid(ws.accountId, entry.ws.accountId);
+}
+
 function enqueueCoop(ws, message) {
   leave(ws);
   const requested = COOP_CHAPTER_IDS.includes(message.chapterId) ? message.chapterId : null;
   const now = Date.now();
   gameplay.count('queue_enter', { mode: GAME_MODE.COOP, course: requested || 'any', device: ws.device });
-  const partnerIndex = coopMatchmaking.findIndex(entry => {
-    if (entry.ws.readyState !== 1 || entry.ws === ws) return false;
-    return !requested || !entry.chapterId || entry.chapterId === requested;
-  });
+  const partnerIndex = coopMatchmaking.findIndex(entry => coopMatchCompatible(ws, entry, requested));
   if (partnerIndex === -1) {
     coopMatchmaking.push({
       ws,
@@ -2206,6 +2211,8 @@ module.exports = {
   verifiedLeaderboard,
   accounts,
   gameplay,
+  socialSafety,
+  coopMatchCompatible,
   leave,
   resetLobby,
   originAllowed,

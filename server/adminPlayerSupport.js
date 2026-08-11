@@ -56,7 +56,15 @@ class AdminPlayerSupport {
     const safeLimit = clampLimit(limit);
     const like = `%${escapeLike(normalized)}%`;
     const prefix = `${escapeLike(normalized)}%`;
-    const rows = this.statements.search.all(now, normalized, prefix, like, normalized, normalized, safeLimit);
+    const rows = this.statements.search.all(
+      now,
+      normalized,
+      prefix,
+      like,
+      normalized,
+      normalized,
+      safeLimit
+    );
     return {
       ok: true,
       query: normalized,
@@ -184,27 +192,31 @@ class AdminPlayerSupport {
 function prepare(db) {
   return {
     search: db.prepare(`
-      SELECT
-        a.id,
-        a.display_name,
-        a.created_at,
-        a.last_seen_at,
-        SUM(CASE WHEN s.expires_at > ? THEN 1 ELSE 0 END) AS active_sessions,
-        EXISTS(SELECT 1 FROM account_identities ai WHERE ai.account_id = a.id) AS has_external_login
-      FROM accounts a
-      LEFT JOIN account_sessions s ON s.account_id = a.id
-      WHERE a.id = ?
-         OR a.id LIKE ? ESCAPE '\\'
-         OR a.display_name LIKE ? ESCAPE '\\'
-      GROUP BY a.id, a.display_name, a.created_at, a.last_seen_at
+      WITH candidates AS (
+        SELECT
+          a.id AS id,
+          a.display_name AS display_name,
+          a.created_at AS created_at,
+          a.last_seen_at AS last_seen_at,
+          SUM(CASE WHEN s.expires_at > ? THEN 1 ELSE 0 END) AS active_sessions,
+          EXISTS(SELECT 1 FROM account_identities ai WHERE ai.account_id = a.id) AS has_external_login
+        FROM accounts a
+        LEFT JOIN account_sessions s ON s.account_id = a.id
+        WHERE a.id = ?
+           OR a.id LIKE ? ESCAPE '\\'
+           OR a.display_name LIKE ? ESCAPE '\\'
+        GROUP BY a.id, a.display_name, a.created_at, a.last_seen_at
+      )
+      SELECT id, display_name, created_at, last_seen_at, active_sessions, has_external_login
+      FROM candidates
       ORDER BY
         CASE
-          WHEN a.id = ? THEN 0
-          WHEN a.display_name = ? COLLATE NOCASE THEN 1
+          WHEN id = ? THEN 0
+          WHEN display_name = ? COLLATE NOCASE THEN 1
           ELSE 2
         END,
-        a.last_seen_at DESC,
-        a.id ASC
+        last_seen_at DESC,
+        id ASC
       LIMIT ?
     `),
     account: db.prepare(`

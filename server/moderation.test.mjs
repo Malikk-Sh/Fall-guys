@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { Accounts } = require('./accounts');
 const { SocialSafety } = require('./socialSafety');
 const { ModerationQueue, MODERATION_STATUSES } = require('./moderation');
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 function fresh() {
   const db = openDatabase(':memory:');
@@ -87,7 +94,63 @@ test('moderation queue groups reports by target and keeps report-time evidence',
       ['griefing', 'Старое имя', 'ch4']
     ]
   );
+  assert.deepEqual(
+    detail.evidence.map(report => [report.reason, report.targetNameSnapshot, report.chapterIdSnapshot]),
+    [
+      ['exploit-cheat', 'Новое имя', 'ch5'],
+      ['griefing', 'Старое имя', 'ch4']
+    ]
+  );
   assert.deepEqual(detail.history, []);
+  context.db.close();
+});
+
+test('repeat reports preserve every accepted name and chapter snapshot', () => {
+  const context = fresh();
+  const target = context.accounts.create('Имя до жалобы');
+  const reporter = context.accounts.create('Репортёр');
+
+  partner(context.accounts, reporter, target, 'ch4', 100);
+  assert.equal(
+    context.social.report({
+      accountId: reporter.id,
+      targetAccountId: target.id,
+      reason: 'offensive-name',
+      now: 1000
+    }).accepted,
+    true
+  );
+
+  context.accounts.rename(target.id, 'Имя после жалобы');
+  partner(context.accounts, reporter, target, 'ch5', 200);
+  assert.equal(
+    context.social.report({
+      accountId: reporter.id,
+      targetAccountId: target.id,
+      reason: 'offensive-name',
+      now: 2100
+    }).accepted,
+    true
+  );
+
+  const detail = context.moderation.get(target.id);
+  assert.equal(detail.totalReports, 2);
+  assert.equal(detail.reports.length, 1, 'aggregate row remains compact');
+  assert.equal(detail.reports[0].reportCount, 2);
+  assert.equal(detail.reports[0].targetNameSnapshot, 'Имя до жалобы');
+  assert.equal(detail.reports[0].chapterIdSnapshot, 'ch4');
+  assert.deepEqual(
+    detail.evidence.map(event => [
+      event.reportedAt,
+      event.occurrences,
+      event.targetNameSnapshot,
+      event.chapterIdSnapshot
+    ]),
+    [
+      [2100, 1, 'Имя после жалобы', 'ch5'],
+      [1000, 1, 'Имя до жалобы', 'ch4']
+    ]
+  );
   context.db.close();
 });
 
@@ -193,4 +256,21 @@ test('moderation input is bounded and no-report accounts cannot get fake cases',
     { ok: false, reason: 'invalid-moderator' }
   );
   context.db.close();
+});
+
+test('moderation CLI refuses a missing database instead of creating an empty one', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'wobble-moderation-'));
+  const missing = join(directory, 'typo.db');
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [join(here, 'moderationCli.mjs'), '--db', missing, 'queue'],
+      { encoding: 'utf8' }
+    );
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /does not exist/);
+    assert.equal(existsSync(missing), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

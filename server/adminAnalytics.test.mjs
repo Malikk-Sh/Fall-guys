@@ -88,6 +88,7 @@ test('admin analytics explains the current period, previous period, trends, filt
 
   const report = analytics.report({ days: 2, limit: 100 });
   assert.equal(report.from, '2026-01-14');
+  assert.equal(report.comparisonAvailable, true);
   assert.equal(report.previousFrom, '2026-01-12');
   assert.equal(report.previousTo, '2026-01-13');
   assert.deepEqual(report.kpis.current, {
@@ -153,7 +154,26 @@ test('admin analytics bounds periods, rows and untrusted filter strings', () => 
   assert.equal(bounded.days, MAX_DAYS);
   assert.equal(bounded.rows.length, 1);
   assert.equal(bounded.truncated, true);
+  assert.equal(bounded.comparisonAvailable, false);
+  assert.equal(bounded.previousFrom, null);
+  assert.equal(bounded.previousTo, null);
+  assert.equal(bounded.kpis.previous, null);
   assert.equal(normalizeFilter('x'.repeat(100)).length, 32);
   assert.equal(normalizeFilter(''), 'all');
+  db.close();
+});
+
+test('comparison availability follows the metric retention window instead of showing fake zeroes', () => {
+  const now = Date.UTC(2026, 0, 15);
+  const db = openDatabase(':memory:');
+  const gameplay = new GameplayMetrics({ db, now: () => now, retentionDays: 10 });
+  const analytics = new AdminAnalytics({ db, gameplay, now: () => now });
+  gameplay.count('match_started', { mode: 'race', course: 'easy', device: 'mobile' });
+
+  assert.equal(analytics.report({ days: 5 }).comparisonAvailable, true);
+  const tooLong = analytics.report({ days: 7 });
+  assert.equal(tooLong.comparisonAvailable, false);
+  assert.equal(tooLong.kpis.previous, null);
+  assert.equal(tooLong.retentionDays, 10);
   db.close();
 });

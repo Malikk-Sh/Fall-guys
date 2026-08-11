@@ -74,6 +74,9 @@ class AdminControlService {
     ) {
       return { ok: false, reason: 'case-changed', case: this.#decorateCase(current) };
     }
+    if (String(status || '') === current.status) {
+      return { ok: false, reason: 'already-status', case: this.#decorateCase(current) };
+    }
     const result = this.moderation.transition({
       targetAccountId,
       status,

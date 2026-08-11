@@ -8,6 +8,7 @@ const socialSafety = require('./007_social_safety');
 const directionalAvoids = require('./008_directional_avoids');
 const moderationWorkflow = require('./009_moderation_workflow');
 const recoveryRotation = require('./010_recovery_rotation');
+const adminControlPlane = require('./011_admin_control_plane');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -19,7 +20,8 @@ const MIGRATIONS = Object.freeze([
   socialSafety,
   directionalAvoids,
   moderationWorkflow,
-  recoveryRotation
+  recoveryRotation,
+  adminControlPlane
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

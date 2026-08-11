@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Wobble Control</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">WOBBLE RUSH</p>
+          <h1>Control Plane</h1>
+        </div>
+        <div id="identity" class="identity" hidden>
+          <span id="admin-name"></span>
+          <span id="admin-role" class="role"></span>
+          <button id="logout" class="ghost">Выйти</button>
+        </div>
+      </header>
+
+      <section id="login-view" class="login-wrap">
+        <form id="login-form" class="card login-card" autocomplete="off">
+          <p class="eyebrow">ПРИВАТНАЯ ПАНЕЛЬ</p>
+          <h2>Вход администратора</h2>
+          <p class="muted">
+            Используйте отдельный admin access code. Он не является recovery code игрового аккаунта.
+          </p>
+          <label>
+            Access code
+            <input id="access-code" name="accessCode" type="password" required autocomplete="off" />
+          </label>
+          <button type="submit" class="primary">Войти</button>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="app-view" hidden>
+        <nav id="tabs" class="tabs" aria-label="Разделы панели">
+          <button data-panel="overview" data-capability="dashboard.read" class="active">Обзор</button>
+          <button data-panel="analytics" data-capability="analytics.read">Статистика</button>
+          <button data-panel="moderation" data-capability="moderation.read">Модерация</button>
+          <button data-panel="audit" data-capability="audit.read">Audit</button>
+        </nav>
+
+        <div class="toolbar">
+          <span id="status-line" class="muted">Готово</span>
+          <button id="refresh" class="ghost">Обновить</button>
+        </div>
+
+        <section id="panel-overview" class="panel">
+          <div id="overview-cards" class="cards"></div>
+          <div class="grid-two">
+            <article class="card">
+              <h2>Production</h2>
+              <dl id="production-details" class="details"></dl>
+            </article>
+            <article class="card">
+              <h2>Нагрузка</h2>
+              <dl id="load-details" class="details"></dl>
+            </article>
+          </div>
+        </section>
+
+        <section id="panel-analytics" class="panel" hidden>
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">GAMEPLAY METRICS</p>
+                <h2>Агрегированная статистика</h2>
+              </div>
+              <label class="compact">
+                Период
+                <select id="analytics-days">
+                  <option value="1">24 часа</option>
+                  <option value="7" selected>7 дней</option>
+                  <option value="30">30 дней</option>
+                  <option value="90">90 дней</option>
+                </select>
+              </label>
+            </div>
+            <p id="analytics-meta" class="muted"></p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Mode</th>
+                    <th>Course</th>
+                    <th>Detail</th>
+                    <th>Device</th>
+                    <th>Samples</th>
+                    <th>Average</th>
+                  </tr>
+                </thead>
+                <tbody id="analytics-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section id="panel-moderation" class="panel" hidden>
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">HUMAN REVIEW</p>
+                <h2>Очередь модерации</h2>
+              </div>
+              <label class="compact">
+                Статус
+                <select id="moderation-status">
+                  <option value="open" selected>Open</option>
+                  <option value="reviewing">Reviewing</option>
+                  <option value="resolved">Resolved</option>
+                  <option value="dismissed">Dismissed</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+            </div>
+            <p class="muted">
+              Этот первый этап панели только читает очередь. Изменение статусов будет отдельным PR.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Игрок</th>
+                    <th>Status</th>
+                    <th>Reporters</th>
+                    <th>Reports</th>
+                    <th>Причины</th>
+                    <th>Последняя</th>
+                  </tr>
+                </thead>
+                <tbody id="moderation-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section id="panel-audit" class="panel" hidden>
+          <article class="card">
+            <p class="eyebrow">IMMUTABLE HISTORY</p>
+            <h2>Журнал администраторов</h2>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Администратор</th>
+                    <th>Роль</th>
+                    <th>Действие</th>
+                    <th>Цель</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+    <script src="/admin/admin.js" defer></script>
+  </body>
+</html>

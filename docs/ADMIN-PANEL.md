@@ -6,8 +6,8 @@
 Она не использует игровой recovery code и не повышает обычный аккаунт игрока до администратора.
 
 Control Plane показывает production health, build/release identity, нагрузку, аккаунты, gameplay
-metrics, moderation workflow и admin audit history. Системные действия уровня backup/restart/deploy
-будут подключаться отдельными PR поверх этой границы безопасности.
+metrics, moderation workflow и admin audit history. Для владельца также доступны четыре строго
+разрешённые operations: создать backup, перепроверить backup, запустить smoke и перезапустить только Wobble.
 
 Интерфейс специально рассчитан не только на разработчика. Возле сложных разделов есть раскрываемые
 объяснения, технические названия сопровождаются понятными русскими подписями, а опасные действия
@@ -92,8 +92,11 @@ https://wobbles.ru/admin/
   transaction: если audit не записался, moderation case тоже не изменяется;
 - recovery code игрока, player session bearer и VPN/Xray secrets к панели отношения не имеют.
 
-Не добавляйте shell execution в Node process. Системные операции должны идти через будущий узкий
-privileged helper с allowlist команд, а не через произвольную строку shell из HTTP request.
+Node process не выполняет shell-команды. Системные операции идут через `/run/wobble-ops.sock` к
+root-owned helper в `/usr/local/lib/wobble-ops/helper.mjs`. Helper принимает только четыре фиксированных
+action ID и запускает только заранее заданные systemd units; пользовательские строки никогда не становятся
+именем команды, unit или аргументом shell. Скрипты из `/opt/wobble` для backup/smoke выполняются самими
+systemd units от `User=wobble`, а не от root.
 
 ## Роли
 
@@ -257,6 +260,31 @@ Control Plane **не** банит, не suspend-ит и не делает forced
 о наказании, которого система фактически не выполнила.
 
 CLI `server/moderationCli.mjs` остаётся поддерживаемым fallback и локальным инструментом оператора.
+
+### Операции
+
+Раздел **Операции** видит только `owner`. Каждая карточка заранее объясняет действие и влияние на игроков.
+Первое нажатие только включает 10-секундное подтверждение; второе запускает действие. Все запросы и их
+результат записываются в admin audit.
+
+Доступны только:
+
+- **Создать резервную копию** — запускает `wobble-backup.service`; игроков не отключает;
+- **Проверить последнюю копию** — повторно делает SQLite `integrity_check` последнего tracked backup;
+- **Проверить работу Wobble** — запускает существующий production smoke (health + страница + WebSocket + fresh backup);
+- **Перезапустить сервер игры** — перезапускает только `wobble.service`; Nginx, shared 443, firewall и Xray не затрагиваются, но игровые соединения кратко оборвутся.
+
+Архитектурная граница специально узкая:
+
+```text
+/admin -> Node (User=wobble)
+       -> /run/wobble-ops.sock (root:wobble, 0660)
+       -> root-owned allowlist helper
+       -> только фиксированные systemd units
+```
+
+Helper не принимает command line, путь к файлу, unit name или shell fragment из HTTP. Даже при компрометации
+игрового процесса эта граница не превращается в произвольное выполнение команд от root.
 
 ### Журнал действий
 

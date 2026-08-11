@@ -31,6 +31,7 @@ const { installRewardRoutes } = require('./rewardRoutes');
 const { installSocialRoutes } = require('./socialRoutes');
 const { AdminAuthService } = require('./adminAuth');
 const { AdminControlService } = require('./adminControl');
+const { AdminOperationsClient } = require('./adminOperationsClient');
 const { installAdminRoutes } = require('./adminRoutes');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
@@ -46,6 +47,7 @@ const adminControl = new AdminControlService({
   gameplay: core.gameplay,
   adminAuth
 });
+const adminOperations = new AdminOperationsClient();
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
 
@@ -98,6 +100,7 @@ installAdminRoutes({
   app: core.app,
   adminAuth,
   control: adminControl,
+  operations: adminOperations,
   enabled: adminPanelEnabled,
   // The shared-443 stream topology does not preserve the public client address to the HTTP
   // backend. Admin login throttling therefore uses the trusted TCP peer and never X-Forwarded-For,
@@ -134,4 +137,4 @@ if (require.main === module) {
   process.on('SIGINT', () => core.shutdown('SIGINT'));
 }
 
-module.exports = { ...core, auth, google, inventory, rewards, adminAuth, adminControl };
+module.exports = { ...core, auth, google, inventory, rewards, adminAuth, adminControl, adminOperations };

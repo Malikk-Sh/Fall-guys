@@ -1,21 +1,16 @@
 [Unit]
-Description=Wobble Rush verified SQLite backup
+Description=Wobble Rush on-demand smoke check
 Documentation=https://github.com/Malikk-Sh/Fall-guys
-After=local-fs.target
+After=wobble.service
 
 [Service]
 Type=oneshot
 User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
-StateDirectory=wobble
 EnvironmentFile=/etc/wobble.env
-ExecStart=/bin/bash /opt/wobble/deploy/backup.sh
-TimeoutStartSec=120
-UMask=0077
-Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
+ExecStart=/bin/bash /opt/wobble/deploy/smoke.sh --require-backup
+TimeoutStartSec=40
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

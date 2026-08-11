@@ -22,6 +22,7 @@ function installAdminRoutes({
   app,
   adminAuth,
   control,
+  operations = null,
   enabled = false,
   loginRateLimitKey = req => req.socket.remoteAddress || 'local-proxy',
   loginAttempts = LOGIN_ATTEMPTS,
@@ -212,6 +213,119 @@ function installAdminRoutes({
       });
     }
     return res.json(result);
+  });
+
+  app.post('/api/admin/operations/status', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'ops.execute');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set())) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!operations || typeof operations.status !== 'function') {
+      return res.status(503).json({ ok: false, error: 'operations-unavailable' });
+    }
+    try {
+      const status = operations.status();
+      return res.json({
+        ok: true,
+        available: Boolean(status.available),
+        operations: status.operations || []
+      });
+    } catch {
+      return res.status(503).json({ ok: false, error: 'operations-unavailable' });
+    }
+  });
+
+  app.post('/api/admin/operations/run', json, async (req, res) => {
+    const resolved = requireAdmin(req, res, 'ops.execute');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['operation', 'confirmation']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!operations || typeof operations.status !== 'function' || typeof operations.run !== 'function') {
+      return res.status(503).json({ ok: false, error: 'operations-unavailable' });
+    }
+
+    const operation = String(req.body?.operation || '').trim();
+    let status;
+    try {
+      status = operations.status();
+    } catch {
+      return res.status(503).json({ ok: false, error: 'operations-unavailable' });
+    }
+    if (!status.operations?.some(item => item?.id === operation)) {
+      return res.status(400).json({ ok: false, error: 'unknown-operation' });
+    }
+    if (req.body?.confirmation !== operation) {
+      return res.status(400).json({ ok: false, error: 'operation-confirmation-required' });
+    }
+
+    const actor = resolved.session.user;
+    adminAuth.audit({
+      actor,
+      action: 'ops.operation.requested',
+      targetType: 'operation',
+      targetId: operation
+    });
+
+    let result;
+    try {
+      result = await operations.run(operation);
+    } catch {
+      result = { ok: false, reason: 'helper-error' };
+    }
+
+    const safeReasons = new Set([
+      'helper-unavailable',
+      'helper-timeout',
+      'helper-error',
+      'helper-closed',
+      'helper-invalid-response',
+      'helper-response-too-large',
+      'helper-response-mismatch',
+      'operation-busy',
+      'operation-timeout',
+      'operation-failed',
+      'restart-cooldown'
+    ]);
+    if (!result?.ok) {
+      const reason = safeReasons.has(result?.reason) ? result.reason : 'helper-error';
+      adminAuth.audit({
+        actor,
+        action: 'ops.operation.failed',
+        targetType: 'operation',
+        targetId: operation,
+        detail: {
+          reason,
+          durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : null
+        }
+      });
+      const httpStatus = reason === 'operation-busy' || reason === 'restart-cooldown' ? 409 : 503;
+      return res.status(httpStatus).json({
+        ok: false,
+        error: reason,
+        ...(reason === 'restart-cooldown' && Number.isFinite(Number(result?.retryAfterMs))
+          ? { retryAfterMs: Math.max(0, Number(result.retryAfterMs)) }
+          : {})
+      });
+    }
+
+    const accepted = Boolean(result.accepted);
+    adminAuth.audit({
+      actor,
+      action: accepted ? 'ops.operation.accepted' : 'ops.operation.completed',
+      targetType: 'operation',
+      targetId: operation,
+      detail: {
+        durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
+      }
+    });
+    return res.json({
+      ok: true,
+      operation,
+      accepted,
+      durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
+    });
   });
 
   app.post('/api/admin/audit', json, (req, res) => {

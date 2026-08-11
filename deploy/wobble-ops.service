@@ -1,0 +1,26 @@
+[Unit]
+Description=Wobble Rush allowlisted privileged operations helper
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+Requires=wobble-ops.socket
+After=wobble-ops.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/node /usr/local/lib/wobble-ops/helper.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelLogs=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0077

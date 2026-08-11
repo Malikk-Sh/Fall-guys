@@ -51,6 +51,7 @@
           <button data-panel="analytics" data-capability="analytics.read">Статистика</button>
           <button data-panel="players" data-capability="player-support.read">Игроки</button>
           <button data-panel="moderation" data-capability="moderation.read">Модерация</button>
+          <button data-panel="operations" data-capability="ops.execute">Операции</button>
           <button data-panel="audit" data-capability="audit.read">Журнал действий</button>
         </nav>
 
@@ -374,6 +375,23 @@
               </table>
             </div>
           </article>
+        </section>
+
+        <section id="panel-operations" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Что можно делать в разделе «Операции»?</summary>
+            <p>
+              Здесь собраны только заранее разрешённые действия для Wobble. Панель не умеет выполнять
+              произвольные команды сервера. Перед каждой операцией показано, что именно она делает и повлияет
+              ли она на игроков.
+            </p>
+            <p>
+              Эти кнопки не меняют Nginx, shared 443, firewall или VPN/Xray. Для каждого запуска требуется
+              повторное подтверждение, а результат записывается в «Журнал действий».
+            </p>
+          </details>
+          <div id="operations-status" class="cards"></div>
+          <div id="operations-list" class="grid-two"></div>
         </section>
 
         <section id="panel-audit" class="panel" hidden>

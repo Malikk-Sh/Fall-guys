@@ -1,5 +1,5 @@
 [Unit]
-Description=Wobble Rush verified SQLite backup
+Description=Verify latest Wobble Rush backup integrity
 Documentation=https://github.com/Malikk-Sh/Fall-guys
 After=local-fs.target
 
@@ -10,12 +10,9 @@ Group=wobble
 WorkingDirectory=/opt/wobble
 StateDirectory=wobble
 EnvironmentFile=/etc/wobble.env
-ExecStart=/bin/bash /opt/wobble/deploy/backup.sh
-TimeoutStartSec=120
+ExecStart=/usr/bin/node /opt/wobble/server/verifyLatestBackup.mjs
+TimeoutStartSec=40
 UMask=0077
-Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

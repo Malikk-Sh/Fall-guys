@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { GameplayMetrics } = require('./metrics');
-const { AdminAnalytics, MAX_DAYS, normalizeFilter } = require('./adminAnalytics');
+const { AdminAnalytics, MAX_DAYS, normalizeFilter, periodFor } = require('./adminAnalytics');
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -13,8 +13,8 @@ function addCounts(gameplay, metric, count, dimensions) {
   for (let index = 0; index < count; index += 1) gameplay.count(metric, dimensions);
 }
 
-test('admin analytics explains the current period, previous period, trends, filters and hotspots', () => {
-  let now = Date.UTC(2026, 0, 13);
+test('admin analytics compares equal completed-day windows and keeps today out of multi-day reports', () => {
+  let now = Date.UTC(2026, 0, 11);
   const db = openDatabase(':memory:');
   const gameplay = new GameplayMetrics({ db, now: () => now });
   const analytics = new AdminAnalytics({ db, gameplay, now: () => now });
@@ -37,7 +37,10 @@ test('admin analytics explains the current period, previous period, trends, filt
   });
   gameplay.flush();
 
-  now += DAY;
+  now += DAY; // Jan 12, deliberately empty previous-period day.
+  gameplay.flush();
+
+  now += DAY; // Jan 13, first current complete day.
   addCounts(gameplay, 'match_started', 3, {
     mode: 'coop',
     course: 'ch1',
@@ -62,7 +65,7 @@ test('admin analytics explains the current period, previous period, trends, filt
   });
   gameplay.flush();
 
-  now += DAY;
+  now += DAY; // Jan 14, second current complete day.
   addCounts(gameplay, 'match_started', 1, {
     mode: 'race',
     course: 'easy',
@@ -85,12 +88,23 @@ test('admin analytics explains the current period, previous period, trends, filt
     detail: 'verified',
     device: 'mobile'
   });
+  gameplay.flush();
+
+  now += DAY; // Jan 15 is live and must not bias the completed 2-day comparison.
+  addCounts(gameplay, 'match_started', 20, {
+    mode: 'race',
+    course: 'live-only',
+    device: 'mobile'
+  });
 
   const report = analytics.report({ days: 2, limit: 100 });
-  assert.equal(report.from, '2026-01-14');
+  assert.equal(report.from, '2026-01-13');
+  assert.equal(report.to, '2026-01-14');
+  assert.equal(report.live, false);
   assert.equal(report.comparisonAvailable, true);
-  assert.equal(report.previousFrom, '2026-01-12');
-  assert.equal(report.previousTo, '2026-01-13');
+  assert.equal(report.comparisonReason, null);
+  assert.equal(report.previousFrom, '2026-01-11');
+  assert.equal(report.previousTo, '2026-01-12');
   assert.deepEqual(report.kpis.current, {
     started: 4,
     finished: 3,
@@ -113,10 +127,11 @@ test('admin analytics explains the current period, previous period, trends, filt
       point.falls
     ]),
     [
-      ['2026-01-14', 3, 2, 1, 2],
-      ['2026-01-15', 1, 1, 0, 1]
+      ['2026-01-13', 3, 2, 1, 2],
+      ['2026-01-14', 1, 1, 0, 1]
     ]
   );
+  assert.equal(report.options.courses.includes('live-only'), false);
   assert.deepEqual(report.options.modes, ['coop', 'race']);
   assert.deepEqual(report.options.devices, ['desktop', 'mobile']);
   assert.equal(report.hotspots.falls[0].samples, 2);
@@ -133,6 +148,15 @@ test('admin analytics explains the current period, previous period, trends, filt
     ['coop', 'race'],
     'filter options remain available so the user can switch without clearing filters first'
   );
+
+  const today = analytics.report({ days: 1 });
+  assert.equal(today.from, '2026-01-15');
+  assert.equal(today.to, '2026-01-15');
+  assert.equal(today.live, true);
+  assert.equal(today.kpis.current.started, 20);
+  assert.equal(today.comparisonAvailable, false);
+  assert.equal(today.comparisonReason, 'current-day-incomplete');
+  assert.equal(today.kpis.previous, null);
   db.close();
 });
 
@@ -141,13 +165,15 @@ test('admin analytics bounds periods, rows and untrusted filter strings', () => 
   const db = openDatabase(':memory:');
   const gameplay = new GameplayMetrics({ db, now: () => now });
   const analytics = new AdminAnalytics({ db, gameplay, now: () => now });
-  for (let index = 0; index < 4; index += 1) {
-    gameplay.count('fall', {
-      mode: `mode-${index}`,
-      course: 'easy',
-      detail: `segment-${index}`,
-      device: 'mobile'
-    });
+  db.prepare(
+    `INSERT INTO gameplay_metrics (day, metric, mode, course, detail, device, samples, total)
+     VALUES (?, 'fall', ?, 'easy', ?, 'mobile', 1, 0)`
+  ).run('2026-01-14', 'mode-0', 'segment-0');
+  for (let index = 1; index < 4; index += 1) {
+    db.prepare(
+      `INSERT INTO gameplay_metrics (day, metric, mode, course, detail, device, samples, total)
+       VALUES (?, 'fall', ?, 'easy', ?, 'mobile', 1, 0)`
+    ).run('2026-01-14', `mode-${index}`, `segment-${index}`);
   }
 
   const bounded = analytics.report({ days: 999, limit: 1 });
@@ -155,6 +181,7 @@ test('admin analytics bounds periods, rows and untrusted filter strings', () => 
   assert.equal(bounded.rows.length, 1);
   assert.equal(bounded.truncated, true);
   assert.equal(bounded.comparisonAvailable, false);
+  assert.equal(bounded.comparisonReason, 'retention-window');
   assert.equal(bounded.previousFrom, null);
   assert.equal(bounded.previousTo, null);
   assert.equal(bounded.kpis.previous, null);
@@ -163,17 +190,20 @@ test('admin analytics bounds periods, rows and untrusted filter strings', () => 
   db.close();
 });
 
-test('comparison availability follows the metric retention window instead of showing fake zeroes', () => {
+test('comparison availability follows retention and live-day semantics', () => {
   const now = Date.UTC(2026, 0, 15);
-  const db = openDatabase(':memory:');
-  const gameplay = new GameplayMetrics({ db, now: () => now, retentionDays: 10 });
-  const analytics = new AdminAnalytics({ db, gameplay, now: () => now });
-  gameplay.count('match_started', { mode: 'race', course: 'easy', device: 'mobile' });
-
-  assert.equal(analytics.report({ days: 5 }).comparisonAvailable, true);
-  const tooLong = analytics.report({ days: 7 });
+  assert.deepEqual(periodFor({ now, days: 1, retentionDays: 90 }), {
+    from: '2026-01-15',
+    to: '2026-01-15',
+    live: true,
+    comparisonAvailable: false,
+    comparisonReason: 'current-day-incomplete',
+    previousFrom: null,
+    previousTo: null
+  });
+  assert.equal(periodFor({ now, days: 5, retentionDays: 10 }).comparisonAvailable, true);
+  const tooLong = periodFor({ now, days: 7, retentionDays: 10 });
   assert.equal(tooLong.comparisonAvailable, false);
-  assert.equal(tooLong.kpis.previous, null);
-  assert.equal(tooLong.retentionDays, 10);
-  db.close();
+  assert.equal(tooLong.comparisonReason, 'retention-window');
+  db.close?.();
 });

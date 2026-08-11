@@ -175,7 +175,12 @@ export class UI {
         return;
       }
       button.disabled = true;
-      this.onAvoidedPlayerRestore?.(player);
+      Promise.resolve(this.onAvoidedPlayerRestore?.(player)).finally(() => {
+        if (!button.isConnected) return;
+        button.disabled = false;
+        button.dataset.confirmRestore = '';
+        button.textContent = 'ВЕРНУТЬ В ПОДБОР';
+      });
     });
   }
 

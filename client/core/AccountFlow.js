@@ -110,7 +110,11 @@ export class AccountFlow {
       const result = await restoreAvoidedPlayer(player.id);
       if (!result) return this.game.ui.toast('Не удалось вернуть игрока в подбор.');
       await this.refreshProfile();
-      this.game.ui.toast('Ваше исключение снято — игрок снова разрешён для быстрого подбора.');
+      this.game.ui.toast(
+        result.removed
+          ? 'Ваше исключение снято — игрок снова разрешён для быстрого подбора.'
+          : 'Это исключение уже было снято.'
+      );
       return result;
     } catch {
       this.game.ui.toast('Не удалось вернуть игрока в подбор.');

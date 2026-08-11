@@ -8,7 +8,7 @@ const { MIGRATIONS, migrateDatabase } = require('./migrations');
 
 test('миграции поднимают чистую базу по порядку и повторно ничего не делают', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   const applied = db
     .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version')
     .all()
@@ -21,7 +21,8 @@ test('миграции поднимают чистую базу по поряд�
     { version: 5, applied_at: 123 },
     { version: 6, applied_at: 123 },
     { version: 7, applied_at: 123 },
-    { version: 8, applied_at: 123 }
+    { version: 8, applied_at: 123 },
+    { version: 9, applied_at: 123 }
   ]);
   assert.deepEqual(migrateDatabase(db, { now: 999 }), []);
   for (const table of [
@@ -33,7 +34,9 @@ test('миграции поднимают чистую базу по поряд�
     'reward_grants',
     'recent_partners',
     'matchmaking_avoids',
-    'social_reports'
+    'social_reports',
+    'moderation_cases',
+    'moderation_events'
   ]) {
     assert.equal(
       db.prepare('SELECT COUNT(*) AS count FROM sqlite_master WHERE name = ?').get(table).count,
@@ -81,6 +84,8 @@ test('миграции прогресса, Auth V2, inventory и rewards сох�
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM recent_partners').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM social_reports').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_cases').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_events').get().count, 0);
   db.close();
 });
 
@@ -97,13 +102,41 @@ test('migration 008 preserves old avoid as the creator personal choice', () => {
     'INSERT INTO matchmaking_avoids (account_a, account_b, created_by_account_id, created_at) VALUES (?, ?, ?, ?)'
   ).run('a', 'b', 'a', 55);
 
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [8]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [8, 9]);
   const row = db
     .prepare(
       'SELECT account_a_avoided_at, account_b_avoided_at FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'
     )
     .get('a', 'b');
   assert.deepEqual({ ...row }, { account_a_avoided_at: 55, account_b_avoided_at: null });
+  db.close();
+});
+
+test('migration 009 backfills the best available report evidence', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db, { migrations: MIGRATIONS.slice(0, 8), now: 100 });
+  db.prepare(
+    'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('reporter', 'Репортёр', 'hash-reporter', 1, 1);
+  db.prepare(
+    'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('target', 'Имя на миграции', 'hash-target', 1, 1);
+  db.prepare(`
+    INSERT INTO recent_partners
+      (account_id, partner_account_id, matches_together, last_chapter_id, last_played_at)
+    VALUES (?, ?, 1, ?, ?)
+  `).run('reporter', 'target', 'ch7', 500);
+  db.prepare(`
+    INSERT INTO social_reports
+      (reporter_account_id, target_account_id, reason, report_count, first_reported_at, last_reported_at)
+    VALUES (?, ?, ?, 1, ?, ?)
+  `).run('reporter', 'target', 'offensive-name', 600, 600);
+
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [9]);
+  const report = db
+    .prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports')
+    .get();
+  assert.deepEqual({ ...report }, { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' });
   db.close();
 });
 

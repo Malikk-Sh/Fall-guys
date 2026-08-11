@@ -7,6 +7,9 @@ APP_DIR="${APP_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 ENV_FILE="${ENV_FILE:-/etc/wobble.env}"
 REQUIRE_BACKUP=0
 [ "${1:-}" = "--require-backup" ] && REQUIRE_BACKUP=1
+EXPECT_VERSION="${SMOKE_EXPECT_VERSION:-}"
+EXPECT_COMMIT="${SMOKE_EXPECT_COMMIT:-}"
+EXPECT_RELEASE="${SMOKE_EXPECT_RELEASE:-}"
 
 if [ -r "$ENV_FILE" ]; then
   set -a
@@ -35,11 +38,23 @@ health="$(curl -fsS --max-time 5 "$BASE_URL/health")"
 html="$(curl -fsS --max-time 5 "$BASE_URL/")"
 grep -q 'WOBBLE' <<<"$html"
 
-"$NODE_BIN" - "$health" "$REQUIRE_BACKUP" <<'NODE'
+"$NODE_BIN" - "$health" "$REQUIRE_BACKUP" "$EXPECT_VERSION" "$EXPECT_COMMIT" "$EXPECT_RELEASE" <<'NODE'
 const health = JSON.parse(process.argv[2]);
 const requireBackup = process.argv[3] === '1';
+const expectedVersion = process.argv[4];
+const expectedCommit = process.argv[5];
+const expectedRelease = process.argv[6];
 if (health.ok !== true || health.service !== 'wobble-rush-3d') {
   throw new Error('unexpected /health payload');
+}
+if (expectedVersion && health.version !== expectedVersion) {
+  throw new Error(`unexpected version: ${health.version}, expected ${expectedVersion}`);
+}
+if (expectedCommit && health.commit !== expectedCommit) {
+  throw new Error(`unexpected commit: ${health.commit}, expected ${expectedCommit}`);
+}
+if (expectedRelease && health.release !== expectedRelease) {
+  throw new Error(`unexpected release: ${health.release}, expected ${expectedRelease}`);
 }
 if (requireBackup) {
   if (!health.backup?.required) throw new Error('persistent server does not report backup as required');

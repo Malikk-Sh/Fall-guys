@@ -4,10 +4,16 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
-const { AdminPlayerSupport, normalizeSearchQuery, escapeLike } = require('./adminPlayerSupport');
+const { migrateDatabase } = require('./migrations');
+const {
+  AdminPlayerSupport,
+  normalizeSearchQuery,
+  ftsPrefixQuery
+} = require('./adminPlayerSupport');
 
 function seed() {
   const db = openDatabase(':memory:');
+  migrateDatabase(db);
   const now = 50_000;
   const insertAccount = db.prepare(`
     INSERT INTO accounts
@@ -16,15 +22,15 @@ function seed() {
   `);
   insertAccount.run(
     'player-main',
-    'Процент%_Игрок',
+    'Иван Игрок',
     'SECRET-RECOVERY-HASH',
     1000,
-    40_000,
+    10_000,
     'SECRET-PENDING-HASH',
     45_000
   );
   insertAccount.run('partner-one', 'Напарник', 'PARTNER-HASH', 2000, 30_000, null, null);
-  insertAccount.run('other-player', 'ПроцентXXИгрок', 'OTHER-HASH', 3000, 20_000, null, null);
+  insertAccount.run('other-player', 'Игорь', 'OTHER-HASH', 3000, 20_000, null, null);
 
   db.prepare(
     'INSERT INTO account_identities (provider, provider_subject, account_id, created_at) VALUES (?, ?, ?, ?)'
@@ -105,7 +111,8 @@ function seed() {
 test('player support returns useful account context without credentials', () => {
   const { db, now, support } = seed();
   const profile = support.get('player-main', { now });
-  assert.equal(profile.account.name, 'Процент%_Игрок');
+  assert.equal(profile.account.name, 'Иван Игрок');
+  assert.equal(profile.account.lastSeenAt, 48_000, 'session activity is fresher than account login time');
   assert.equal(profile.account.recoveryRotationPending, true);
   assert.equal(profile.account.recoveryRotationStartedAt, 45_000);
   assert.deepEqual(profile.login.providers, [{ provider: 'google', linkedAt: 5000 }]);
@@ -143,20 +150,30 @@ test('player support returns useful account context without credentials', () => 
   db.close();
 });
 
-test('player support search escapes LIKE wildcards and returns only bounded summaries', () => {
+test('player support search is Unicode case-insensitive, bounded and updated by account triggers', () => {
   const { db, now, support } = seed();
-  const literal = support.search('%_', { now });
-  assert.equal(literal.ok, true);
-  assert.deepEqual(
-    literal.results.map(item => item.id),
-    ['player-main']
-  );
-  assert.equal(literal.results[0].activeSessions, 1);
-  assert.equal(literal.results[0].hasExternalLogin, true);
+  const lowerCase = support.search('иван', { now });
+  assert.equal(lowerCase.ok, true);
+  assert.deepEqual(lowerCase.results.map(item => item.id), ['player-main']);
+  assert.equal(lowerCase.results[0].activeSessions, 1);
+  assert.equal(lowerCase.results[0].lastSeenAt, 48_000);
+  assert.equal(lowerCase.results[0].hasExternalLogin, true);
+
+  db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run('Пётр Игрок', 'player-main');
+  assert.deepEqual(support.search('пёт', { now }).results.map(item => item.id), ['player-main']);
+  assert.deepEqual(support.search('иван', { now }).results, []);
 
   assert.equal(support.search('x').reason, 'invalid-query');
   assert.equal(normalizeSearchQuery(' bad\nquery '), null);
-  assert.equal(escapeLike('a%b_c\\d'), 'a\\%b\\_c\\\\d');
+  assert.equal(ftsPrefixQuery('Иван игрок'), '"Иван"* AND "игрок"*');
+  db.close();
+});
+
+test('expired recovery rotations are not shown as pending', () => {
+  const { db, now, support } = seed();
+  const expired = support.get('player-main', { now: now + 16 * 60 * 1000 });
+  assert.equal(expired.account.recoveryRotationPending, false);
+  assert.equal(expired.account.recoveryRotationStartedAt, null);
   db.close();
 });
 

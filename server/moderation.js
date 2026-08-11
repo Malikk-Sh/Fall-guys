@@ -92,6 +92,15 @@ class ModerationQueue {
       targetNameSnapshot: row.target_name_snapshot || null,
       chapterIdSnapshot: row.chapter_id_snapshot || null
     }));
+    const evidence = this.statements.evidence.all(target).map(row => ({
+      id: Number(row.id),
+      reporterAccountId: row.reporter_account_id,
+      reason: row.reason,
+      reportedAt: Number(row.reported_at || 0),
+      occurrences: Number(row.occurrences || 1),
+      targetNameSnapshot: row.target_name_snapshot || null,
+      chapterIdSnapshot: row.chapter_id_snapshot || null
+    }));
     const history = this.statements.history.all(target).map(row => ({
       id: Number(row.id),
       fromStatus: row.from_status,
@@ -101,7 +110,7 @@ class ModerationQueue {
       reviewedThrough: Number(row.reviewed_through || 0),
       createdAt: Number(row.created_at || 0)
     }));
-    return { ...summary, reports, history };
+    return { ...summary, reports, evidence, history };
   }
 
   transition({ targetAccountId, status, moderatorId, note, now = Date.now() } = {}) {
@@ -238,6 +247,19 @@ function prepare(db) {
       FROM social_reports
       WHERE target_account_id = ?
       ORDER BY last_reported_at DESC, reporter_account_id ASC, reason ASC
+    `),
+    evidence: db.prepare(`
+      SELECT
+        id,
+        reporter_account_id,
+        reason,
+        reported_at,
+        occurrences,
+        target_name_snapshot,
+        chapter_id_snapshot
+      FROM social_report_evidence
+      WHERE target_account_id = ?
+      ORDER BY reported_at DESC, id DESC
     `),
     history: db.prepare(`
       SELECT id, from_status, to_status, moderator_id, note, reviewed_through, created_at

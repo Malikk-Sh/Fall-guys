@@ -1,6 +1,6 @@
 {
   "name": "wobble-rush-3d",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Procedural browser obstacle racer with a two-player co-op mode, for desktop, mobile, and online parties",
   "private": true,
   "engines": {

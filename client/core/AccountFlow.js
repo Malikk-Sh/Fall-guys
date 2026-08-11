@@ -4,6 +4,7 @@ import {
   ensureAccount,
   accountProfile,
   avoidRecentPartner,
+  listAvoidedPlayers,
   listAccounts,
   currentAccount as accountForRecords,
   authConfig,
@@ -14,6 +15,7 @@ import {
   renameAccount,
   rememberAccount,
   reportRecentPartner,
+  restoreAvoidedPlayer,
   sessionAccount,
   switchAccount,
   submitRecord
@@ -34,6 +36,7 @@ export class AccountFlow {
     this.game.ui.onProfileRefresh = () => this.refreshProfile();
     this.game.ui.onRecentPartnerAvoid = partner => this.avoidPartner(partner);
     this.game.ui.onRecentPartnerReport = (partner, reason) => this.reportPartner(partner, reason);
+    this.game.ui.onAvoidedPlayerRestore = player => this.restorePlayer(player);
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
@@ -71,19 +74,20 @@ export class AccountFlow {
     this.game.ui.setAccountRecords(this.records);
     this.game.ui.setAccountProgress(progress);
     this.game.ui.setServerProfile(online ? account?.profile || null : null);
+    this.game.ui.setAvoidedPlayers(null);
     this.game.ui.setAccountList(listAccounts());
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }
 
   async refreshProfile() {
-    try {
-      const profile = await accountProfile();
-      if (profile) this.game.ui.setServerProfile(profile);
-      return profile;
-    } catch {
-      return null;
-    }
+    const [profile, avoidedPlayers] = await Promise.all([
+      accountProfile().catch(() => null),
+      listAvoidedPlayers().catch(() => null)
+    ]);
+    if (profile) this.game.ui.setServerProfile(profile);
+    if (avoidedPlayers) this.game.ui.setAvoidedPlayers(avoidedPlayers);
+    return profile;
   }
 
   async avoidPartner(partner) {
@@ -96,6 +100,20 @@ export class AccountFlow {
       return result;
     } catch {
       this.game.ui.toast('Не удалось сохранить исключение — попробуйте ещё раз.');
+      return null;
+    }
+  }
+
+  async restorePlayer(player) {
+    if (!player?.id) return null;
+    try {
+      const result = await restoreAvoidedPlayer(player.id);
+      if (!result) return this.game.ui.toast('Не удалось вернуть игрока в подбор.');
+      await this.refreshProfile();
+      this.game.ui.toast('Ваше исключение снято — игрок снова разрешён для быстрого подбора.');
+      return result;
+    } catch {
+      this.game.ui.toast('Не удалось вернуть игрока в подбор.');
       return null;
     }
   }

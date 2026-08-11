@@ -37,7 +37,7 @@ async function listen(app) {
   };
 }
 
-test('avoid хранит одну симметричную пару и не влияет на произвольные аккаунты', () => {
+test('avoid remains symmetric for matchmaking but each player owns their personal choice', () => {
   const context = fresh();
   const { first, second } = partnered(context);
   const stranger = context.accounts.create('Незнакомец');
@@ -49,19 +49,45 @@ test('avoid хранит одну симметричную пару и не вл
   });
   assert.equal(context.social.shouldAvoid(first.id, second.id), false);
 
-  const created = context.social.avoid({ accountId: first.id, targetAccountId: second.id, now: 200 });
-  assert.deepEqual(created, { ok: true, avoided: true, created: true });
+  assert.deepEqual(context.social.avoid({ accountId: first.id, targetAccountId: second.id, now: 200 }), {
+    ok: true,
+    avoided: true,
+    created: true
+  });
   assert.equal(context.social.shouldAvoid(first.id, second.id), true);
-  assert.equal(context.social.shouldAvoid(second.id, first.id), true);
+  assert.deepEqual(context.social.listAvoided(first.id), [{ id: second.id, name: 'Второй', avoidedAt: 200 }]);
+  assert.deepEqual(context.social.listAvoided(second.id), []);
+
   assert.equal(
     context.social.avoid({ accountId: second.id, targetAccountId: first.id, now: 300 }).created,
-    false
+    true
   );
   assert.equal(context.db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 1);
+
+  assert.deepEqual(context.social.unavoid({ accountId: first.id, targetAccountId: second.id }), {
+    ok: true,
+    avoided: false,
+    removed: true
+  });
+  assert.deepEqual(context.social.listAvoided(first.id), []);
+  assert.equal(context.social.shouldAvoid(first.id, second.id), true, 'second choice still protects pair');
+
+  assert.equal(context.social.unavoid({ accountId: second.id, targetAccountId: first.id }).removed, true);
+  assert.equal(context.social.shouldAvoid(first.id, second.id), false);
+  assert.equal(context.db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 0);
   context.db.close();
 });
 
-test('social actions разрешены только для самого последнего напарника', () => {
+test('profile only exposes the current account own avoid choice', () => {
+  const context = fresh();
+  const { first, second } = partnered(context);
+  context.social.avoid({ accountId: first.id, targetAccountId: second.id, now: 200 });
+  assert.equal(context.accounts.profile(first.id).recentPartner.avoided, true);
+  assert.equal(context.accounts.profile(second.id).recentPartner.avoided, false);
+  context.db.close();
+});
+
+test('social actions are limited to the most recent partner', () => {
   const context = fresh();
   const { first, second } = partnered(context);
   const third = context.accounts.create('Третий');
@@ -84,7 +110,7 @@ test('social actions разрешены только для самого пос�
   context.db.close();
 });
 
-test('report принимает только фиксированные причины и подавляет spam в cooldown', () => {
+test('report accepts fixed reasons and suppresses spam during cooldown', () => {
   const context = fresh();
   const { first, second } = partnered(context);
 
@@ -118,7 +144,7 @@ test('report принимает только фиксированные прич
   context.db.close();
 });
 
-test('social HTTP routes требуют session и не принимают свободный текст', async () => {
+test('social HTTP routes list and restore only the authenticated account own avoids', async () => {
   const context = fresh();
   const { first, second } = partnered(context);
   const app = express();
@@ -156,13 +182,38 @@ test('social HTTP routes требуют session и не принимают св�
     });
     assert.equal(avoid.status, 200);
     assert.equal((await avoid.json()).avoided, true);
+
+    const firstList = await fetch(`${server.url}/api/social/avoids`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-account': first.id },
+      body: '{}'
+    });
+    assert.deepEqual(
+      (await firstList.json()).players.map(player => player.id),
+      [second.id]
+    );
+
+    const secondList = await fetch(`${server.url}/api/social/avoids`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-account': second.id },
+      body: '{}'
+    });
+    assert.deepEqual((await secondList.json()).players, []);
+
+    const restored = await fetch(`${server.url}/api/social/unavoid`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-account': first.id },
+      body: JSON.stringify({ targetAccountId: second.id })
+    });
+    assert.equal((await restored.json()).removed, true);
+    assert.equal(context.social.shouldAvoid(first.id, second.id), false);
   } finally {
     await server.close();
     context.db.close();
   }
 });
 
-test('social API payload не имеет канала свободного текста', () => {
+test('social API payload has no free-text channel', () => {
   assert.equal(keysOnly({ targetAccountId: 'p2' }, new Set(['targetAccountId'])), true);
   assert.equal(
     keysOnly({ targetAccountId: 'p2', reason: 'afk' }, new Set(['targetAccountId', 'reason'])),

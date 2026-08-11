@@ -2461,3 +2461,46 @@ body.large-ui .menu-card {
     grid-template-columns: 1fr;
   }
 }
+
+.avoided-players-list {
+  display: grid;
+  gap: 8px;
+}
+.avoided-player-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #ffffff1f;
+  border-radius: 12px;
+  background: #ffffff0a;
+}
+.avoided-player-row > span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.avoided-player-row strong,
+.avoided-player-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.avoided-player-row small,
+.avoid-privacy-note {
+  color: #ffffff9c;
+  font-size: 8px;
+  line-height: 1.45;
+}
+.avoid-privacy-note {
+  display: block;
+  margin-top: 8px;
+}
+@media (max-width: 760px) {
+  .avoided-player-row {
+    grid-template-columns: 1fr;
+  }
+  .avoided-player-row .button {
+    width: 100%;
+  }
+}

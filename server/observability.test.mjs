@@ -40,7 +40,7 @@ test('build identity нормализует commit и берёт точную в
   assert.deepEqual(
     buildIdentity({ env: { WOBBLE_BUILD_SHA: 'abcdef0123456789' }, startedAt: '2026-08-10T00:00:00.000Z' }),
     {
-      version: '2.5.0',
+      version: '2.6.0',
       commit: 'abcdef012345',
       startedAt: '2026-08-10T00:00:00.000Z'
     }

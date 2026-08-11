@@ -358,8 +358,15 @@ function prepare(db) {
              rp.last_chapter_id, rp.last_played_at,
    EXISTS (
      SELECT 1 FROM matchmaking_avoids ma
-     WHERE (ma.account_a = rp.account_id AND ma.account_b = rp.partner_account_id)
-        OR (ma.account_a = rp.partner_account_id AND ma.account_b = rp.account_id)
+     WHERE (
+       ma.account_a = rp.account_id
+       AND ma.account_b = rp.partner_account_id
+       AND ma.account_a_avoided_at IS NOT NULL
+     ) OR (
+       ma.account_b = rp.account_id
+       AND ma.account_a = rp.partner_account_id
+       AND ma.account_b_avoided_at IS NOT NULL
+     )
    ) AS avoided
       FROM recent_partners rp
       JOIN accounts a ON a.id = rp.partner_account_id

@@ -1,0 +1,41 @@
+name: Apply PR71 review fixes
+
+on:
+  push:
+    branches:
+      - feat/admin-infrastructure-status
+    paths:
+      - .github/workflows/apply-pr71-review-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-infrastructure-status
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: python3 .github/pr71-review-fixes.py
+      - name: Format changed files
+        run: |
+          npx prettier --write \
+            client/admin/admin.js \
+            deploy/install.sh \
+            deploy/wobble.env.example \
+            docs/INFRASTRUCTURE-STATUS.md \
+            server/adminInfrastructure.js \
+            server/adminInfrastructure.test.mjs
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add client deploy docs server
+          git commit -m "Address infrastructure status review feedback"
+          git push origin HEAD:feat/admin-infrastructure-status

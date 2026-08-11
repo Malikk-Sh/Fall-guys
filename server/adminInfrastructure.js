@@ -87,12 +87,7 @@ function tlsProbe({ host = '127.0.0.1', port = 443, servername, timeoutMs = 2500
       return;
     }
     const started = Date.now();
-    const socket = tls.connect({
-      host,
-      port,
-      servername,
-      rejectUnauthorized: false
-    });
+    const socket = tls.connect({ host, port, servername, rejectUnauthorized: false });
     let done = false;
     const finish = payload => {
       if (done) return;
@@ -123,19 +118,32 @@ function tlsProbe({ host = '127.0.0.1', port = 443, servername, timeoutMs = 2500
   });
 }
 
-function publicTarget(env) {
-  for (const raw of String(env.ALLOWED_ORIGINS || '').split(',')) {
-    const value = raw.trim();
-    if (!value) continue;
-    try {
-      const url = new URL(value);
-      if (url.protocol !== 'https:' || !url.hostname) continue;
-      return { origin: url.origin, hostname: url.hostname, port: safePositiveInt(url.port, 443) };
-    } catch {
-      // Ignore an invalid origin; normal server startup/origin validation owns that configuration.
-    }
+function parseHttpsTarget(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol !== 'https:' || !url.hostname) return null;
+    return { origin: url.origin, hostname: url.hostname, port: safePositiveInt(url.port, 443) };
+  } catch {
+    return null;
   }
-  return { origin: null, hostname: null, port: 443 };
+}
+
+function publicTarget(env) {
+  // ALLOWED_ORIGINS is a browser allowlist and can intentionally contain old/custom origins.
+  // The installer therefore writes one canonical, non-secret production origin specifically for
+  // operational probes. Never let an arbitrary first allowlist entry decide SNI.
+  const canonical = parseHttpsTarget(env.WOBBLE_PUBLIC_ORIGIN);
+  if (canonical) return canonical;
+
+  // Backward-compatible fallback for local/manual installations: a single unambiguous HTTPS
+  // origin is safe to use. If there are several, report the target as unknown rather than guess.
+  const candidates = [];
+  for (const raw of String(env.ALLOWED_ORIGINS || '').split(',')) {
+    const candidate = parseHttpsTarget(raw);
+    if (!candidate) continue;
+    if (!candidates.some(item => item.origin === candidate.origin)) candidates.push(candidate);
+  }
+  return candidates.length === 1 ? candidates[0] : { origin: null, hostname: null, port: 443 };
 }
 
 function diskStatus(databaseFile, statfs = fs.statfsSync) {

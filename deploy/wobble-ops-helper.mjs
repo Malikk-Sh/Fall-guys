@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const SYSTEMCTL = '/usr/bin/systemctl';
 const MAX_REQUEST_BYTES = 4096;
+const REQUEST_READ_TIMEOUT_MS = 5000;
 const RESTART_DELAY_MS = 1000;
 const RESTART_COOLDOWN_MS = 30_000;
 
@@ -112,10 +113,12 @@ export async function executeRequest(request, now = Date.now()) {
   }
 }
 
-export function createServer() {
+export function createServer({ execute = executeRequest, requestTimeoutMs = REQUEST_READ_TIMEOUT_MS } = {}) {
   return net.createServer(socket => {
     socket.setEncoding('utf8');
-    socket.setTimeout(5000, () => socket.destroy());
+    // The short timeout protects only the tiny unauthenticated local request frame. Once a valid
+    // allowlisted action has been parsed, operation-specific systemd/client timeouts take over.
+    socket.setTimeout(requestTimeoutMs, () => socket.destroy());
     let input = '';
     let handled = false;
 
@@ -147,7 +150,11 @@ export function createServer() {
         });
         return;
       }
-      const result = await executeRequest(request);
+
+      // A backup can legitimately take far longer than the 5-second request-read guard. Keeping
+      // that guard active here would report a false failure while systemd continues the job.
+      socket.setTimeout(0);
+      const result = await execute(request);
       send(socket, { ...result, requestId: request.requestId, action: request.action });
     });
     socket.once('error', () => socket.destroy());

@@ -6,10 +6,17 @@ moderation HTTP endpoint: moderation is performed locally on the VPS against the
 
 ## What is stored
 
-A report keeps the reporter and target account IDs, the fixed reason, aggregate report count and
-first/last report time. From migration 009 onward it also snapshots the target display name and the
-co-op chapter at report time. This matters for `offensive-name` reports because a player can rename
-before a moderator reviews the case.
+`social_reports` remains a compact aggregate by reporter, target and fixed reason: it keeps the
+report count plus first/last accepted time. From migration 009 onward every newly accepted report
+also gets an immutable row in `social_report_evidence` with the target display name and co-op
+chapter as they were at that report time. This matters for `offensive-name` reports because a player
+can rename before a moderator reviews the case, and a later repeat report must not erase the earlier
+snapshot.
+
+Reports created before migration 009 were already aggregated, so their individual historical names
+and chapters cannot be reconstructed. Migration 009 preserves one explicitly aggregated legacy
+evidence row with its original report count and the best evidence still available at migration time;
+all later accepted reports are stored one-by-one.
 
 The moderation queue groups report rows by target account. It shows the number of independent
 reporters, total reports, reason counts and latest activity. Cases with more independent reporters
@@ -32,7 +39,8 @@ moderation history remains intact, so a new report cannot erase an earlier decis
 ## Production commands
 
 The production database is normally `/var/lib/wobble/leaderboard.db`. Run the CLI as the `wobble`
-user so any SQLite/WAL files keep the same ownership as the game service.
+user so any SQLite/WAL files keep the same ownership as the game service. The CLI refuses missing
+paths instead of silently creating a new empty database, which protects against typos during review.
 
 List the open queue:
 

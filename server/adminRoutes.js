@@ -13,6 +13,11 @@ const {
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_ATTEMPTS = 60;
 
+const keysOnly = (body, allowed) =>
+  body && typeof body === 'object' && !Array.isArray(body)
+    ? Object.keys(body).every(key => allowed.has(key))
+    : false;
+
 function installAdminRoutes({
   app,
   adminAuth,
@@ -58,7 +63,7 @@ function installAdminRoutes({
     if (logins.limited(loginRateLimitKey(req), loginAttempts)) {
       return res.status(429).json({ ok: false, error: 'rate-limited' });
     }
-    if (!req.body || Object.keys(req.body).some(key => key !== 'accessCode')) {
+    if (!keysOnly(req.body, new Set(['accessCode']))) {
       return res.status(400).json({ ok: false, error: 'invalid-payload' });
     }
     const login = adminAuth.login(req.body.accessCode);
@@ -126,11 +131,48 @@ function installAdminRoutes({
   app.post('/api/admin/moderation/queue', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'moderation.read');
     if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['status', 'limit']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
     const result = control.moderationQueue({
       status: req.body?.status || 'open',
       limit: req.body?.limit || 50
     });
     if (!result.ok) return res.status(400).json({ ok: false, error: result.reason });
+    return res.json(result);
+  });
+
+  app.post('/api/admin/moderation/case', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'moderation.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['targetAccountId'])) || !req.body.targetAccountId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    const item = control.moderationCase(req.body.targetAccountId);
+    if (!item) return res.status(404).json({ ok: false, error: 'moderation-case-not-found' });
+    return res.json({ ok: true, case: item });
+  });
+
+  app.post('/api/admin/moderation/transition', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'moderation.write');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['targetAccountId', 'status', 'note']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    const result = control.moderationTransition({
+      targetAccountId: req.body?.targetAccountId,
+      status: req.body?.status,
+      note: req.body?.note,
+      actor: resolved.session.user
+    });
+    if (!result.ok) {
+      const status = result.reason === 'no-reports' ? 404 : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.reason,
+        ...(result.allowedStatuses ? { allowedStatuses: result.allowedStatuses } : {})
+      });
+    }
     return res.json(result);
   });
 
@@ -143,4 +185,4 @@ function installAdminRoutes({
   return { requireAdmin, tokenFrom };
 }
 
-module.exports = { installAdminRoutes, LOGIN_ATTEMPTS, LOGIN_WINDOW_MS };
+module.exports = { installAdminRoutes, LOGIN_ATTEMPTS, LOGIN_WINDOW_MS, keysOnly };

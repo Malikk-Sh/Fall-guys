@@ -43,7 +43,8 @@ const adminAuth = new AdminAuthService({ db: core.accounts.db });
 const adminControl = new AdminControlService({
   db: core.accounts.db,
   health: core.health,
-  gameplay: core.gameplay
+  gameplay: core.gameplay,
+  adminAuth
 });
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';

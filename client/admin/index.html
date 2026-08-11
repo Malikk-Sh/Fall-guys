@@ -120,7 +120,8 @@
               </label>
             </div>
             <p class="muted">
-              Этот первый этап панели только читает очередь. Изменение статусов будет отдельным PR.
+              Откройте дело, чтобы увидеть immutable evidence и историю. Решение остаётся human-review:
+              количество жалоб само по себе ничего не блокирует.
             </p>
             <div class="table-wrap">
               <table>
@@ -132,6 +133,7 @@
                     <th>Reports</th>
                     <th>Причины</th>
                     <th>Последняя</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody id="moderation-body"></tbody>
@@ -162,6 +164,63 @@
         </section>
       </section>
     </main>
+
+    <dialog id="moderation-dialog" class="case-dialog">
+      <article class="case-shell">
+        <header class="case-head">
+          <div>
+            <p class="eyebrow">MODERATION CASE</p>
+            <h2 id="case-title">Дело игрока</h2>
+            <p id="case-id" class="mono muted"></p>
+          </div>
+          <button id="case-close" class="ghost" type="button">Закрыть</button>
+        </header>
+
+        <div class="case-summary">
+          <span id="case-status" class="status-badge"></span>
+          <span id="case-reports" class="muted"></span>
+          <span id="case-last" class="muted"></span>
+        </div>
+
+        <section class="case-section">
+          <h3>Evidence</h3>
+          <div id="case-evidence" class="evidence-list"></div>
+        </section>
+
+        <section class="case-section">
+          <h3>История решений</h3>
+          <div id="case-history" class="history-list"></div>
+        </section>
+
+        <form id="case-action" class="case-action" hidden>
+          <div class="case-action-grid">
+            <label>
+              Новый статус
+              <select id="case-next-status">
+                <option value="open">Open</option>
+                <option value="reviewing">Reviewing</option>
+                <option value="resolved">Resolved</option>
+                <option value="dismissed">Dismissed</option>
+              </select>
+            </label>
+            <label class="case-note-label">
+              Заметка модератора
+              <textarea
+                id="case-note"
+                maxlength="1000"
+                rows="4"
+                placeholder="Для resolved/dismissed заметка обязательна. Не вставляйте credentials или секреты."
+              ></textarea>
+            </label>
+          </div>
+          <p id="case-action-hint" class="muted">
+            Изменение статуса требует второго подтверждения и записывается в moderation history + admin audit.
+          </p>
+          <button id="case-apply" class="primary action-button" type="submit">Подготовить изменение</button>
+        </form>
+      </article>
+    </dialog>
+
     <script src="/admin/admin.js" defer></script>
   </body>
 </html>

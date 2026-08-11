@@ -5,10 +5,9 @@
 `/admin/` — отдельная интерактивная панель владельца проекта, операторов, модераторов и аналитиков.
 Она не использует игровой recovery code и не повышает обычный аккаунт игрока до администратора.
 
-Первый этап intentionally read-only: панель показывает production health, build/release identity,
-нагрузку, аккаунты, gameplay metrics, moderation queue и admin audit history. Изменение модерации,
-backup/deploy/restart и другие системные действия будут подключаться отдельными PR поверх этой
-границы безопасности.
+Control Plane показывает production health, build/release identity, нагрузку, аккаунты, gameplay
+metrics, moderation workflow и admin audit history. Системные действия уровня backup/restart/deploy
+будут подключаться отдельными PR поверх этой границы безопасности.
 
 ## Security model
 
@@ -26,8 +25,9 @@ backup/deploy/restart и другие системные действия буд
 - expired admin sessions очищаются при следующем login, одновременно на одного администратора
   хранится не больше 20 живых sessions;
 - роли проверяются на сервере, скрытая кнопка в UI не является проверкой прав;
-- admin mutations и соответствующие audit events фиксируются одной SQLite transaction;
-- admin actions пишутся в `admin_audit_events`;
+- admin mutations и соответствующие audit events фиксируются транзакционно;
+- moderation transition и соответствующий `admin_audit_events` event выполняются одной SQLite
+  transaction: если audit не записался, moderation case тоже не изменяется;
 - recovery code игрока, player session bearer и VPN/Xray secrets к панели отношения не имеют.
 
 Не добавляйте shell execution в Node process. Системные операции должны идти через будущий узкий
@@ -35,13 +35,13 @@ privileged helper с allowlist команд, а не через произвол
 
 ## Роли
 
-| Role        | Первый этап                                                                  |
-| ----------- | ---------------------------------------------------------------------------- |
-| `owner`     | все read views + зарезервированные будущие admin/ops/moderation capabilities |
-| `operator`  | dashboard, analytics, moderation queue, audit                                |
-| `moderator` | dashboard и moderation queue                                                 |
-| `analyst`   | dashboard и gameplay analytics                                               |
-| `viewer`    | только dashboard                                                             |
+| Role        | Текущие возможности                                               |
+| ----------- | ----------------------------------------------------------------- |
+| `owner`     | все read views, moderation writes, будущие admin/ops capabilities |
+| `operator`  | dashboard, analytics, moderation read, audit                      |
+| `moderator` | dashboard, moderation case review и безопасные status transitions |
+| `analyst`   | dashboard и gameplay analytics                                    |
+| `viewer`    | только dashboard                                                  |
 
 Capabilities проверяет `server/adminAuth.js`; frontend лишь отражает результат сервера.
 
@@ -136,14 +136,44 @@ Read-only представление `GameplayMetrics.summary()` с выборо
 
 ### Moderation
 
-Read-only queue со статусами `open`, `reviewing`, `resolved`, `dismissed`, `all`. Решения пока
-по-прежнему выполняются локальным `moderationCli.mjs`; write UI будет отдельным этапом.
+Очередь поддерживает `open`, `reviewing`, `resolved`, `dismissed`, `all`. Каждое дело можно открыть
+как отдельный workspace и проверить:
+
+- current name и account ID;
+- independent reporters / total reports / reasons;
+- immutable evidence rows;
+- name snapshot и chapter snapshot на момент accepted report;
+- полную moderation history;
+- moderator identity для действий, выполненных через Control Plane.
+
+`owner` и `moderator` могут переводить дело между статусами. `resolved` и `dismissed` требуют note.
+Интерфейс делает изменение двухшаговым: первый tap только готовит действие, второй в течение 10
+секунд подтверждает тот же status/note.
+
+Для каждого detail-response сервер возвращает `revision`, построенный из последних immutable evidence
+и moderation-event IDs. Во время transition сервер берёт SQLite write lock, повторно читает case и
+сверяет этот revision **внутри той же transaction**, в которой затем пишет решение. Поэтому новая
+жалоба не теряется даже при совпавшем millisecond timestamp, а цепочка переходов вроде
+`open → reviewing → open` всё равно меняет revision. При несовпадении сервер отвечает
+`case-changed`, ничего не применяет и возвращает свежий case для повторного review.
+
+Control Plane **не** банит, не suspend-ит и не делает forced rename. Status `resolved` означает только,
+что moderation review закрыт согласно note и реально выполненным внешним действиям. Не пишите в note
+о наказании, которого система фактически не выполнила.
+
+После успешного transition панель обновляет и открытую карточку, и текущую очередь, поэтому дело
+сразу исчезает из старого status-фильтра, если больше ему не соответствует.
+
+CLI `server/moderationCli.mjs` остаётся поддерживаемым fallback и локальным инструментом оператора.
 
 ### Audit
 
 Последние admin events: actor, role, action, target и timestamp. Access code и session token в audit
 не записываются. Большие structured details заменяются валидным JSON-marker о truncation, поэтому
 одна слишком большая запись не может сломать просмотр всего журнала.
+
+Для moderation transition в admin audit сохраняются только transition metadata и `notePresent`; сама
+moderator note уже находится в `moderation_events` и намеренно не дублируется во второй журнал.
 
 ## Отключение панели при инциденте
 
@@ -164,7 +194,7 @@ systemctl restart wobble
 
 План развития Control Plane:
 
-1. moderation case detail + безопасные status transitions;
+1. ~~moderation case detail + безопасные status transitions~~;
 2. полноценные analytics charts, фильтры и export;
 3. player/account support view без раскрытия credentials;
 4. privileged operations helper для backup/smoke/restart и позже deploy;

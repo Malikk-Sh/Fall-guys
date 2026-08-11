@@ -6,13 +6,22 @@
 
 Жалоба — сигнал для human review, а не автоматическое наказание.
 
-Текущий moderation tool:
+Если Wobble Control Plane включён, основной интерфейс модератора:
 
-- работает локально на VPS;
-- читает production SQLite;
-- не имеет public HTTP endpoint;
-- не банит, не suspend-ит и не переименовывает игрока автоматически;
-- сохраняет audit trail решений.
+```text
+https://wobbles.ru/admin/
+```
+
+Он показывает очередь, immutable evidence, snapshots и историю решений и позволяет `owner` /
+`moderator` безопасно менять status. Локальный `moderationCli.mjs` остаётся fallback-инструментом
+оператора VPS.
+
+Ни панель, ни CLI сейчас:
+
+- не банят;
+- не suspend-ят;
+- не делают forced rename;
+- не считают число reports автоматическим verdict.
 
 ## 2. Причины жалоб
 
@@ -41,7 +50,43 @@ dismissed
 Если после закрытия приходит более новая accepted report, effective status снова становится `open`,
 но предыдущая moderation history сохраняется.
 
-## 4. Запуск CLI
+## 4. Работа через Control Plane
+
+Откройте вкладку **Модерация**, выберите статус очереди и нажмите **Открыть** у нужного case.
+
+Карточка дела показывает:
+
+- current name и account ID;
+- unique reporters;
+- total reports;
+- reasons;
+- immutable evidence rows;
+- name snapshot на момент accepted report;
+- chapter snapshot;
+- previous moderation history;
+- timestamps и moderator identity.
+
+Особенно для `offensive-name` смотрите snapshot: текущий nickname мог уже измениться.
+
+### Взять дело в работу
+
+Выберите `reviewing`. Первое нажатие **Подготовить изменение** ничего не записывает: UI покажет
+второе подтверждение. Проверьте case ещё раз и подтвердите в течение 10 секунд.
+
+### Закрыть дело
+
+Для `resolved` или `dismissed` обязательно заполните note. Note должна объяснять результат review и
+реально выполненное действие, но не содержать credentials или лишние персональные данные.
+
+Если между открытием дела и подтверждением пришла новая accepted report или другой moderator изменил
+status, сервер отклонит stale decision и вернёт свежую карточку. Защита основана на monotonic case
+revision из immutable evidence/history IDs, а не только на wall-clock timestamp, поэтому совпавшее
+время событий не скрывает изменение. Прочитайте новые данные и принимайте решение заново.
+
+Каждый transition пишется одновременно в moderation history и admin audit. Если audit event сохранить
+не удалось, status тоже не меняется.
+
+## 5. CLI fallback
 
 Production DB:
 
@@ -57,8 +102,6 @@ sudo -u wobble node /opt/wobble/server/moderationCli.mjs \
 ```
 
 CLI специально отказывается создавать новую БД при ошибке в пути.
-
-## 5. Очередь
 
 Открытые cases:
 
@@ -87,38 +130,24 @@ sudo -u wobble node /opt/wobble/server/moderationCli.mjs \
 Queue сортируется для triage: independent reporters важнее общего количества повторов, затем
 учитываются cheat/offensive-name signals и свежесть. Это порядок проверки, не verdict.
 
-## 6. Изучить case
+## 6. Изучить case через CLI
 
 ```bash
 sudo -u wobble node /opt/wobble/server/moderationCli.mjs \
   --db /var/lib/wobble/leaderboard.db show <account-id>
 ```
 
-Проверьте:
+Проверьте те же данные, что и в Control Plane: evidence, snapshots, reporters, reasons и history.
 
-- current name;
-- unique reporters;
-- total reports;
-- reasons;
-- immutable evidence rows;
-- name snapshot на момент report;
-- chapter snapshot;
-- previous moderation history;
-- timestamps.
+## 7. Изменить status через CLI
 
-Особенно для `offensive-name` смотрите snapshot: текущий nickname мог уже измениться.
-
-## 7. Взять case в работу
+Взять в работу:
 
 ```bash
 sudo -u wobble node /opt/wobble/server/moderationCli.mjs \
   --db /var/lib/wobble/leaderboard.db set <account-id> reviewing \
   --moderator malik
 ```
-
-Используйте стабильный moderator ID, чтобы audit trail оставался читаемым.
-
-## 8. Закрыть
 
 Resolved:
 
@@ -138,22 +167,22 @@ sudo -u wobble node /opt/wobble/server/moderationCli.mjs \
   --note "Evidence reviewed; no moderation action justified."
 ```
 
-Note должна описывать проверку/результат, а не содержать credentials или лишние персональные данные.
+Для CLI используйте стабильный moderator ID, чтобы history оставалась читаемой.
 
-## 9. Рекомендуемый SOP
+## 8. Рекомендуемый SOP
 
 ```text
 queue
-  -> show
-  -> проверить independent reporters и evidence
-  -> set reviewing
-  -> выполнить внешнее действие, если оно существует
+  -> открыть case
+  -> проверить independent reporters и immutable evidence
+  -> reviewing
+  -> выполнить внешнее действие, если оно действительно существует
   -> resolved/dismissed + понятная note
 ```
 
 Не пишите в note, что игрок "забанен", если такого действия фактически не было.
 
-## 10. Запрещённые практики
+## 9. Запрещённые практики
 
 Не делайте:
 
@@ -167,7 +196,7 @@ queue
 Если CLI сообщает кратковременный SQLite lock, подождите и повторите. Не копируйте live DB ради
 обычного review.
 
-## 11. Checklist закрытия
+## 10. Checklist закрытия
 
 ```text
 [ ] account ID проверен

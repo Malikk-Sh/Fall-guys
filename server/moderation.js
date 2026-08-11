@@ -37,6 +37,12 @@ function clampLimit(value, fallback = 50) {
   return Math.min(parsed, 200);
 }
 
+function caseRevision(evidence, history) {
+  const latestEvidenceId = Number(evidence[0]?.id || 0);
+  const latestHistoryId = Number(history.at(-1)?.id || 0);
+  return `${latestEvidenceId}:${latestHistoryId}`;
+}
+
 function toSummary(row) {
   if (!row) return null;
   return {
@@ -110,10 +116,19 @@ class ModerationQueue {
       reviewedThrough: Number(row.reviewed_through || 0),
       createdAt: Number(row.created_at || 0)
     }));
-    return { ...summary, reports, evidence, history };
+    return { ...summary, reports, evidence, history, revision: caseRevision(evidence, history) };
   }
 
-  transition({ targetAccountId, status, moderatorId, note, now = Date.now() } = {}) {
+  transition({
+    targetAccountId,
+    status,
+    moderatorId,
+    note,
+    expectedRevision = null,
+    rejectSameStatus = false,
+    audit = null,
+    now = Date.now()
+  } = {}) {
     const target = String(targetAccountId || '').trim();
     const nextStatus = String(status || '').trim();
     const moderator = normalizeModeratorId(moderatorId);
@@ -127,18 +142,35 @@ class ModerationQueue {
     if (CLOSED_STATUSES.has(nextStatus) && !normalizedNote) {
       return { ok: false, reason: 'note-required' };
     }
+    if (audit != null && typeof audit !== 'function') return { ok: false, reason: 'invalid-audit-hook' };
 
-    const current = this.get(target);
-    if (!current) return { ok: false, reason: 'no-reports' };
     const at = Number.isFinite(now) && now >= 0 ? Math.round(now) : Date.now();
-    const reviewedThrough = CLOSED_STATUSES.has(nextStatus)
-      ? current.lastReportedAt
-      : nextStatus === 'open'
-        ? 0
-        : current.reviewedThrough;
-
-    this.db.exec('BEGIN IMMEDIATE');
+    let inTransaction = false;
     try {
+      this.db.exec('BEGIN IMMEDIATE');
+      inTransaction = true;
+      const current = this.get(target);
+      if (!current) {
+        this.db.exec('ROLLBACK');
+        inTransaction = false;
+        return { ok: false, reason: 'no-reports' };
+      }
+      if (expectedRevision != null && String(expectedRevision) !== current.revision) {
+        this.db.exec('ROLLBACK');
+        inTransaction = false;
+        return { ok: false, reason: 'case-changed', case: current };
+      }
+      if (rejectSameStatus && nextStatus === current.status) {
+        this.db.exec('ROLLBACK');
+        inTransaction = false;
+        return { ok: false, reason: 'already-status', case: current };
+      }
+
+      const reviewedThrough = CLOSED_STATUSES.has(nextStatus)
+        ? current.lastReportedAt
+        : nextStatus === 'open'
+          ? 0
+          : current.reviewedThrough;
       this.statements.upsertCase.run(
         target,
         nextStatus,
@@ -156,13 +188,23 @@ class ModerationQueue {
         reviewedThrough,
         at
       );
+      if (audit) {
+        audit({
+          targetAccountId: target,
+          fromStatus: current.status,
+          toStatus: nextStatus,
+          note: normalizedNote,
+          reviewedThrough,
+          createdAt: at
+        });
+      }
       this.db.exec('COMMIT');
+      inTransaction = false;
+      return { ok: true, case: this.get(target) };
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      if (inTransaction) this.db.exec('ROLLBACK');
       throw error;
     }
-
-    return { ok: true, case: this.get(target) };
   }
 }
 
@@ -259,13 +301,13 @@ function prepare(db) {
         chapter_id_snapshot
       FROM social_report_evidence
       WHERE target_account_id = ?
-      ORDER BY reported_at DESC, id DESC
+      ORDER BY id DESC
     `),
     history: db.prepare(`
       SELECT id, from_status, to_status, moderator_id, note, reviewed_through, created_at
       FROM moderation_events
       WHERE target_account_id = ?
-      ORDER BY created_at ASC, id ASC
+      ORDER BY id ASC
     `),
     upsertCase: db.prepare(`
       INSERT INTO moderation_cases
@@ -293,5 +335,6 @@ module.exports = {
   MAX_NOTE,
   normalizeModeratorId,
   normalizeNote,
-  clampLimit
+  clampLimit,
+  caseRevision
 };

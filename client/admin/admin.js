@@ -326,17 +326,15 @@ function renderAnalyticsKpis(data) {
   const completion = current.completionPercent == null ? '—' : `${current.completionPercent}%`;
   const previousCompletion = previous?.completionPercent == null ? '—' : `${previous.completionPercent}%`;
   const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+  const compareHint = (currentValue, previousValue, formatter = formatNumber) =>
+    comparisonAvailable ? comparisonHint(currentValue, previousValue, formatter) : comparisonUnavailableHint;
   const cards = $('#analytics-kpis');
   cards.replaceChildren(
-    statCard(
-      'Начатые матчи',
-      formatNumber(current.started),
-      comparisonHint(current.started, previous.started)
-    ),
+    statCard('Начатые матчи', formatNumber(current.started), compareHint(current.started, previous?.started)),
     statCard(
       'Завершённые матчи',
       formatNumber(current.finished),
-      comparisonHint(current.finished, previous.finished)
+      compareHint(current.finished, previous?.finished)
     ),
     statCard(
       'Завершено / начато',
@@ -346,14 +344,14 @@ function renderAnalyticsKpis(data) {
     statCard(
       'Выходы до финиша',
       formatNumber(current.abandoned),
-      comparisonHint(current.abandoned, previous.abandoned),
-      current.abandoned > previous.abandoned ? 'warn' : ''
+      compareHint(current.abandoned, previous?.abandoned),
+      comparisonAvailable && current.abandoned > Number(previous?.abandoned || 0) ? 'warn' : ''
     ),
     statCard(
       'Падения',
       formatNumber(current.falls),
-      comparisonHint(current.falls, previous.falls),
-      current.falls > previous.falls ? 'warn' : ''
+      compareHint(current.falls, previous?.falls),
+      comparisonAvailable && current.falls > Number(previous?.falls || 0) ? 'warn' : ''
     ),
     statCard(
       'Среднее проверенное время',

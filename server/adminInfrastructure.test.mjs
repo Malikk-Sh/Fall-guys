@@ -63,11 +63,33 @@ test('systemd parser and public target expose only structured operational fields
   });
 });
 
+test('canonical public origin wins over browser allowlist ordering and ambiguous fallback never guesses', () => {
+  assert.deepEqual(
+    publicTarget({
+      WOBBLE_PUBLIC_ORIGIN: 'https://wobbles.ru',
+      ALLOWED_ORIGINS: 'https://old.example,https://wobbles.ru'
+    }),
+    { origin: 'https://wobbles.ru', hostname: 'wobbles.ru', port: 443 }
+  );
+  assert.deepEqual(
+    publicTarget({ ALLOWED_ORIGINS: 'https://old.example,https://wobbles.ru' }),
+    { origin: null, hostname: null, port: 443 }
+  );
+  assert.deepEqual(
+    publicTarget({
+      WOBBLE_PUBLIC_ORIGIN: 'http://unsafe.example',
+      ALLOWED_ORIGINS: 'https://wobbles.ru:8443'
+    }),
+    { origin: 'https://wobbles.ru:8443', hostname: 'wobbles.ru', port: 8443 }
+  );
+});
+
 test('infrastructure snapshot combines service, TLS, resource and backup health without secrets', async () => {
   const calls = [];
   const infrastructure = new AdminInfrastructure({
     env: {
-      ALLOWED_ORIGINS: 'https://wobbles.ru',
+      WOBBLE_PUBLIC_ORIGIN: 'https://wobbles.ru',
+      ALLOWED_ORIGINS: 'https://legacy.example,https://wobbles.ru',
       PORT: '3000',
       LEADERBOARD_DB: '/var/lib/wobble/leaderboard.db'
     },

@@ -79,8 +79,9 @@ dismissed
 реально выполненное действие, но не содержать credentials или лишние персональные данные.
 
 Если между открытием дела и подтверждением пришла новая accepted report или другой moderator изменил
-status, сервер отклонит stale decision и вернёт свежую карточку. Прочитайте новые данные и принимайте
-решение заново.
+status, сервер отклонит stale decision и вернёт свежую карточку. Защита основана на monotonic case
+revision из immutable evidence/history IDs, а не только на wall-clock timestamp, поэтому совпавшее
+время событий не скрывает изменение. Прочитайте новые данные и принимайте решение заново.
 
 Каждый transition пишется одновременно в moderation history и admin audit. Если audit event сохранить
 не удалось, status тоже не меняется.

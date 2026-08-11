@@ -1,12 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  commitStagedRecoveryCode,
+  confirmRecoveryCode,
+  currentAccount,
+  forgetAccountChecked,
   listAccountSessions,
+  prepareRecoveryCode,
+  rememberAccount,
   revokeAccountSession,
   revokeOtherAccountSessions,
-  rotateRecoveryCode,
-  logoutAccount
+  stageRecoveryCode,
+  switchAccount
 } from '../client/core/account.js';
+
+function memoryStorage() {
+  let value = null;
+  let failWrites = false;
+  return {
+    getItem: () => value,
+    setItem: (_key, next) => {
+      if (failWrites) throw new Error('storage unavailable');
+      value = next;
+    },
+    failWrites: () => {
+      failWrites = true;
+    }
+  };
+}
 
 function fakeServer(handlers) {
   const calls = [];
@@ -57,25 +78,60 @@ test('account client lists and revokes sessions without ever handling the cookie
   );
 });
 
-test('recovery rotation returns the one-time replacement code and logout stays session-only', async () => {
+test('staged recovery keeps the active code and never changes the selected account', () => {
+  const storage = memoryStorage();
+  rememberAccount({ id: 'a', name: 'A', secret: 'OLD-A' }, storage);
+  rememberAccount({ id: 'b', name: 'B', secret: 'OLD-B' }, storage);
+  switchAccount('b', storage);
+
+  const staged = stageRecoveryCode('a', 'NEW-A', Date.now() + 60_000, storage);
+  assert.equal(staged.persisted, true);
+  assert.equal(currentAccount(storage).id, 'b');
+  const accountA = staged.state.accounts.find(account => account.id === 'a');
+  assert.equal(accountA.secret, 'OLD-A');
+  assert.equal(accountA.pendingRecovery.secret, 'NEW-A');
+
+  const committed = commitStagedRecoveryCode('a', storage);
+  assert.equal(committed.persisted, true);
+  assert.equal(currentAccount(storage).id, 'b');
+  const savedA = committed.state.accounts.find(account => account.id === 'a');
+  assert.equal(savedA.secret, 'NEW-A');
+  assert.equal(savedA.pendingRecovery, undefined);
+});
+
+test('checked logout detects a localStorage write failure instead of pretending the code was removed', () => {
+  const storage = memoryStorage();
+  rememberAccount({ id: 'a', name: 'A', secret: 'KEEP-ME' }, storage);
+  storage.failWrites();
+
+  const forgotten = forgetAccountChecked('a', storage);
+  assert.equal(forgotten.persisted, false);
+  assert.equal(currentAccount(storage).secret, 'KEEP-ME');
+});
+
+test('recovery prepare and confirm are separate same-origin requests', async () => {
   const replacement = 'replacement-code-for-test';
   const server = fakeServer({
-    '/api/auth/recovery/rotate': () => ({
+    '/api/auth/recovery/rotate/prepare': () => ({
       status: 200,
-      data: { ok: true, secret: replacement, revokedSessions: 3 }
+      data: { ok: true, secret: replacement, expiresAt: Date.now() + 60_000 }
     }),
-    '/api/auth/logout': () => ({ status: 200, data: { ok: true } })
+    '/api/auth/recovery/rotate/confirm': body => ({
+      status: 200,
+      data: { ok: true, confirmed: true, alreadyConfirmed: false, revokedSessions: 3, echoed: body.secret }
+    })
   });
 
-  const rotated = await rotateRecoveryCode({ fetchImpl: server.fetchImpl });
-  assert.equal(rotated.secret, replacement);
-  assert.equal(rotated.revokedSessions, 3);
-  assert.equal(await logoutAccount({ fetchImpl: server.fetchImpl }), true);
+  const prepared = await prepareRecoveryCode({ fetchImpl: server.fetchImpl });
+  assert.equal(prepared.secret, replacement);
+  const confirmed = await confirmRecoveryCode(prepared.secret, { fetchImpl: server.fetchImpl });
+  assert.equal(confirmed.ok, true);
+  assert.equal(confirmed.revokedSessions, 3);
   assert.deepEqual(
     server.calls.map(call => [call.path, call.body]),
     [
-      ['/api/auth/recovery/rotate', {}],
-      ['/api/auth/logout', {}]
+      ['/api/auth/recovery/rotate/prepare', {}],
+      ['/api/auth/recovery/rotate/confirm', { secret: replacement }]
     ]
   );
 });

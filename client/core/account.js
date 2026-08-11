@@ -42,14 +42,21 @@ function isUsable(account) {
   );
 }
 
-export function writeAccounts(state, storage) {
+function persistAccounts(state, storage) {
   const store = storageOf(storage);
-  if (!store) return state;
+  if (!store) return false;
   try {
     store.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
   } catch {
-    // Переполненное хранилище не должно ломать вход.
+    return false;
   }
+}
+
+export function writeAccounts(state, storage) {
+  // Старые call sites ожидают state даже при недоступном storage. Операции безопасности ниже
+  // используют отдельные checked helpers и никогда не считают молчаливый отказ успешной записью.
+  persistAccounts(state, storage);
   return state;
 }
 
@@ -96,11 +103,69 @@ export function switchAccount(id, storage) {
   return writeAccounts(state, storage);
 }
 
-export function forgetAccount(id, storage) {
+export function forgetAccountChecked(id, storage) {
   const state = readAccounts(storage);
   state.accounts = state.accounts.filter(a => a.id !== id);
   if (state.current === id) state.current = state.accounts[0]?.id || null;
-  return writeAccounts(state, storage);
+  const wrote = persistAccounts(state, storage);
+  const saved = readAccounts(storage);
+  return {
+    persisted: wrote && !saved.accounts.some(account => account.id === id),
+    state: saved
+  };
+}
+
+export function forgetAccount(id, storage) {
+  return forgetAccountChecked(id, storage).state;
+}
+
+export function stageRecoveryCode(accountId, secret, expiresAt, storage) {
+  const state = readAccounts(storage);
+  const account = state.accounts.find(item => item.id === accountId);
+  if (!account || typeof secret !== 'string' || !secret) {
+    return { persisted: false, state };
+  }
+  account.pendingRecovery = {
+    secret,
+    expiresAt: Number.isFinite(Number(expiresAt)) ? Number(expiresAt) : 0
+  };
+  const wrote = persistAccounts(state, storage);
+  const saved = readAccounts(storage);
+  const staged = saved.accounts.find(item => item.id === accountId)?.pendingRecovery;
+  return {
+    persisted: wrote && staged?.secret === secret,
+    state: saved
+  };
+}
+
+export function commitStagedRecoveryCode(accountId, storage) {
+  const state = readAccounts(storage);
+  const account = state.accounts.find(item => item.id === accountId);
+  const secret = account?.pendingRecovery?.secret;
+  if (!account || !secret) return { persisted: false, state, secret: null };
+  account.secret = secret;
+  delete account.pendingRecovery;
+  const wrote = persistAccounts(state, storage);
+  const saved = readAccounts(storage);
+  const stored = saved.accounts.find(item => item.id === accountId);
+  return {
+    persisted: wrote && stored?.secret === secret && !stored.pendingRecovery,
+    state: saved,
+    secret
+  };
+}
+
+export function discardStagedRecoveryCode(accountId, storage) {
+  const state = readAccounts(storage);
+  const account = state.accounts.find(item => item.id === accountId);
+  if (!account?.pendingRecovery) return { persisted: true, state };
+  delete account.pendingRecovery;
+  const wrote = persistAccounts(state, storage);
+  const saved = readAccounts(storage);
+  return {
+    persisted: wrote && !saved.accounts.find(item => item.id === accountId)?.pendingRecovery,
+    state: saved
+  };
 }
 
 async function post(path, body = {}, { fetchImpl = globalThis.fetch } = {}) {
@@ -196,9 +261,15 @@ export async function revokeOtherAccountSessions(options) {
   return ok ? data : null;
 }
 
-export async function rotateRecoveryCode(options) {
-  const { ok, data } = await post('/api/auth/recovery/rotate', {}, options);
+export async function prepareRecoveryCode(options) {
+  const { ok, data } = await post('/api/auth/recovery/rotate/prepare', {}, options);
   return ok && typeof data?.secret === 'string' ? data : null;
+}
+
+export async function confirmRecoveryCode(secret, options) {
+  const { ok, status, data } = await post('/api/auth/recovery/rotate/confirm', { secret }, options);
+  if (ok) return { ok: true, ...data };
+  return { ok: false, status, error: data?.error || 'confirm-failed' };
 }
 
 export async function renameAccount(name, options) {
@@ -251,7 +322,12 @@ export async function ensureAccount(options = {}) {
   const sessionMatchesSelection = session && !session.missing && (!stored || stored.id === session.id);
   if (sessionMatchesSelection) {
     const secret = stored?.id === session.id ? stored.secret : '';
-    const account = { ...session, ...(secret ? { secret } : {}) };
+    const pendingRecovery = stored?.id === session.id ? stored.pendingRecovery : null;
+    const account = {
+      ...session,
+      ...(secret ? { secret } : {}),
+      ...(pendingRecovery ? { pendingRecovery } : {})
+    };
     rememberAccount(account, storage);
     return {
       account,
@@ -261,11 +337,32 @@ export async function ensureAccount(options = {}) {
     };
   }
 
+  // Если confirm успел закоммититься, но его HTTP-ответ потерялся, active cookie мог исчезнуть
+  // позже. Тогда сначала пробуем staged code. Старый code не удаляется, пока сервер не подтвердит
+  // новый, поэтому при отказе staged code можно безопасно вернуться к прежнему.
+  if (stored?.pendingRecovery?.secret) {
+    const stagedSecret = stored.pendingRecovery.secret;
+    const entered = await quiet(() => loginAccount(stagedSecret, options));
+    if (entered && !entered.unknown) {
+      commitStagedRecoveryCode(stored.id, storage);
+      const account = { ...entered, secret: stagedSecret };
+      rememberAccount(account, storage);
+      return {
+        account,
+        records: entered.records,
+        progress: entered.progress,
+        online: true
+      };
+    }
+    if (!entered) return { account: stored, records: [], online: false };
+  }
+
   if (stored?.secret) {
     const entered = await quiet(() => loginAccount(stored.secret, options));
     if (entered?.unknown) {
       forgetAccount(stored.id, storage);
     } else if (entered) {
+      if (stored.pendingRecovery) discardStagedRecoveryCode(stored.id, storage);
       const account = { ...entered, secret: stored.secret };
       rememberAccount(account, storage);
       return {

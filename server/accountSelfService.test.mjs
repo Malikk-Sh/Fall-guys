@@ -7,7 +7,7 @@ const express = require('express');
 const { openDatabase } = require('./db');
 const { Accounts } = require('./accounts');
 const { AuthService, SESSION_COOKIE, hashToken, publicSessionId } = require('./auth');
-const { AccountSelfService } = require('./accountSelfService');
+const { AccountSelfService, RECOVERY_ROTATION_TTL_MS } = require('./accountSelfService');
 const { installAuthRoutes } = require('./authRoutes');
 
 function fresh() {
@@ -91,7 +91,7 @@ test('session self-service exposes opaque ids and can revoke only another sessio
   context.db.close();
 });
 
-test('rotating recovery code invalidates the old code and other persistent sessions atomically', () => {
+test('recovery rotation is staged, atomic on confirm and idempotent after a lost response', () => {
   const context = fresh();
   const account = context.accounts.create('Recovery');
   const oldSecret = account.secret;
@@ -100,22 +100,73 @@ test('rotating recovery code invalidates the old code and other persistent sessi
   const otherA = context.auth.createSession(account.id, now + 1);
   const otherB = context.auth.createSession(account.id, now + 2);
 
-  const rotated = context.selfService.rotateRecoveryCode({
+  const prepared = context.selfService.prepareRecoveryCode({ accountId: account.id, now: now + 20 });
+  assert.match(prepared.secret, /^WOBBLE-[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}$/);
+  assert.equal(
+    context.accounts.login(oldSecret).id,
+    account.id,
+    'prepare keeps the old recovery code active'
+  );
+  assert.equal(
+    context.auth.resolveSession(otherA.token).accountId,
+    account.id,
+    'prepare revokes no sessions'
+  );
+
+  const confirmed = context.selfService.confirmRecoveryCode({
     accountId: account.id,
     currentToken: current.token,
+    secret: prepared.secret,
     now: now + 100
   });
-  assert.match(rotated.secret, /^WOBBLE-[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}$/);
-  assert.equal(rotated.revokedSessions, 2);
+  assert.deepEqual(confirmed, {
+    ok: true,
+    confirmed: true,
+    alreadyConfirmed: false,
+    revokedSessions: 2
+  });
   assert.equal(context.accounts.login(oldSecret), null);
-  assert.equal(context.accounts.login(rotated.secret).id, account.id);
+  assert.equal(context.accounts.login(prepared.secret).id, account.id);
   assert.equal(context.auth.resolveSession(current.token).accountId, account.id);
   assert.equal(context.auth.resolveSession(otherA.token), null);
   assert.equal(context.auth.resolveSession(otherB.token), null);
+
+  assert.deepEqual(
+    context.selfService.confirmRecoveryCode({
+      accountId: account.id,
+      currentToken: current.token,
+      secret: prepared.secret,
+      now: now + 200
+    }),
+    { ok: true, confirmed: true, alreadyConfirmed: true, revokedSessions: 0 },
+    'retry after an ambiguous response is safe'
+  );
   context.db.close();
 });
 
-test('HTTP self-service requires the HttpOnly session and keeps the current browser signed in', async () => {
+test('expired prepared recovery code never invalidates the active code', () => {
+  const context = fresh();
+  const account = context.accounts.create('Expiry');
+  const oldSecret = account.secret;
+  const now = Date.now();
+  const current = context.auth.createSession(account.id, now);
+  const prepared = context.selfService.prepareRecoveryCode({ accountId: account.id, now });
+
+  assert.deepEqual(
+    context.selfService.confirmRecoveryCode({
+      accountId: account.id,
+      currentToken: current.token,
+      secret: prepared.secret,
+      now: now + RECOVERY_ROTATION_TTL_MS + 1
+    }),
+    { ok: false, reason: 'rotation-expired' }
+  );
+  assert.equal(context.accounts.login(oldSecret).id, account.id);
+  assert.equal(context.accounts.login(prepared.secret), null);
+  context.db.close();
+});
+
+test('HTTP staged recovery requires a session and keeps the old code until confirm', async () => {
   const context = fresh();
   const account = context.accounts.create('HTTP Self Service');
   const oldSecret = account.secret;
@@ -126,67 +177,47 @@ test('HTTP self-service requires the HttpOnly session and keeps the current brow
   const server = await listen(app);
 
   try {
-    const denied = await fetch(`${server.url}/api/auth/sessions`, {
+    const denied = await fetch(`${server.url}/api/auth/recovery/rotate/prepare`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}'
     });
     assert.equal(denied.status, 401);
 
-    const listed = await fetch(`${server.url}/api/auth/sessions`, {
+    const preparedResponse = await fetch(`${server.url}/api/auth/recovery/rotate/prepare`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: cookie(current.token) },
       body: '{}'
     });
-    assert.equal(listed.status, 200);
-    assert.match(listed.headers.get('cache-control') || '', /no-store/);
-    const sessions = (await listed.json()).sessions;
-    assert.equal(sessions.length, 2);
-    const currentSession = sessions.find(item => item.current);
-    const otherSession = sessions.find(item => !item.current);
+    assert.equal(preparedResponse.status, 200);
+    assert.match(preparedResponse.headers.get('cache-control') || '', /no-store/);
+    const prepared = await preparedResponse.json();
+    assert.equal(context.accounts.login(oldSecret).id, account.id);
+    assert.equal(context.auth.resolveSession(other.token).accountId, account.id);
 
-    const currentRevoke = await fetch(`${server.url}/api/auth/sessions/revoke`, {
+    const confirm = await fetch(`${server.url}/api/auth/recovery/rotate/confirm`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: cookie(current.token) },
-      body: JSON.stringify({ sessionId: currentSession.id })
+      body: JSON.stringify({ secret: prepared.secret })
     });
-    assert.equal(currentRevoke.status, 409);
-    assert.equal((await currentRevoke.json()).error, 'current-session');
-
-    const revoke = await fetch(`${server.url}/api/auth/sessions/revoke`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: cookie(current.token) },
-      body: JSON.stringify({ sessionId: otherSession.id })
-    });
-    assert.equal(revoke.status, 200);
-    assert.equal((await revoke.json()).removed, true);
-    assert.equal(context.auth.resolveSession(other.token), null);
-
-    const third = context.auth.createSession(account.id);
-    const rotate = await fetch(`${server.url}/api/auth/recovery/rotate`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: cookie(current.token) },
-      body: '{}'
-    });
-    assert.equal(rotate.status, 200);
-    assert.match(rotate.headers.get('cache-control') || '', /no-store/);
-    const rotated = await rotate.json();
-    assert.equal(rotated.revokedSessions, 1);
+    assert.equal(confirm.status, 200);
+    assert.match(confirm.headers.get('cache-control') || '', /no-store/);
+    const confirmed = await confirm.json();
+    assert.equal(confirmed.confirmed, true);
+    assert.equal(confirmed.alreadyConfirmed, false);
+    assert.equal(confirmed.revokedSessions, 1);
     assert.equal(context.accounts.login(oldSecret), null);
-    assert.equal(context.accounts.login(rotated.secret).id, account.id);
-    assert.equal(context.auth.resolveSession(third.token), null);
+    assert.equal(context.accounts.login(prepared.secret).id, account.id);
+    assert.equal(context.auth.resolveSession(other.token), null);
     assert.equal(context.auth.resolveSession(current.token).accountId, account.id);
 
-    const after = await fetch(`${server.url}/api/auth/sessions`, {
+    const retry = await fetch(`${server.url}/api/auth/recovery/rotate/confirm`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: cookie(current.token) },
-      body: '{}'
+      body: JSON.stringify({ secret: prepared.secret })
     });
-    const afterSessions = (await after.json()).sessions;
-    assert.deepEqual(
-      afterSessions.map(item => item.current),
-      [true]
-    );
+    assert.equal(retry.status, 200);
+    assert.equal((await retry.json()).alreadyConfirmed, true);
   } finally {
     await server.close();
     context.db.close();

@@ -117,16 +117,29 @@ function installAuthRoutes({
     return res.json({ ok: true, revoked });
   });
 
-  app.post('/api/auth/recovery/rotate', json, (req, res) => {
+  app.post('/api/auth/recovery/rotate/prepare', json, (req, res) => {
     const session = requireSession(req, res);
     if (!session) return undefined;
-    const rotated = selfService.rotateRecoveryCode({
-      accountId: session.accountId,
-      currentToken: tokenFrom(req)
-    });
-    if (!rotated) return res.status(404).json({ ok: false, error: 'unknown-account' });
+    const prepared = selfService.prepareRecoveryCode({ accountId: session.accountId });
+    if (!prepared) return res.status(404).json({ ok: false, error: 'unknown-account' });
     res.setHeader('Cache-Control', 'no-store');
-    return res.json({ ok: true, ...rotated });
+    return res.json({ ok: true, ...prepared });
+  });
+
+  app.post('/api/auth/recovery/rotate/confirm', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    const result = selfService.confirmRecoveryCode({
+      accountId: session.accountId,
+      currentToken: tokenFrom(req),
+      secret: req.body?.secret
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    if (!result.ok) {
+      const status = result.reason === 'unknown-account' ? 404 : result.reason === 'invalid-code' ? 400 : 409;
+      return res.status(status).json({ ok: false, error: result.reason });
+    }
+    return res.json({ ok: true, ...result });
   });
 
   app.post('/api/auth/recovery', json, (req, res) => {

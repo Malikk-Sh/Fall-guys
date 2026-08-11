@@ -10,7 +10,7 @@ import {
   authConfig,
   createAccount,
   equipAccountCosmetic,
-  forgetAccount,
+  forgetAccountChecked,
   listAccountSessions,
   loginAccount,
   loginGoogle,
@@ -21,7 +21,11 @@ import {
   restoreAvoidedPlayer,
   revokeAccountSession,
   revokeOtherAccountSessions,
-  rotateRecoveryCode,
+  prepareRecoveryCode,
+  confirmRecoveryCode,
+  stageRecoveryCode,
+  commitStagedRecoveryCode,
+  discardStagedRecoveryCode,
   sessionAccount,
   switchAccount,
   submitRecord
@@ -92,7 +96,7 @@ export class AccountFlow {
         this.security.rotate.dataset.confirm = '1';
         this.security.rotate.textContent = 'ПОДТВЕРДИТЬ СМЕНУ КОДА';
         this.game.ui.accountStatus(
-          'Старый код сразу перестанет работать, а остальные постоянные сеансы будут завершены.'
+          'Новый код сначала будет сохранён на этом устройстве; после подтверждения старый перестанет работать, а остальные сеансы будут завершены.'
         );
         return;
       }
@@ -249,30 +253,120 @@ export class AccountFlow {
     }
   }
 
+  showRecoveryCode(secret) {
+    const code = document.querySelector('#accountCode');
+    const value = document.querySelector('#accountCodeValue');
+    code?.classList.remove('hidden');
+    if (value) value.textContent = secret;
+  }
+
+  async resumePendingRecovery() {
+    const stored = accountForRecords();
+    const pending = stored?.pendingRecovery;
+    if (!this.online || !stored?.id || !pending?.secret) return null;
+    const accountId = stored.id;
+    try {
+      const result = await confirmRecoveryCode(pending.secret);
+      if (result?.ok) {
+        const committed = commitStagedRecoveryCode(accountId);
+        if (this.game.ui.account?.id === accountId) {
+          const next = { ...this.game.ui.account, secret: pending.secret };
+          delete next.pendingRecovery;
+          this.game.ui.setAccount(next, { online: true });
+          this.game.ui.setAccountList(listAccounts());
+          this.showRecoveryCode(pending.secret);
+          this.game.ui.accountStatus(
+            committed.persisted
+              ? 'Смена кода восстановления завершена после повторного подключения.'
+              : 'Новый код уже активен на сервере, но браузер не смог обновить локальную запись. Сохраните показанный код вручную.'
+          );
+          await this.refreshSessions();
+        }
+        return result;
+      }
+
+      if (['rotation-expired', 'rotation-mismatch', 'rotation-not-prepared'].includes(result?.error)) {
+        discardStagedRecoveryCode(accountId);
+        if (this.game.ui.account?.id === accountId) {
+          this.game.ui.accountStatus('Незавершённая смена кода отменена; прежний код остался действующим.');
+        }
+      }
+      return null;
+    } catch {
+      if (this.game.ui.account?.id === accountId) {
+        this.game.ui.accountStatus(
+          'Смена кода ожидает подтверждения сервера. Старый и подготовленный новый код сохранены на устройстве; повторим автоматически.'
+        );
+      }
+      return null;
+    }
+  }
+
   async rotateRecovery() {
-    if (!this.online || !this.game.ui.account) return null;
+    const initiatingAccount = this.game.ui.account;
+    if (!this.online || !initiatingAccount?.id) return null;
+    const accountId = initiatingAccount.id;
+    const revision = this.profileRevision;
     this.security.rotate.disabled = true;
     try {
-      const result = await rotateRecoveryCode();
-      if (!result?.secret) return this.game.ui.accountStatus('Не удалось заменить код восстановления.');
-      const next = { ...this.game.ui.account, secret: result.secret };
-      rememberAccount(next);
-      this.game.ui.setAccount(next, { online: true });
-      this.game.ui.setAccountList(listAccounts());
-      const code = document.querySelector('#accountCode');
-      const value = document.querySelector('#accountCodeValue');
-      code?.classList.remove('hidden');
-      if (value) value.textContent = result.secret;
-      this.resetSecurityConfirmations();
-      this.game.ui.accountStatus(
-        `Новый код готов. Старый больше не работает. Завершено других сеансов: ${Number(
-          result.revokedSessions || 0
-        )}.`
-      );
-      await this.refreshSessions();
+      const prepared = await prepareRecoveryCode();
+      if (!prepared?.secret)
+        return this.game.ui.accountStatus('Не удалось подготовить новый код восстановления.');
+
+      // Prepare ничего не инвалидирует. Если игрок успел переключиться, просто оставляем server-side
+      // pending hash истечь: секрет другого аккаунта никогда не попадёт в текущую запись.
+      if (revision !== this.profileRevision || this.game.ui.account?.id !== accountId) return null;
+
+      const staged = stageRecoveryCode(accountId, prepared.secret, prepared.expiresAt);
+      if (!staged.persisted) {
+        this.game.ui.accountStatus(
+          'Браузер не смог безопасно сохранить новый код. Смена отменена, прежний код продолжает работать.'
+        );
+        return null;
+      }
+
+      let result;
+      try {
+        result = await confirmRecoveryCode(prepared.secret);
+      } catch {
+        this.resetSecurityConfirmations();
+        this.game.ui.accountStatus(
+          'Ответ подтверждения потерян. Старый и подготовленный новый код сохранены; Wobble повторит подтверждение при следующем подключении.'
+        );
+        return { pending: true };
+      }
+
+      if (!result?.ok) {
+        if (['rotation-expired', 'rotation-mismatch', 'rotation-not-prepared'].includes(result?.error)) {
+          discardStagedRecoveryCode(accountId);
+        }
+        this.game.ui.accountStatus('Смена кода не подтверждена; прежний код остался действующим.');
+        return null;
+      }
+
+      const committed = commitStagedRecoveryCode(accountId);
+      const stillCurrent = revision === this.profileRevision && this.game.ui.account?.id === accountId;
+      if (stillCurrent) {
+        const next = { ...this.game.ui.account, secret: prepared.secret };
+        delete next.pendingRecovery;
+        this.game.ui.setAccount(next, { online: true });
+        this.game.ui.setAccountList(listAccounts());
+        this.showRecoveryCode(prepared.secret);
+        this.resetSecurityConfirmations();
+        this.game.ui.accountStatus(
+          committed.persisted
+            ? `Новый код готов. Старый больше не работает. Завершено других сеансов: ${Number(
+                result.revokedSessions || 0
+              )}.`
+            : 'Новый код уже активен, но браузер не смог обновить локальную запись. Сохраните показанный код вручную.'
+        );
+        await this.refreshSessions();
+      }
       return result;
     } catch {
-      this.game.ui.accountStatus('Не удалось заменить код восстановления.');
+      if (this.game.ui.account?.id === accountId) {
+        this.game.ui.accountStatus('Не удалось заменить код восстановления.');
+      }
       return null;
     } finally {
       if (this.security?.rotate?.isConnected) this.security.rotate.disabled = false;
@@ -286,8 +380,17 @@ export class AccountFlow {
     try {
       const loggedOut = await logoutAccount();
       if (!loggedOut) return this.game.ui.accountStatus('Не удалось завершить текущий сеанс.');
-      forgetAccount(account.id);
+      const forgotten = forgetAccountChecked(account.id);
       this.networkTicket = null;
+      if (!forgotten.persisted) {
+        this.records = new Map();
+        this.apply(null, { online: false, records: [], progress: null });
+        this.game.ui.setAccountList([]);
+        this.game.ui.accountStatus(
+          'Сеанс на сервере завершён, но браузер не смог удалить сохранённый recovery code. Не перезагружайте страницу: очистите данные сайта вручную перед уходом.'
+        );
+        return false;
+      }
       const remaining = listAccounts();
       if (remaining.length) {
         await this.signIn();
@@ -348,7 +451,10 @@ export class AccountFlow {
     this.game.ui.setAvoidedPlayers(null);
     this.game.ui.setAccountList(listAccounts());
     this.updateSelfService(account, this.online);
-    if (this.online) this.refreshSessions();
+    if (this.online) {
+      this.refreshSessions();
+      if (account?.pendingRecovery?.secret) this.resumePendingRecovery();
+    }
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }

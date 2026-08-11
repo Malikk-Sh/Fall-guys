@@ -104,15 +104,33 @@ class SocialSafety {
       };
     }
 
-    this.statements.upsertReport.run(
-      reporter,
-      target,
-      normalizedReason,
-      at,
-      at,
-      targetAccount.display_name || 'Wobbler',
-      latest.last_chapter_id || null
-    );
+    const nameSnapshot = targetAccount.display_name || 'Wobbler';
+    const chapterSnapshot = latest.last_chapter_id || null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.upsertReport.run(
+        reporter,
+        target,
+        normalizedReason,
+        at,
+        at,
+        nameSnapshot,
+        chapterSnapshot
+      );
+      this.statements.insertEvidence.run(
+        reporter,
+        target,
+        normalizedReason,
+        at,
+        nameSnapshot,
+        chapterSnapshot
+      );
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
     const saved = this.statements.report.get(reporter, target, normalizedReason);
     return {
       ok: true,
@@ -200,9 +218,20 @@ function prepare(db) {
       VALUES (?, ?, ?, 1, ?, ?, ?, ?)
       ON CONFLICT (reporter_account_id, target_account_id, reason) DO UPDATE SET
         report_count = report_count + 1,
-        last_reported_at = excluded.last_reported_at,
-        target_name_snapshot = excluded.target_name_snapshot,
-        chapter_id_snapshot = excluded.chapter_id_snapshot
+        last_reported_at = excluded.last_reported_at
+    `),
+    insertEvidence: db.prepare(`
+      INSERT INTO social_report_evidence
+        (
+          reporter_account_id,
+          target_account_id,
+          reason,
+          reported_at,
+          occurrences,
+          target_name_snapshot,
+          chapter_id_snapshot
+        )
+      VALUES (?, ?, ?, ?, 1, ?, ?)
     `)
   };
 }

@@ -1,6 +1,7 @@
 'use strict';
 
 const { AdminAnalytics } = require('./adminAnalytics');
+const { AdminPlayerSupport } = require('./adminPlayerSupport');
 const { ModerationQueue } = require('./moderation');
 
 const ADMIN_MODERATOR_PREFIX = 'admin:';
@@ -20,6 +21,7 @@ class AdminControlService {
     this.gameplay = gameplay;
     this.adminAuth = adminAuth;
     this.analyticsReport = new AdminAnalytics({ db, gameplay });
+    this.playerSupport = new AdminPlayerSupport({ db });
     this.moderation = new ModerationQueue({ db });
     this.statements = prepare(db);
   }
@@ -48,6 +50,44 @@ class AdminControlService {
 
   analytics({ days = 7, limit = 300, mode = 'all', course = 'all', device = 'all' } = {}) {
     return this.analyticsReport.report({ days, limit, mode, course, device });
+  }
+
+  playerSearch(query, { limit = 20, now = Date.now() } = {}) {
+    return this.playerSupport.search(query, { limit, now });
+  }
+
+  playerDetail(accountId, { actor, now = Date.now() } = {}) {
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    const profile = this.playerSupport.get(accountId, { now });
+    if (!profile) return { ok: false, reason: 'unknown-account' };
+    const moderation = this.moderation.get(profile.account.id);
+    const result = {
+      ok: true,
+      player: {
+        ...profile,
+        moderation: moderation
+          ? {
+              status: moderation.status,
+              storedStatus: moderation.storedStatus,
+              uniqueReporters: moderation.uniqueReporters,
+              totalReports: moderation.totalReports,
+              reasons: moderation.reasons,
+              lastReportedAt: moderation.lastReportedAt,
+              reviewedThrough: moderation.reviewedThrough
+            }
+          : null
+      }
+    };
+    // Viewing account-level support data is more sensitive than aggregate analytics. Keep an audit
+    // record of the exact player whose card was opened, but never duplicate the card contents.
+    this.adminAuth.audit({
+      actor,
+      action: 'player.support.view',
+      targetType: 'player-account',
+      targetId: profile.account.id,
+      now
+    });
+    return result;
   }
 
   moderationQueue({ status = 'open', limit = 50 } = {}) {

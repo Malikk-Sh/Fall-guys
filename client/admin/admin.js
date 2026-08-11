@@ -94,8 +94,41 @@ function closeModerationCase() {
   if (dialog.open) dialog.close();
 }
 
+function clearPlayerSupportView() {
+  state.playerDetailRevision += 1;
+  state.playerSearchQuery = '';
+  const detail = $('#player-detail');
+  if (detail) detail.hidden = true;
+  const query = $('#player-search-query');
+  if (query) query.value = '';
+  const meta = $('#player-search-meta');
+  if (meta) meta.textContent = '';
+  const results = $('#player-results-body');
+  if (results) results.replaceChildren();
+  for (const selector of [
+    '#player-summary-cards',
+    '#player-account-details',
+    '#player-progress-details',
+    '#player-social-details',
+    '#player-loadout-details',
+    '#player-chapters',
+    '#player-achievements',
+    '#player-records',
+    '#player-inventory',
+    '#player-partners'
+  ]) {
+    const node = $(selector);
+    if (node) node.replaceChildren();
+  }
+  const name = $('#player-detail-name');
+  if (name) name.textContent = 'Игрок';
+  const id = $('#player-detail-id');
+  if (id) id.textContent = '';
+}
+
 function showLogin(message = '') {
   closeModerationCase();
+  clearPlayerSupportView();
   state.csrf = '';
   state.admin = null;
   state.capabilities = new Set();

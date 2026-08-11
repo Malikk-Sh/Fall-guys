@@ -205,12 +205,12 @@ session tokens или другие credentials.
 Раздел **Игроки** доступен `owner` и `operator`. Он предназначен для обычных вопросов поддержки:
 «почему не виден прогресс», «есть ли активный вход», «какая глава пройдена», «получена ли награда».
 
-Поиск принимает минимум два символа имени или часть account ID. Открытие полной карточки записывает
+Поиск принимает минимум два символа: начало слова в имени или начало/полный account ID. Имя ищется через отдельный FTS5 `unicode61` индекс, поэтому русский и латинский регистр не влияет на результат и поиск не сканирует всю таблицу аккаунтов. Открытие полной карточки записывает
 `player.support.view` в admin audit с ID просмотренного аккаунта.
 
 Карточка показывает имя и ID, даты активности, безопасный summary сессий, названия identity providers,
-факт незавершённой recovery rotation, co-op прогресс, achievements, records, loadout, cosmetics,
-последние награды, недавних напарников, собственные avoid-решения игрока и агрегат жалоб.
+факт ещё действующей незавершённой recovery rotation (15-минутный TTL), co-op прогресс, achievements, records, loadout, cosmetics,
+последние награды, недавних напарников, собственные avoid-решения игрока и агрегат жалоб. Последняя активность берётся из свежей игровой session activity с `accounts.last_seen_at` только как fallback.
 
 Control Plane намеренно не возвращает `accounts.secret_hash`, `pending_secret_hash`,
 `account_sessions.token_hash`, `account_identities.provider_subject`, `reward_grants.idempotency_key`

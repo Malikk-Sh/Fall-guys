@@ -5,11 +5,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
-const {
-  AdminPlayerSupport,
-  normalizeSearchQuery,
-  ftsPrefixQuery
-} = require('./adminPlayerSupport');
+const { AdminPlayerSupport, normalizeSearchQuery, ftsPrefixQuery } = require('./adminPlayerSupport');
 
 function seed() {
   const db = openDatabase(':memory:');
@@ -154,13 +150,19 @@ test('player support search is Unicode case-insensitive, bounded and updated by 
   const { db, now, support } = seed();
   const lowerCase = support.search('иван', { now });
   assert.equal(lowerCase.ok, true);
-  assert.deepEqual(lowerCase.results.map(item => item.id), ['player-main']);
+  assert.deepEqual(
+    lowerCase.results.map(item => item.id),
+    ['player-main']
+  );
   assert.equal(lowerCase.results[0].activeSessions, 1);
   assert.equal(lowerCase.results[0].lastSeenAt, 48_000);
   assert.equal(lowerCase.results[0].hasExternalLogin, true);
 
   db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run('Пётр Игрок', 'player-main');
-  assert.deepEqual(support.search('пёт', { now }).results.map(item => item.id), ['player-main']);
+  assert.deepEqual(
+    support.search('пёт', { now }).results.map(item => item.id),
+    ['player-main']
+  );
   assert.deepEqual(support.search('иван', { now }).results, []);
 
   assert.equal(support.search('x').reason, 'invalid-query');

@@ -71,7 +71,16 @@ Gameplay metrics хранятся 90 дней.
 
 ## 4. Read-only SQL
 
-Для production-аналитики используйте:
+Приложение использует встроенный `node:sqlite`, поэтому Wobble installer не обязан устанавливать
+отдельный shell-клиент `sqlite3`. Если вы хотите выполнять SQL-рецепты из этого раздела прямо на
+Ubuntu/Debian VPS, один раз установите CLI:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y sqlite3
+```
+
+После этого открывайте production DB только read-only:
 
 ```bash
 sqlite3 -readonly /var/lib/wobble/leaderboard.db
@@ -79,9 +88,13 @@ sqlite3 -readonly /var/lib/wobble/leaderboard.db
 
 ### События за 7 дней
 
+`detail` включён в группировку намеренно: иначе `finish_time` смешал бы `verified` и `unverified`
+результаты в одно вводящее в заблуждение среднее.
+
 ```sql
 SELECT
   metric,
+  detail,
   SUM(samples) AS samples,
   CASE
     WHEN SUM(total) <> 0
@@ -90,7 +103,7 @@ SELECT
   END AS average
 FROM gameplay_metrics
 WHERE day >= date('now', '-6 day')
-GROUP BY metric
+GROUP BY metric, detail
 ORDER BY samples DESC;
 ```
 
@@ -207,17 +220,20 @@ ORDER BY day DESC
 LIMIT 30;
 ```
 
-Приблизительно active accounts за 24 часа:
+Приблизительно active authenticated accounts за 24 часа лучше считать по активности persistent
+sessions: обычный возврат через HttpOnly cookie обновляет `account_sessions.last_seen_at`, а не
+`accounts.last_seen_at`.
 
 ```sql
-SELECT COUNT(*) AS active_accounts_24h
-FROM accounts
+SELECT COUNT(DISTINCT account_id) AS active_accounts_24h
+FROM account_sessions
 WHERE last_seen_at >=
-  (CAST(strftime('%s', 'now') AS INTEGER) - 86400) * 1000;
+    (CAST(strftime('%s', 'now') AS INTEGER) - 86400) * 1000
+  AND expires_at > CAST(strftime('%s', 'now') AS INTEGER) * 1000;
 ```
 
-`last_seen_at` не является полноценным event analytics session marker, поэтому не называйте этот
-запрос строгим DAU без дополнительной продуктовой спецификации.
+Это operational approximation активности аутентифицированных аккаунтов, а не полноценный event
+analytics DAU: таблица sessions описывает auth activity, а не каждое gameplay event.
 
 ## 6. Что текущая analytics schema не умеет
 

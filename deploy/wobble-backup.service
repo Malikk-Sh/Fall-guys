@@ -11,6 +11,7 @@ WorkingDirectory=/opt/wobble
 StateDirectory=wobble
 EnvironmentFile=/etc/wobble.env
 ExecStart=/bin/bash /opt/wobble/deploy/backup.sh
+TimeoutStartSec=120
 UMask=0077
 Nice=10
 IOSchedulingClass=best-effort

@@ -276,9 +276,19 @@ cp "$APP_DIR/deploy/wobble-backup.service" /etc/systemd/system/wobble-backup.ser
 cp "$APP_DIR/deploy/wobble-backup.timer" /etc/systemd/system/wobble-backup.timer
 cp "$APP_DIR/deploy/wobble-backup-watch.service" /etc/systemd/system/wobble-backup-watch.service
 cp "$APP_DIR/deploy/wobble-backup-watch.timer" /etc/systemd/system/wobble-backup-watch.timer
+cp "$APP_DIR/deploy/wobble-backup-verify.service" /etc/systemd/system/wobble-backup-verify.service
+cp "$APP_DIR/deploy/wobble-smoke.service" /etc/systemd/system/wobble-smoke.service
+cp "$APP_DIR/deploy/wobble-ops.service" /etc/systemd/system/wobble-ops.service
+cp "$APP_DIR/deploy/wobble-ops.socket" /etc/systemd/system/wobble-ops.socket
+# Важно: privileged helper не запускается из /opt/wobble, которым владеет service-user.
+# Иначе компрометация игрового процесса позволила бы заменить root-код перед запуском helper.
+install -d -m 0755 -o root -g root /usr/local/lib/wobble-ops
+install -m 0755 -o root -g root "$APP_DIR/deploy/wobble-ops-helper.mjs" /usr/local/lib/wobble-ops/helper.mjs
 systemctl daemon-reload
+systemctl stop wobble-ops.service >/dev/null 2>&1 || true
 systemctl enable wobble >/dev/null
-systemctl enable wobble-backup.timer wobble-backup-watch.timer >/dev/null
+systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket >/dev/null
+systemctl restart wobble-ops.socket
 
 say "Преддеплойная резервная копия"
 database_file="$(

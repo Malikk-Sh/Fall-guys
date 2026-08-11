@@ -8,7 +8,8 @@ const require = createRequire(import.meta.url);
 const { verifyBackup } = require('./backup');
 
 function resolveTrackedFile(root, storedFile) {
-  if (!root || typeof storedFile !== 'string' || !storedFile.trim() || path.isAbsolute(storedFile)) return null;
+  if (!root || typeof storedFile !== 'string' || !storedFile.trim() || path.isAbsolute(storedFile))
+    return null;
   const base = path.resolve(root);
   const target = path.resolve(base, storedFile);
   if (target === base || !target.startsWith(`${base}${path.sep}`)) return null;

@@ -35,9 +35,9 @@ const OPERATION_DEFINITIONS = Object.freeze({
   'wobble.restart': Object.freeze({
     id: 'wobble.restart',
     title: 'Перезапустить сервер игры',
-    description:
-      'Перезапускает только процесс Wobble. Nginx, shared 443 и VPN/Xray эта операция не трогает.',
-    impact: 'Все игроки на несколько секунд потеряют соединение с игрой. Используйте только при необходимости.',
+    description: 'Перезапускает только процесс Wobble. Nginx, shared 443 и VPN/Xray эта операция не трогает.',
+    impact:
+      'Все игроки на несколько секунд потеряют соединение с игрой. Используйте только при необходимости.',
     tone: 'danger'
   })
 });
@@ -52,7 +52,10 @@ function validOperation(value) {
 }
 
 class AdminOperationsClient {
-  constructor({ socketPath = process.env.ADMIN_OPS_SOCKET || DEFAULT_SOCKET_PATH, timeoutMs = 135_000 } = {}) {
+  constructor({
+    socketPath = process.env.ADMIN_OPS_SOCKET || DEFAULT_SOCKET_PATH,
+    timeoutMs = 135_000
+  } = {}) {
     this.socketPath = socketPath;
     this.timeoutMs = timeoutMs;
   }
@@ -122,7 +125,10 @@ class AdminOperationsClient {
       socket.once('error', error => {
         finish({
           ok: false,
-          reason: error?.code === 'ENOENT' || error?.code === 'ECONNREFUSED' ? 'helper-unavailable' : 'helper-error',
+          reason:
+            error?.code === 'ENOENT' || error?.code === 'ECONNREFUSED'
+              ? 'helper-unavailable'
+              : 'helper-error',
           requestId,
           operation: action
         });

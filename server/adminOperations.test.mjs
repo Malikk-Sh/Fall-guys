@@ -51,7 +51,9 @@ function post(base, route, loginState, body) {
 test('web client and root helper share the same closed operation allowlist', () => {
   assert.deepEqual(Object.keys(ACTIONS).sort(), Object.keys(OPERATION_DEFINITIONS).sort());
   assert.deepEqual(
-    publicOperations().map(item => item.id).sort(),
+    publicOperations()
+      .map(item => item.id)
+      .sort(),
     Object.keys(ACTIONS).sort()
   );
   assert.equal(validOperation('backup.create'), 'backup.create');
@@ -138,8 +140,12 @@ test('only owner can execute operations and every accepted request is audited', 
   assert.deepEqual(calls, ['backup.create']);
 
   const audit = adminAuth.recentAudit(20);
-  assert.ok(audit.some(event => event.action === 'ops.operation.requested' && event.targetId === 'backup.create'));
-  assert.ok(audit.some(event => event.action === 'ops.operation.completed' && event.targetId === 'backup.create'));
+  assert.ok(
+    audit.some(event => event.action === 'ops.operation.requested' && event.targetId === 'backup.create')
+  );
+  assert.ok(
+    audit.some(event => event.action === 'ops.operation.completed' && event.targetId === 'backup.create')
+  );
 
   const operator = await login(base, adminAuth, 'operator');
   const forbidden = await post(base, '/api/admin/operations/run', operator, {

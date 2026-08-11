@@ -11,7 +11,10 @@ const state = {
   playerSearchQuery: '',
   moderationCase: null,
   moderationConfirmation: null,
-  moderationLoadRevision: 0
+  moderationLoadRevision: 0,
+  operations: null,
+  operationConfirmation: null,
+  operationConfirmationTimer: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -53,7 +56,11 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'admin.user.disable': 'Администратор отключён',
   'admin.user.enable': 'Администратор включён',
   'moderation.case.transition': 'Изменён статус жалобы',
-  'player.support.view': 'Открыта карточка игрока'
+  'player.support.view': 'Открыта карточка игрока',
+  'ops.operation.requested': 'Запрошена системная операция',
+  'ops.operation.completed': 'Системная операция завершена',
+  'ops.operation.accepted': 'Принят запрос на перезапуск Wobble',
+  'ops.operation.failed': 'Системная операция завершилась ошибкой'
 });
 
 function setStatus(text, tone = '') {
@@ -133,6 +140,8 @@ function showLogin(message = '') {
   state.admin = null;
   state.capabilities = new Set();
   state.analytics = null;
+  state.operations = null;
+  clearOperationConfirmation();
   $('#app-view').hidden = true;
   $('#identity').hidden = true;
   $('#login-view').hidden = false;
@@ -162,6 +171,7 @@ function switchPanel(name) {
   if (name !== 'moderation') closeModerationCase();
   if (name !== 'analytics') state.analyticsLoadRevision += 1;
   if (name !== 'players') state.playerDetailRevision += 1;
+  if (name !== 'operations') clearOperationConfirmation();
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
   for (const item of $$('#tabs [data-panel]')) item.classList.toggle('active', item.dataset.panel === name);
@@ -993,6 +1003,128 @@ async function submitModerationTransition(event) {
   }
 }
 
+function clearOperationConfirmation() {
+  state.operationConfirmation = null;
+  if (state.operationConfirmationTimer) clearTimeout(state.operationConfirmationTimer);
+  state.operationConfirmationTimer = null;
+}
+
+function operationErrorLabel(reason) {
+  const labels = {
+    'operations-unavailable': 'Безопасный helper пока не установлен или недоступен.',
+    'helper-unavailable': 'Безопасный helper сейчас недоступен.',
+    'helper-timeout': 'Операция выполнялась слишком долго и панель перестала её ждать.',
+    'helper-error': 'Не удалось связаться с безопасным helper.',
+    'operation-busy': 'Сейчас уже выполняется другая системная операция. Подождите немного.',
+    'operation-timeout': 'Системная операция превысила допустимое время.',
+    'operation-failed': 'Системная проверка завершилась ошибкой.',
+    'restart-cooldown': 'Wobble недавно уже перезапускался. Подождите перед повтором.'
+  };
+  return labels[reason] || reason || 'Неизвестная ошибка';
+}
+
+function renderOperations(payload) {
+  state.operations = payload;
+  const status = $('#operations-status');
+  status.replaceChildren(
+    statCard(
+      'Безопасные операции',
+      payload.available ? 'ДОСТУПНЫ' : 'НЕДОСТУПНЫ',
+      payload.available
+        ? 'root-helper подключён через закрытый Unix socket и принимает только список действий ниже'
+        : 'после обновления VPS установщик должен включить wobble-ops.socket',
+      payload.available ? 'good' : 'bad'
+    )
+  );
+
+  const root = $('#operations-list');
+  root.replaceChildren();
+  for (const operation of payload.operations || []) {
+    const card = document.createElement('article');
+    card.className = 'card';
+    appendText(
+      card,
+      'p',
+      operation.tone === 'danger' ? 'ТРЕБУЕТ ОСТОРОЖНОСТИ' : 'БЕЗОПАСНАЯ ОПЕРАЦИЯ',
+      'eyebrow'
+    );
+    appendText(card, 'h2', operation.title);
+    appendText(card, 'p', operation.description, 'section-help');
+    const impact = document.createElement('div');
+    impact.className = 'explain-box';
+    appendText(impact, 'strong', 'Что произойдёт');
+    appendText(impact, 'span', operation.impact);
+    card.append(impact);
+
+    const confirming =
+      state.operationConfirmation?.operation === operation.id &&
+      state.operationConfirmation.expiresAt > Date.now();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.operation = operation.id;
+    button.className = operation.tone === 'danger' ? 'primary confirm' : 'primary';
+    button.disabled = !payload.available;
+    button.textContent = confirming ? 'Подтвердить действие' : operation.title;
+    card.append(button);
+    if (confirming) {
+      appendText(
+        card,
+        'p',
+        'Первое нажатие ничего не выполнило. Проверьте описание выше и нажмите ещё раз в течение 10 секунд.',
+        'muted warn'
+      );
+    }
+    root.append(card);
+  }
+}
+
+async function loadOperations() {
+  const payload = await api('/api/admin/operations/status', {});
+  renderOperations(payload);
+}
+
+async function runOperation(operation) {
+  const spec = state.operations?.operations?.find(item => item.id === operation);
+  if (!spec || !state.operations?.available) return;
+  const now = Date.now();
+  if (
+    !state.operationConfirmation ||
+    state.operationConfirmation.operation !== operation ||
+    state.operationConfirmation.expiresAt <= now
+  ) {
+    clearOperationConfirmation();
+    state.operationConfirmation = { operation, expiresAt: now + 10_000 };
+    state.operationConfirmationTimer = setTimeout(() => {
+      clearOperationConfirmation();
+      if (state.currentPanel === 'operations' && state.operations) renderOperations(state.operations);
+    }, 10_100);
+    renderOperations(state.operations);
+    setStatus(`Проверьте описание «${spec.title}» и нажмите ещё раз для подтверждения.`, 'warn');
+    return;
+  }
+
+  clearOperationConfirmation();
+  for (const button of $$('#operations-list button[data-operation]')) button.disabled = true;
+  setStatus(`Выполняю: ${spec.title}…`);
+  try {
+    const result = await api('/api/admin/operations/run', {
+      operation,
+      confirmation: operation
+    });
+    if (operation === 'wobble.restart' && result.accepted) {
+      setStatus('Перезапуск Wobble принят. Страница обновится после запуска сервера…', 'warn');
+      setTimeout(() => window.location.reload(), 4500);
+      return;
+    }
+    await loadOperations();
+    setStatus(`${spec.title}: готово.`, 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    if (state.operations) renderOperations(state.operations);
+    setStatus(`${spec.title}: ${operationErrorLabel(error.payload?.error || error.message)}`, 'bad');
+  }
+}
+
 function auditActionLabel(action) {
   return AUDIT_ACTION_LABELS[action] || action;
 }
@@ -1026,6 +1158,7 @@ async function refreshCurrent() {
     analytics: loadAnalytics,
     players: loadPlayers,
     moderation: loadModeration,
+    operations: loadOperations,
     audit: loadAudit
   };
   const loader = loaders[state.currentPanel];
@@ -1068,6 +1201,10 @@ $('#logout').addEventListener('click', async () => {
 });
 
 $('#refresh').addEventListener('click', refreshCurrent);
+$('#operations-list').addEventListener('click', event => {
+  const button = event.target.closest('button[data-operation]');
+  if (button) runOperation(button.dataset.operation);
+});
 $('#analytics-days').addEventListener('change', () => {
   $('#analytics-mode').value = 'all';
   $('#analytics-course').value = 'all';

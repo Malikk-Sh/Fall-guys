@@ -2,16 +2,22 @@
 
 const { ModerationQueue } = require('./moderation');
 
+const ADMIN_MODERATOR_PREFIX = 'admin:';
+
 class AdminControlService {
-  constructor({ db, health, gameplay } = {}) {
+  constructor({ db, health, gameplay, adminAuth } = {}) {
     if (!db) throw new Error('AdminControlService requires an open database');
     if (typeof health !== 'function') throw new Error('AdminControlService requires health()');
     if (!gameplay || typeof gameplay.summary !== 'function') {
       throw new Error('AdminControlService requires GameplayMetrics');
     }
+    if (!adminAuth || typeof adminAuth.audit !== 'function') {
+      throw new Error('AdminControlService requires AdminAuthService');
+    }
     this.db = db;
     this.health = health;
     this.gameplay = gameplay;
+    this.adminAuth = adminAuth;
     this.moderation = new ModerationQueue({ db });
     this.statements = prepare(db);
   }
@@ -45,6 +51,56 @@ class AdminControlService {
   moderationQueue({ status = 'open', limit = 50 } = {}) {
     return this.moderation.queue({ status, limit });
   }
+
+  moderationCase(targetAccountId) {
+    return this.#decorateCase(this.moderation.get(targetAccountId));
+  }
+
+  moderationTransition({ targetAccountId, status, note, actor, now = Date.now() } = {}) {
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    const result = this.moderation.transition({
+      targetAccountId,
+      status,
+      moderatorId: `${ADMIN_MODERATOR_PREFIX}${actor.id}`,
+      note,
+      now,
+      audit: transition =>
+        this.adminAuth.audit({
+          actor,
+          action: 'moderation.case.transition',
+          targetType: 'player-account',
+          targetId: transition.targetAccountId,
+          detail: {
+            fromStatus: transition.fromStatus,
+            toStatus: transition.toStatus,
+            reviewedThrough: transition.reviewedThrough,
+            notePresent: Boolean(transition.note)
+          },
+          now: transition.createdAt
+        })
+    });
+    if (!result.ok) return result;
+    return { ...result, case: this.#decorateCase(result.case) };
+  }
+
+  #adminName(moderatorId) {
+    const value = String(moderatorId || '');
+    if (!value.startsWith(ADMIN_MODERATOR_PREFIX)) return null;
+    const id = value.slice(ADMIN_MODERATOR_PREFIX.length);
+    return this.statements.adminName.get(id)?.display_name || null;
+  }
+
+  #decorateCase(item) {
+    if (!item) return null;
+    return {
+      ...item,
+      moderatorName: this.#adminName(item.moderatorId),
+      history: item.history.map(event => ({
+        ...event,
+        moderatorName: this.#adminName(event.moderatorId)
+      }))
+    };
+  }
 }
 
 function prepare(db) {
@@ -60,8 +116,9 @@ function prepare(db) {
       FROM social_report_evidence
       WHERE reported_at >= ?
     `),
-    competitiveRecords: db.prepare('SELECT COUNT(*) AS count FROM leaderboard_entries')
+    competitiveRecords: db.prepare('SELECT COUNT(*) AS count FROM leaderboard_entries'),
+    adminName: db.prepare('SELECT display_name FROM admin_users WHERE id = ?')
   };
 }
 
-module.exports = { AdminControlService };
+module.exports = { AdminControlService, ADMIN_MODERATOR_PREFIX };

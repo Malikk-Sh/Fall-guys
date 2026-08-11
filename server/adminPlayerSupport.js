@@ -48,7 +48,12 @@ class AdminPlayerSupport {
   constructor({ db } = {}) {
     if (!db) throw new Error('AdminPlayerSupport requires an open database');
     this.db = db;
-    this.statements = prepare(db);
+    this.statements = null;
+  }
+
+  #prepare() {
+    this.statements ||= prepare(this.db);
+    return this.statements;
   }
 
   search(query, { limit = DEFAULT_SEARCH_RESULTS, now = Date.now() } = {}) {
@@ -61,10 +66,11 @@ class AdminPlayerSupport {
         maxLength: MAX_SEARCH_QUERY
       };
     }
+    const statements = this.#prepare();
     const safeLimit = clampLimit(limit);
     const idPrefix = `${escapeGlob(normalized)}*`;
     const ftsQuery = ftsPrefixQuery(normalized);
-    const statement = ftsQuery ? this.statements.searchWithName : this.statements.searchIdOnly;
+    const statement = ftsQuery ? statements.searchWithName : statements.searchIdOnly;
     const rows = ftsQuery
       ? statement.all(normalized, idPrefix, normalized, safeLimit, ftsQuery, safeLimit, now, safeLimit)
       : statement.all(normalized, idPrefix, normalized, safeLimit, now, safeLimit);
@@ -85,15 +91,16 @@ class AdminPlayerSupport {
   get(accountId, { now = Date.now() } = {}) {
     const id = String(accountId || '').trim();
     if (!id || id.length > 160 || hasAsciiControl(id)) return null;
-    const account = this.statements.account.get(id);
+    const statements = this.#prepare();
+    const account = statements.account.get(id);
     if (!account) return null;
 
-    const session = this.statements.sessions.get(now, now, now, now, id);
-    const stats = this.statements.stats.get(id);
-    const loadout = this.statements.loadout.get(id);
-    const reportSummary = this.statements.reportSummary.get(id);
-    const reportsSubmitted = this.statements.reportsSubmitted.get(id);
-    const avoidCount = this.statements.avoidCount.get(id, id);
+    const session = statements.sessions.get(now, now, now, now, id);
+    const stats = statements.stats.get(id);
+    const loadout = statements.loadout.get(id);
+    const reportSummary = statements.reportSummary.get(id);
+    const reportsSubmitted = statements.reportsSubmitted.get(id);
+    const avoidCount = statements.avoidCount.get(id, id);
     const rotationStartedAt = nullableNumber(account.pending_secret_created_at);
     const recoveryRotationPending =
       rotationStartedAt != null &&
@@ -110,7 +117,7 @@ class AdminPlayerSupport {
         recoveryRotationStartedAt: recoveryRotationPending ? rotationStartedAt : null
       },
       login: {
-        providers: this.statements.identities.all(id).map(row => ({
+        providers: statements.identities.all(id).map(row => ({
           provider: row.provider,
           linkedAt: Number(row.linked_at)
         })),
@@ -129,7 +136,7 @@ class AdminPlayerSupport {
           coopRevives: Number(stats?.coop_revives || 0),
           updatedAt: nullableNumber(stats?.updated_at)
         },
-        chapters: this.statements.chapters.all(id).map(row => ({
+        chapters: statements.chapters.all(id).map(row => ({
           chapterId: row.chapter_id,
           completions: Number(row.completions || 0),
           bestTimeMs: Number(row.best_time_ms || 0),
@@ -137,11 +144,11 @@ class AdminPlayerSupport {
           flawless: Boolean(row.flawless),
           lastCompletedAt: Number(row.last_completed_at || 0)
         })),
-        achievements: this.statements.achievements.all(id).map(row => ({
+        achievements: statements.achievements.all(id).map(row => ({
           id: row.achievement_id,
           unlockedAt: Number(row.unlocked_at)
         })),
-        personalRecords: this.statements.records.all(id).map(row => ({
+        personalRecords: statements.records.all(id).map(row => ({
           mode: row.mode,
           courseKey: row.course_key,
           timeMs: Number(row.time_ms),
@@ -159,12 +166,12 @@ class AdminPlayerSupport {
               updatedAt: Number(loadout.updated_at)
             }
           : null,
-        cosmetics: this.statements.cosmetics.all(id).map(row => ({
+        cosmetics: statements.cosmetics.all(id).map(row => ({
           id: row.cosmetic_id,
           unlockedAt: Number(row.unlocked_at),
           source: row.source
         })),
-        recentRewards: this.statements.rewards.all(id, MAX_RECENT_REWARDS).map(row => ({
+        recentRewards: statements.rewards.all(id, MAX_RECENT_REWARDS).map(row => ({
           source: row.source,
           reward: row.reward,
           cosmeticId: row.cosmetic_id || null,
@@ -173,7 +180,7 @@ class AdminPlayerSupport {
         }))
       },
       social: {
-        recentPartners: this.statements.partners.all(id, id, MAX_RECENT_PARTNERS).map(row => ({
+        recentPartners: statements.partners.all(id, id, MAX_RECENT_PARTNERS).map(row => ({
           id: row.partner_account_id,
           name: row.display_name || 'Wobbler',
           matchesTogether: Number(row.matches_together || 0),
@@ -186,7 +193,7 @@ class AdminPlayerSupport {
           reporters: Number(reportSummary?.reporters || 0),
           total: Number(reportSummary?.total || 0),
           lastReportedAt: nullableNumber(reportSummary?.last_reported_at),
-          reasons: this.statements.reportReasons.all(id).map(row => ({
+          reasons: statements.reportReasons.all(id).map(row => ({
             reason: row.reason,
             count: Number(row.count || 0)
           }))

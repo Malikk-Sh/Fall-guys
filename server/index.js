@@ -297,6 +297,7 @@ const health = () => ({
   service: 'wobble-rush-3d',
   version: build.version,
   commit: build.commit,
+  release: build.release || null,
   protocolVersion: PROTOCOL_VERSION,
   startedAt: build.startedAt,
   rooms: rooms.size,

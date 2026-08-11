@@ -11,11 +11,14 @@ function normalizeCommit(value) {
 }
 
 function buildIdentity({ env = process.env, startedAt = PROCESS_STARTED_AT } = {}) {
-  return {
+  const identity = {
     version: packageJson.version,
     commit: normalizeCommit(env.WOBBLE_BUILD_SHA || env.RENDER_GIT_COMMIT || env.GITHUB_SHA),
     startedAt
   };
+  const release = String(env.WOBBLE_RELEASE_TAG || '').trim();
+  if (release) identity.release = release;
+  return identity;
 }
 
 module.exports = { buildIdentity, normalizeCommit, PROCESS_STARTED_AT };

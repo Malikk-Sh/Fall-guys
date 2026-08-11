@@ -1,0 +1,21 @@
+[Unit]
+Description=Wobble Rush on-demand smoke check
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=wobble.service
+
+[Service]
+Type=oneshot
+User=wobble
+Group=wobble
+WorkingDirectory=/opt/wobble
+EnvironmentFile=/etc/wobble.env
+ExecStart=/bin/bash /opt/wobble/deploy/smoke.sh --require-backup
+TimeoutStartSec=40
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true

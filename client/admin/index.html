@@ -306,8 +306,8 @@
             </p>
             <p>
               Панель принципиально не показывает recovery-коды, хеши кодов, session tokens, Google ID или
-              другие данные, с которыми можно войти в аккаунт. Здесь пока нет кнопок изменения аккаунта —
-              только чтение.
+              другие данные, с которыми можно войти в аккаунт. История санкций доступна здесь для поддержки, а
+              применять ограничения можно только ролям с отдельным правом модерации.
             </p>
           </details>
 
@@ -383,6 +383,10 @@
               </section>
             </div>
             <div class="support-lists">
+              <details class="support-details" open>
+                <summary>Санкции и предупреждения</summary>
+                <div id="player-sanctions" class="rank-list"></div>
+              </details>
               <details class="support-details" open>
                 <summary>Главы кампании</summary>
                 <div id="player-chapters" class="rank-list"></div>
@@ -536,6 +540,86 @@
             Здесь видно, кто и когда переводил дело между статусами и какую заметку оставил.
           </p>
           <div id="case-history" class="history-list"></div>
+        </section>
+
+        <section class="case-section sanction-section">
+          <h3>Санкции игрока</h3>
+          <p class="section-help">
+            Бан применяется сервером к аккаунту: активные входы завершаются, текущие WebSocket-соединения
+            закрываются, а новый вход и RESUME блокируются до окончания срока или ручного снятия.
+          </p>
+          <div id="case-sanction-current" class="history-list"></div>
+          <details class="support-details">
+            <summary>История санкций</summary>
+            <div id="case-sanction-history" class="history-list"></div>
+          </details>
+          <form id="sanction-action" class="case-action sanction-action" hidden>
+            <div class="explain-box">
+              <strong>Сначала проверьте материалы дела</strong>
+              <span
+                >Причина видна игроку. Внутренняя заметка остаётся только в админ-панели и журнале
+                санкций.</span
+              >
+            </div>
+            <div class="sanction-grid">
+              <label>
+                Действие
+                <select id="sanction-kind">
+                  <option value="warning">Предупреждение</option>
+                  <option value="ban" selected>Временный бан</option>
+                </select>
+              </label>
+              <label id="sanction-duration-label">
+                Срок
+                <select id="sanction-duration">
+                  <option value="900000">15 минут</option>
+                  <option value="3600000">1 час</option>
+                  <option value="21600000">6 часов</option>
+                  <option value="86400000" selected>24 часа</option>
+                  <option value="259200000">3 дня</option>
+                  <option value="604800000">7 дней</option>
+                  <option value="2592000000" data-owner-only>30 дней</option>
+                  <option value="custom">Другой срок</option>
+                  <option value="permanent" data-permanent>Без срока</option>
+                </select>
+              </label>
+              <label id="sanction-custom-label" hidden>
+                Срок в часах
+                <input id="sanction-custom-hours" type="number" min="1" step="1" value="24" />
+              </label>
+              <label>
+                Причина для игрока
+                <select id="sanction-reason">
+                  <option value="griefing">Мешает другим игрокам</option>
+                  <option value="exploit-cheat">Читы / эксплуатация ошибки</option>
+                  <option value="offensive-name">Недопустимое имя</option>
+                  <option value="afk">Бездействие (AFK)</option>
+                  <option value="other">Другое нарушение правил</option>
+                </select>
+              </label>
+              <label class="case-note-label sanction-note-label">
+                Внутренняя заметка модератора
+                <textarea
+                  id="sanction-note"
+                  maxlength="1000"
+                  rows="4"
+                  required
+                  placeholder="Что проверено и почему выбрана эта санкция. Игрок этот текст не увидит."
+                ></textarea>
+              </label>
+            </div>
+            <p id="sanction-action-hint" class="muted">
+              Первое нажатие только готовит действие; второе подтверждает его в течение 10 секунд.
+            </p>
+            <div class="sanction-buttons">
+              <button id="sanction-apply" class="primary action-button" type="submit">
+                Подготовить санкцию
+              </button>
+              <button id="sanction-revoke" class="ghost danger-action" type="button" hidden>
+                Снять активный бан
+              </button>
+            </div>
+          </form>
         </section>
 
         <form id="case-action" class="case-action" hidden>

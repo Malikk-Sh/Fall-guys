@@ -179,6 +179,12 @@ async function post(path, body = {}, { fetchImpl = globalThis.fetch } = {}) {
   return { ok: response.ok, status: response.status, data };
 }
 
+function sanctionResult(status, data) {
+  return status === 403 && data?.error === 'account-sanctioned'
+    ? { sanctioned: true, sanction: data.sanction || null }
+    : null;
+}
+
 function serverAccount(data, fallbackSecret = '') {
   if (!data?.account) return null;
   const google = data.identities?.some?.(identity => identity.provider === 'google');
@@ -198,6 +204,8 @@ function serverAccount(data, fallbackSecret = '') {
 export async function sessionAccount(options) {
   const { ok, status, data } = await post('/api/auth/session', {}, options);
   if (status === 401) return { missing: true };
+  const blocked = sanctionResult(status, data);
+  if (blocked) return blocked;
   return ok ? serverAccount(data) : null;
 }
 
@@ -230,6 +238,8 @@ export async function createAccount(name, options) {
 export async function loginAccount(secret, options) {
   const { ok, status, data } = await post('/api/auth/recovery', { secret }, options);
   if (status === 404) return { unknown: true };
+  const blocked = sanctionResult(status, data);
+  if (blocked) return blocked;
   if (!ok) return null;
   return serverAccount(data, secret);
 }
@@ -237,6 +247,8 @@ export async function loginAccount(secret, options) {
 export async function loginGoogle(credential, options) {
   const { ok, status, data } = await post('/api/auth/google', { credential }, options);
   if (status === 409) return { conflict: true };
+  const blocked = sanctionResult(status, data);
+  if (blocked) return blocked;
   if (!ok) return null;
   return serverAccount(data);
 }
@@ -319,6 +331,9 @@ export async function ensureAccount(options = {}) {
   };
 
   const session = await quiet(() => sessionAccount(options));
+  if (session?.sanctioned) {
+    return { account: stored, records: [], progress: null, online: false, sanction: session.sanction };
+  }
   const sessionMatchesSelection = session && !session.missing && (!stored || stored.id === session.id);
   if (sessionMatchesSelection) {
     const secret = stored?.id === session.id ? stored.secret : '';
@@ -343,6 +358,9 @@ export async function ensureAccount(options = {}) {
   if (stored?.pendingRecovery?.secret) {
     const stagedSecret = stored.pendingRecovery.secret;
     const entered = await quiet(() => loginAccount(stagedSecret, options));
+    if (entered?.sanctioned) {
+      return { account: stored, records: [], progress: null, online: false, sanction: entered.sanction };
+    }
     if (entered && !entered.unknown) {
       commitStagedRecoveryCode(stored.id, storage);
       const account = { ...entered, secret: stagedSecret };
@@ -359,6 +377,9 @@ export async function ensureAccount(options = {}) {
 
   if (stored?.secret) {
     const entered = await quiet(() => loginAccount(stored.secret, options));
+    if (entered?.sanctioned) {
+      return { account: stored, records: [], progress: null, online: false, sanction: entered.sanction };
+    }
     if (entered?.unknown) {
       forgetAccount(stored.id, storage);
     } else if (entered) {

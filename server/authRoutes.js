@@ -12,6 +12,7 @@ function installAuthRoutes({
   auth,
   google,
   inventory = null,
+  sanctions = null,
   clientIp = req => req.socket.remoteAddress || 'unknown',
   accountPayload,
   secureCookies = process.env.NODE_ENV === 'production'
@@ -31,8 +32,31 @@ function installAuthRoutes({
 
   const tokenFrom = req => parseCookies(req.headers.cookie)[SESSION_COOKIE] || '';
   const sessionFrom = req => auth.resolveSession(tokenFrom(req));
+  const sanctionFor = accountId => {
+    if (!accountId || !sanctions || typeof sanctions.active !== 'function') return null;
+    return sanctions.active(accountId);
+  };
+  const denySanction = (res, accountId, sanction, { clearCookie = false } = {}) => {
+    // Revoking all account sessions makes the restriction immediate on every device. The sanction
+    // table is still checked on every login, so deleting the cookie is cleanup rather than the
+    // source of truth.
+    try {
+      auth.revokeAccountSessions(accountId);
+    } catch {
+      // A failed cleanup must not turn an active ban into an allowed request.
+    }
+    if (clearCookie) res.setHeader('Set-Cookie', clearSessionCookie({ secure: secureCookies }));
+    res.setHeader('Cache-Control', 'no-store');
+    const publicSanction = sanctions?.publicView?.(sanction) || {
+      reason: sanction?.reason || 'other',
+      expiresAt: sanction?.expiresAt ?? null,
+      permanent: Boolean(sanction?.permanent)
+    };
+    return res.status(403).json({ ok: false, error: 'account-sanctioned', sanction: publicSanction });
+  };
 
   const issue = (res, accountId) => {
+    if (sanctionFor(accountId)) return null;
     const session = auth.createSession(accountId);
     if (!session) return null;
     res.setHeader(
@@ -48,14 +72,21 @@ function installAuthRoutes({
 
   const withNetworkTicket = (payload, accountId) => ({
     ...payload,
-    networkTicket: auth.createSocketTicket(accountId)?.token || null
+    networkTicket: sanctionFor(accountId) ? null : auth.createSocketTicket(accountId)?.token || null
   });
 
   const requireSession = (req, res) => {
     const session = sessionFrom(req);
-    if (session) return session;
-    res.status(401).json({ ok: false, error: 'session-required' });
-    return null;
+    if (!session) {
+      res.status(401).json({ ok: false, error: 'session-required' });
+      return null;
+    }
+    const sanction = sanctionFor(session.accountId);
+    if (sanction) {
+      denySanction(res, session.accountId, sanction, { clearCookie: true });
+      return null;
+    }
+    return session;
   };
 
   app.post('/api/auth/config', json, (_req, res) => {
@@ -66,6 +97,8 @@ function installAuthRoutes({
   app.post('/api/auth/session', json, (req, res) => {
     const session = sessionFrom(req);
     if (!session) return res.status(401).json({ ok: false, error: 'no-session' });
+    const sanction = sanctionFor(session.accountId);
+    if (sanction) return denySanction(res, session.accountId, sanction, { clearCookie: true });
     return res.json(
       withNetworkTicket(
         {
@@ -147,6 +180,8 @@ function installAuthRoutes({
       return res.status(429).json({ ok: false, error: 'rate-limited' });
     const account = recoveryLogin(req.body?.secret);
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+    const sanction = sanctionFor(account.id);
+    if (sanction) return denySanction(res, account.id, sanction, { clearCookie: true });
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
 
     return res.json(
@@ -169,6 +204,11 @@ function installAuthRoutes({
 
     const existing = auth.identity('google', verified.subject);
     const current = sessionFrom(req);
+    if (current) {
+      const currentSanction = sanctionFor(current.accountId);
+      if (currentSanction)
+        return denySanction(res, current.accountId, currentSanction, { clearCookie: true });
+    }
     let account;
     let secret = null;
     let linked = false;
@@ -192,6 +232,8 @@ function installAuthRoutes({
     }
 
     if (!account) return res.status(404).json({ ok: false, error: 'unknown-account' });
+    const sanction = sanctionFor(account.id);
+    if (sanction) return denySanction(res, account.id, sanction, { clearCookie: true });
     if (!issue(res, account.id)) return res.status(500).json({ ok: false, error: 'session-failed' });
 
     return res.json(

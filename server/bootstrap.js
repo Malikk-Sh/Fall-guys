@@ -34,6 +34,8 @@ const { AdminControlService } = require('./adminControl');
 const { AdminInfrastructure } = require('./adminInfrastructure');
 const { AdminOperationsClient } = require('./adminOperationsClient');
 const { installAdminRoutes } = require('./adminRoutes');
+const { PlayerSanctions } = require('./playerSanctions');
+const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
 
@@ -42,11 +44,15 @@ const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_
 const inventory = new InventoryService({ db: core.accounts.db, accounts: core.accounts });
 const rewards = new RewardService({ db: core.accounts.db, inventory });
 const adminAuth = new AdminAuthService({ db: core.accounts.db });
+const sanctions = new PlayerSanctions({ db: core.accounts.db });
 const adminControl = new AdminControlService({
   db: core.accounts.db,
   health: core.health,
   gameplay: core.gameplay,
-  adminAuth
+  adminAuth,
+  sanctions,
+  auth,
+  disconnectAccount: accountId => networkIdentity.disconnectAccount(accountId)
 });
 const adminInfrastructure = new AdminInfrastructure({ health: core.health });
 const adminOperations = new AdminOperationsClient();
@@ -55,7 +61,16 @@ const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
 
 // WST принадлежит только рукопожатию WebSocket. NetworkIdentity поглощает его один раз и дальше
 // игровой протокол использует уже ws.accountId; CREATE/JOIN/FIND не видят credential вообще.
-networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+// Второй callback — server-side access policy. Он проверяется и для свежего WST, и для RESUME,
+// поэтому старый reconnect token не позволяет обойти выданный после отключения бан.
+accountAccessPolicy.configure(accountId => {
+  const active = sanctions.active(accountId);
+  return active ? sanctions.publicView(active) : null;
+});
+networkIdentity.configure(
+  ticket => auth.consumeSocketTicket(ticket),
+  accountId => !sanctions.active(accountId)
+);
 // В публичный профиль комнаты loadout попадает только из server inventory. index.js знает лишь
 // этот узкий resolver и не получает доступ ни к HttpOnly session, ни к ownership-операциям.
 socialCosmetics.configure(accountId => inventory.publicLoadout(accountId));
@@ -85,6 +100,7 @@ const authRoutes = installAuthRoutes({
   auth,
   google,
   inventory,
+  sanctions,
   clientIp,
   accountPayload,
   secureCookies: process.env.COOKIE_SECURE
@@ -129,6 +145,7 @@ if (require.main === module) {
         serverInventory: true,
         socialCosmetics: true,
         socialSafety: true,
+        playerSanctions: true,
         rewardPlatform: true,
         adminPanel: adminPanelEnabled,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',
@@ -146,6 +163,7 @@ module.exports = {
   google,
   inventory,
   rewards,
+  sanctions,
   adminAuth,
   adminControl,
   adminInfrastructure,

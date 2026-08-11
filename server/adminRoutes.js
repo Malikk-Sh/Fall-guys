@@ -216,6 +216,88 @@ function installAdminRoutes({
     return res.json(result);
   });
 
+  app.post('/api/admin/sanctions/apply', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'sanctions.write');
+    if (!resolved) return undefined;
+    if (
+      !keysOnly(
+        req.body,
+        new Set(['targetAccountId', 'kind', 'reason', 'note', 'durationMs', 'permanent'])
+      ) ||
+      !req.body?.targetAccountId
+    ) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!control || typeof control.sanctionApply !== 'function') {
+      return res.status(503).json({ ok: false, error: 'sanctions-unavailable' });
+    }
+    const result = control.sanctionApply({
+      targetAccountId: req.body.targetAccountId,
+      kind: req.body.kind,
+      reason: req.body.reason,
+      note: req.body.note,
+      durationMs: req.body.durationMs,
+      permanent: req.body.permanent === true,
+      actor: resolved.session.user
+    });
+    if (!result.ok) {
+      const forbidden = new Set([
+        'sanctions-forbidden',
+        'sanction-duration-forbidden',
+        'permanent-sanction-owner-only'
+      ]);
+      const status =
+        result.reason === 'unknown-account'
+          ? 404
+          : result.reason === 'active-ban-exists'
+            ? 409
+            : result.reason === 'sanctions-unavailable'
+              ? 503
+              : forbidden.has(result.reason)
+                ? 403
+                : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.reason,
+        ...(result.maxDurationMs ? { maxDurationMs: result.maxDurationMs } : {}),
+        ...(result.allowedKinds ? { allowedKinds: result.allowedKinds } : {}),
+        ...(result.allowedReasons ? { allowedReasons: result.allowedReasons } : {}),
+        ...(result.active ? { active: result.active } : {})
+      });
+    }
+    return res.json(result);
+  });
+
+  app.post('/api/admin/sanctions/revoke', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'sanctions.write');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['sanctionId', 'note'])) || !req.body?.sanctionId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!control || typeof control.sanctionRevoke !== 'function') {
+      return res.status(503).json({ ok: false, error: 'sanctions-unavailable' });
+    }
+    const result = control.sanctionRevoke({
+      sanctionId: req.body.sanctionId,
+      note: req.body.note,
+      actor: resolved.session.user
+    });
+    if (!result.ok) {
+      const status =
+        result.reason === 'unknown-sanction'
+          ? 404
+          : result.reason === 'permanent-sanction-owner-only' || result.reason === 'sanctions-forbidden'
+            ? 403
+            : result.reason === 'sanctions-unavailable'
+              ? 503
+              : result.reason === 'sanction-not-active'
+                ? 409
+                : 400;
+      return res.status(status).json({ ok: false, error: result.reason });
+    }
+    return res.json(result);
+  });
+
   app.post('/api/admin/infrastructure', json, async (req, res) => {
     const resolved = requireAdmin(req, res, 'infrastructure.read');
     if (!resolved) return undefined;

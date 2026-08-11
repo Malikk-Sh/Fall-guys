@@ -1,6 +1,6 @@
 import { ClockSync } from './ClockSync.js';
 import { SnapshotBuffer } from './SnapshotBuffer.js';
-import { C2S, S2C, PROTOCOL_VERSION } from '/shared/protocol.js';
+import { C2S, S2C, ERROR_CODES, PROTOCOL_VERSION } from '/shared/protocol.js';
 
 // Интервал отправки своего состояния. Совпадает с частотой рассылки снапшотов на сервере (66 мс).
 const STATE_INTERVAL_MS = 66;
@@ -62,6 +62,7 @@ const ERROR_TEXT = {
   AUTH_FAILED: 'Не удалось подтвердить аккаунт для сетевой игры.',
   AUTH_ALREADY_BOUND: 'Аккаунт уже привязан к этому соединению.',
   AUTH_UNAVAILABLE: 'Авторизация сети временно недоступна.',
+  ACCOUNT_SANCTIONED: 'Онлайн-доступ аккаунта ограничен модерацией.',
   ROOM_NOT_FOUND: 'Комната не найдена. Проверьте код.',
   ROOM_FULL: 'В комнате нет свободных мест.',
   MATCH_ALREADY_STARTED: 'Игра в этой комнате уже началась.',
@@ -118,6 +119,9 @@ export class NetworkManager {
     this.handshakeReady = false;
     // Клиент старее сервера: говорить с ним бессмысленно, страницу надо обновить.
     this.versionMismatch = false;
+    this.accessBlocked = false;
+    this.accessBlockSanction = null;
+    this.ui.clearNetworkAccessBlock = () => this.clearAccessBlock();
 
     this.clock = new ClockSync();
     this.snapshots = new SnapshotBuffer();
@@ -206,6 +210,10 @@ export class NetworkManager {
   }
 
   connect() {
+    if (this.accessBlocked) {
+      this.ui.status('Онлайн-доступ аккаунта ограничен модерацией.');
+      return;
+    }
     if (this.ws && this.ws.readyState <= 1) return;
     this.intentionalClose = false;
     clearTimeout(this.reconnectTimer);
@@ -291,6 +299,10 @@ export class NetworkManager {
     // Пока ждали HttpOnly session, соединение могло уже смениться. Ticket не отправляем в другой
     // сокет: тот сам запросит свежий WST и тем самым сохранит одноразовую семантику.
     if (socket !== this.ws || socket.readyState !== WebSocket.OPEN) return;
+    if (ticket && typeof ticket === 'object' && ticket.blocked === true) {
+      this.blockAccess(ticket.sanction || null);
+      return;
+    }
     if (!ticket) {
       this.authInFlight = false;
       this.authRetryCount = 0;
@@ -298,6 +310,41 @@ export class NetworkManager {
       return;
     }
     this.raw({ type: C2S.AUTH, ticket });
+  }
+
+  blockAccess(sanction = null) {
+    this.accessBlocked = true;
+    this.accessBlockSanction = sanction || null;
+    this.intentionalClose = true;
+    clearTimeout(this.reconnectTimer);
+    this.queue.length = 0;
+    this.pendingWelcome = null;
+    this.resumeInFlight = false;
+    this.resumeToken = null;
+    this.authInFlight = false;
+    this.authRetryCount = 0;
+    this.handshakeReady = false;
+    this.id = null;
+    this.roomCode = null;
+    this.matchId = null;
+    this.finishSentFor = null;
+    this.saveSession(null);
+    this.setLinkState(LINK_STATE.FAILED);
+    this.ui.error?.(ERROR_TEXT.ACCOUNT_SANCTIONED);
+    this.emit('accountSanctioned', { sanction: this.accessBlockSanction });
+    try {
+      this.ws?.close();
+    } catch {
+      // A stale browser socket may already be closed. The local hard block still remains active.
+    }
+    return false;
+  }
+
+  clearAccessBlock() {
+    this.accessBlocked = false;
+    this.accessBlockSanction = null;
+    this.intentionalClose = false;
+    if (this.linkState === LINK_STATE.FAILED) this.setLinkState(LINK_STATE.OFFLINE);
   }
 
   // Принять личность, выданную сервером новому сокету. Вызывается после socket-auth либо когда
@@ -454,6 +501,10 @@ export class NetworkManager {
         break;
 
       case S2C.ERROR:
+        if (message.code === ERROR_CODES.ACCOUNT_SANCTIONED) {
+          this.blockAccess();
+          return;
+        }
         if (this.authInFlight && message.code === 'AUTH_FAILED' && this.authRetryCount < 1) {
           // WST мог быть поглощён соединением, которое оборвалось ровно между AUTH и ответом.
           // HttpOnly session всё ещё жива: один раз просим новый ticket и не replay-им старый.
@@ -520,6 +571,10 @@ export class NetworkManager {
   }
 
   send(type, data = {}) {
+    if (this.accessBlocked) {
+      this.ui.status('Онлайн-доступ аккаунта ограничен модерацией.');
+      return false;
+    }
     // Несовместимый клиент молчит: любое его сообщение сервер всё равно отвергнет, а нам важнее,
     // чтобы игрок увидел «обновите страницу», а не поток сетевых ошибок поверх него.
     if (this.versionMismatch) return false;

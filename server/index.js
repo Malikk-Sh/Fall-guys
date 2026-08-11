@@ -47,6 +47,7 @@ const { Accounts } = require('./accounts');
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
+const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { socialCosmetics } = require('./socialCosmetics');
 const { backupHealthStatus } = require('./backupStatus');
 const { buildIdentity } = require('./buildInfo');
@@ -437,6 +438,24 @@ const accountPayload = account => ({
   progress: accounts.progress(account.id)
 });
 
+function legacySanction(account) {
+  const item = account?.id ? accountAccessPolicy.sanction(account.id) : null;
+  if (!item) return null;
+  return {
+    reason: String(item.reason || 'other'),
+    expiresAt: item.expiresAt == null ? null : Number(item.expiresAt),
+    permanent: Boolean(item.permanent)
+  };
+}
+
+function rejectSanctionedLegacy(res, account) {
+  const sanction = legacySanction(account);
+  if (!sanction) return false;
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(403).json({ ok: false, error: 'account-sanctioned', sanction });
+  return true;
+}
+
 app.post('/account', accountJson, (req, res) => {
   if (httpRateLimited('create', clientIp(req))) {
     return res.status(429).json({ ok: false, error: 'rate-limited' });
@@ -455,12 +474,14 @@ app.post('/account/login', accountJson, (req, res) => {
   // 404, а не 403: «такого аккаунта нет» и «код неверный» — для игрока одно и то же событие, и
   // различать их вслух значило бы подсказывать перебирающему, что он угадал половину.
   if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  if (rejectSanctionedLegacy(res, account)) return undefined;
   return res.json(accountPayload(account));
 });
 
 app.post('/account/name', accountJson, (req, res) => {
   const account = accounts.login(req.body?.secret);
   if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  if (rejectSanctionedLegacy(res, account)) return undefined;
   const name = accounts.rename(account.id, req.body?.name);
   return res.json({ ok: true, account: { id: account.id, name } });
 });
@@ -471,6 +492,7 @@ app.post('/account/record', accountJson, (req, res) => {
   }
   const account = accounts.login(req.body?.secret);
   if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
+  if (rejectSanctionedLegacy(res, account)) return undefined;
   const saved = accounts.saveRecord({
     accountId: account.id,
     mode: req.body?.mode,
@@ -1029,6 +1051,7 @@ function enqueueCoop(ws, message) {
 
 // Возврат в комнату по токену прошлой сессии.
 function resume(ws, token) {
+  ws.accountAccessDenied = false;
   const session = sessions.get(token);
   if (!session) return false;
   const room = rooms.get(session.roomCode);
@@ -1044,6 +1067,10 @@ function resume(ws, token) {
 
   // Resume token уже принадлежит конкретному серверному player. Обычный reconnect наследует
   // accountId этого player; заранее привязанный другой account занять его место не может.
+  if (player.accountId && !networkIdentity.allowed(player.accountId)) {
+    ws.accountAccessDenied = true;
+    return false;
+  }
   if (!networkIdentity.bindResumedPlayer(ws, player)) return false;
 
   // Занимаем прежнее место: идентификатор игрока сохраняется, поэтому напарник не увидит,
@@ -1552,14 +1579,26 @@ wss.on('connection', (ws, req) => {
             ? ERROR_CODES.AUTH_ALREADY_BOUND
             : authenticated.reason === 'unavailable'
               ? ERROR_CODES.AUTH_UNAVAILABLE
-              : ERROR_CODES.AUTH_FAILED;
+              : authenticated.reason === 'blocked-account'
+                ? ERROR_CODES.ACCOUNT_SANCTIONED
+                : ERROR_CODES.AUTH_FAILED;
         const detail =
           authenticated.reason === 'already-bound'
             ? 'Аккаунт уже привязан к этому соединению.'
             : authenticated.reason === 'unavailable'
               ? 'Сетевая авторизация временно недоступна.'
-              : 'WebSocket ticket недействителен, истёк или уже использован.';
-        return sendError(ws, code, detail, false);
+              : authenticated.reason === 'blocked-account'
+                ? 'Онлайн-доступ аккаунта ограничен модерацией.'
+                : 'WebSocket ticket недействителен, истёк или уже использован.';
+        sendError(ws, code, detail, false);
+        if (authenticated.reason === 'blocked-account') {
+          try {
+            ws.close(4003, 'account-sanctioned');
+          } catch {
+            // The account remains blocked by the server-side policy even if close races transport teardown.
+          }
+        }
+        return;
       }
       return send(ws, { type: S2C.AUTHENTICATED, accountId: authenticated.accountId });
     }
@@ -1569,6 +1608,16 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.RESUME) {
       if (resume(ws, message.token)) return;
       metrics.resumeFailed++;
+      if (ws.accountAccessDenied) {
+        log('info', 'resume_sanctioned', { playerId: ws.id });
+        sendError(ws, ERROR_CODES.ACCOUNT_SANCTIONED, 'Онлайн-доступ аккаунта ограничен модерацией.', false);
+        try {
+          ws.close(4003, 'account-sanctioned');
+        } catch {
+          // The access decision is already final; close failure cannot authorize the socket.
+        }
+        return;
+      }
       log('info', 'resume_failed', { playerId: ws.id });
       return send(ws, { type: S2C.RESUME_FAILED, code: ERROR_CODES.RECONNECT_EXPIRED });
     }

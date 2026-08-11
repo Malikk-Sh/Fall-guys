@@ -1,6 +1,7 @@
 const express = require('express');
 const { SESSION_COOKIE, parseCookies, cookieForSession, clearSessionCookie } = require('./auth');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
+const { AccountSelfService } = require('./accountSelfService');
 
 const AUTH_WINDOW_MS = 10 * 60 * 1000;
 
@@ -20,6 +21,7 @@ function installAuthRoutes({
     recovery: [40, new BoundedIpRateLimiter({ windowMs: AUTH_WINDOW_MS })],
     google: [80, new BoundedIpRateLimiter({ windowMs: AUTH_WINDOW_MS })]
   };
+  const selfService = new AccountSelfService({ db: accounts.db, auth });
 
   const rateLimited = (kind, ip) => {
     if (!ip) return false;
@@ -79,6 +81,52 @@ function installAuthRoutes({
     const session = requireSession(req, res);
     if (!session) return undefined;
     return res.json({ ok: true, profile: accounts.profile(session.accountId) });
+  });
+
+  app.post('/api/auth/sessions', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({
+      ok: true,
+      sessions: auth.listSessions(session.accountId, tokenFrom(req))
+    });
+  });
+
+  app.post('/api/auth/sessions/revoke', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    const result = auth.revokeAccountSession({
+      accountId: session.accountId,
+      sessionId: req.body?.sessionId,
+      currentToken: tokenFrom(req)
+    });
+    if (!result.ok) {
+      const status = result.reason === 'current-session' ? 409 : 400;
+      return res.status(status).json({ ok: false, error: result.reason });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, removed: result.removed });
+  });
+
+  app.post('/api/auth/sessions/revoke-others', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    const revoked = auth.revokeOtherSessions(session.accountId, tokenFrom(req));
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, revoked });
+  });
+
+  app.post('/api/auth/recovery/rotate', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    const rotated = selfService.rotateRecoveryCode({
+      accountId: session.accountId,
+      currentToken: tokenFrom(req)
+    });
+    if (!rotated) return res.status(404).json({ ok: false, error: 'unknown-account' });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...rotated });
   });
 
   app.post('/api/auth/recovery', json, (req, res) => {

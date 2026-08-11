@@ -181,6 +181,26 @@ export async function logoutAccount(options) {
   return ok;
 }
 
+export async function listAccountSessions(options) {
+  const { ok, data } = await post('/api/auth/sessions', {}, options);
+  return ok && Array.isArray(data?.sessions) ? data.sessions : null;
+}
+
+export async function revokeAccountSession(sessionId, options) {
+  const { ok, data } = await post('/api/auth/sessions/revoke', { sessionId }, options);
+  return ok ? data : null;
+}
+
+export async function revokeOtherAccountSessions(options) {
+  const { ok, data } = await post('/api/auth/sessions/revoke-others', {}, options);
+  return ok ? data : null;
+}
+
+export async function rotateRecoveryCode(options) {
+  const { ok, data } = await post('/api/auth/recovery/rotate', {}, options);
+  return ok && typeof data?.secret === 'string' ? data : null;
+}
+
 export async function renameAccount(name, options) {
   const { ok, data } = await post('/api/auth/name', { name }, options);
   return ok && data?.account ? data.account : null;

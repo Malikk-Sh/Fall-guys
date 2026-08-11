@@ -1,0 +1,13 @@
+[Unit]
+Description=Wobble Rush safe operations socket
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+
+[Socket]
+ListenStream=/run/wobble-ops.sock
+SocketUser=root
+SocketGroup=wobble
+SocketMode=0660
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

@@ -23,106 +23,16 @@ jobs:
       - name: Apply focused fixes
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('client/core/AccountFlow.js')
-          text = path.read_text()
-          old = """  async revokeOtherSessions() {
-    if (!this.online) return null;
-    this.security.revokeOthers.disabled = true;
-    try {
-      const result = await revokeOtherAccountSessions();
-      if (!result) return this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
-      this.game.ui.accountStatus(
-        result.revoked ? `Завершено других сеансов: ${result.revoked}.` : 'Других активных сеансов уже нет.'
-      );
-      await this.refreshSessions();
-      return result;
-    } catch {
-      this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
-      return null;
-    } finally {
-      if (this.security?.revokeOthers?.isConnected) this.security.revokeOthers.disabled = false;
-    }
-  }
-"""
-          new = """  async revokeOtherSessions() {
-    if (!this.online) return null;
-    this.security.revokeOthers.disabled = true;
-    try {
-      const result = await revokeOtherAccountSessions();
-      if (!result) {
-        this.security.revokeOthers.disabled = false;
-        return this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
-      }
-      this.game.ui.accountStatus(
-        result.revoked ? `Завершено других сеансов: ${result.revoked}.` : 'Других активных сеансов уже нет.'
-      );
-      await this.refreshSessions();
-      return result;
-    } catch {
-      if (this.security?.revokeOthers?.isConnected) this.security.revokeOthers.disabled = false;
-      this.game.ui.accountStatus('Не удалось завершить другие сеансы.');
-      return null;
-    }
-  }
-"""
-          if old not in text:
-              raise SystemExit('AccountFlow revokeOtherSessions block not found')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('server/auth.js')
-          text = path.read_text()
-          old = """  revokeOtherSessions(accountId, currentToken) {
-    const id = String(accountId || '');
-    const currentHash = hashToken(currentToken);
-    if (!id || !currentHash) return 0;
-    return this.statements.deleteOtherSessions.run(id, currentHash).changes;
-  }
-"""
-          new = """  revokeOtherSessions(accountId, currentToken, now = Date.now()) {
-    const id = String(accountId || '');
-    const currentHash = hashToken(currentToken);
-    if (!id || !currentHash) return 0;
-    const current = this.statements.session.get(currentHash);
-    if (!current || current.account_id !== id || current.expires_at <= now) return 0;
-    return this.statements.deleteOtherSessions.run(id, currentHash).changes;
-  }
-"""
-          if old not in text:
-              raise SystemExit('AuthService revokeOtherSessions block not found')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('server/accountSelfService.js')
-          text = path.read_text()
-          old = "const revokedSessions = this.auth.revokeOtherSessions(id, currentToken);"
-          new = "const revokedSessions = this.auth.revokeOtherSessions(id, currentToken, at);"
-          if old not in text:
-              raise SystemExit('AccountSelfService revoke call not found')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('docs/ACCOUNT-SELF-SERVICE.md')
-          text = path.read_text()
-          old = """If another saved local account exists, Wobble Rush selects it. Otherwise the UI stays signed out until
-the player signs in with a recovery code, Google, or creates a new account.
-"""
-          new = """If another saved local account exists, Wobble Rush selects it. Otherwise the current page stays signed
-out. On a later reload the existing first-run behavior may create a new, unrelated Wobble account;
-the signed-out account itself is not recovered again unless the player supplies its new recovery code
-or signs in through its linked Google identity.
-"""
-          if old not in text:
-              raise SystemExit('Self-service logout documentation block not found')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          npx prettier --write client/core/AccountFlow.js server/auth.js server/accountSelfService.js docs/ACCOUNT-SELF-SERVICE.md
+          python3 -c "from pathlib import Path; p=Path('client/core/AccountFlow.js'); t=p.read_text(); old='if (this.security?.revokeOthers?.isConnected) this.security.revokeOthers.disabled = false;'; new=\"if (this.security?.revokeOthers?.isConnected)\\n        this.security.revokeOthers.disabled =\\n          !this.online || !this.security.sessions.querySelector('button');\"; assert old in t; p.write_text(t.replace(old,new,1))"
+          python3 -c "from pathlib import Path; p=Path('server/auth.js'); t=p.read_text(); old='revokeOtherSessions(accountId, currentToken) {'; new='revokeOtherSessions(accountId, currentToken, now = Date.now()) {'; assert old in t; t=t.replace(old,new,1); old='    if (!id || !currentHash) return 0;\\n    return this.statements.deleteOtherSessions.run(id, currentHash).changes;'; new='    if (!id || !currentHash) return 0;\\n    const current = this.statements.session.get(currentHash);\\n    if (!current || current.account_id !== id || current.expires_at <= now) return 0;\\n    return this.statements.deleteOtherSessions.run(id, currentHash).changes;'; assert old in t; p.write_text(t.replace(old,new,1))"
+          python3 -c "from pathlib import Path; p=Path('server/accountSelfService.js'); t=p.read_text(); old='this.auth.revokeOtherSessions(id, currentToken)'; new='this.auth.revokeOtherSessions(id, currentToken, at)'; assert old in t; p.write_text(t.replace(old,new,1))"
+          npx prettier --write client/core/AccountFlow.js server/auth.js server/accountSelfService.js
       - name: Commit fixes and remove helper
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/harden-account-self-service.yml
-          git add client/core/AccountFlow.js server/auth.js server/accountSelfService.js docs/ACCOUNT-SELF-SERVICE.md
+          git add client/core/AccountFlow.js server/auth.js server/accountSelfService.js
           git commit -m "Harden account self-service edge cases"
           git push origin HEAD:agent/account-self-service

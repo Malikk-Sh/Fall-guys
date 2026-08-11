@@ -112,6 +112,10 @@ class AdminAnalytics {
     const from = dayKey(now - (periodDays - 1) * DAY_MS);
     const previousFrom = dayKey(now - (periodDays * 2 - 1) * DAY_MS);
     const previousTo = dayKey(now - periodDays * DAY_MS);
+    const retentionDays = Number.isFinite(Number(this.gameplay.retentionDays))
+      ? Math.max(0, Number(this.gameplay.retentionDays))
+      : MAX_DAYS;
+    const comparisonAvailable = periodDays * 2 - 1 <= retentionDays;
     const args = filterArgs(filters);
 
     const rawRows = this.statements.rows.all(from, ...args, rowLimit + 1);
@@ -127,7 +131,9 @@ class AdminAnalytics {
     }));
 
     const currentKpiRows = this.statements.kpis.all(from, ...args);
-    const previousKpiRows = this.statements.kpisBetween.all(previousFrom, previousTo, ...args);
+    const previousKpiRows = comparisonAvailable
+      ? this.statements.kpisBetween.all(previousFrom, previousTo, ...args)
+      : null;
     const trendRows = this.statements.trend.all(from, ...args);
     const fallHotspots = this.statements.hotspots.all(from, ...args, 'fall', 12).map(toHotspot);
     const abandonHotspots = this.statements.hotspots.all(from, ...args, 'match_abandoned', 12).map(toHotspot);
@@ -142,14 +148,16 @@ class AdminAnalytics {
     return {
       days: periodDays,
       from,
-      previousFrom,
-      previousTo,
+      previousFrom: comparisonAvailable ? previousFrom : null,
+      previousTo: comparisonAvailable ? previousTo : null,
+      comparisonAvailable,
+      retentionDays,
       dropped: Number(this.gameplay.dropped || 0),
       filters,
       options,
       kpis: {
         current: summarizeKpis(currentKpiRows),
-        previous: summarizeKpis(previousKpiRows)
+        previous: previousKpiRows ? summarizeKpis(previousKpiRows) : null
       },
       trend: buildTrend(trendRows, from, periodDays),
       hotspots: {

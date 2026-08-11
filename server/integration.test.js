@@ -279,6 +279,10 @@ async function startedRoom(url, mode = 'coop') {
 
 test('не вернувшийся после grace period игрок учитывается как abandonment', async t => {
   await listen();
+  // Integration tests share the in-process room registry. Expire disconnected players left by
+  // earlier scenarios before taking this test's metric baseline, otherwise the deliberate
+  // future timestamp below would correctly sweep them too and make the delta non-local.
+  expireDisconnectedPlayers(Date.now() + 30_001);
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
   const { host, guest, started } = await startedRoom(url, 'coop');
   t.after(async () => {

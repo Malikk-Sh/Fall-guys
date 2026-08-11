@@ -1,5 +1,6 @@
 'use strict';
 
+const { AdminAnalytics } = require('./adminAnalytics');
 const { ModerationQueue } = require('./moderation');
 
 const ADMIN_MODERATOR_PREFIX = 'admin:';
@@ -18,6 +19,7 @@ class AdminControlService {
     this.health = health;
     this.gameplay = gameplay;
     this.adminAuth = adminAuth;
+    this.analyticsReport = new AdminAnalytics({ db, gameplay });
     this.moderation = new ModerationQueue({ db });
     this.statements = prepare(db);
   }
@@ -44,8 +46,8 @@ class AdminControlService {
     };
   }
 
-  analytics({ days = 7, limit = 200 } = {}) {
-    return this.gameplay.summary({ days, limit });
+  analytics({ days = 7, limit = 300, mode = 'all', course = 'all', device = 'all' } = {}) {
+    return this.analyticsReport.report({ days, limit, mode, course, device });
   }
 
   moderationQueue({ status = 'open', limit = 50 } = {}) {

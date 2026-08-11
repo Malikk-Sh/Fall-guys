@@ -14,6 +14,7 @@ const {
   rooms,
   resetRateLimits,
   setResultsTimeout,
+  expireDisconnectedPlayers,
   expireSessions,
   SESSION_TTL_MS,
   shutdown: shutdownServer
@@ -275,6 +276,43 @@ async function startedRoom(url, mode = 'coop') {
   await waitForStart(started.at);
   return { host, guest, started, code: created.code };
 }
+
+test('не вернувшийся после grace period игрок учитывается как abandonment', async t => {
+  await listen();
+  // Integration tests share the in-process room registry. Expire disconnected players left by
+  // earlier scenarios before taking this test's metric baseline, otherwise the deliberate
+  // future timestamp below would correctly sweep them too and make the delta non-local.
+  expireDisconnectedPlayers(Date.now() + 30_001);
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const { host, guest, started } = await startedRoom(url, 'coop');
+  t.after(async () => {
+    await Promise.all([host.close(), guest.close()]);
+    await shutdown();
+  });
+
+  const room = [...rooms.values()].find(item => item.matchId === started.matchId);
+  const guestId = guest.messages.find(message => message.type === 'hello').id;
+  const abandonSamples = () => {
+    gameplay.flush();
+    return gameplay
+      .summary({ days: 1, limit: 1000 })
+      .rows.filter(row => row.metric === 'match_abandoned' && row.mode === 'coop')
+      .reduce((sum, row) => sum + row.samples, 0);
+  };
+  const before = abandonSamples();
+
+  guest.ws.terminate();
+  const deadline = Date.now() + 2000;
+  while (!room.players.get(guestId)?.disconnectedAt && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const disconnectedAt = room.players.get(guestId)?.disconnectedAt;
+  assert.ok(disconnectedAt, 'server noticed the socket disconnect');
+
+  expireDisconnectedPlayers(disconnectedAt + 30_001);
+  assert.equal(room.players.has(guestId), false);
+  assert.equal(abandonSamples(), before + 1);
+});
 
 test('игрок возвращается в свою комнату после обрыва связи', async t => {
   await listen();

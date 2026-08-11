@@ -12,7 +12,8 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">WOBBLE RUSH</p>
-          <h1>Control Plane</h1>
+          <h1>Панель управления</h1>
+          <p class="topbar-subtitle">Состояние игры, статистика, жалобы и журнал действий — в одном месте.</p>
         </div>
         <div id="identity" class="identity" hidden>
           <span id="admin-name"></span>
@@ -26,13 +27,20 @@
           <p class="eyebrow">ПРИВАТНАЯ ПАНЕЛЬ</p>
           <h2>Вход администратора</h2>
           <p class="muted">
-            Используйте отдельный admin access code. Он не является recovery code игрового аккаунта.
+            Введите отдельный код администратора. Это не пароль от игрового аккаунта и не recovery-код игрока.
           </p>
+          <div class="explain-box">
+            <strong>Где взять код?</strong>
+            <span
+              >Первый owner создаётся один раз на VPS командой из документации ADMIN-PANEL.md. Код
+              показывается только при создании или ротации.</span
+            >
+          </div>
           <label>
-            Access code
+            Код администратора
             <input id="access-code" name="accessCode" type="password" required autocomplete="off" />
           </label>
-          <button type="submit" class="primary">Войти</button>
+          <button type="submit" class="primary">Войти в панель</button>
           <p id="login-error" class="error" role="alert"></p>
         </form>
       </section>
@@ -42,57 +50,164 @@
           <button data-panel="overview" data-capability="dashboard.read" class="active">Обзор</button>
           <button data-panel="analytics" data-capability="analytics.read">Статистика</button>
           <button data-panel="moderation" data-capability="moderation.read">Модерация</button>
-          <button data-panel="audit" data-capability="audit.read">Audit</button>
+          <button data-panel="audit" data-capability="audit.read">Журнал действий</button>
         </nav>
 
         <div class="toolbar">
           <span id="status-line" class="muted">Готово</span>
-          <button id="refresh" class="ghost">Обновить</button>
+          <button id="refresh" class="ghost">Обновить данные</button>
         </div>
 
         <section id="panel-overview" class="panel">
+          <details class="help-card" open>
+            <summary>Что показывает «Обзор»?</summary>
+            <p>
+              Здесь только безопасное чтение: сколько игроков сейчас в игре, есть ли жалобы, работает ли
+              резервное копирование и хватает ли серверу ресурсов. Нажатие «Обновить данные» ничего не
+              перезапускает и не меняет.
+            </p>
+          </details>
           <div id="overview-cards" class="cards"></div>
           <div class="grid-two">
             <article class="card">
-              <h2>Production</h2>
+              <h2>Версия и работа сервера</h2>
+              <p class="section-help">
+                Помогает понять, какая именно версия игры сейчас запущена и сколько времени сервер работает
+                без перезапуска.
+              </p>
               <dl id="production-details" class="details"></dl>
             </article>
             <article class="card">
-              <h2>Нагрузка</h2>
+              <h2>Нагрузка сервера</h2>
+              <p class="section-help">
+                Если значения здесь резко растут или появляется «Перегружен: да», игроки могут начать замечать
+                задержки.
+              </p>
               <dl id="load-details" class="details"></dl>
             </article>
           </div>
         </section>
 
         <section id="panel-analytics" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Как читать статистику?</summary>
+            <p>
+              Выберите период и при необходимости отфильтруйте режим, трассу/главу или устройство. Карточки
+              сверху дают быстрый ответ, график показывает изменение по дням, а «Где проблемы» помогает найти
+              места с частыми падениями и выходами из матча.
+            </p>
+            <p>
+              «Завершено / начато» — ориентир, а не строгий процент уникальных игроков: метрики обезличены и
+              считают события, а не людей.
+            </p>
+          </details>
+
           <article class="card">
-            <div class="card-head">
+            <div class="card-head analytics-head">
               <div>
-                <p class="eyebrow">GAMEPLAY METRICS</p>
-                <h2>Агрегированная статистика</h2>
+                <p class="eyebrow">ИГРОВАЯ СТАТИСТИКА</p>
+                <h2>Что происходит с игроками</h2>
               </div>
-              <label class="compact">
+              <div class="export-actions">
+                <button id="analytics-export-csv" class="ghost" type="button">Скачать CSV</button>
+                <button id="analytics-export-json" class="ghost" type="button">Скачать JSON</button>
+              </div>
+            </div>
+
+            <div class="filter-grid">
+              <label>
                 Период
                 <select id="analytics-days">
-                  <option value="1">24 часа</option>
-                  <option value="7" selected>7 дней</option>
-                  <option value="30">30 дней</option>
-                  <option value="90">90 дней</option>
+                  <option value="1">Сегодня — в реальном времени</option>
+                  <option value="7" selected>Последние 7 полных дней</option>
+                  <option value="30">Последние 30 полных дней</option>
+                  <option value="90">Последние 90 полных дней</option>
+                </select>
+              </label>
+              <label>
+                Режим игры
+                <select id="analytics-mode">
+                  <option value="all">Все режимы</option>
+                </select>
+              </label>
+              <label>
+                Трасса / глава
+                <select id="analytics-course">
+                  <option value="all">Все трассы и главы</option>
+                </select>
+              </label>
+              <label>
+                Устройство
+                <select id="analytics-device">
+                  <option value="all">Все устройства</option>
                 </select>
               </label>
             </div>
+
             <p id="analytics-meta" class="muted"></p>
+            <div id="analytics-kpis" class="cards analytics-kpis"></div>
+          </article>
+
+          <div class="analytics-grid">
+            <article class="card">
+              <div class="card-head">
+                <div>
+                  <h2>Динамика по дням</h2>
+                  <p class="section-help">Высота столбца показывает количество выбранных событий за день.</p>
+                </div>
+                <label class="compact">
+                  Что показать
+                  <select id="analytics-trend-metric">
+                    <option value="matchStarted">Начатые матчи</option>
+                    <option value="matchFinished">Завершённые матчи</option>
+                    <option value="matchAbandoned">Выходы до финиша</option>
+                    <option value="falls">Падения</option>
+                  </select>
+                </label>
+              </div>
+              <div id="analytics-chart" class="bar-chart" aria-label="График статистики по дням"></div>
+            </article>
+
+            <article class="card">
+              <h2>Где игрокам сложнее всего</h2>
+              <p class="section-help">
+                Два списка ниже помогают быстро находить проблемные участки. Это повод проверить уровень, а не
+                автоматическое доказательство бага.
+              </p>
+              <div class="hotspot-columns">
+                <section>
+                  <h3>Частые падения</h3>
+                  <div id="fall-hotspots" class="rank-list"></div>
+                </section>
+                <section>
+                  <h3>Частые выходы из матча</h3>
+                  <div id="abandon-hotspots" class="rank-list"></div>
+                </section>
+              </div>
+            </article>
+          </div>
+
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <h2>Подробная таблица</h2>
+                <p class="section-help">
+                  Нужна для точного анализа и экспорта. Ниже используются технические названия метрик, но
+                  рядом в интерфейсе показывается их понятная расшифровка.
+                </p>
+              </div>
+            </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Metric</th>
-                    <th>Mode</th>
-                    <th>Course</th>
-                    <th>Detail</th>
-                    <th>Device</th>
-                    <th>Samples</th>
-                    <th>Average</th>
+                    <th>Событие</th>
+                    <th>Режим</th>
+                    <th>Трасса / глава</th>
+                    <th>Деталь</th>
+                    <th>Устройство</th>
+                    <th>Количество</th>
+                    <th>Среднее</th>
                   </tr>
                 </thead>
                 <tbody id="analytics-body"></tbody>
@@ -102,37 +217,45 @@
         </section>
 
         <section id="panel-moderation" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Как работает модерация?</summary>
+            <p>
+              Жалоба только попадает человеку на проверку. Сама по себе она никого не блокирует. «Новые» — ещё
+              не разобранные дела, «В работе» — дело уже проверяет модератор, «Закрытые» — проверка завершена,
+              «Отклонённые» — нарушение не подтвердилось.
+            </p>
+          </details>
           <article class="card">
             <div class="card-head">
               <div>
-                <p class="eyebrow">HUMAN REVIEW</p>
-                <h2>Очередь модерации</h2>
+                <p class="eyebrow">ПРОВЕРКА ЧЕЛОВЕКОМ</p>
+                <h2>Очередь жалоб</h2>
               </div>
               <label class="compact">
-                Статус
+                Какие дела показать
                 <select id="moderation-status">
-                  <option value="open" selected>Open</option>
-                  <option value="reviewing">Reviewing</option>
-                  <option value="resolved">Resolved</option>
-                  <option value="dismissed">Dismissed</option>
-                  <option value="all">All</option>
+                  <option value="open" selected>Новые (open)</option>
+                  <option value="reviewing">В работе (reviewing)</option>
+                  <option value="resolved">Закрытые (resolved)</option>
+                  <option value="dismissed">Отклонённые (dismissed)</option>
+                  <option value="all">Все</option>
                 </select>
               </label>
             </div>
             <p class="muted">
-              Откройте дело, чтобы увидеть immutable evidence и историю. Решение остаётся human-review:
-              количество жалоб само по себе ничего не блокирует.
+              Нажмите «Открыть дело», чтобы увидеть материалы жалоб и историю решений. Количество жалоб
+              помогает расставить приоритет, но не является автоматическим доказательством нарушения.
             </p>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Игрок</th>
-                    <th>Status</th>
-                    <th>Reporters</th>
-                    <th>Reports</th>
+                    <th>Статус</th>
+                    <th>Разных жалобщиков</th>
+                    <th>Всего жалоб</th>
                     <th>Причины</th>
-                    <th>Последняя</th>
+                    <th>Последняя жалоба</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -143,9 +266,17 @@
         </section>
 
         <section id="panel-audit" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Что такое журнал действий?</summary>
+            <p>
+              Это история важных действий внутри админ-панели: кто вошёл, кто изменил статус жалобы и над
+              каким объектом работал. Журнал нужен, чтобы позже можно было понять, кто и что сделал. Секретные
+              коды и токены в него не записываются.
+            </p>
+          </details>
           <article class="card">
-            <p class="eyebrow">IMMUTABLE HISTORY</p>
-            <h2>Журнал администраторов</h2>
+            <p class="eyebrow">ИСТОРИЯ АДМИНИСТРАТОРОВ</p>
+            <h2>Журнал действий</h2>
             <div class="table-wrap">
               <table>
                 <thead>
@@ -153,8 +284,8 @@
                     <th>Время</th>
                     <th>Администратор</th>
                     <th>Роль</th>
-                    <th>Действие</th>
-                    <th>Цель</th>
+                    <th>Что сделал</th>
+                    <th>С чем</th>
                   </tr>
                 </thead>
                 <tbody id="audit-body"></tbody>
@@ -169,11 +300,11 @@
       <article class="case-shell">
         <header class="case-head">
           <div>
-            <p class="eyebrow">MODERATION CASE</p>
+            <p class="eyebrow">ДЕЛО МОДЕРАЦИИ</p>
             <h2 id="case-title">Дело игрока</h2>
             <p id="case-id" class="mono muted"></p>
           </div>
-          <button id="case-close" class="ghost" type="button">Закрыть</button>
+          <button id="case-close" class="ghost" type="button">Закрыть окно</button>
         </header>
 
         <div class="case-summary">
@@ -183,24 +314,38 @@
         </div>
 
         <section class="case-section">
-          <h3>Evidence</h3>
+          <h3>Материалы жалоб</h3>
+          <p class="section-help">
+            Каждая запись фиксирует причину, время, имя игрока и главу на момент принятия жалобы. Даже если
+            имя позже поменяется, эта запись останется прежней.
+          </p>
           <div id="case-evidence" class="evidence-list"></div>
         </section>
 
         <section class="case-section">
           <h3>История решений</h3>
+          <p class="section-help">
+            Здесь видно, кто и когда переводил дело между статусами и какую заметку оставил.
+          </p>
           <div id="case-history" class="history-list"></div>
         </section>
 
         <form id="case-action" class="case-action" hidden>
+          <div class="explain-box">
+            <strong>Перед изменением статуса</strong>
+            <span
+              >Сначала проверьте материалы выше. Первое нажатие только готовит действие, второе подтверждает
+              его. Если за это время придёт новая жалоба, сервер не даст применить устаревшее решение.</span
+            >
+          </div>
           <div class="case-action-grid">
             <label>
               Новый статус
               <select id="case-next-status">
-                <option value="open">Open</option>
-                <option value="reviewing">Reviewing</option>
-                <option value="resolved">Resolved</option>
-                <option value="dismissed">Dismissed</option>
+                <option value="open">Новое / вернуть в очередь</option>
+                <option value="reviewing">В работе</option>
+                <option value="resolved">Закрыть как рассмотренное</option>
+                <option value="dismissed">Отклонить жалобы</option>
               </select>
             </label>
             <label class="case-note-label">
@@ -209,12 +354,12 @@
                 id="case-note"
                 maxlength="1000"
                 rows="4"
-                placeholder="Для resolved/dismissed заметка обязательна. Не вставляйте credentials или секреты."
+                placeholder="Кратко опишите, что проверили и почему приняли решение. Для закрытия или отклонения заметка обязательна. Не вставляйте пароли и секретные коды."
               ></textarea>
             </label>
           </div>
           <p id="case-action-hint" class="muted">
-            Изменение статуса требует второго подтверждения и записывается в moderation history + admin audit.
+            Изменение будет записано и в историю дела, и в журнал действий администраторов.
           </p>
           <button id="case-apply" class="primary action-button" type="submit">Подготовить изменение</button>
         </form>

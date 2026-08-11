@@ -117,13 +117,17 @@ function installAdminRoutes({
   app.post('/api/admin/analytics', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'analytics.read');
     if (!resolved) return undefined;
-    const days = Number.parseInt(req.body?.days, 10);
-    const limit = Number.parseInt(req.body?.limit, 10);
+    if (!keysOnly(req.body, new Set(['days', 'limit', 'mode', 'course', 'device']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
     return res.json({
       ok: true,
       analytics: control.analytics({
-        days: Number.isSafeInteger(days) && days > 0 ? Math.min(days, 90) : 7,
-        limit: Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 1000) : 200
+        days: req.body?.days,
+        limit: req.body?.limit,
+        mode: req.body?.mode,
+        course: req.body?.course,
+        device: req.body?.device
       })
     });
   });

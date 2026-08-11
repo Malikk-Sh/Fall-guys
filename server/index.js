@@ -901,6 +901,22 @@ function handleDisconnect(ws) {
   emitLobby(room);
 }
 
+function expireDisconnectedPlayers(now = Date.now()) {
+  for (const room of [...rooms.values()]) {
+    for (const player of [...room.players.values()]) {
+      if (!player.disconnectedAt || now - player.disconnectedAt <= RECONNECT_GRACE_MS) continue;
+      if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
+        if (!room.abandonTracked) {
+          room.abandonTracked = true;
+          trackEvent(productEvents, 'matchAbandoned');
+        }
+        gameplay.count('match_abandoned', dims(room, player, `cp${player.checkpoint ?? 0}`));
+      }
+      dropPlayer(room, player.id);
+    }
+  }
+}
+
 function addPlayer(room, ws, name, playerId = null) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
@@ -2074,20 +2090,10 @@ const heartbeatTimer = setInterval(() => {
 
   const now = Date.now();
 
-  // Игроки, не вернувшиеся за отведённое время, освобождают слот.
+  // Игроки, не вернувшиеся за отведённое время, освобождают слот и считаются
+  // abandon только после истечения grace period — краткий обрыв с успешным resume им не является.
+  expireDisconnectedPlayers(now);
   for (const room of [...rooms.values()]) {
-    for (const player of [...room.players.values()]) {
-      if (player.disconnectedAt && now - player.disconnectedAt > RECONNECT_GRACE_MS) {
-        if (
-          (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) &&
-          !room.abandonTracked
-        ) {
-          room.abandonTracked = true;
-          trackEvent(productEvents, 'matchAbandoned');
-        }
-        dropPlayer(room, player.id);
-      }
-    }
     if (room.state === ROOM_STATE.PLAYING && room.mode === GAME_MODE.COOP) {
       // Упавший поднимается сам по истечении срока — иначе пара, где один отошёл от устройства,
       // застряла бы в главе навсегда.
@@ -2230,6 +2236,7 @@ module.exports = {
   createEventCounters,
   trackEvent,
   setResultsTimeout,
+  expireDisconnectedPlayers,
   expireSessions,
   SESSION_TTL_MS,
   shutdown

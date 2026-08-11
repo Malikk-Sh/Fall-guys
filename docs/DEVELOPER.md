@@ -141,7 +141,8 @@ npm run test:e2e:desktop
 - повторный request не дублирует reward;
 - связанные изменения выполняются транзакционно;
 - malicious client покрыт тестом;
-- credential не попадает в gameplay protocol.
+- recovery code и persistent session bearer не входят в gameplay messages; одноразовый WST допустим
+  только в выделенном socket-auth обмене.
 
 ## 7. Сетевой протокол
 
@@ -177,14 +178,17 @@ Checklist протокольного изменения:
 - HttpOnly persistent session cookie для обычных запросов;
 - короткий одноразовый WebSocket ticket (WST) только для socket-auth.
 
-Recovery code — recovery credential, а не обычный request credential.
+Recovery code — recovery credential, а не обычный request credential. WST, напротив, специально
+возвращается как `networkTicket` в authenticated HTTP response и затем один раз передаётся в
+`C2S.AUTH`; после успешного bind gameplay messages используют уже `ws.accountId` без credential.
 
 Active sessions и staged recovery rotation подробно описаны в
 [`ACCOUNT-SELF-SERVICE.md`](ACCOUNT-SELF-SERVICE.md). При изменении auth-кода обязательно проверяйте:
 
-- raw session bearer не входит в JSON;
+- raw persistent session bearer не входит в JSON;
+- recovery code не используется как обычный gameplay credential;
 - session cookie остаётся HttpOnly;
-- WST одноразовый и короткоживущий;
+- WST одноразовый, короткоживущий и используется только для socket-auth;
 - destructive actions имеют явное подтверждение;
 - потеря HTTP-ответа не уничтожает единственный recovery path.
 
@@ -252,7 +256,8 @@ Production DB находится вне checkout, обычно в `/var/lib/wobb
 
 ```text
 [ ] Понятна server-authoritative граница
-[ ] Нет credential в логах/JSON/gameplay protocol
+[ ] Recovery code и persistent session bearer не попадают в JSON/gameplay messages
+[ ] Одноразовый WST используется только как networkTicket -> C2S.AUTH для socket-auth
 [ ] Есть unit/integration test
 [ ] Есть E2E, если меняется пользовательский сетевой сценарий
 [ ] Миграция добавлена новым номером, если меняется schema

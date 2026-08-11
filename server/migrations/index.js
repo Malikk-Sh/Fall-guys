@@ -5,6 +5,7 @@ const serverInventory = require('./004_server_inventory');
 const rewardPlatform = require('./005_reward_platform');
 const recentPartners = require('./006_recent_partners');
 const socialSafety = require('./007_social_safety');
+const directionalAvoids = require('./008_directional_avoids');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -13,7 +14,8 @@ const MIGRATIONS = Object.freeze([
   serverInventory,
   rewardPlatform,
   recentPartners,
-  socialSafety
+  socialSafety,
+  directionalAvoids
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

@@ -128,6 +128,7 @@ export class UI {
       $('#profileOpen').setAttribute('aria-expanded', String(show));
       if (show) {
         this.renderServerProfile();
+        this.renderAvoidedPlayers();
         this.onProfileRefresh?.();
       }
     };
@@ -159,11 +160,69 @@ export class UI {
         this.onRecentPartnerReport?.(partner, button.dataset.socialReport);
       })
     );
+    $('#avoidedPlayersList').addEventListener('click', event => {
+      const button = event.target.closest?.('[data-restore-avoid]');
+      if (!button) return;
+      const player = this.avoidedPlayers?.find(item => item.id === button.dataset.restoreAvoid);
+      if (!player) return;
+      if (button.dataset.confirmRestore !== '1') {
+        selectAll('[data-restore-avoid]').forEach(item => {
+          item.dataset.confirmRestore = '';
+          item.textContent = 'ВЕРНУТЬ В ПОДБОР';
+        });
+        button.dataset.confirmRestore = '1';
+        button.textContent = 'ПОДТВЕРДИТЬ';
+        return;
+      }
+      button.disabled = true;
+      Promise.resolve(this.onAvoidedPlayerRestore?.(player)).finally(() => {
+        if (!button.isConnected) return;
+        button.disabled = false;
+        button.dataset.confirmRestore = '';
+        button.textContent = 'ВЕРНУТЬ В ПОДБОР';
+      });
+    });
   }
 
   setServerProfile(profile) {
     this.serverProfile = profile || null;
     this.renderServerProfile();
+  }
+
+  setAvoidedPlayers(players) {
+    this.avoidedPlayers = Array.isArray(players) ? players : null;
+    this.renderAvoidedPlayers();
+  }
+
+  renderAvoidedPlayers() {
+    const list = $('#avoidedPlayersList');
+    const empty = $('#avoidedPlayersEmpty');
+    if (!list || !empty) return;
+    list.replaceChildren();
+    if (!Array.isArray(this.avoidedPlayers)) {
+      empty.classList.remove('hidden');
+      empty.textContent = 'Загрузка списка…';
+      return;
+    }
+    empty.classList.toggle('hidden', this.avoidedPlayers.length > 0);
+    empty.textContent = 'Вы никого не исключали из быстрого подбора.';
+    for (const player of this.avoidedPlayers) {
+      const row = document.createElement('div');
+      row.className = 'avoided-player-row';
+      const copy = document.createElement('span');
+      const name = document.createElement('strong');
+      name.textContent = player.name || 'Wobbler';
+      const detail = document.createElement('small');
+      detail.textContent = 'НЕ ПОПАДЁТ В ВАШ БЫСТРЫЙ ПОДБОР';
+      copy.append(name, detail);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'button button-secondary';
+      restore.dataset.restoreAvoid = player.id;
+      restore.textContent = 'ВЕРНУТЬ В ПОДБОР';
+      row.append(copy, restore);
+      list.append(row);
+    }
   }
 
   renderServerProfile() {

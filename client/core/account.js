@@ -201,6 +201,16 @@ export async function avoidRecentPartner(targetAccountId, options) {
   return ok ? data : null;
 }
 
+export async function listAvoidedPlayers(options) {
+  const { ok, data } = await post('/api/social/avoids', {}, options);
+  return ok && Array.isArray(data?.players) ? data.players : null;
+}
+
+export async function restoreAvoidedPlayer(targetAccountId, options) {
+  const { ok, data } = await post('/api/social/unavoid', { targetAccountId }, options);
+  return ok ? data : null;
+}
+
 export async function reportRecentPartner(targetAccountId, reason, options) {
   const { ok, data } = await post('/api/social/report', { targetAccountId, reason }, options);
   return ok ? data : null;

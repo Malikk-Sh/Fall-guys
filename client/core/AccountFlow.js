@@ -4,6 +4,7 @@ import {
   ensureAccount,
   accountProfile,
   avoidRecentPartner,
+  listAvoidedPlayers,
   listAccounts,
   currentAccount as accountForRecords,
   authConfig,
@@ -14,6 +15,7 @@ import {
   renameAccount,
   rememberAccount,
   reportRecentPartner,
+  restoreAvoidedPlayer,
   sessionAccount,
   switchAccount,
   submitRecord
@@ -27,6 +29,7 @@ export class AccountFlow {
     this.game = game;
     this.records = new Map();
     this.networkTicket = null;
+    this.profileRevision = 0;
     // NetworkManager забирает WST ровно для socket-auth. Ticket не остаётся в UI после выдачи;
     // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
@@ -34,6 +37,7 @@ export class AccountFlow {
     this.game.ui.onProfileRefresh = () => this.refreshProfile();
     this.game.ui.onRecentPartnerAvoid = partner => this.avoidPartner(partner);
     this.game.ui.onRecentPartnerReport = (partner, reason) => this.reportPartner(partner, reason);
+    this.game.ui.onAvoidedPlayerRestore = player => this.restorePlayer(player);
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
@@ -62,6 +66,7 @@ export class AccountFlow {
   }
 
   apply(account, { online = true, records = null, progress = null } = {}) {
+    this.profileRevision += 1;
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
@@ -71,19 +76,24 @@ export class AccountFlow {
     this.game.ui.setAccountRecords(this.records);
     this.game.ui.setAccountProgress(progress);
     this.game.ui.setServerProfile(online ? account?.profile || null : null);
+    this.game.ui.setAvoidedPlayers(null);
     this.game.ui.setAccountList(listAccounts());
     if (this.game.previewSpec)
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }
 
   async refreshProfile() {
-    try {
-      const profile = await accountProfile();
-      if (profile) this.game.ui.setServerProfile(profile);
-      return profile;
-    } catch {
-      return null;
-    }
+    const revision = this.profileRevision;
+    const [profile, avoidedPlayers] = await Promise.all([
+      accountProfile().catch(() => null),
+      listAvoidedPlayers().catch(() => null)
+    ]);
+    // A response that started under another local/session account must never paint
+    // private profile data into the newly selected account UI.
+    if (revision !== this.profileRevision) return null;
+    if (profile) this.game.ui.setServerProfile(profile);
+    if (avoidedPlayers) this.game.ui.setAvoidedPlayers(avoidedPlayers);
+    return profile;
   }
 
   async avoidPartner(partner) {
@@ -96,6 +106,24 @@ export class AccountFlow {
       return result;
     } catch {
       this.game.ui.toast('Не удалось сохранить исключение — попробуйте ещё раз.');
+      return null;
+    }
+  }
+
+  async restorePlayer(player) {
+    if (!player?.id) return null;
+    try {
+      const result = await restoreAvoidedPlayer(player.id);
+      if (!result) return this.game.ui.toast('Не удалось вернуть игрока в подбор.');
+      await this.refreshProfile();
+      this.game.ui.toast(
+        result.removed
+          ? 'Ваше исключение снято — игрок снова разрешён для быстрого подбора.'
+          : 'Это исключение уже было снято.'
+      );
+      return result;
+    } catch {
+      this.game.ui.toast('Не удалось вернуть игрока в подбор.');
       return null;
     }
   }

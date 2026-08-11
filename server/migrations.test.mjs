@@ -4,11 +4,11 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
-const { migrateDatabase } = require('./migrations');
+const { MIGRATIONS, migrateDatabase } = require('./migrations');
 
 test('миграции поднимают чистую базу по порядку и повторно ничего не делают', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7, 8]);
   const applied = db
     .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version')
     .all()
@@ -20,7 +20,8 @@ test('миграции поднимают чистую базу по поряд�
     { version: 4, applied_at: 123 },
     { version: 5, applied_at: 123 },
     { version: 6, applied_at: 123 },
-    { version: 7, applied_at: 123 }
+    { version: 7, applied_at: 123 },
+    { version: 8, applied_at: 123 }
   ]);
   assert.deepEqual(migrateDatabase(db, { now: 999 }), []);
   for (const table of [
@@ -80,6 +81,29 @@ test('миграции прогресса, Auth V2, inventory и rewards сох�
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM recent_partners').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM social_reports').get().count, 0);
+  db.close();
+});
+
+test('migration 008 preserves old avoid as the creator personal choice', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db, { migrations: MIGRATIONS.slice(0, 7), now: 100 });
+  db.prepare(
+    'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('a', 'Первый', 'hash-a', 1, 1);
+  db.prepare(
+    'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
+  ).run('b', 'Второй', 'hash-b', 1, 1);
+  db.prepare(
+    'INSERT INTO matchmaking_avoids (account_a, account_b, created_by_account_id, created_at) VALUES (?, ?, ?, ?)'
+  ).run('a', 'b', 'a', 55);
+
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [8]);
+  const row = db
+    .prepare(
+      'SELECT account_a_avoided_at, account_b_avoided_at FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'
+    )
+    .get('a', 'b');
+  assert.deepEqual({ ...row }, { account_a_avoided_at: 55, account_b_avoided_at: null });
   db.close();
 });
 

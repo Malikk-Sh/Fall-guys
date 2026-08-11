@@ -35,6 +35,7 @@ test('миграции поднимают чистую базу по поряд�
     'recent_partners',
     'matchmaking_avoids',
     'social_reports',
+    'social_report_evidence',
     'moderation_cases',
     'moderation_events'
   ]) {
@@ -84,6 +85,7 @@ test('миграции прогресса, Auth V2, inventory и rewards сох�
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM recent_partners').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM matchmaking_avoids').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM social_reports').get().count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM social_report_evidence').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_cases').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM moderation_events').get().count, 0);
   db.close();
@@ -132,13 +134,29 @@ test('migration 009 backfills the best available report evidence', () => {
     `
     INSERT INTO social_reports
       (reporter_account_id, target_account_id, reason, report_count, first_reported_at, last_reported_at)
-    VALUES (?, ?, ?, 1, ?, ?)
+    VALUES (?, ?, ?, 3, ?, ?)
   `
-  ).run('reporter', 'target', 'offensive-name', 600, 600);
+  ).run('reporter', 'target', 'offensive-name', 400, 600);
 
   assert.deepEqual(migrateDatabase(db, { now: 200 }), [9]);
   const report = db.prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports').get();
   assert.deepEqual({ ...report }, { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' });
+  const evidence = db
+    .prepare(
+      `SELECT reporter_account_id, target_account_id, reason, reported_at, occurrences,
+              target_name_snapshot, chapter_id_snapshot
+       FROM social_report_evidence`
+    )
+    .get();
+  assert.deepEqual({ ...evidence }, {
+    reporter_account_id: 'reporter',
+    target_account_id: 'target',
+    reason: 'offensive-name',
+    reported_at: 600,
+    occurrences: 3,
+    target_name_snapshot: 'Имя на миграции',
+    chapter_id_snapshot: 'ch7'
+  });
   db.close();
 });
 

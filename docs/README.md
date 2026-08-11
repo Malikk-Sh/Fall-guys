@@ -7,6 +7,7 @@
 
 - **Разработчик:** [`DEVELOPER.md`](DEVELOPER.md).
 - **Владелец VPS / оператор:** [`OPERATIONS.md`](OPERATIONS.md).
+- **Владелец проекта / администратор:** [`ADMIN-PANEL.md`](ADMIN-PANEL.md).
 - **Модератор:** [`MODERATOR-GUIDE.md`](MODERATOR-GUIDE.md).
 - **Аналитик / статистик:** [`ANALYTICS.md`](ANALYTICS.md).
 - **Дежурный по инциденту:** [`INCIDENT-RUNBOOK.md`](INCIDENT-RUNBOOK.md).
@@ -18,6 +19,8 @@
   server-authoritative границы и checklist для production-sensitive изменений.
 - [`OPERATIONS.md`](OPERATIONS.md) — production layout, systemd, Nginx, shared TCP/443, UFW, TLS,
   deploy, релизы, backup/restore и ежедневная эксплуатация.
+- [`ADMIN-PANEL.md`](ADMIN-PANEL.md) — Wobble Control Plane, отдельные admin credentials, роли,
+  audit trail, bootstrap первого owner и этапы безопасной автоматизации.
 - [`ANALYTICS.md`](ANALYTICS.md) — семантика `/metrics/gameplay`, read-only SQL и шаблон регулярного
   продуктово-технического отчёта.
 - [`MODERATOR-GUIDE.md`](MODERATOR-GUIDE.md) — практический SOP модератора поверх локальной

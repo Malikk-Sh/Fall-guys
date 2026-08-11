@@ -9,6 +9,68 @@ Control Plane показывает production health, build/release identity, н
 metrics, moderation workflow и admin audit history. Системные действия уровня backup/restart/deploy
 будут подключаться отдельными PR поверх этой границы безопасности.
 
+Интерфейс специально рассчитан не только на разработчика. Возле сложных разделов есть раскрываемые
+объяснения, технические названия сопровождаются понятными русскими подписями, а опасные действия
+описывают, что именно произойдёт до подтверждения.
+
+## Первый вход на production — пошагово
+
+Панель находится по адресу:
+
+```text
+https://wobbles.ru/admin/
+```
+
+Но production panel выключена по умолчанию. Первый запуск состоит из трёх отдельных шагов.
+
+### 1. Обновить Wobble
+
+На VPS:
+
+```bash
+bash /opt/wobble/deploy/install.sh
+```
+
+После успешного deploy migration 011 создаст admin tables. Самого администратора миграция
+**не создаёт**.
+
+### 2. Создать первого владельца
+
+```bash
+sudo -u wobble node /opt/wobble/server/adminCli.mjs \
+  --db /var/lib/wobble/leaderboard.db \
+  create --name Malik --role owner
+```
+
+Команда вернёт JSON с `user` и `accessCode`. `accessCode` показывается один раз. Сохраните его в
+password manager. Не отправляйте его в Issues, PR, логи, moderator notes или обычный чат.
+
+### 3. Включить панель
+
+Откройте `/etc/wobble.env` и добавьте или измените:
+
+```dotenv
+ADMIN_PANEL_ENABLED=1
+ADMIN_COOKIE_SECURE=1
+```
+
+Затем:
+
+```bash
+systemctl restart wobble
+curl -fsS http://127.0.0.1:3000/health/live
+```
+
+После этого откройте:
+
+```text
+https://wobbles.ru/admin/
+```
+
+и введите только что созданный admin access code.
+
+Игровой recovery code, пароль Google или данные VPN здесь не используются.
+
 ## Security model
 
 - production panel выключена по умолчанию: `ADMIN_PANEL_ENABLED=0`;
@@ -35,50 +97,15 @@ privileged helper с allowlist команд, а не через произвол
 
 ## Роли
 
-| Role        | Текущие возможности                                               |
+| Role        | Что означает простыми словами                                     |
 | ----------- | ----------------------------------------------------------------- |
-| `owner`     | все read views, moderation writes, будущие admin/ops capabilities |
-| `operator`  | dashboard, analytics, moderation read, audit                      |
-| `moderator` | dashboard, moderation case review и безопасные status transitions |
-| `analyst`   | dashboard и gameplay analytics                                    |
-| `viewer`    | только dashboard                                                  |
+| `owner`     | владелец: полный доступ к разрешённым функциям панели             |
+| `operator`  | оператор: наблюдение за сервером и модерацией без решений         |
+| `moderator` | модератор: просмотр жалоб и изменение их статуса                  |
+| `analyst`   | аналитик: обзор и игровая статистика                              |
+| `viewer`    | наблюдатель: только безопасный обзор                              |
 
 Capabilities проверяет `server/adminAuth.js`; frontend лишь отражает результат сервера.
-
-## Bootstrap первого owner
-
-После deploy migration 011 создаст таблицы, но **не создаст администратора автоматически**.
-
-На VPS:
-
-```bash
-sudo -u wobble node /opt/wobble/server/adminCli.mjs \
-  --db /var/lib/wobble/leaderboard.db \
-  create --name Malik --role owner
-```
-
-Команда вернёт JSON с `user` и `accessCode`. `accessCode` показывается один раз. Сохраните его в
-password manager и не отправляйте в Issues, PR, логи или moderator notes.
-
-После этого включите панель в `/etc/wobble.env`:
-
-```dotenv
-ADMIN_PANEL_ENABLED=1
-ADMIN_COOKIE_SECURE=1
-```
-
-и перезапустите только Wobble:
-
-```bash
-systemctl restart wobble
-curl -fsS http://127.0.0.1:3000/health/live
-```
-
-Панель:
-
-```text
-https://wobbles.ru/admin/
-```
 
 ## Управление администраторами
 
@@ -112,29 +139,75 @@ sudo -u wobble node /opt/wobble/server/adminCli.mjs \
 
 `disable` немедленно удаляет активные admin sessions. `enable` не восстанавливает старые sessions.
 
-## Что видно в панели сейчас
+## Что видно в панели
 
-### Overview
+### Обзор
 
+Раздел объясняет показатели человеческими названиями и показывает:
+
+- текущих игроков и комнаты;
+- активные аккаунты за 24 часа;
+- новые и уже рассматриваемые moderation cases;
+- состояние backup;
 - package version / commit / release;
 - protocol version;
 - uptime;
-- rooms / players;
-- event-loop p95, RSS и heap;
+- event-loop p95, RSS и heap с пояснением, что это показатели нагрузки;
 - socket/match capacity;
 - matchmaking waiting;
-- total accounts и accounts with active persistent sessions in the last 24h;
-- open/reviewing moderation queue;
-- report evidence count за 24 часа;
-- competitive leaderboard entry count;
-- backup health из production `/health` model.
+- competitive leaderboard entry count.
 
-### Analytics
+Кнопка **Обновить данные** только перечитывает состояние. Она ничего не перезапускает.
 
-Read-only представление `GameplayMetrics.summary()` с выбором 1/7/30/90 дней. Семантика полей
-остаётся той же, что описана в [`ANALYTICS.md`](ANALYTICS.md).
+### Статистика
 
-### Moderation
+Analytics теперь предназначена для обычного визуального анализа, а не только для чтения сырой
+таблицы.
+
+Можно выбрать:
+
+- период: сегодня / 7 / 30 / 90 дней;
+- режим;
+- трассу или co-op главу;
+- тип устройства: mobile / desktop.
+
+Панель показывает:
+
+- начатые матчи;
+- завершённые матчи;
+- отношение `finished / started`;
+- выходы до финиша;
+- падения;
+- среднее server-verified finish time;
+- сравнение каждого основного показателя с предыдущим периодом такой же длины;
+- график по дням;
+- топ мест падения;
+- топ мест, после которых чаще бросают матч;
+- подробную агрегированную таблицу.
+
+`finished / started` — это отношение обезличенных событий, а не strict unique-player funnel. Оно
+может быть полезно для сравнения периодов, но его нельзя называть точным retention или conversion
+rate уникальных пользователей.
+
+Если `dropped > 0`, панель показывает предупреждение. Это обычно означает проблему с instrumentation:
+код начал создавать слишком много уникальных dimension keys.
+
+#### Export
+
+Кнопки **Скачать CSV** и **Скачать JSON** работают в браузере и экспортируют только уже разрешённую
+агрегированную analytics response с текущими фильтрами. Они не получают account IDs, recovery data,
+session tokens или другие credentials.
+
+### Модерация
+
+Статусы в UI дополнительно переводятся:
+
+```text
+open       -> Новое
+reviewing  -> В работе
+resolved   -> Закрыто
+ dismissed  -> Отклонено
+```
 
 Очередь поддерживает `open`, `reviewing`, `resolved`, `dismissed`, `all`. Каждое дело можно открыть
 как отдельный workspace и проверить:
@@ -145,6 +218,9 @@ Read-only представление `GameplayMetrics.summary()` с выборо
 - name snapshot и chapter snapshot на момент accepted report;
 - полную moderation history;
 - moderator identity для действий, выполненных через Control Plane.
+
+Причины жалоб также показываются понятными подписями (`AFK`, griefing, offensive name,
+exploit/cheat).
 
 `owner` и `moderator` могут переводить дело между статусами. `resolved` и `dismissed` требуют note.
 Интерфейс делает изменение двухшаговым: первый tap только готовит действие, второй в течение 10
@@ -161,16 +237,16 @@ Control Plane **не** банит, не suspend-ит и не делает forced
 что moderation review закрыт согласно note и реально выполненным внешним действиям. Не пишите в note
 о наказании, которого система фактически не выполнила.
 
-После успешного transition панель обновляет и открытую карточку, и текущую очередь, поэтому дело
-сразу исчезает из старого status-фильтра, если больше ему не соответствует.
-
 CLI `server/moderationCli.mjs` остаётся поддерживаемым fallback и локальным инструментом оператора.
 
-### Audit
+### Журнал действий
 
-Последние admin events: actor, role, action, target и timestamp. Access code и session token в audit
-не записываются. Большие structured details заменяются валидным JSON-marker о truncation, поэтому
-одна слишком большая запись не может сломать просмотр всего журнала.
+В интерфейсе это называется **Журнал действий**, а не только техническим словом Audit.
+
+Он показывает последние admin events: actor, role, понятное название action, target и timestamp.
+Access code и session token в audit не записываются. Большие structured details заменяются валидным
+JSON-marker о truncation, поэтому одна слишком большая запись не может сломать просмотр всего
+журнала.
 
 Для moderation transition в admin audit сохраняются только transition metadata и `notePresent`; сама
 moderator note уже находится в `moderation_events` и намеренно не дублируется во второй журнал.
@@ -195,7 +271,7 @@ systemctl restart wobble
 План развития Control Plane:
 
 1. ~~moderation case detail + безопасные status transitions~~;
-2. полноценные analytics charts, фильтры и export;
+2. ~~analytics charts, фильтры, сравнение периодов и export~~;
 3. player/account support view без раскрытия credentials;
 4. privileged operations helper для backup/smoke/restart и позже deploy;
 5. system status: Nginx, certificate, disk, listeners и backup/offsite;

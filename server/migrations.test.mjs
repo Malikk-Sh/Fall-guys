@@ -215,7 +215,9 @@ test('migration 012 indexes existing accounts for support search without creatin
 
   assert.deepEqual(migrateDatabase(db, { now: 200 }), [12]);
   const row = db
-    .prepare('SELECT account_id, display_name FROM account_support_search WHERE account_support_search MATCH ?')
+    .prepare(
+      'SELECT account_id, display_name FROM account_support_search WHERE account_support_search MATCH ?'
+    )
     .get('иван*');
   assert.deepEqual({ ...row }, { account_id: 'legacy-search', display_name: 'Иван Игрок' });
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM accounts').get().count, 1);

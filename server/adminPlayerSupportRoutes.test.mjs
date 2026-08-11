@@ -5,12 +5,14 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const express = require('express');
 const { openDatabase } = require('./db');
+const { migrateDatabase } = require('./migrations');
 const { AdminAuthService, hasCapability } = require('./adminAuth');
 const { AdminControlService } = require('./adminControl');
 const { installAdminRoutes } = require('./adminRoutes');
 
 function prepare() {
   const db = openDatabase(':memory:');
+  migrateDatabase(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS leaderboard_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -113,7 +113,7 @@ class ModerationQueue {
     return { ...summary, reports, evidence, history };
   }
 
-  transition({ targetAccountId, status, moderatorId, note, now = Date.now() } = {}) {
+  transition({ targetAccountId, status, moderatorId, note, audit = null, now = Date.now() } = {}) {
     const target = String(targetAccountId || '').trim();
     const nextStatus = String(status || '').trim();
     const moderator = normalizeModeratorId(moderatorId);
@@ -127,6 +127,7 @@ class ModerationQueue {
     if (CLOSED_STATUSES.has(nextStatus) && !normalizedNote) {
       return { ok: false, reason: 'note-required' };
     }
+    if (audit != null && typeof audit !== 'function') return { ok: false, reason: 'invalid-audit-hook' };
 
     const current = this.get(target);
     if (!current) return { ok: false, reason: 'no-reports' };
@@ -156,6 +157,16 @@ class ModerationQueue {
         reviewedThrough,
         at
       );
+      if (audit) {
+        audit({
+          targetAccountId: target,
+          fromStatus: current.status,
+          toStatus: nextStatus,
+          note: normalizedNote,
+          reviewedThrough,
+          createdAt: at
+        });
+      }
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');

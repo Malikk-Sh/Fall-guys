@@ -30,7 +30,9 @@ jobs:
         run: npm ci
 
       - name: Apply Codex review fixes
-        run: python3 scripts/pr73_review_fixes.py
+        run: |
+          python3 scripts/pr73_review_fixes.py
+          python3 scripts/pr73_import_fix.py
 
       - name: Format changed source
         run: |
@@ -87,7 +89,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm scripts/pr73_review_fixes.py .github/workflows/pr73-review-fix.yml
+          git rm scripts/pr73_review_fixes.py scripts/pr73_import_fix.py .github/workflows/pr73-review-fix.yml
           git add -A
           git diff --cached --check
           git commit -m "Close player sanction bypasses"

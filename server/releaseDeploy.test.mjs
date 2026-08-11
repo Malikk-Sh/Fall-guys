@@ -9,8 +9,13 @@ const smoke = readFileSync(new URL('../deploy/smoke.sh', import.meta.url), 'utf8
 
 test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /RELEASE_TAG="\$\{RELEASE_TAG-\$\{SAVED_RELEASE_TAG:-\}\}"/);
-  assert.match(install, /refs\/tags\/\$\{RELEASE_TAG\}:refs\/tags\/\$\{RELEASE_TAG\}/);
+  assert.match(install, /refs\/wobble-release-candidates\/\$\{RELEASE_TAG\}/);
+  assert.match(install, /remote_release_object/);
+  assert.match(install, /local_release_object/);
+  assert.match(install, /release tag \$\{RELEASE_TAG\} изменился/);
   assert.match(install, /checkout --detach --force "\$release_commit"/);
+  assert.match(install, /releases\/tags\/\$\{RELEASE_TAG\}/);
+  assert.match(install, /release \$\{RELEASE_TAG\} ещё не опубликован/);
   assert.match(install, /check-release\.mjs" "\$RELEASE_TAG"/);
   assert.match(install, /SAVED_RELEASE_TAG='\$\{RELEASE_TAG\}'/);
 });

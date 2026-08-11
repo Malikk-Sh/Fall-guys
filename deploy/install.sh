@@ -37,6 +37,7 @@ BRANCH="${BRANCH:-main}"
 # An explicitly empty RELEASE_TAG switches back to branch deployment; otherwise the last
 # successful release remains pinned across ordinary no-argument updates.
 RELEASE_TAG="${RELEASE_TAG-${SAVED_RELEASE_TAG:-}}"
+RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-Malikk-Sh/Fall-guys}"
 DOMAIN="${DOMAIN:-$SAVED_DOMAIN}"
 HTTPS_PORT="${HTTPS_PORT:-$SAVED_HTTPS_PORT}"
 HTTPS_PORT="${HTTPS_PORT:-443}"
@@ -59,6 +60,10 @@ fi
 if [ -n "$RELEASE_TAG" ] &&
   ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
   fail "RELEASE_TAG должен выглядеть как v2.6.0 или v2.6.0-beta.1"
+fi
+if [ -n "$RELEASE_TAG" ] &&
+  ! [[ "$RELEASE_REPOSITORY" =~ ^[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+$ ]]; then
+  fail "RELEASE_REPOSITORY должен выглядеть как owner/repo"
 fi
 
 case "$SHARED_HTTPS_443" in
@@ -131,8 +136,29 @@ if [ -n "$RELEASE_TAG" ]; then
     git init -q "$APP_DIR"
     git -C "$APP_DIR" remote add origin "$REPO"
   fi
+  say "Проверяю опубликованный release ${RELEASE_TAG}"
+  release_json="$(
+    curl -fsS --max-time 10       -H 'Accept: application/vnd.github+json'       -H 'X-GitHub-Api-Version: 2022-11-28'       "https://api.github.com/repos/${RELEASE_REPOSITORY}/releases/tags/${RELEASE_TAG}"
+  )" || fail "release ${RELEASE_TAG} ещё не опубликован в GitHub Releases"
+  node - "$release_json" "$RELEASE_TAG" <<'NODE'
+const release = JSON.parse(process.argv[2]);
+const expectedTag = process.argv[3];
+if (release.tag_name !== expectedTag || release.draft === true || !release.published_at) {
+  throw new Error(`release ${expectedTag} is not published`);
+}
+NODE
+
   say "Фиксированный release ${RELEASE_TAG}"
-  git -C "$APP_DIR" fetch --force --depth 1 origin     "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+  candidate_ref="refs/wobble-release-candidates/${RELEASE_TAG}"
+  git -C "$APP_DIR" fetch --force --depth 1 origin     "+refs/tags/${RELEASE_TAG}:${candidate_ref}"
+  remote_release_object="$(git -C "$APP_DIR" rev-parse "$candidate_ref")"
+  if local_release_object="$(git -C "$APP_DIR" rev-parse -q --verify "refs/tags/${RELEASE_TAG}" 2>/dev/null)"; then
+    [ "$local_release_object" = "$remote_release_object" ] ||
+      fail "release tag ${RELEASE_TAG} изменился после первого получения — отказываюсь перезаписывать pin"
+  else
+    git -C "$APP_DIR" update-ref "refs/tags/${RELEASE_TAG}" "$remote_release_object"
+  fi
+  git -C "$APP_DIR" update-ref -d "$candidate_ref" >/dev/null 2>&1 || true
   release_commit="$(git -C "$APP_DIR" rev-parse "${RELEASE_TAG}^{commit}")"
   git -C "$APP_DIR" checkout --detach --force "$release_commit"
 else

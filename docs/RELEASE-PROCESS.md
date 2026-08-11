@@ -31,7 +31,7 @@ If verification fails, do not move or reuse the tag. Fix the problem on `main` a
 
 The production server already exposes the package version and exact build commit through `/health`. After deploying a public beta, compare those values with the GitHub Release tag commit before announcing the build.
 
-Exact tag-pinned VPS deployment is intentionally a separate hardening step: the existing installer still follows its configured branch. Until that follow-up lands, a release is considered published only after the production `/health` build SHA is manually verified against the release commit.
+Production deploys can now pin an exact published release tag. The installer still verifies `/health` build identity after restart, so the release tag, package version and exact build SHA remain tied together.
 
 ## Production deployment
 
@@ -43,4 +43,4 @@ RELEASE_TAG=v2.6.0-beta.1 bash /opt/wobble/deploy/install.sh
 
 A successful tagged deployment stores `SAVED_RELEASE_TAG` in `/etc/wobble-deploy.conf`. Ordinary later runs stay pinned to that exact release. To deploy a newer release, pass its tag explicitly. To intentionally return to branch mode, pass an explicitly empty tag, for example `RELEASE_TAG= BRANCH=main bash /opt/wobble/deploy/install.sh`.
 
-The installer verifies that the tag matches `package.json` and `package-lock.json`, checks out the tag commit detached, writes both release tag and build SHA into the service environment, and requires the deploy smoke to observe the expected version, commit and release identity from `/health`.
+The installer first requires the tag to have a non-draft published GitHub Release, then refuses to overwrite a previously seen local tag if the remote tag object ever changes. It verifies that the tag matches `package.json` and `package-lock.json`, checks out the tag commit detached, writes both release tag and build SHA into the service environment, and requires the deploy smoke to observe the expected version, commit and release identity from `/health`.

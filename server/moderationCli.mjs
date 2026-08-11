@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -61,6 +62,19 @@ const dbPath = parsed.options.db || process.env.LEADERBOARD_DB;
 if (!dbPath || dbPath === ':memory:') {
   console.error('Refusing to moderate an unspecified/in-memory database. Pass --db <sqlite>.');
   usage(2);
+}
+if (!existsSync(dbPath)) {
+  console.error(`Refusing to create a new moderation database: ${dbPath} does not exist.`);
+  process.exit(2);
+}
+try {
+  if (!statSync(dbPath).isFile()) {
+    console.error(`Refusing moderation database path that is not a file: ${dbPath}`);
+    process.exit(2);
+  }
+} catch (error) {
+  console.error(`Cannot inspect moderation database ${dbPath}: ${error.message}`);
+  process.exit(2);
 }
 
 const [command, targetAccountId, requestedStatus, ...extra] = parsed.positional;

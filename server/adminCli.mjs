@@ -7,6 +7,8 @@ const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { AdminAuthService, ADMIN_ROLES } = require('./adminAuth');
 
+const CLI_ACTOR = Object.freeze({ name: 'admin-cli', role: 'system' });
+
 function usage(exitCode = 0) {
   const out = exitCode ? console.error : console.log;
   out(`Wobble Rush admin CLI
@@ -75,18 +77,15 @@ try {
   const admin = new AdminAuthService({ db });
   if (command === 'create') {
     if (targetId) usage(2);
-    const result = admin.createUser({ name: parsed.options.name, role: parsed.options.role });
+    const result = admin.createUser({
+      name: parsed.options.name,
+      role: parsed.options.role,
+      actor: CLI_ACTOR
+    });
     if (!result.ok) {
       console.error(JSON.stringify(result, null, 2));
       process.exitCode = 1;
     } else {
-      admin.audit({
-        actor: { name: 'admin-cli', role: 'system' },
-        action: 'admin.user.create',
-        targetType: 'admin-user',
-        targetId: result.user.id,
-        detail: { role: result.user.role }
-      });
       console.log(JSON.stringify(result, null, 2));
     }
   } else if (command === 'list') {
@@ -94,28 +93,14 @@ try {
     console.log(JSON.stringify({ ok: true, users: admin.listUsers() }, null, 2));
   } else if (command === 'rotate') {
     if (!targetId) usage(2);
-    const result = admin.rotateAccessCode(targetId);
+    const result = admin.rotateAccessCode(targetId, { actor: CLI_ACTOR });
     if (!result.ok) process.exitCode = 1;
-    else
-      admin.audit({
-        actor: { name: 'admin-cli', role: 'system' },
-        action: 'admin.user.rotate-access',
-        targetType: 'admin-user',
-        targetId
-      });
     console.log(JSON.stringify(result, null, 2));
   } else if (command === 'disable' || command === 'enable') {
     if (!targetId) usage(2);
     const disabled = command === 'disable';
-    const result = admin.setDisabled(targetId, disabled);
+    const result = admin.setDisabled(targetId, disabled, { actor: CLI_ACTOR });
     if (!result.ok) process.exitCode = 1;
-    else
-      admin.audit({
-        actor: { name: 'admin-cli', role: 'system' },
-        action: disabled ? 'admin.user.disable' : 'admin.user.enable',
-        targetType: 'admin-user',
-        targetId
-      });
     console.log(JSON.stringify(result, null, 2));
   } else {
     usage(2);

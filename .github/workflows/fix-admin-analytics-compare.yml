@@ -1,0 +1,71 @@
+name: Temporary fix analytics comparison UI
+
+on:
+  push:
+    branches: [feat/admin-analytics-usability]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/admin-analytics-usability
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Fix comparison cards
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('client/admin/admin.js')
+          text = path.read_text()
+          old = """  const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+            const cards = $('#analytics-kpis');"""
+          new = """  const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+            const compareHint = (currentValue, previousValue, formatter = formatNumber) =>
+              comparisonAvailable
+                ? comparisonHint(currentValue, previousValue, formatter)
+                : comparisonUnavailableHint;
+            const cards = $('#analytics-kpis');"""
+          if old not in text:
+              raise SystemExit('comparison helper anchor not found')
+          text = text.replace(old, new)
+          replacements = {
+            "comparisonHint(current.started, previous.started)": "compareHint(current.started, previous?.started)",
+            "comparisonHint(current.finished, previous.finished)": "compareHint(current.finished, previous?.finished)",
+            "comparisonHint(current.abandoned, previous.abandoned)": "compareHint(current.abandoned, previous?.abandoned)",
+            "comparisonHint(current.falls, previous.falls)": "compareHint(current.falls, previous?.falls)",
+            "current.abandoned > previous.abandoned ? 'warn' : ''": "comparisonAvailable && current.abandoned > Number(previous?.abandoned || 0) ? 'warn' : ''",
+            "current.falls > previous.falls ? 'warn' : ''": "comparisonAvailable && current.falls > Number(previous?.falls || 0) ? 'warn' : ''"
+          }
+          for old_value, new_value in replacements.items():
+              if old_value not in text:
+                  raise SystemExit(f'comparison replacement not found: {old_value}')
+              text = text.replace(old_value, new_value)
+          path.write_text(text)
+          PY
+
+      - name: Format file
+        run: npx prettier --write client/admin/admin.js
+
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/admin/admin.js
+          git commit -m 'Handle unavailable analytics comparison in UI'
+          git push origin HEAD:feat/admin-analytics-usability

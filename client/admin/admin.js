@@ -301,23 +301,20 @@ function renderModerationCase(item) {
   const status = $('#case-status');
   status.textContent = item.status;
   status.dataset.status = item.status;
-  $('#case-reports').textContent = `${formatNumber(item.uniqueReporters)} reporters · ${formatNumber(item.totalReports)} reports · ${reasonsText(item.reasons)}`;
+  $('#case-reports').textContent =
+    `${formatNumber(item.uniqueReporters)} reporters · ${formatNumber(item.totalReports)} reports · ${reasonsText(item.reasons)}`;
   $('#case-last').textContent = `Последняя жалоба: ${formatTime(item.lastReportedAt)}`;
 
   const evidenceRoot = $('#case-evidence');
   evidenceRoot.replaceChildren();
   for (const evidence of item.evidence || []) {
-    itemCard(
-      evidenceRoot,
-      evidence.reason,
-      [
-        formatTime(evidence.reportedAt),
-        `reporter ${evidence.reporterAccountId}`,
-        evidence.chapterIdSnapshot ? `chapter ${evidence.chapterIdSnapshot}` : null,
-        evidence.targetNameSnapshot ? `name «${evidence.targetNameSnapshot}»` : null,
-        Number(evidence.occurrences) > 1 ? `${evidence.occurrences} legacy occurrences` : null
-      ]
-    );
+    itemCard(evidenceRoot, evidence.reason, [
+      formatTime(evidence.reportedAt),
+      `reporter ${evidence.reporterAccountId}`,
+      evidence.chapterIdSnapshot ? `chapter ${evidence.chapterIdSnapshot}` : null,
+      evidence.targetNameSnapshot ? `name «${evidence.targetNameSnapshot}»` : null,
+      Number(evidence.occurrences) > 1 ? `${evidence.occurrences} legacy occurrences` : null
+    ]);
   }
   if (!item.evidence?.length) appendText(evidenceRoot, 'p', 'Evidence отсутствует.', 'muted');
 
@@ -374,7 +371,13 @@ async function submitModerationTransition(event) {
     return;
   }
 
-  const signature = JSON.stringify([item.targetAccountId, item.status, item.lastReportedAt, nextStatus, note]);
+  const signature = JSON.stringify([
+    item.targetAccountId,
+    item.status,
+    item.lastReportedAt,
+    nextStatus,
+    note
+  ]);
   const now = Date.now();
   if (
     !state.moderationConfirmation ||

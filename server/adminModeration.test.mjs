@@ -34,18 +34,22 @@ function prepareDatabase() {
   insertAccount.run('reporter-a', 'Reporter A', 'reporter-a-hash', 1, 1);
   insertAccount.run('reporter-b', 'Reporter B', 'reporter-b-hash', 1, 1);
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO social_reports
       (reporter_account_id, target_account_id, reason, report_count, first_reported_at,
        last_reported_at, target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('reporter-a', 'target', 'griefing', 1, 1000, 1000, 'Old Name', 'ch4');
-  db.prepare(`
+  `
+  ).run('reporter-a', 'target', 'griefing', 1, 1000, 1000, 'Old Name', 'ch4');
+  db.prepare(
+    `
     INSERT INTO social_report_evidence
       (reporter_account_id, target_account_id, reason, reported_at, occurrences,
        target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run('reporter-a', 'target', 'griefing', 1000, 1, 'Old Name', 'ch4');
+  `
+  ).run('reporter-a', 'target', 'griefing', 1000, 1, 'Old Name', 'ch4');
 
   const control = new AdminControlService({
     db,
@@ -57,7 +61,11 @@ function prepareDatabase() {
 }
 
 function createModerator(adminAuth, role = 'moderator') {
-  const created = adminAuth.createUser({ name: role === 'moderator' ? 'Moderator' : 'Viewer', role, now: 100 });
+  const created = adminAuth.createUser({
+    name: role === 'moderator' ? 'Moderator' : 'Viewer',
+    role,
+    now: 100
+  });
   assert.equal(created.ok, true);
   return created;
 }
@@ -88,7 +96,9 @@ test('admin moderation shows immutable evidence and writes moderation + admin au
   assert.equal(result.case.history.at(-1).moderatorName, 'Moderator');
 
   const moderationEvent = db
-    .prepare('SELECT from_status, to_status, moderator_id, note FROM moderation_events ORDER BY id DESC LIMIT 1')
+    .prepare(
+      'SELECT from_status, to_status, moderator_id, note FROM moderation_events ORDER BY id DESC LIMIT 1'
+    )
     .get();
   assert.deepEqual(
     { ...moderationEvent },
@@ -130,18 +140,22 @@ test('admin moderation rejects stale decisions when new evidence arrives after t
   const moderator = createModerator(adminAuth);
   const opened = control.moderationCase('target');
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO social_reports
       (reporter_account_id, target_account_id, reason, report_count, first_reported_at,
        last_reported_at, target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('reporter-b', 'target', 'exploit-cheat', 1, 1100, 1100, 'New Snapshot', 'ch5');
-  db.prepare(`
+  `
+  ).run('reporter-b', 'target', 'exploit-cheat', 1, 1100, 1100, 'New Snapshot', 'ch5');
+  db.prepare(
+    `
     INSERT INTO social_report_evidence
       (reporter_account_id, target_account_id, reason, reported_at, occurrences,
        target_name_snapshot, chapter_id_snapshot)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run('reporter-b', 'target', 'exploit-cheat', 1100, 1, 'New Snapshot', 'ch5');
+  `
+  ).run('reporter-b', 'target', 'exploit-cheat', 1100, 1, 'New Snapshot', 'ch5');
 
   const stale = control.moderationTransition({
     targetAccountId: 'target',

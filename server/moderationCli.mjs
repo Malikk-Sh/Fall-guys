@@ -67,6 +67,7 @@ const [command, targetAccountId, requestedStatus, ...extra] = parsed.positional;
 if (!command || extra.length) usage(2);
 
 const db = openDatabase(dbPath);
+db.exec('PRAGMA busy_timeout = 5000');
 try {
   const moderation = new ModerationQueue({ db });
 

@@ -5,6 +5,8 @@ const state = {
   admin: null,
   capabilities: new Set(),
   currentPanel: 'overview',
+  sessionGeneration: 0,
+  refreshRevision: 0,
   infrastructure: null,
   analytics: null,
   analyticsLoadRevision: 0,
@@ -144,6 +146,13 @@ function showLogin(message = '') {
   state.analytics = null;
   state.operations = null;
   clearOperationConfirmation();
+  state.sessionGeneration += 1;
+  state.refreshRevision += 1;
+  document.body.dataset.adminSession = 'login';
+  const refresh = $('#refresh');
+  refresh.disabled = false;
+  refresh.removeAttribute('aria-busy');
+  $('#app-view').removeAttribute('aria-busy');
   $('#app-view').hidden = true;
   $('#identity').hidden = true;
   $('#login-view').hidden = false;
@@ -154,6 +163,8 @@ function activateSession(payload) {
   state.csrf = payload.csrf;
   state.admin = payload.admin;
   state.capabilities = new Set(payload.capabilities || []);
+  state.sessionGeneration += 1;
+  document.body.dataset.adminSession = 'active';
   $('#admin-name').textContent = payload.admin.name;
   $('#admin-role').textContent = ROLE_LABELS[payload.admin.role] || payload.admin.role;
   $('#admin-role').title = `Техническое название роли: ${payload.admin.role}`;
@@ -176,7 +187,18 @@ function switchPanel(name) {
   if (name !== 'operations') clearOperationConfirmation();
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
-  for (const item of $$('#tabs [data-panel]')) item.classList.toggle('active', item.dataset.panel === name);
+  for (const item of $$('#tabs [data-panel]')) {
+    const active = item.dataset.panel === name;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  }
+  const activeButton = $(`#tabs [data-panel="${name}"]`);
+  activeButton?.scrollIntoView({
+    block: 'nearest',
+    inline: 'center',
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+  });
   refreshCurrent();
 }
 
@@ -257,7 +279,7 @@ function appendText(parent, tag, text, className = '') {
 
 function statCard(label, value, hint = '', tone = '') {
   const card = document.createElement('article');
-  card.className = 'stat';
+  card.className = `stat${tone ? ` stat-${tone}` : ''}`;
   appendText(card, 'span', label, 'label');
   appendText(card, 'strong', value, `value ${tone}`.trim());
   if (hint) appendText(card, 'span', hint, 'hint');
@@ -1350,16 +1372,34 @@ async function refreshCurrent() {
     operations: loadOperations,
     audit: loadAudit
   };
-  const loader = loaders[state.currentPanel];
+  const panel = state.currentPanel;
+  const loader = loaders[panel];
   if (!loader) return;
+
+  const revision = ++state.refreshRevision;
+  const sessionGeneration = state.sessionGeneration;
+  const refresh = $('#refresh');
+  refresh.disabled = true;
+  refresh.setAttribute('aria-busy', 'true');
+  $('#app-view').setAttribute('aria-busy', 'true');
   setStatus('Обновляю данные…');
+
   try {
     const result = await loader();
+    if (revision !== state.refreshRevision || panel !== state.currentPanel) return;
     if (result?.statusText) setStatus(result.statusText, result.tone || '');
     else setStatus(`Данные обновлены в ${new Date().toLocaleTimeString('ru-RU')}`, 'good');
   } catch (error) {
-    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    if (error.status === 401 && sessionGeneration === state.sessionGeneration)
+      return showLogin('Сессия администратора завершена. Войдите снова.');
+    if (revision !== state.refreshRevision || panel !== state.currentPanel) return;
     setStatus(`Ошибка: ${error.message}`, 'bad');
+  } finally {
+    if (revision === state.refreshRevision) {
+      refresh.disabled = false;
+      refresh.removeAttribute('aria-busy');
+      $('#app-view').removeAttribute('aria-busy');
+    }
   }
 }
 

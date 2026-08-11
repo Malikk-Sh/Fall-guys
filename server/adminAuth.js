@@ -19,7 +19,7 @@ const ROLE_CAPABILITIES = Object.freeze({
     'ops.execute'
   ]),
   operator: Object.freeze(['dashboard.read', 'analytics.read', 'moderation.read', 'audit.read']),
-  moderator: Object.freeze(['dashboard.read', 'moderation.read']),
+  moderator: Object.freeze(['dashboard.read', 'moderation.read', 'moderation.write']),
   analyst: Object.freeze(['dashboard.read', 'analytics.read']),
   viewer: Object.freeze(['dashboard.read'])
 });

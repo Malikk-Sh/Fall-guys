@@ -22,6 +22,7 @@ function installAdminRoutes({
   app,
   adminAuth,
   control,
+  infrastructure = null,
   operations = null,
   enabled = false,
   loginRateLimitKey = req => req.socket.remoteAddress || 'local-proxy',
@@ -213,6 +214,22 @@ function installAdminRoutes({
       });
     }
     return res.json(result);
+  });
+
+  app.post('/api/admin/infrastructure', json, async (req, res) => {
+    const resolved = requireAdmin(req, res, 'infrastructure.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set())) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!infrastructure || typeof infrastructure.snapshot !== 'function') {
+      return res.status(503).json({ ok: false, error: 'infrastructure-unavailable' });
+    }
+    try {
+      return res.json({ ok: true, infrastructure: await infrastructure.snapshot() });
+    } catch {
+      return res.status(503).json({ ok: false, error: 'infrastructure-unavailable' });
+    }
   });
 
   app.post('/api/admin/operations/status', json, (req, res) => {

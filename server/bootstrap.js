@@ -31,6 +31,7 @@ const { installRewardRoutes } = require('./rewardRoutes');
 const { installSocialRoutes } = require('./socialRoutes');
 const { AdminAuthService } = require('./adminAuth');
 const { AdminControlService } = require('./adminControl');
+const { AdminInfrastructure } = require('./adminInfrastructure');
 const { AdminOperationsClient } = require('./adminOperationsClient');
 const { installAdminRoutes } = require('./adminRoutes');
 const { networkIdentity } = require('./networkIdentity');
@@ -47,6 +48,7 @@ const adminControl = new AdminControlService({
   gameplay: core.gameplay,
   adminAuth
 });
+const adminInfrastructure = new AdminInfrastructure({ health: core.health });
 const adminOperations = new AdminOperationsClient();
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
@@ -100,6 +102,7 @@ installAdminRoutes({
   app: core.app,
   adminAuth,
   control: adminControl,
+  infrastructure: adminInfrastructure,
   operations: adminOperations,
   enabled: adminPanelEnabled,
   // The shared-443 stream topology does not preserve the public client address to the HTTP
@@ -137,4 +140,14 @@ if (require.main === module) {
   process.on('SIGINT', () => core.shutdown('SIGINT'));
 }
 
-module.exports = { ...core, auth, google, inventory, rewards, adminAuth, adminControl, adminOperations };
+module.exports = {
+  ...core,
+  auth,
+  google,
+  inventory,
+  rewards,
+  adminAuth,
+  adminControl,
+  adminInfrastructure,
+  adminOperations
+};

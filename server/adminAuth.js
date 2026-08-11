@@ -11,6 +11,7 @@ const ADMIN_ROLES = Object.freeze(['owner', 'operator', 'moderator', 'analyst', 
 const ROLE_CAPABILITIES = Object.freeze({
   owner: Object.freeze([
     'dashboard.read',
+    'infrastructure.read',
     'analytics.read',
     'player-support.read',
     'moderation.read',
@@ -21,6 +22,7 @@ const ROLE_CAPABILITIES = Object.freeze({
   ]),
   operator: Object.freeze([
     'dashboard.read',
+    'infrastructure.read',
     'analytics.read',
     'player-support.read',
     'moderation.read',

@@ -44,16 +44,13 @@ function post(base, route, loginState, body = {}) {
 }
 
 test('systemd parser and public target expose only structured operational fields', () => {
-  assert.deepEqual(
-    parseSystemdShow('ActiveState=active\nSubState=running\nUnitFileState=enabled\n'),
-    {
-      found: true,
-      active: true,
-      activeState: 'active',
-      subState: 'running',
-      unitFileState: 'enabled'
-    }
-  );
+  assert.deepEqual(parseSystemdShow('ActiveState=active\nSubState=running\nUnitFileState=enabled\n'), {
+    found: true,
+    active: true,
+    activeState: 'active',
+    subState: 'running',
+    unitFileState: 'enabled'
+  });
   assert.deepEqual(publicTarget({ ALLOWED_ORIGINS: 'https://wobbles.ru' }), {
     origin: 'https://wobbles.ru',
     hostname: 'wobbles.ru',
@@ -154,7 +151,15 @@ test('infrastructure endpoint is read-only and limited to owner/operator', async
   const infrastructure = {
     snapshot: async () => {
       calls.push('snapshot');
-      return { generatedAt: 'now', services: {}, resources: {}, network: {}, https: {}, backup: null, game: {} };
+      return {
+        generatedAt: 'now',
+        services: {},
+        resources: {},
+        network: {},
+        https: {},
+        backup: null,
+        game: {}
+      };
     }
   };
   const app = express();

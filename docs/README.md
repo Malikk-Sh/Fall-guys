@@ -40,6 +40,8 @@
 - [`MODERATION.md`](MODERATION.md) — data model и точная семантика moderation queue.
 - [`ACCOUNT-SELF-SERVICE.md`](ACCOUNT-SELF-SERVICE.md) — active sessions, recovery rotation и logout.
 - [`RELEASE-PROCESS.md`](RELEASE-PROCESS.md) — immutable tags, GitHub Release и exact-release deploy.
+- [`OPERATIONS-CONTROL.md`](OPERATIONS-CONTROL.md) — безопасная privileged-граница owner-only операций.
+- [`INFRASTRUCTURE-STATUS.md`](INFRASTRUCTURE-STATUS.md) — read-only диагностика VPS во вкладке «Сервер».
 
 ## Приоритет источников
 

@@ -48,6 +48,7 @@
       <section id="app-view" hidden>
         <nav id="tabs" class="tabs" aria-label="Разделы панели">
           <button data-panel="overview" data-capability="dashboard.read" class="active">Обзор</button>
+          <button data-panel="infrastructure" data-capability="infrastructure.read">Сервер</button>
           <button data-panel="analytics" data-capability="analytics.read">Статистика</button>
           <button data-panel="players" data-capability="player-support.read">Игроки</button>
           <button data-panel="moderation" data-capability="moderation.read">Модерация</button>
@@ -88,6 +89,84 @@
               <dl id="load-details" class="details"></dl>
             </article>
           </div>
+        </section>
+
+        <section id="panel-infrastructure" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Что показывает раздел «Сервер»?</summary>
+            <p>
+              Это только диагностика. Здесь видно, запущены ли Wobble и Nginx, хватает ли памяти и места на
+              диске, работает ли HTTPS и свежая ли резервная копия. «Обновить данные» ничего не перезапускает
+              и не меняет.
+            </p>
+            <p>
+              Проверка не редактирует Nginx, firewall, shared 443 или VPN/Xray. Если что-то отмечено красным,
+              сначала прочитайте пояснение рядом с показателем, а затем используйте runbook или вкладку
+              «Операции» только для разрешённых действий Wobble.
+            </p>
+          </details>
+
+          <div id="infrastructure-summary" class="cards"></div>
+
+          <div class="grid-two">
+            <article class="card">
+              <h2>Системные службы</h2>
+              <p class="section-help">
+                Служба — это процесс или таймер, которым управляет systemd. «Работает» означает, что systemd
+                считает её активной; это не изменяет её состояние.
+              </p>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Что проверяется</th>
+                      <th>Состояние</th>
+                      <th>Автозапуск</th>
+                    </tr>
+                  </thead>
+                  <tbody id="infrastructure-services-body"></tbody>
+                </table>
+              </div>
+            </article>
+
+            <article class="card">
+              <h2>HTTPS-сертификат</h2>
+              <p class="section-help">
+                Проверка делает настоящий TLS-вход через локальный порт 443 с доменом Wobble. Так мы видим
+                сертификат, который реально отдаёт Nginx через shared-443 маршрут.
+              </p>
+              <dl id="infrastructure-https-details" class="details"></dl>
+            </article>
+          </div>
+
+          <div class="grid-two">
+            <article class="card">
+              <h2>Ресурсы VPS</h2>
+              <p class="section-help">
+                Показывает общую память и свободное место на файловой системе базы данных. Панель не читает
+                содержимое файлов и не показывает список файлов.
+              </p>
+              <dl id="infrastructure-resource-details" class="details"></dl>
+            </article>
+
+            <article class="card">
+              <h2>Локальные точки подключения</h2>
+              <p class="section-help">
+                «Доступен» означает, что на нужном локальном порту кто-то принимает соединение. HTTPS ниже
+                дополнительно проверяется TLS-рукопожатием.
+              </p>
+              <dl id="infrastructure-network-details" class="details"></dl>
+            </article>
+          </div>
+
+          <article class="card">
+            <h2>Резервное копирование</h2>
+            <p class="section-help">
+              Здесь тот же безопасный статус backup, который использует health-check. Offsite — копия вне VPS;
+              если она ещё не настроена, панель так и напишет, не выдавая это за ошибку локального backup.
+            </p>
+            <dl id="infrastructure-backup-details" class="details"></dl>
+          </article>
         </section>
 
         <section id="panel-analytics" class="panel" hidden>

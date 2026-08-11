@@ -48,13 +48,7 @@ async function readSystemdUnit(unit) {
   try {
     const { stdout } = await execFileAsync(
       SYSTEMCTL,
-      [
-        'show',
-        unit,
-        '--property=ActiveState',
-        '--property=SubState',
-        '--property=UnitFileState'
-      ],
+      ['show', unit, '--property=ActiveState', '--property=SubState', '--property=UnitFileState'],
       { timeout: 2000, maxBuffer: 16 * 1024, windowsHide: true }
     );
     return parseSystemdShow(stdout);
@@ -116,7 +110,9 @@ function tlsProbe({ host = '127.0.0.1', port = 443, servername, timeoutMs = 2500
       finish({
         reachable: true,
         trusted: Boolean(socket.authorized),
-        authorizationError: socket.authorized ? null : String(socket.authorizationError || 'untrusted').slice(0, 120),
+        authorizationError: socket.authorized
+          ? null
+          : String(socket.authorizationError || 'untrusted').slice(0, 120),
         latencyMs: Math.max(0, Date.now() - started),
         validFrom: Number.isFinite(validFromMs) ? new Date(validFromMs).toISOString() : null,
         validTo: Number.isFinite(validToMs) ? new Date(validToMs).toISOString() : null,
@@ -144,7 +140,8 @@ function publicTarget(env) {
 
 function diskStatus(databaseFile, statfs = fs.statfsSync) {
   try {
-    const target = databaseFile && databaseFile !== ':memory:' ? path.dirname(path.resolve(databaseFile)) : '/';
+    const target =
+      databaseFile && databaseFile !== ':memory:' ? path.dirname(path.resolve(databaseFile)) : '/';
     const info = statfs(target);
     const blockSize = Number(info.bsize || info.frsize || 0);
     const totalBytes = blockSize * Number(info.blocks || 0);

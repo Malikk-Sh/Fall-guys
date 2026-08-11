@@ -5,6 +5,7 @@ const state = {
   admin: null,
   capabilities: new Set(),
   currentPanel: 'overview',
+  infrastructure: null,
   analytics: null,
   analyticsLoadRevision: 0,
   playerDetailRevision: 0,
@@ -139,6 +140,7 @@ function showLogin(message = '') {
   state.csrf = '';
   state.admin = null;
   state.capabilities = new Set();
+  state.infrastructure = null;
   state.analytics = null;
   state.operations = null;
   clearOperationConfirmation();
@@ -180,6 +182,34 @@ function switchPanel(name) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat('ru-RU').format(Number(value || 0));
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  let amount = bytes;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toLocaleString('ru-RU', { maximumFractionDigits: index >= 3 ? 1 : 0 })} ${units[index]}`;
+}
+
+function percent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toLocaleString('ru-RU', { maximumFractionDigits: 1 })}%` : '—';
+}
+
+function availability(value) {
+  return value ? 'Доступен' : 'Недоступен';
+}
+
+function serviceState(service) {
+  if (!service?.found) return 'Не найден';
+  if (service.active) return 'Работает';
+  return `Не активен (${service.activeState || 'unknown'})`;
 }
 
 function formatBoundedCount(value, truncated) {
@@ -1003,6 +1033,151 @@ async function submitModerationTransition(event) {
   }
 }
 
+function infrastructureTone(infra) {
+  if (!infra) return 'bad';
+  if (
+    !infra.services?.wobble?.active ||
+    !infra.services?.nginx?.active ||
+    !infra.network?.https443?.reachable ||
+    !infra.https?.reachable ||
+    infra.https?.expired ||
+    infra.backup?.stale ||
+    (infra.resources?.disk?.usedPercent ?? 0) >= 95
+  ) {
+    return 'bad';
+  }
+  if (
+    !infra.https?.trusted ||
+    (infra.https?.daysRemaining != null && infra.https.daysRemaining < 14) ||
+    (infra.resources?.disk?.usedPercent ?? 0) >= 85
+  ) {
+    return 'warn';
+  }
+  return 'good';
+}
+
+function renderInfrastructure(payload) {
+  const infra = payload.infrastructure;
+  state.infrastructure = infra;
+  const summary = $('#infrastructure-summary');
+  summary.replaceChildren();
+
+  const wobbleOk = Boolean(infra.services?.wobble?.active && infra.network?.nodeLocal?.reachable);
+  const nginxOk = Boolean(infra.services?.nginx?.active && infra.network?.https443?.reachable);
+  const certDays = infra.https?.daysRemaining;
+  const certOk = Boolean(infra.https?.reachable && infra.https?.trusted && !infra.https?.expired);
+  const diskUsed = infra.resources?.disk?.usedPercent;
+  const backupOk = Boolean(
+    infra.backup && !infra.backup.stale && (!infra.backup.required || infra.backup.available)
+  );
+
+  summary.append(
+    statCard(
+      'Сервер игры',
+      wobbleOk ? 'РАБОТАЕТ' : 'ТРЕБУЕТ ПРОВЕРКИ',
+      'wobble.service + локальный Node-порт',
+      wobbleOk ? 'good' : 'bad'
+    ),
+    statCard(
+      'Nginx / HTTPS',
+      nginxOk ? 'РАБОТАЕТ' : 'ТРЕБУЕТ ПРОВЕРКИ',
+      'systemd + локальный порт 443',
+      nginxOk ? 'good' : 'bad'
+    ),
+    statCard(
+      'Сертификат',
+      certOk ? `${formatNumber(certDays)} дн.` : 'ТРЕБУЕТ ПРОВЕРКИ',
+      certOk ? 'до окончания HTTPS-сертификата' : 'TLS недоступен, просрочен или не доверен',
+      certOk && certDays >= 14 ? 'good' : certOk ? 'warn' : 'bad'
+    ),
+    statCard(
+      'Диск',
+      diskUsed == null ? 'НЕТ ДАННЫХ' : `${percent(diskUsed)} занято`,
+      `свободно ${formatBytes(infra.resources?.disk?.availableBytes)}`,
+      diskUsed == null ? 'warn' : diskUsed >= 95 ? 'bad' : diskUsed >= 85 ? 'warn' : 'good'
+    ),
+    statCard(
+      'Backup',
+      backupOk ? 'СВЕЖИЙ' : 'ТРЕБУЕТ ПРОВЕРКИ',
+      backupOk ? 'последняя копия в допустимом возрасте' : 'копия отсутствует или устарела',
+      backupOk ? 'good' : 'bad'
+    )
+  );
+
+  const servicesBody = $('#infrastructure-services-body');
+  servicesBody.replaceChildren();
+  for (const service of Object.values(infra.services || {})) {
+    servicesBody.append(
+      rowWithCells([
+        `${service.label} (${service.unit})`,
+        serviceState(service),
+        service.unitFileState === 'enabled'
+          ? 'Включён'
+          : service.unitFileState === 'disabled'
+            ? 'Выключен'
+            : service.unitFileState || '—'
+      ])
+    );
+  }
+
+  fillDetails('#infrastructure-https-details', [
+    ['Домен', infra.publicTarget?.hostname || 'Не определён'],
+    ['TLS-подключение', availability(infra.https?.reachable)],
+    ['Сертификат доверен', infra.https?.trusted ? 'Да' : 'Нет / не удалось проверить'],
+    ['Действителен до', formatTime(infra.https?.validTo)],
+    ['Осталось дней', certDays == null ? '—' : formatNumber(certDays)],
+    ['Задержка TLS', formatMilliseconds(infra.https?.latencyMs)]
+  ]);
+
+  const memory = infra.resources?.memory || {};
+  const disk = infra.resources?.disk || {};
+  fillDetails('#infrastructure-resource-details', [
+    ['VPS работает без перезагрузки', formatDuration(infra.resources?.hostUptimeSeconds)],
+    [
+      'Память занята',
+      `${formatBytes(memory.usedBytes)} / ${formatBytes(memory.totalBytes)} (${percent(memory.usedPercent)})`
+    ],
+    ['Память свободна', formatBytes(memory.freeBytes)],
+    [
+      'Диск занят',
+      `${formatBytes(disk.usedBytes)} / ${formatBytes(disk.totalBytes)} (${percent(disk.usedPercent)})`
+    ],
+    ['Диск свободен', formatBytes(disk.availableBytes)],
+    ['Средняя нагрузка 1 / 5 / 15 мин', (infra.resources?.loadAverage || []).join(' / ') || '—']
+  ]);
+
+  fillDetails('#infrastructure-network-details', [
+    ['HTTP :80', availability(infra.network?.http80?.reachable)],
+    ['Shared HTTPS :443', availability(infra.network?.https443?.reachable)],
+    [
+      `Node 127.0.0.1:${infra.network?.nodeLocal?.port || 3000}`,
+      availability(infra.network?.nodeLocal?.reachable)
+    ],
+    ['TLS через SNI Wobble', availability(infra.https?.reachable)]
+  ]);
+
+  const backup = infra.backup || {};
+  const offsite = backup.offsite || {};
+  fillDetails('#infrastructure-backup-details', [
+    ['Локальная копия', backup.available ? 'Есть' : 'Нет'],
+    ['Свежесть', backup.stale ? 'Устарела / проблема' : backup.available ? 'В норме' : 'Нет данных'],
+    ['Последний успех', formatTime(backup.lastSuccessAt)],
+    ['Возраст', backup.ageSeconds == null ? '—' : formatDuration(backup.ageSeconds)],
+    ['Проверка целостности', backup.integrity || '—'],
+    ['Offsite настроен', offsite.configured ? 'Да' : 'Нет'],
+    ['Offsite обязателен', offsite.required ? 'Да' : 'Нет'],
+    ['Offsite доступен', offsite.configured ? (offsite.available ? 'Да' : 'Нет') : 'Не настроен']
+  ]);
+
+  const tone = infrastructureTone(infra);
+  if (tone === 'good') setStatus('Серверные проверки не показывают явных проблем.', 'good');
+}
+
+async function loadInfrastructure() {
+  const payload = await api('/api/admin/infrastructure', {});
+  renderInfrastructure(payload);
+}
+
 function clearOperationConfirmation() {
   state.operationConfirmation = null;
   if (state.operationConfirmationTimer) clearTimeout(state.operationConfirmationTimer);
@@ -1155,6 +1330,7 @@ async function loadAudit() {
 async function refreshCurrent() {
   const loaders = {
     overview: loadOverview,
+    infrastructure: loadInfrastructure,
     analytics: loadAnalytics,
     players: loadPlayers,
     moderation: loadModeration,

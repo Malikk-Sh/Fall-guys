@@ -56,8 +56,24 @@ class AdminControlService {
     return this.#decorateCase(this.moderation.get(targetAccountId));
   }
 
-  moderationTransition({ targetAccountId, status, note, actor, now = Date.now() } = {}) {
+  moderationTransition({
+    targetAccountId,
+    status,
+    note,
+    expectedStatus,
+    expectedLastReportedAt,
+    actor,
+    now = Date.now()
+  } = {}) {
     if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    const current = this.moderation.get(targetAccountId);
+    if (!current) return { ok: false, reason: 'no-reports' };
+    if (
+      String(expectedStatus || '') !== current.status ||
+      Number(expectedLastReportedAt) !== current.lastReportedAt
+    ) {
+      return { ok: false, reason: 'case-changed', case: this.#decorateCase(current) };
+    }
     const result = this.moderation.transition({
       targetAccountId,
       status,

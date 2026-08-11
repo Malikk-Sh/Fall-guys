@@ -80,6 +80,38 @@ function buildTrend(rows, from, days) {
   return [...byDay.values()];
 }
 
+function periodFor({ now, days, retentionDays }) {
+  if (days === 1) {
+    const today = dayKey(now);
+    return {
+      from: today,
+      to: today,
+      live: true,
+      comparisonAvailable: false,
+      comparisonReason: 'current-day-incomplete',
+      previousFrom: null,
+      previousTo: null
+    };
+  }
+
+  // Daily metrics cannot compare equal elapsed fractions of two calendar days. For multi-day
+  // reports use only completed UTC days, so every compared bucket covers the same amount of time.
+  const from = dayKey(now - days * DAY_MS);
+  const to = dayKey(now - DAY_MS);
+  const previousFrom = dayKey(now - days * 2 * DAY_MS);
+  const previousTo = dayKey(now - (days + 1) * DAY_MS);
+  const comparisonAvailable = days * 2 <= retentionDays;
+  return {
+    from,
+    to,
+    live: false,
+    comparisonAvailable,
+    comparisonReason: comparisonAvailable ? null : 'retention-window',
+    previousFrom: comparisonAvailable ? previousFrom : null,
+    previousTo: comparisonAvailable ? previousTo : null
+  };
+}
+
 class AdminAnalytics {
   constructor({ db, gameplay, now } = {}) {
     if (!db) throw new Error('AdminAnalytics requires an open database');
@@ -109,16 +141,13 @@ class AdminAnalytics {
     this.statements ||= prepare(this.db);
 
     const now = this.now();
-    const from = dayKey(now - (periodDays - 1) * DAY_MS);
-    const previousFrom = dayKey(now - (periodDays * 2 - 1) * DAY_MS);
-    const previousTo = dayKey(now - periodDays * DAY_MS);
     const retentionDays = Number.isFinite(Number(this.gameplay.retentionDays))
       ? Math.max(0, Number(this.gameplay.retentionDays))
       : MAX_DAYS;
-    const comparisonAvailable = periodDays * 2 - 1 <= retentionDays;
+    const period = periodFor({ now, days: periodDays, retentionDays });
     const args = filterArgs(filters);
 
-    const rawRows = this.statements.rows.all(from, ...args, rowLimit + 1);
+    const rawRows = this.statements.rows.all(period.from, period.to, ...args, rowLimit + 1);
     const truncated = rawRows.length > rowLimit;
     const rows = rawRows.slice(0, rowLimit).map(row => ({
       metric: row.metric,
@@ -130,15 +159,19 @@ class AdminAnalytics {
       average: Number(row.total) ? Math.round(Number(row.total) / Number(row.samples)) : null
     }));
 
-    const currentKpiRows = this.statements.kpis.all(from, ...args);
-    const previousKpiRows = comparisonAvailable
-      ? this.statements.kpisBetween.all(previousFrom, previousTo, ...args)
+    const currentKpiRows = this.statements.kpis.all(period.from, period.to, ...args);
+    const previousKpiRows = period.comparisonAvailable
+      ? this.statements.kpis.all(period.previousFrom, period.previousTo, ...args)
       : null;
-    const trendRows = this.statements.trend.all(from, ...args);
-    const fallHotspots = this.statements.hotspots.all(from, ...args, 'fall', 12).map(toHotspot);
-    const abandonHotspots = this.statements.hotspots.all(from, ...args, 'match_abandoned', 12).map(toHotspot);
+    const trendRows = this.statements.trend.all(period.from, period.to, ...args);
+    const fallHotspots = this.statements.hotspots
+      .all(period.from, period.to, ...args, 'fall', 12)
+      .map(toHotspot);
+    const abandonHotspots = this.statements.hotspots
+      .all(period.from, period.to, ...args, 'match_abandoned', 12)
+      .map(toHotspot);
 
-    const dimensions = this.statements.dimensions.all(from);
+    const dimensions = this.statements.dimensions.all(period.from, period.to);
     const options = {
       modes: [...new Set(dimensions.map(row => row.mode))].sort(),
       courses: [...new Set(dimensions.map(row => row.course))].sort(),
@@ -147,10 +180,13 @@ class AdminAnalytics {
 
     return {
       days: periodDays,
-      from,
-      previousFrom: comparisonAvailable ? previousFrom : null,
-      previousTo: comparisonAvailable ? previousTo : null,
-      comparisonAvailable,
+      from: period.from,
+      to: period.to,
+      live: period.live,
+      previousFrom: period.previousFrom,
+      previousTo: period.previousTo,
+      comparisonAvailable: period.comparisonAvailable,
+      comparisonReason: period.comparisonReason,
       retentionDays,
       dropped: Number(this.gameplay.dropped || 0),
       filters,
@@ -159,7 +195,7 @@ class AdminAnalytics {
         current: summarizeKpis(currentKpiRows),
         previous: previousKpiRows ? summarizeKpis(previousKpiRows) : null
       },
-      trend: buildTrend(trendRows, from, periodDays),
+      trend: buildTrend(trendRows, period.from, periodDays),
       hotspots: {
         falls: fallHotspots,
         abandons: abandonHotspots
@@ -190,18 +226,12 @@ function prepare(db) {
       SELECT metric, mode, course, detail, device,
              SUM(samples) AS samples, SUM(total) AS total
       FROM gameplay_metrics
-      WHERE day >= ? AND ${filtered}
+      WHERE day >= ? AND day <= ? AND ${filtered}
       GROUP BY metric, mode, course, detail, device
       ORDER BY samples DESC, metric ASC, mode ASC, course ASC, detail ASC, device ASC
       LIMIT ?
     `),
     kpis: db.prepare(`
-      SELECT metric, detail, SUM(samples) AS samples, SUM(total) AS total
-      FROM gameplay_metrics
-      WHERE day >= ? AND ${filtered}
-      GROUP BY metric, detail
-    `),
-    kpisBetween: db.prepare(`
       SELECT metric, detail, SUM(samples) AS samples, SUM(total) AS total
       FROM gameplay_metrics
       WHERE day >= ? AND day <= ? AND ${filtered}
@@ -210,7 +240,7 @@ function prepare(db) {
     trend: db.prepare(`
       SELECT day, metric, SUM(samples) AS samples
       FROM gameplay_metrics
-      WHERE day >= ? AND ${filtered}
+      WHERE day >= ? AND day <= ? AND ${filtered}
         AND metric IN ('match_started', 'match_finished', 'match_abandoned', 'fall')
       GROUP BY day, metric
       ORDER BY day ASC, metric ASC
@@ -218,7 +248,7 @@ function prepare(db) {
     hotspots: db.prepare(`
       SELECT course, detail, device, SUM(samples) AS samples
       FROM gameplay_metrics
-      WHERE day >= ? AND ${filtered} AND metric = ?
+      WHERE day >= ? AND day <= ? AND ${filtered} AND metric = ?
       GROUP BY course, detail, device
       ORDER BY samples DESC, course ASC, detail ASC, device ASC
       LIMIT ?
@@ -226,7 +256,7 @@ function prepare(db) {
     dimensions: db.prepare(`
       SELECT DISTINCT mode, course, device
       FROM gameplay_metrics
-      WHERE day >= ?
+      WHERE day >= ? AND day <= ?
       ORDER BY mode ASC, course ASC, device ASC
     `)
   };
@@ -239,5 +269,6 @@ module.exports = {
   TREND_METRICS,
   clampDays,
   normalizeFilter,
-  summarizeKpis
+  summarizeKpis,
+  periodFor
 };

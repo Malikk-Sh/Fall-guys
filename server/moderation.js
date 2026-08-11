@@ -8,16 +8,26 @@ const CLOSED_STATUSES = new Set(['resolved', 'dismissed']);
 const MAX_MODERATOR_ID = 80;
 const MAX_NOTE = 1000;
 
+function hasAsciiControl(value) {
+  const text = String(value || '');
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function normalizeModeratorId(value) {
-  const text = String(value || '').trim();
-  if (!text || text.length > MAX_MODERATOR_ID || /[\u0000-\u001f\u007f]/.test(text)) return null;
+  const raw = String(value || '');
+  const text = raw.trim();
+  if (!text || text.length > MAX_MODERATOR_ID || hasAsciiControl(raw)) return null;
   return text;
 }
 
 function normalizeNote(value) {
   if (value == null) return '';
   const text = String(value).trim();
-  if (text.length > MAX_NOTE || /\u0000/.test(text)) return null;
+  if (text.length > MAX_NOTE || text.includes(String.fromCharCode(0))) return null;
   return text;
 }
 

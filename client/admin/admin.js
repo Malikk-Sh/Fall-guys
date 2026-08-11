@@ -4,7 +4,9 @@ const state = {
   csrf: '',
   admin: null,
   capabilities: new Set(),
-  currentPanel: 'overview'
+  currentPanel: 'overview',
+  moderationCase: null,
+  moderationConfirmation: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -40,7 +42,15 @@ async function api(path, body = {}, { csrf = true } = {}) {
   return payload;
 }
 
+function closeModerationCase() {
+  state.moderationCase = null;
+  resetModerationConfirmation();
+  const dialog = $('#moderation-dialog');
+  if (dialog.open) dialog.close();
+}
+
 function showLogin(message = '') {
+  closeModerationCase();
   state.csrf = '';
   state.admin = null;
   state.capabilities = new Set();
@@ -69,6 +79,7 @@ function activateSession(payload) {
 function switchPanel(name) {
   const button = $(`#tabs [data-panel="${name}"]`);
   if (!button || button.hidden) name = 'overview';
+  if (name !== 'moderation') closeModerationCase();
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
   for (const item of $$('#tabs [data-panel]')) item.classList.toggle('active', item.dataset.panel === name);
@@ -224,22 +235,184 @@ async function loadModeration() {
   const body = $('#moderation-body');
   body.replaceChildren();
   for (const item of payload.cases || []) {
-    body.append(
-      rowWithCells([
-        `${item.currentName} · ${item.targetAccountId}`,
-        item.status,
-        item.uniqueReporters,
-        item.totalReports,
-        reasonsText(item.reasons),
-        formatTime(item.lastReportedAt)
-      ])
-    );
+    const row = rowWithCells([
+      `${item.currentName} · ${item.targetAccountId}`,
+      item.status,
+      item.uniqueReporters,
+      item.totalReports,
+      reasonsText(item.reasons),
+      formatTime(item.lastReportedAt)
+    ]);
+    const action = document.createElement('td');
+    const button = appendText(action, 'button', 'Открыть', 'case-open');
+    button.type = 'button';
+    button.addEventListener('click', () => openModerationCase(item.targetAccountId));
+    row.append(action);
+    body.append(row);
   }
   if (!payload.cases?.length) {
     const row = document.createElement('tr');
     const cell = appendText(row, 'td', 'Очередь пуста', 'empty');
-    cell.colSpan = 6;
+    cell.colSpan = 7;
     body.append(row);
+  }
+}
+
+function itemCard(root, title, meta, note = '') {
+  const card = document.createElement('article');
+  card.className = root.id === 'case-history' ? 'history-item' : 'evidence-item';
+  const head = document.createElement('div');
+  head.className = 'item-head';
+  appendText(head, 'strong', title);
+  card.append(head);
+  const details = document.createElement('div');
+  details.className = 'item-meta';
+  for (const value of meta.filter(Boolean)) appendText(details, 'span', value);
+  card.append(details);
+  if (note) appendText(card, 'p', note, 'item-note');
+  root.append(card);
+}
+
+function defaultModerationStatus(current) {
+  if (current === 'open') return 'reviewing';
+  if (current === 'reviewing') return 'resolved';
+  return 'reviewing';
+}
+
+function resetModerationConfirmation(message = '') {
+  state.moderationConfirmation = null;
+  const button = $('#case-apply');
+  if (button) {
+    button.disabled = false;
+    button.textContent = 'Подготовить изменение';
+    button.classList.remove('confirm');
+  }
+  const hint = $('#case-action-hint');
+  if (hint && message) hint.textContent = message;
+}
+
+function renderModerationCase(item) {
+  state.moderationCase = item;
+  resetModerationConfirmation(
+    'Изменение статуса требует второго подтверждения и записывается в moderation history + admin audit.'
+  );
+  $('#case-title').textContent = item.currentName || 'Wobbler';
+  $('#case-id').textContent = item.targetAccountId;
+  const status = $('#case-status');
+  status.textContent = item.status;
+  status.dataset.status = item.status;
+  $('#case-reports').textContent = `${formatNumber(item.uniqueReporters)} reporters · ${formatNumber(item.totalReports)} reports · ${reasonsText(item.reasons)}`;
+  $('#case-last').textContent = `Последняя жалоба: ${formatTime(item.lastReportedAt)}`;
+
+  const evidenceRoot = $('#case-evidence');
+  evidenceRoot.replaceChildren();
+  for (const evidence of item.evidence || []) {
+    itemCard(
+      evidenceRoot,
+      evidence.reason,
+      [
+        formatTime(evidence.reportedAt),
+        `reporter ${evidence.reporterAccountId}`,
+        evidence.chapterIdSnapshot ? `chapter ${evidence.chapterIdSnapshot}` : null,
+        evidence.targetNameSnapshot ? `name «${evidence.targetNameSnapshot}»` : null,
+        Number(evidence.occurrences) > 1 ? `${evidence.occurrences} legacy occurrences` : null
+      ]
+    );
+  }
+  if (!item.evidence?.length) appendText(evidenceRoot, 'p', 'Evidence отсутствует.', 'muted');
+
+  const historyRoot = $('#case-history');
+  historyRoot.replaceChildren();
+  for (const event of item.history || []) {
+    itemCard(
+      historyRoot,
+      `${event.fromStatus} → ${event.toStatus}`,
+      [
+        formatTime(event.createdAt),
+        event.moderatorName || event.moderatorId,
+        event.reviewedThrough ? `reviewed through ${formatTime(event.reviewedThrough)}` : null
+      ],
+      event.note || ''
+    );
+  }
+  if (!item.history?.length) appendText(historyRoot, 'p', 'Решений по делу пока нет.', 'muted');
+
+  const action = $('#case-action');
+  action.hidden = !state.capabilities.has('moderation.write');
+  $('#case-next-status').value = defaultModerationStatus(item.status);
+  $('#case-note').value = '';
+}
+
+async function openModerationCase(targetAccountId) {
+  setStatus('Загрузка moderation case…');
+  try {
+    const payload = await api('/api/admin/moderation/case', { targetAccountId });
+    renderModerationCase(payload.case);
+    const dialog = $('#moderation-dialog');
+    if (!dialog.open) dialog.showModal();
+    setStatus('Дело загружено', 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Не удалось открыть дело: ${error.message}`, 'bad');
+  }
+}
+
+async function submitModerationTransition(event) {
+  event.preventDefault();
+  const item = state.moderationCase;
+  if (!item || !state.capabilities.has('moderation.write')) return;
+  const nextStatus = $('#case-next-status').value;
+  const note = $('#case-note').value.trim();
+  const hint = $('#case-action-hint');
+  const button = $('#case-apply');
+  if (nextStatus === item.status) {
+    resetModerationConfirmation('Выберите статус, отличный от текущего.');
+    return;
+  }
+  if ((nextStatus === 'resolved' || nextStatus === 'dismissed') && !note) {
+    resetModerationConfirmation('Для resolved и dismissed сервер требует заметку с обоснованием решения.');
+    return;
+  }
+
+  const signature = JSON.stringify([item.targetAccountId, item.status, item.lastReportedAt, nextStatus, note]);
+  const now = Date.now();
+  if (
+    !state.moderationConfirmation ||
+    state.moderationConfirmation.signature !== signature ||
+    state.moderationConfirmation.expiresAt < now
+  ) {
+    state.moderationConfirmation = { signature, expiresAt: now + 10_000 };
+    button.textContent = `Подтвердить → ${nextStatus}`;
+    button.classList.add('confirm');
+    hint.textContent = 'Проверьте evidence и решение ещё раз. Подтверждение действительно 10 секунд.';
+    return;
+  }
+
+  button.disabled = true;
+  hint.textContent = 'Сохраняем решение…';
+  try {
+    const payload = await api('/api/admin/moderation/transition', {
+      targetAccountId: item.targetAccountId,
+      status: nextStatus,
+      note,
+      expectedStatus: item.status,
+      expectedLastReportedAt: item.lastReportedAt
+    });
+    renderModerationCase(payload.case);
+    await loadModeration();
+    setStatus(`Moderation case: ${payload.case.status}`, 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    if (error.status === 409 && error.payload?.case) {
+      renderModerationCase(error.payload.case);
+      hint.textContent = 'Дело изменилось после открытия. Новые данные загружены — проверьте их заново.';
+      setStatus('Moderation case изменился — решение не применено', 'warn');
+      return;
+    }
+    resetModerationConfirmation(`Ошибка: ${error.message}`);
+    setStatus(`Ошибка moderation: ${error.message}`, 'bad');
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -309,6 +482,14 @@ $('#logout').addEventListener('click', async () => {
 $('#refresh').addEventListener('click', refreshCurrent);
 $('#analytics-days').addEventListener('change', refreshCurrent);
 $('#moderation-status').addEventListener('change', refreshCurrent);
+$('#case-close').addEventListener('click', closeModerationCase);
+$('#case-action').addEventListener('submit', submitModerationTransition);
+$('#case-next-status').addEventListener('change', () => resetModerationConfirmation());
+$('#case-note').addEventListener('input', () => resetModerationConfirmation());
+$('#moderation-dialog').addEventListener('cancel', () => {
+  state.moderationCase = null;
+  resetModerationConfirmation();
+});
 for (const button of $$('#tabs [data-panel]')) {
   button.addEventListener('click', () => switchPanel(button.dataset.panel));
 }

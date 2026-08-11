@@ -87,10 +87,11 @@ class SocialSafety {
     const normalizedReason = String(reason || '');
     if (!pairFor(reporter, target)) return { ok: false, reason: 'invalid-target' };
     if (!REPORT_REASON_SET.has(normalizedReason)) return { ok: false, reason: 'invalid-reason' };
-    if (!this.statements.account.get(reporter) || !this.statements.account.get(target)) {
-      return { ok: false, reason: 'unknown-account' };
-    }
-    if (!this.isRecentPartner(reporter, target)) return { ok: false, reason: 'not-recent-partner' };
+    const reporterAccount = this.statements.account.get(reporter);
+    const targetAccount = this.statements.account.get(target);
+    if (!reporterAccount || !targetAccount) return { ok: false, reason: 'unknown-account' };
+    const latest = this.statements.latestPartner.get(reporter);
+    if (latest?.partner_account_id !== target) return { ok: false, reason: 'not-recent-partner' };
 
     const at = Number.isFinite(now) && now >= 0 ? Math.round(now) : Date.now();
     const previous = this.statements.report.get(reporter, target, normalizedReason);
@@ -103,7 +104,33 @@ class SocialSafety {
       };
     }
 
-    this.statements.upsertReport.run(reporter, target, normalizedReason, at, at);
+    const nameSnapshot = targetAccount.display_name || 'Wobbler';
+    const chapterSnapshot = latest.last_chapter_id || null;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.upsertReport.run(
+        reporter,
+        target,
+        normalizedReason,
+        at,
+        at,
+        nameSnapshot,
+        chapterSnapshot
+      );
+      this.statements.insertEvidence.run(
+        reporter,
+        target,
+        normalizedReason,
+        at,
+        nameSnapshot,
+        chapterSnapshot
+      );
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
     const saved = this.statements.report.get(reporter, target, normalizedReason);
     return {
       ok: true,
@@ -116,9 +143,9 @@ class SocialSafety {
 
 function prepare(db) {
   return {
-    account: db.prepare('SELECT 1 AS present FROM accounts WHERE id = ?'),
+    account: db.prepare('SELECT display_name FROM accounts WHERE id = ?'),
     latestPartner: db.prepare(`
-      SELECT partner_account_id
+      SELECT partner_account_id, last_chapter_id, last_played_at
       FROM recent_partners
       WHERE account_id = ?
       ORDER BY last_played_at DESC, partner_account_id ASC
@@ -178,11 +205,33 @@ function prepare(db) {
     `),
     upsertReport: db.prepare(`
       INSERT INTO social_reports
-        (reporter_account_id, target_account_id, reason, report_count, first_reported_at, last_reported_at)
-      VALUES (?, ?, ?, 1, ?, ?)
+        (
+          reporter_account_id,
+          target_account_id,
+          reason,
+          report_count,
+          first_reported_at,
+          last_reported_at,
+          target_name_snapshot,
+          chapter_id_snapshot
+        )
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
       ON CONFLICT (reporter_account_id, target_account_id, reason) DO UPDATE SET
         report_count = report_count + 1,
         last_reported_at = excluded.last_reported_at
+    `),
+    insertEvidence: db.prepare(`
+      INSERT INTO social_report_evidence
+        (
+          reporter_account_id,
+          target_account_id,
+          reason,
+          reported_at,
+          occurrences,
+          target_name_snapshot,
+          chapter_id_snapshot
+        )
+      VALUES (?, ?, ?, ?, 1, ?, ?)
     `)
   };
 }

@@ -6,6 +6,7 @@ const rewardPlatform = require('./005_reward_platform');
 const recentPartners = require('./006_recent_partners');
 const socialSafety = require('./007_social_safety');
 const directionalAvoids = require('./008_directional_avoids');
+const moderationWorkflow = require('./009_moderation_workflow');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -15,7 +16,8 @@ const MIGRATIONS = Object.freeze([
   rewardPlatform,
   recentPartners,
   socialSafety,
-  directionalAvoids
+  directionalAvoids,
+  moderationWorkflow
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

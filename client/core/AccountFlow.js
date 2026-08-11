@@ -412,6 +412,13 @@ export class AccountFlow {
   }
 
   async takeNetworkTicket({ fresh = false } = {}) {
+    const cachedSanction = this.game.accountSanction;
+    if (cachedSanction) {
+      const expiresAt = Number(cachedSanction.expiresAt);
+      const stillActive = cachedSanction.permanent || !Number.isFinite(expiresAt) || expiresAt > Date.now();
+      if (stillActive) return { blocked: true, sanction: cachedSanction };
+      this.game.accountSanction = null;
+    }
     if (!fresh && this.networkTicket) {
       const ticket = this.networkTicket;
       this.networkTicket = null;
@@ -424,7 +431,7 @@ export class AccountFlow {
       if (!session || session.missing) return null;
       if (session.sanctioned) {
         this.showSanction(session.sanction);
-        return null;
+        return { blocked: true, sanction: session.sanction };
       }
       return session.networkTicket || null;
     } catch {
@@ -470,7 +477,10 @@ export class AccountFlow {
   apply(account, { online = true, records = null, progress = null } = {}) {
     this.profileRevision += 1;
     this.online = Boolean(online && account);
-    if (this.online) this.game.accountSanction = null;
+    if (this.online) {
+      this.game.accountSanction = null;
+      this.game.ui.clearNetworkAccessBlock?.();
+    }
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }

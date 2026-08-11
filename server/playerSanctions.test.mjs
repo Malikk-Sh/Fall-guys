@@ -123,6 +123,24 @@ test('sanction and mandatory audit hook are atomic', () => {
   db.close();
 });
 
+test('admin history does not silently truncate repeat offenders after 50 sanctions', () => {
+  const { db, moderator, sanctions } = setup();
+  for (let index = 0; index < 55; index += 1) {
+    const result = sanctions.apply({
+      accountId: 'player-1',
+      kind: 'warning',
+      reason: 'griefing',
+      note: `Warning ${index + 1}`,
+      createdByAdminId: moderator.user.id,
+      now: 10_000 + index
+    });
+    assert.equal(result.ok, true);
+  }
+  assert.equal(sanctions.history('player-1').length, 55);
+  assert.equal(sanctions.history('player-1', { limit: 10 }).length, 10);
+  db.close();
+});
+
 test('invalid reasons, empty notes and unsafe durations are rejected', () => {
   const { db, moderator, sanctions } = setup();
   const base = {

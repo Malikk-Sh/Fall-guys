@@ -35,6 +35,7 @@ const { AdminInfrastructure } = require('./adminInfrastructure');
 const { AdminOperationsClient } = require('./adminOperationsClient');
 const { installAdminRoutes } = require('./adminRoutes');
 const { PlayerSanctions } = require('./playerSanctions');
+const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
 
@@ -62,6 +63,10 @@ const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
 // игровой протокол использует уже ws.accountId; CREATE/JOIN/FIND не видят credential вообще.
 // Второй callback — server-side access policy. Он проверяется и для свежего WST, и для RESUME,
 // поэтому старый reconnect token не позволяет обойти выданный после отключения бан.
+accountAccessPolicy.configure(accountId => {
+  const active = sanctions.active(accountId);
+  return active ? sanctions.publicView(active) : null;
+});
 networkIdentity.configure(
   ticket => auth.consumeSocketTicket(ticket),
   accountId => !sanctions.active(accountId)

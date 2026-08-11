@@ -270,7 +270,7 @@ class AdminControlService {
     if (!this.sanctions) return { active: null, history: [] };
     return {
       active: this.#decorateSanction(this.sanctions.active(accountId, { now })),
-      history: this.sanctions.history(accountId, { limit: 50, now }).map(item => this.#decorateSanction(item))
+      history: this.sanctions.history(accountId, { now }).map(item => this.#decorateSanction(item))
     };
   }
 

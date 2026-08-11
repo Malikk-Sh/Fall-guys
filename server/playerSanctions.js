@@ -82,10 +82,14 @@ class PlayerSanctions {
     return toSanction(this.statements.byId.get(id), now);
   }
 
-  history(accountId, { limit = 50, now = Date.now() } = {}) {
+  history(accountId, { limit = null, now = Date.now() } = {}) {
     const id = String(accountId || '').trim();
     if (!id) return [];
-    return this.statements.history.all(id, clampLimit(limit)).map(row => toSanction(row, now));
+    const rows =
+      limit == null
+        ? this.statements.historyAll.all(id)
+        : this.statements.historyLimited.all(id, clampLimit(limit));
+    return rows.map(row => toSanction(row, now));
   }
 
   apply({
@@ -219,7 +223,8 @@ function prepare(db) {
       LIMIT 1
     `),
     byId: db.prepare(`${select} WHERE id = ?`),
-    history: db.prepare(`${select} WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`),
+    historyAll: db.prepare(`${select} WHERE account_id = ? ORDER BY created_at DESC, id DESC`),
+    historyLimited: db.prepare(`${select} WHERE account_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`),
     insert: db.prepare(`
       INSERT INTO player_sanctions
         (account_id, kind, reason, note, created_by_admin_id, created_at, expires_at)

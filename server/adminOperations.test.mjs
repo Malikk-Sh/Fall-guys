@@ -59,12 +59,19 @@ test('web client and root helper share the same closed operation allowlist', () 
   assert.equal(validOperation('backup.create'), 'backup.create');
   assert.equal(validOperation('anything; rm -rf /'), null);
 
+  const allowedUnits = new Set([
+    'wobble-backup.service',
+    'wobble-backup-verify.service',
+    'wobble-smoke.service',
+    'wobble.service'
+  ]);
   for (const [action, spec] of Object.entries(ACTIONS)) {
-    assert.match(spec.unit, /^wobble-[a-z-]+\.service$/);
+    assert.equal(allowedUnits.has(spec.unit), true, `${action} may use only an explicitly approved unit`);
     assert.ok(['start', 'restart'].includes(spec.verb));
     assert.equal(typeof OPERATION_DEFINITIONS[action].description, 'string');
     assert.ok(OPERATION_DEFINITIONS[action].description.length > 20);
   }
+  assert.equal(allowedUnits.size, Object.keys(ACTIONS).length);
 });
 
 test('helper rejects extra fields and unknown actions before systemctl', () => {

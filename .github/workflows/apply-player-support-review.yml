@@ -1,0 +1,32 @@
+name: Temporary apply player support review
+
+on:
+  push:
+    branches: [feat/admin-player-support]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-player-support
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: python3 scripts/tmp-player-support-review.py
+      - run: npx prettier --write client/admin/admin.js client/admin/index.html docs/ADMIN-PANEL.md server/adminPlayerSupport.js server/adminPlayerSupport.test.mjs server/adminPlayerSupportRoutes.test.mjs server/migrations/index.js server/migrations/012_account_support_search.js
+      - name: Commit review fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/admin/admin.js client/admin/index.html docs/ADMIN-PANEL.md server/adminPlayerSupport.js server/adminPlayerSupport.test.mjs server/adminPlayerSupportRoutes.test.mjs server/migrations/index.js server/migrations/012_account_support_search.js
+          git commit -m 'Address player support review findings'
+          git push origin HEAD:feat/admin-player-support

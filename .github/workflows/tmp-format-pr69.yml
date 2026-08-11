@@ -1,0 +1,34 @@
+name: Temp format PR69
+
+on:
+  push:
+    branches:
+      - feat/admin-player-support
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-player-support
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx prettier --write server/migrations.test.mjs
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/migrations.test.mjs
+          git commit -m "Format migration 012 regression test"
+          git push origin HEAD:feat/admin-player-support

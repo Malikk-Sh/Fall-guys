@@ -1,0 +1,480 @@
+name: Temporary build player support UI
+
+on:
+  push:
+    branches: [feat/admin-player-support]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-player-support
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Add player support UI and docs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # HTML: tab and read-only workspace.
+          p = Path('client/admin/index.html')
+          s = p.read_text()
+          tab = '<button data-panel="analytics" data-capability="analytics.read">Статистика</button>'
+          if tab not in s:
+              raise SystemExit('analytics tab anchor missing')
+          s = s.replace(tab, tab + '\n          <button data-panel="players" data-capability="player-support.read">Игроки</button>', 1)
+          anchor = '        <section id="panel-moderation" class="panel" hidden>'
+          panel = '''        <section id="panel-players" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Для чего нужен раздел «Игроки»?</summary>
+            <p>
+              Это безопасная карточка поддержки. Найдите игрока по имени или ID, чтобы проверить его прогресс, активность, достижения, косметику, количество активных входов и связанный социальный контекст.
+            </p>
+            <p>
+              Панель принципиально не показывает recovery-коды, хеши кодов, session tokens, Google ID или другие данные, с которыми можно войти в аккаунт. Здесь пока нет кнопок изменения аккаунта — только чтение.
+            </p>
+          </details>
+
+          <article class="card">
+            <p class="eyebrow">ПОДДЕРЖКА ИГРОКОВ</p>
+            <h2>Найти аккаунт</h2>
+            <p class="section-help">Введите хотя бы 2 символа имени или часть ID. Поиск ничего не меняет в аккаунте.</p>
+            <form id="player-search-form" class="support-search">
+              <input id="player-search-query" type="search" minlength="2" maxlength="80" placeholder="Например: Malik или UUID аккаунта" required />
+              <button class="primary support-search-button" type="submit">Найти игрока</button>
+            </form>
+            <p id="player-search-meta" class="muted"></p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Игрок</th>
+                    <th>Последняя активность</th>
+                    <th>Активных входов</th>
+                    <th>Внешний вход</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="player-results-body"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article id="player-detail" class="card player-detail" hidden>
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">КАРТОЧКА ИГРОКА</p>
+                <h2 id="player-detail-name">Игрок</h2>
+                <p id="player-detail-id" class="mono muted"></p>
+              </div>
+              <button id="player-detail-close" class="ghost" type="button">Закрыть карточку</button>
+            </div>
+            <div class="explain-box">
+              <strong>Что важно знать</strong>
+              <span>Открытие этой карточки записывается в «Журнал действий». IP-адреса и данные устройства игровых сессий Wobble сейчас не собирает, поэтому панель честно показывает только количество и время сессий.</span>
+            </div>
+            <div id="player-summary-cards" class="cards"></div>
+            <div class="support-grid">
+              <section class="support-section">
+                <h3>Аккаунт и вход</h3>
+                <dl id="player-account-details" class="details"></dl>
+              </section>
+              <section class="support-section">
+                <h3>Кооперативный прогресс</h3>
+                <dl id="player-progress-details" class="details"></dl>
+              </section>
+              <section class="support-section">
+                <h3>Социальный контекст</h3>
+                <dl id="player-social-details" class="details"></dl>
+              </section>
+              <section class="support-section">
+                <h3>Экипировка</h3>
+                <dl id="player-loadout-details" class="details"></dl>
+              </section>
+            </div>
+
+            <div class="support-lists">
+              <details class="support-details" open>
+                <summary>Главы кампании</summary>
+                <div id="player-chapters" class="rank-list"></div>
+              </details>
+              <details class="support-details">
+                <summary>Достижения</summary>
+                <div id="player-achievements" class="rank-list"></div>
+              </details>
+              <details class="support-details">
+                <summary>Личные рекорды</summary>
+                <div id="player-records" class="rank-list"></div>
+              </details>
+              <details class="support-details">
+                <summary>Открытая косметика и последние награды</summary>
+                <div id="player-inventory" class="rank-list"></div>
+              </details>
+              <details class="support-details">
+                <summary>Недавние напарники</summary>
+                <div id="player-partners" class="rank-list"></div>
+              </details>
+            </div>
+          </article>
+        </section>
+
+''' + anchor
+          if anchor not in s:
+              raise SystemExit('moderation panel anchor missing')
+          p.write_text(s.replace(anchor, panel, 1))
+
+          # JS: support workspace.
+          p = Path('client/admin/admin.js')
+          s = p.read_text()
+          s = s.replace(
+              "  analyticsLoadRevision: 0,\n  moderationCase: null,",
+              "  analyticsLoadRevision: 0,\n  playerDetailRevision: 0,\n  playerSearchQuery: '',\n  moderationCase: null,"
+          )
+          s = s.replace(
+              "  'moderation.case.transition': 'Изменён статус жалобы'",
+              "  'moderation.case.transition': 'Изменён статус жалобы',\n  'player.support.view': 'Открыта карточка игрока'"
+          )
+          s = s.replace(
+              "  if (name !== 'analytics') state.analyticsLoadRevision += 1;\n  state.currentPanel = name;",
+              "  if (name !== 'analytics') state.analyticsLoadRevision += 1;\n  if (name !== 'players') state.playerDetailRevision += 1;\n  state.currentPanel = name;"
+          )
+
+          anchor = "function reasonsText(reasons = {}) {"
+          block = r'''function fillDetailsElement(root, entries) {
+            root.replaceChildren();
+            for (const [label, value] of entries) {
+              appendText(root, 'dt', label);
+              appendText(root, 'dd', String(value ?? '—'));
+            }
+          }
+
+          function providerLabel(provider) {
+            if (provider === 'google') return 'Google';
+            return provider || '—';
+          }
+
+          function playerListItem(root, title, meta) {
+            const item = document.createElement('div');
+            item.className = 'rank-item support-list-item';
+            const copy = document.createElement('div');
+            appendText(copy, 'strong', title);
+            appendText(copy, 'span', meta, 'rank-meta');
+            item.append(copy);
+            root.append(item);
+          }
+
+          function renderSimpleList(selector, rows, formatter, emptyText) {
+            const root = $(selector);
+            root.replaceChildren();
+            for (const row of rows || []) {
+              const [title, meta] = formatter(row);
+              playerListItem(root, title, meta);
+            }
+            if (!rows?.length) appendText(root, 'p', emptyText, 'muted');
+          }
+
+          function hidePlayerDetail() {
+            state.playerDetailRevision += 1;
+            $('#player-detail').hidden = true;
+          }
+
+          function renderPlayerDetail(player) {
+            const account = player.account || {};
+            const login = player.login || {};
+            const sessions = login.sessions || {};
+            const progress = player.progress || {};
+            const stats = progress.stats || {};
+            const inventory = player.inventory || {};
+            const social = player.social || {};
+            const moderation = player.moderation;
+            const providers = (login.providers || []).map(item => providerLabel(item.provider)).join(', ') || 'не привязан';
+
+            $('#player-detail-name').textContent = account.name || 'Wobbler';
+            $('#player-detail-id').textContent = `ID аккаунта: ${account.id}`;
+            $('#player-summary-cards').replaceChildren(
+              statCard('Активных входов', formatNumber(sessions.active), 'показываем только количество, без token/IP'),
+              statCard('Пройдено глав', `${formatNumber(stats.coopChaptersCompleted)} / 10`, `${formatNumber(stats.coopMatchesCompleted)} завершённых co-op матчей`),
+              statCard('Получено жалоб', formatNumber(social.reportsReceived?.total), `${formatNumber(social.reportsReceived?.reporters)} разных жалобщиков`, social.reportsReceived?.total ? 'warn' : ''),
+              statCard('Модерация', moderation ? statusLabel(moderation.status) : 'Нет дела', moderation ? `${formatNumber(moderation.totalReports)} жалоб в деле` : 'активного moderation case нет')
+            );
+
+            fillDetailsElement($('#player-account-details'), [
+              ['Создан', formatTime(account.createdAt)],
+              ['Последняя активность аккаунта', formatTime(account.lastSeenAt)],
+              ['Способы входа', providers],
+              ['Активных сессий', formatNumber(sessions.active)],
+              ['Всего сохранённых session rows', formatNumber(sessions.totalStored)],
+              ['Последняя активная сессия', formatTime(sessions.latestSeenAt)],
+              ['Ближайшее истечение сессии', formatTime(sessions.soonestActiveExpiresAt)],
+              ['Смена recovery-кода ожидает подтверждения', account.recoveryRotationPending ? `да, с ${formatTime(account.recoveryRotationStartedAt)}` : 'нет']
+            ]);
+            fillDetailsElement($('#player-progress-details'), [
+              ['Завершено co-op матчей', formatNumber(stats.coopMatchesCompleted)],
+              ['Уникально пройдено глав', `${formatNumber(stats.coopChaptersCompleted)} / 10`],
+              ['Спасений напарника', formatNumber(stats.coopRevives)],
+              ['Достижений', formatNumber(progress.achievements?.length)],
+              ['Личных рекордов', formatNumber(progress.personalRecords?.length)]
+            ]);
+            fillDetailsElement($('#player-social-details'), [
+              ['Недавних напарников в карточке', formatNumber(social.recentPartners?.length)],
+              ['Сам исключил из подбора', formatNumber(social.avoidedByThisPlayer)],
+              ['Жалоб получил', formatNumber(social.reportsReceived?.total)],
+              ['Разных жалобщиков', formatNumber(social.reportsReceived?.reporters)],
+              ['Жалоб отправил', formatNumber(social.reportsSubmitted)],
+              ['Последняя жалоба на игрока', formatTime(social.reportsReceived?.lastReportedAt)]
+            ]);
+            const loadout = inventory.loadout || {};
+            fillDetailsElement($('#player-loadout-details'), [
+              ['Тело', loadout.body || 'classic'],
+              ['Визор', loadout.visor || 'не выбран'],
+              ['Антенна', loadout.antenna || 'не выбрана'],
+              ['След', loadout.trail || 'не выбран'],
+              ['Финишный эффект', loadout.finish || 'не выбран'],
+              ['Открыто предметов', formatNumber(inventory.cosmetics?.length)]
+            ]);
+
+            renderSimpleList('#player-chapters', progress.chapters, row => [
+              courseLabel(row.chapterId),
+              `${formatNumber(row.completions)} прохождений · лучшее время ${formatMilliseconds(row.bestTimeMs)} · ${row.flawless ? 'есть безошибочное прохождение' : 'безошибочного прохождения нет'} · последнее ${formatTime(row.lastCompletedAt)}`
+            ], 'Главы пока не пройдены.');
+            renderSimpleList('#player-achievements', progress.achievements, row => [
+              row.id,
+              `получено ${formatTime(row.unlockedAt)}`
+            ], 'Достижений пока нет.');
+            renderSimpleList('#player-records', progress.personalRecords, row => [
+              `${modeLabel(row.mode)} · ${courseLabel(row.courseKey)}`,
+              `${formatMilliseconds(row.timeMs)} · поставлен ${formatTime(row.achievedAt)}`
+            ], 'Личных рекордов пока нет.');
+            renderSimpleList('#player-inventory', inventory.cosmetics, row => [
+              row.id,
+              `открыто ${formatTime(row.unlockedAt)} · источник: ${row.source}`
+            ], 'Дополнительная косметика пока не открыта.');
+            for (const reward of inventory.recentRewards || []) {
+              playerListItem(
+                $('#player-inventory'),
+                `Награда: ${reward.reward}${reward.cosmeticId ? ` · ${reward.cosmeticId}` : ''}`,
+                `${formatTime(reward.grantedAt)} · источник: ${reward.source}`
+              );
+            }
+            renderSimpleList('#player-partners', social.recentPartners, row => [
+              `${row.name} · ${row.id}`,
+              `${formatNumber(row.matchesTogether)} матчей вместе · ${courseLabel(row.lastChapterId)} · ${formatTime(row.lastPlayedAt)}${row.avoidedByThisPlayer ? ' · этот игрок исключён из повторного подбора' : ''}`
+            ], 'Недавних напарников нет.');
+            $('#player-detail').hidden = false;
+            $('#player-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+
+          async function openPlayerDetail(accountId) {
+            const revision = ++state.playerDetailRevision;
+            setStatus('Загружаю карточку игрока…');
+            try {
+              const payload = await api('/api/admin/players/detail', { accountId });
+              if (revision !== state.playerDetailRevision) return;
+              renderPlayerDetail(payload.player);
+              setStatus('Карточка игрока загружена', 'good');
+            } catch (error) {
+              if (revision !== state.playerDetailRevision) return;
+              if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+              setStatus(`Не удалось открыть игрока: ${error.message}`, 'bad');
+            }
+          }
+
+          async function searchPlayers() {
+            const query = $('#player-search-query').value.trim();
+            if (query.length < 2) {
+              $('#player-search-meta').textContent = 'Введите хотя бы 2 символа.';
+              return false;
+            }
+            state.playerSearchQuery = query;
+            const payload = await api('/api/admin/players/search', { query, limit: 30 });
+            const body = $('#player-results-body');
+            body.replaceChildren();
+            for (const player of payload.results || []) {
+              const row = rowWithCells([
+                `${player.name} · ${player.id}`,
+                formatTime(player.lastSeenAt),
+                formatNumber(player.activeSessions),
+                player.hasExternalLogin ? 'есть' : 'нет'
+              ]);
+              const action = document.createElement('td');
+              const button = appendText(action, 'button', 'Открыть карточку', 'case-open');
+              button.type = 'button';
+              button.addEventListener('click', () => openPlayerDetail(player.id));
+              row.append(action);
+              body.append(row);
+            }
+            if (!payload.results?.length) {
+              const row = document.createElement('tr');
+              const cell = appendText(row, 'td', 'Игроки по этому запросу не найдены.', 'empty');
+              cell.colSpan = 5;
+              body.append(row);
+            }
+            $('#player-search-meta').textContent = `Найдено: ${formatNumber(payload.results?.length)}. Поиск по имени может вернуть несколько совпадений.`;
+            return true;
+          }
+
+          async function loadPlayers() {
+            if (!state.playerSearchQuery) return true;
+            $('#player-search-query').value = state.playerSearchQuery;
+            return searchPlayers();
+          }
+
+          ''' + anchor
+          if anchor not in s:
+              raise SystemExit('reasonsText anchor missing')
+          s = s.replace(anchor, block, 1)
+          s = s.replace(
+              "    analytics: loadAnalytics,\n    moderation: loadModeration,",
+              "    analytics: loadAnalytics,\n    players: loadPlayers,\n    moderation: loadModeration,"
+          )
+          event_anchor = "$('#moderation-status').addEventListener('change', refreshCurrent);"
+          event_block = '''$('#player-search-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            setStatus('Ищу игрока…');
+            try {
+              await searchPlayers();
+              setStatus('Поиск завершён', 'good');
+            } catch (error) {
+              if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+              setStatus(`Ошибка поиска: ${error.message}`, 'bad');
+            }
+          });
+          $('#player-detail-close').addEventListener('click', hidePlayerDetail);
+          ''' + event_anchor
+          if event_anchor not in s:
+              raise SystemExit('moderation event anchor missing')
+          p.write_text(s.replace(event_anchor, event_block, 1))
+
+          # CSS.
+          p = Path('client/admin/admin.css')
+          s = p.read_text() + r'''
+
+          .support-search {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 9px;
+            margin-bottom: 10px;
+          }
+          .support-search-button {
+            width: auto;
+            margin: 0;
+            min-width: 140px;
+          }
+          .player-detail {
+            margin-top: 12px;
+          }
+          .support-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+          }
+          .support-section {
+            padding: 14px;
+            border: 1px solid #282f47;
+            border-radius: 13px;
+            background: #141827;
+          }
+          .support-section h3 {
+            color: #dfe3f1;
+          }
+          .support-lists {
+            display: grid;
+            gap: 9px;
+            margin-top: 12px;
+          }
+          .support-details {
+            border: 1px solid #282f47;
+            border-radius: 13px;
+            background: rgba(20, 24, 39, 0.75);
+            overflow: hidden;
+          }
+          .support-details summary {
+            cursor: pointer;
+            padding: 12px 14px;
+            font-weight: 750;
+            color: #dfe3f1;
+          }
+          .support-details[open] summary {
+            border-bottom: 1px solid #282f47;
+          }
+          .support-details .rank-list {
+            padding: 10px;
+          }
+          .support-list-item {
+            grid-template-columns: 1fr;
+          }
+          @media (max-width: 700px) {
+            .support-search,
+            .support-grid {
+              grid-template-columns: 1fr;
+            }
+            .support-search-button {
+              width: 100%;
+            }
+          }
+          '''
+          p.write_text(s)
+
+          # Documentation.
+          p = Path('docs/ADMIN-PANEL.md')
+          s = p.read_text()
+          role_old = "| `operator`  | оператор: наблюдение за сервером и модерацией без решений         |"
+          role_new = "| `operator`  | оператор: сервер, статистика, поддержка игроков и модерация read-only |"
+          s = s.replace(role_old, role_new)
+          anchor = "### Модерация\n"
+          section = '''### Игроки / поддержка аккаунтов
+
+Раздел **Игроки** доступен `owner` и `operator`. Он предназначен для обычных вопросов поддержки:
+«почему не виден прогресс», «есть ли активный вход», «какая глава пройдена», «получена ли награда».
+
+Поиск принимает минимум два символа имени или часть account ID. Открытие полной карточки записывает
+`player.support.view` в admin audit с ID просмотренного аккаунта.
+
+Карточка показывает:
+
+- имя, account ID, даты создания и последней активности;
+- только **количество и время** игровых sessions, без token/hash/IP/User-Agent;
+- названия привязанных identity providers (например `Google`) без provider subject;
+- только факт незавершённой recovery rotation и время её начала, без recovery hash/code;
+- co-op stats, главы, achievements и personal records;
+- loadout, открытые cosmetics и последние reward grants без idempotency key;
+- недавних напарников и только собственные решения игрока «не подбирать снова»;
+- агрегат жалоб и effective moderation status.
+
+Control Plane намеренно не возвращает `accounts.secret_hash`, `pending_secret_hash`,
+`account_sessions.token_hash`, `account_identities.provider_subject`, `reward_grants.idempotency_key`
+или другие credentials. В этом PR карточка полностью read-only: восстановление, отзыв игровых sessions,
+forced rename и другие account mutations требуют отдельного дизайна прав и подтверждений.
+
+''' + anchor
+          if anchor not in s:
+              raise SystemExit('docs moderation anchor missing')
+          s = s.replace(anchor, section, 1)
+          s = s.replace('3. player/account support view без раскрытия credentials;', '3. ~~player/account support view без раскрытия credentials~~;')
+          p.write_text(s)
+          PY
+      - name: Format UI, docs and tests
+        run: |
+          npx prettier --write \
+            client/admin/index.html \
+            client/admin/admin.js \
+            client/admin/admin.css \
+            docs/ADMIN-PANEL.md \
+            server/adminPlayerSupportRoutes.test.mjs
+      - name: Commit UI
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/admin/index.html client/admin/admin.js client/admin/admin.css docs/ADMIN-PANEL.md server/adminPlayerSupportRoutes.test.mjs
+          git commit -m 'Add understandable player support workspace'
+          git push origin HEAD:feat/admin-player-support

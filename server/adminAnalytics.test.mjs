@@ -205,5 +205,4 @@ test('comparison availability follows retention and live-day semantics', () => {
   const tooLong = periodFor({ now, days: 7, retentionDays: 10 });
   assert.equal(tooLong.comparisonAvailable, false);
   assert.equal(tooLong.comparisonReason, 'retention-window');
-  db.close?.();
 });

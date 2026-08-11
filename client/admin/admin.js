@@ -6,6 +6,7 @@ const state = {
   capabilities: new Set(),
   currentPanel: 'overview',
   analytics: null,
+  analyticsLoadRevision: 0,
   moderationCase: null,
   moderationConfirmation: null,
   moderationLoadRevision: 0
@@ -123,6 +124,7 @@ function switchPanel(name) {
   const button = $(`#tabs [data-panel="${name}"]`);
   if (!button || button.hidden) name = 'overview';
   if (name !== 'moderation') closeModerationCase();
+  if (name !== 'analytics') state.analyticsLoadRevision += 1;
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
   for (const item of $$('#tabs [data-panel]')) item.classList.toggle('active', item.dataset.panel === name);
@@ -325,7 +327,10 @@ function renderAnalyticsKpis(data) {
   const comparisonAvailable = data.comparisonAvailable !== false;
   const completion = current.completionPercent == null ? '—' : `${current.completionPercent}%`;
   const previousCompletion = previous?.completionPercent == null ? '—' : `${previous.completionPercent}%`;
-  const comparisonUnavailableHint = `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
+  const comparisonUnavailableHint =
+    data.comparisonReason === 'current-day-incomplete'
+      ? 'сегодняшний день ещё идёт — не сравниваем его с полным вчерашним днём'
+      : `полное сравнение недоступно: метрики хранятся ${formatNumber(data.retentionDays)} дней`;
   const compareHint = (currentValue, previousValue, formatter = formatNumber) =>
     comparisonAvailable ? comparisonHint(currentValue, previousValue, formatter) : comparisonUnavailableHint;
   const cards = $('#analytics-kpis');
@@ -442,8 +447,10 @@ function renderAnalyticsTable(data) {
 }
 
 async function loadAnalytics() {
+  const requestRevision = ++state.analyticsLoadRevision;
   const request = analyticsRequest();
   const payload = await api('/api/admin/analytics', request);
+  if (requestRevision !== state.analyticsLoadRevision) return false;
   const data = payload.analytics;
   state.analytics = data;
   populateFilter('#analytics-mode', 'Все режимы', data.options?.modes, data.filters?.mode, modeLabel);
@@ -464,7 +471,9 @@ async function loadAnalytics() {
   const limitNote = data.truncated ? ' · таблица ограничена первыми 1000 строками' : '';
   const comparisonNote = data.comparisonAvailable
     ? ` · сравнение с ${data.previousFrom}–${data.previousTo}`
-    : ` · предыдущий полный период не сравнивается: история хранится ${formatNumber(data.retentionDays)} дней`;
+    : data.comparisonReason === 'current-day-incomplete'
+      ? ' · сегодня показывается в реальном времени без сравнения со вчера'
+      : ` · предыдущий полный период не сравнивается: история хранится ${formatNumber(data.retentionDays)} дней`;
   const droppedNote = data.dropped
     ? ` · ВНИМАНИЕ: сервер отбросил ${formatNumber(data.dropped)} необычных ключей метрик`
     : ' · потерь метрик не обнаружено';
@@ -478,6 +487,7 @@ async function loadAnalytics() {
     'Выходов до финиша по выбранным фильтрам нет.'
   );
   renderAnalyticsTable(data);
+  return true;
 }
 
 function downloadText(filename, content, type) {

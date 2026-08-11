@@ -261,6 +261,12 @@ Control Plane **не** банит, не suspend-ит и не делает forced
 
 CLI `server/moderationCli.mjs` остаётся поддерживаемым fallback и локальным инструментом оператора.
 
+### Сервер
+
+Вкладка **Сервер** доступна `owner` и `operator` и только читает состояние production: фиксированные
+systemd units, локальные порты 80/443/Node, TLS-сертификат через настоящий SNI handshake, память, диск и
+backup/offsite. Она не меняет Nginx, firewall, shared 443 или VPN/Xray. Подробности: [INFRASTRUCTURE-STATUS.md](INFRASTRUCTURE-STATUS.md).
+
 ### Операции
 
 Раздел **Операции** видит только `owner`. Каждая карточка заранее объясняет действие и влияние на игроков.

@@ -101,7 +101,9 @@ class AdminOperationsClient {
 
       socket.setEncoding('utf8');
       socket.once('connect', () => {
-        socket.end(`${JSON.stringify({ requestId, action })}\n`);
+        // Do not half-close here. The helper may spend tens of seconds waiting for a systemd
+        // oneshot and must still be able to return its result over this same connection.
+        socket.write(`${JSON.stringify({ requestId, action })}\n`);
       });
       socket.on('data', chunk => {
         buffer += chunk;

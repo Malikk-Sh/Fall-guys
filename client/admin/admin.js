@@ -300,7 +300,9 @@ $('#login-form').addEventListener('submit', async event => {
 $('#logout').addEventListener('click', async () => {
   try {
     await api('/api/admin/logout');
-  } catch {}
+  } catch {
+    state.csrf = '';
+  }
   showLogin();
 });
 

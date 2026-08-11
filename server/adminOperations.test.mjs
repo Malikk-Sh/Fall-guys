@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-import { ACTIONS, validateRequest } from '../deploy/wobble-ops-helper.mjs';
+import { ACTIONS, createServer, validateRequest } from '../deploy/wobble-ops-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const express = require('express');
@@ -12,7 +13,12 @@ const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
 const { AdminAuthService, hasCapability } = require('./adminAuth');
 const { installAdminRoutes } = require('./adminRoutes');
-const { OPERATION_DEFINITIONS, publicOperations, validOperation } = require('./adminOperationsClient');
+const {
+  AdminOperationsClient,
+  OPERATION_DEFINITIONS,
+  publicOperations,
+  validOperation
+} = require('./adminOperationsClient');
 
 async function start(app) {
   const server = app.listen(0, '127.0.0.1');
@@ -80,6 +86,33 @@ test('helper rejects extra fields and unknown actions before systemctl', () => {
   assert.equal(validateRequest({ requestId, action: 'shell.exec' }), null);
   assert.equal(validateRequest({ requestId, action: 'smoke.run', command: 'id' }), null);
   assert.equal(validateRequest({ requestId: 'not-a-uuid', action: 'smoke.run' }), null);
+});
+
+test('client keeps the IPC connection alive until a slow allowlisted operation replies', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-ops-test-'));
+  const socketPath = path.join(dir, 'ops.sock');
+  const helper = createServer({
+    requestTimeoutMs: 10,
+    execute: async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return { ok: true, durationMs: 50 };
+    }
+  });
+  await new Promise((resolve, reject) => {
+    helper.once('error', reject);
+    helper.listen(socketPath, resolve);
+  });
+  t.after(async () => {
+    await new Promise(resolve => helper.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const client = new AdminOperationsClient({ socketPath, timeoutMs: 500 });
+  assert.equal(client.available(), true);
+  const result = await client.run('backup.verify');
+  assert.equal(result.ok, true);
+  assert.equal(result.action, 'backup.verify');
+  assert.equal(result.durationMs, 50);
 });
 
 test('privileged helper is installed from a root-owned path while app scripts run unprivileged', () => {

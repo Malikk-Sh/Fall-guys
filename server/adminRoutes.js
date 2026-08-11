@@ -125,7 +125,10 @@ function installAdminRoutes({
   app.post('/api/admin/moderation/queue', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'moderation.read');
     if (!resolved) return undefined;
-    const result = control.moderationQueue({ status: req.body?.status || 'open', limit: req.body?.limit || 50 });
+    const result = control.moderationQueue({
+      status: req.body?.status || 'open',
+      limit: req.body?.limit || 50
+    });
     if (!result.ok) return res.status(400).json({ ok: false, error: result.reason });
     return res.json(result);
   });

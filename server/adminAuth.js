@@ -77,13 +77,7 @@ function cookieForAdminSession(token, { secure = true, maxAgeMs = ADMIN_SESSION_
 }
 
 function clearAdminSessionCookie({ secure = true } = {}) {
-  const attributes = [
-    `${ADMIN_SESSION_COOKIE}=`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Strict',
-    'Max-Age=0'
-  ];
+  const attributes = [`${ADMIN_SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
   if (secure) attributes.push('Secure');
   return attributes.join('; ');
 }
@@ -231,9 +225,14 @@ class AdminAuthService {
   }
 
   audit({ actor = null, action, targetType = null, targetId = null, detail = null, now = Date.now() } = {}) {
-    const safeAction = String(action || '').trim().slice(0, 120);
+    const safeAction = String(action || '')
+      .trim()
+      .slice(0, 120);
     if (!safeAction) return false;
-    const actorName = String(actor?.name || 'system').trim().slice(0, 80) || 'system';
+    const actorName =
+      String(actor?.name || 'system')
+        .trim()
+        .slice(0, 80) || 'system';
     const actorRole = ADMIN_ROLES.includes(actor?.role) ? actor.role : 'system';
     const detailJson = detail == null ? null : JSON.stringify(detail).slice(0, 4000);
     this.statements.insertAudit.run(

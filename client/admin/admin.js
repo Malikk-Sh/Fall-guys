@@ -81,7 +81,9 @@ function formatNumber(value) {
 
 function formatTime(value) {
   if (!value) return '—';
-  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value));
+  return new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium' }).format(
+    new Date(value)
+  );
 }
 
 function formatDuration(seconds) {
@@ -128,7 +130,11 @@ async function loadOverview() {
   const cards = $('#overview-cards');
   cards.replaceChildren(
     statCard('Игроки сейчас', formatNumber(health.players), `${formatNumber(health.rooms)} комнат`),
-    statCard('Активные 24ч', formatNumber(data.accounts?.active24h), `${formatNumber(data.accounts?.total)} аккаунтов`),
+    statCard(
+      'Активные 24ч',
+      formatNumber(data.accounts?.active24h),
+      `${formatNumber(data.accounts?.total)} аккаунтов`
+    ),
     statCard(
       'Модерация',
       formatNumber(data.moderation?.open),
@@ -138,7 +144,9 @@ async function loadOverview() {
     statCard(
       'Backup',
       backup.ok === false ? 'ПРОБЛЕМА' : 'OK',
-      backup.local?.ageSeconds != null ? `возраст ${formatDuration(backup.local.ageSeconds)}` : 'статус в /health',
+      backup.local?.ageSeconds != null
+        ? `возраст ${formatDuration(backup.local.ageSeconds)}`
+        : 'статус в /health',
       backup.ok === false ? 'bad' : 'good'
     )
   );
@@ -197,10 +205,12 @@ async function loadAnalytics() {
 }
 
 function reasonsText(reasons = {}) {
-  return Object.entries(reasons)
-    .filter(([, count]) => Number(count) > 0)
-    .map(([reason, count]) => `${reason}: ${count}`)
-    .join(' · ') || '—';
+  return (
+    Object.entries(reasons)
+      .filter(([, count]) => Number(count) > 0)
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join(' · ') || '—'
+  );
 }
 
 async function loadModeration() {

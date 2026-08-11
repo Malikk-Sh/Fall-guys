@@ -14,7 +14,10 @@ test('admin access code is one-time visible, sessions are hashed and role capabi
   const created = auth.createUser({ name: 'Malik', role: 'owner', now: 100 });
   assert.equal(created.ok, true);
   assert.match(created.accessCode, /^WADMIN\./);
-  assert.equal(db.prepare('SELECT access_secret_hash FROM admin_users').get().access_secret_hash.includes('WADMIN'), false);
+  assert.equal(
+    db.prepare('SELECT access_secret_hash FROM admin_users').get().access_secret_hash.includes('WADMIN'),
+    false
+  );
 
   const login = auth.login(created.accessCode, 200);
   assert.ok(login);
@@ -52,7 +55,14 @@ test('admin HTTP API requires session, capability and CSRF for authenticated ope
     analytics: () => ({ rows: [] }),
     moderationQueue: () => ({ ok: true, cases: [] })
   };
-  installAdminRoutes({ app, adminAuth: auth, control, enabled: true, secureCookies: false, clientIp: () => 'test' });
+  installAdminRoutes({
+    app,
+    adminAuth: auth,
+    control,
+    enabled: true,
+    secureCookies: false,
+    clientIp: () => 'test'
+  });
   const server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   t.after(() => {

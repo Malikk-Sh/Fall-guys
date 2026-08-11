@@ -29,13 +29,13 @@ privileged helper с allowlist команд, а не через произвол
 
 ## Роли
 
-| Role | Первый этап |
-| --- | --- |
-| `owner` | все read views + зарезервированные будущие admin/ops/moderation capabilities |
-| `operator` | dashboard, analytics, moderation queue, audit |
-| `moderator` | dashboard и moderation queue |
-| `analyst` | dashboard и gameplay analytics |
-| `viewer` | только dashboard |
+| Role        | Первый этап                                                                  |
+| ----------- | ---------------------------------------------------------------------------- |
+| `owner`     | все read views + зарезервированные будущие admin/ops/moderation capabilities |
+| `operator`  | dashboard, analytics, moderation queue, audit                                |
+| `moderator` | dashboard и moderation queue                                                 |
+| `analyst`   | dashboard и gameplay analytics                                               |
+| `viewer`    | только dashboard                                                             |
 
 Capabilities проверяет `server/adminAuth.js`; frontend лишь отражает результат сервера.
 

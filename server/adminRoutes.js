@@ -11,14 +11,15 @@ const {
 } = require('./adminAuth');
 
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
-const LOGIN_ATTEMPTS = 12;
+const LOGIN_ATTEMPTS = 60;
 
 function installAdminRoutes({
   app,
   adminAuth,
   control,
   enabled = false,
-  clientIp = req => req.socket.remoteAddress || 'unknown',
+  loginRateLimitKey = req => req.socket.remoteAddress || 'local-proxy',
+  loginAttempts = LOGIN_ATTEMPTS,
   secureCookies = process.env.NODE_ENV === 'production'
 } = {}) {
   if (!app || !adminAuth || !control) throw new Error('Admin routes require app, adminAuth and control');
@@ -54,7 +55,7 @@ function installAdminRoutes({
 
   app.post('/api/admin/login', json, (req, res) => {
     if (!enabled) return unavailable(res);
-    if (logins.limited(clientIp(req), LOGIN_ATTEMPTS)) {
+    if (logins.limited(loginRateLimitKey(req), loginAttempts)) {
       return res.status(429).json({ ok: false, error: 'rate-limited' });
     }
     if (!req.body || Object.keys(req.body).some(key => key !== 'accessCode')) {

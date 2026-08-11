@@ -422,16 +422,47 @@ export class AccountFlow {
     try {
       const session = await sessionAccount();
       if (!session || session.missing) return null;
+      if (session.sanctioned) {
+        this.showSanction(session.sanction);
+        return null;
+      }
       return session.networkTicket || null;
     } catch {
       return null;
     }
   }
 
+  sanctionMessage(sanction) {
+    const reasons = {
+      afk: 'бездействие (AFK)',
+      griefing: 'намеренное создание помех другим игрокам',
+      'offensive-name': 'недопустимое имя',
+      'exploit-cheat': 'использование читов или эксплуатация ошибки',
+      other: 'нарушение правил'
+    };
+    const reason = reasons[sanction?.reason] || reasons.other;
+    if (sanction?.permanent) return `Онлайн-доступ заблокирован без срока. Причина: ${reason}.`;
+    const expires = Number(sanction?.expiresAt);
+    const until = Number.isFinite(expires)
+      ? new Date(expires).toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'short' })
+      : 'указанного модерацией срока';
+    return `Онлайн-доступ временно ограничен до ${until}. Причина: ${reason}.`;
+  }
+
+  showSanction(sanction) {
+    this.game.accountSanction = sanction || null;
+    this.networkTicket = null;
+    const message = this.sanctionMessage(sanction);
+    this.game.ui.accountStatus(message);
+    this.game.ui.toast?.(message);
+    return message;
+  }
+
   async signIn() {
-    const { account, records, progress, online } = await ensureAccount({});
+    const { account, records, progress, online, sanction = null } = await ensureAccount({});
     this.apply(account, { online, records, progress });
-    if (!online)
+    if (sanction) this.showSanction(sanction);
+    else if (!online)
       this.game.ui.accountStatus('Сервер не ответил — рекорды сохранятся только на этом устройстве.');
     this.setupGoogle().catch(() => {});
   }
@@ -439,6 +470,7 @@ export class AccountFlow {
   apply(account, { online = true, records = null, progress = null } = {}) {
     this.profileRevision += 1;
     this.online = Boolean(online && account);
+    if (this.online) this.game.accountSanction = null;
     if (records) {
       this.records = new Map(records.map(record => [`${record.mode}:${record.courseKey}`, record.time]));
     }
@@ -609,6 +641,7 @@ export class AccountFlow {
     ui.accountStatus('Проверяем Google…');
     try {
       const entered = await loginGoogle(credential);
+      if (entered?.sanctioned) return this.showSanction(entered.sanction);
       if (!entered || entered.conflict)
         return ui.accountStatus(
           entered?.conflict
@@ -649,6 +682,7 @@ export class AccountFlow {
       }
       if (action === 'login') {
         const entered = await loginAccount(value);
+        if (entered?.sanctioned) return this.showSanction(entered.sanction);
         if (!entered || entered.unknown) return ui.accountStatus('Такой код не подошёл. Проверьте символы.');
         const account = { ...entered, secret: value };
         rememberAccount(account);

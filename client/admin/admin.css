@@ -991,3 +991,40 @@ body[data-admin-session='active'] .topbar {
     transition: none;
   }
 }
+
+/* Player sanctions --------------------------------------------------------- */
+.sanction-section {
+  display: grid;
+  gap: 12px;
+}
+.sanction-action {
+  border-color: rgba(255, 135, 154, 0.24);
+}
+.sanction-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.sanction-note-label {
+  grid-column: 1 / -1;
+}
+.sanction-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.sanction-buttons button {
+  flex: 1 1 210px;
+}
+.danger-action {
+  border-color: rgba(255, 135, 154, 0.45);
+  color: #ffb0bd;
+}
+@media (max-width: 700px) {
+  .sanction-grid {
+    grid-template-columns: 1fr;
+  }
+  .sanction-note-label {
+    grid-column: auto;
+  }
+}

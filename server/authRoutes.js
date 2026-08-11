@@ -206,7 +206,8 @@ function installAuthRoutes({
     const current = sessionFrom(req);
     if (current) {
       const currentSanction = sanctionFor(current.accountId);
-      if (currentSanction) return denySanction(res, current.accountId, currentSanction, { clearCookie: true });
+      if (currentSanction)
+        return denySanction(res, current.accountId, currentSanction, { clearCookie: true });
     }
     let account;
     let secret = null;

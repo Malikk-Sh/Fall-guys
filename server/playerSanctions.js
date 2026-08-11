@@ -26,7 +26,8 @@ function normalizeNote(value) {
 
 function normalizeDuration(value) {
   const duration = Number(value);
-  if (!Number.isSafeInteger(duration) || duration < MIN_TEMP_BAN_MS || duration > MAX_TEMP_BAN_MS) return null;
+  if (!Number.isSafeInteger(duration) || duration < MIN_TEMP_BAN_MS || duration > MAX_TEMP_BAN_MS)
+    return null;
   return duration;
 }
 
@@ -53,14 +54,7 @@ function toSanction(row, now = Date.now()) {
     expiresAt,
     permanent: kind === 'ban' && expiresAt == null,
     active,
-    status:
-      kind === 'warning'
-        ? 'warning'
-        : revokedAt != null
-          ? 'revoked'
-          : active
-            ? 'active'
-            : 'expired',
+    status: kind === 'warning' ? 'warning' : revokedAt != null ? 'revoked' : active ? 'active' : 'expired',
     revokedAt,
     revokedByAdminId: row.revoked_by_admin_id || null,
     revokeNote: row.revoke_note || null
@@ -94,7 +88,17 @@ class PlayerSanctions {
     return this.statements.history.all(id, clampLimit(limit)).map(row => toSanction(row, now));
   }
 
-  apply({ accountId, kind, reason, note, createdByAdminId, durationMs = null, permanent = false, now = Date.now(), audit = null } = {}) {
+  apply({
+    accountId,
+    kind,
+    reason,
+    note,
+    createdByAdminId,
+    durationMs = null,
+    permanent = false,
+    now = Date.now(),
+    audit = null
+  } = {}) {
     const id = String(accountId || '').trim();
     const normalizedKind = normalizeKind(kind);
     const normalizedReason = normalizeReason(reason);
@@ -102,7 +106,8 @@ class PlayerSanctions {
     const adminId = String(createdByAdminId || '').trim();
     if (!id || !this.statements.account.get(id)) return { ok: false, reason: 'unknown-account' };
     if (!normalizedKind) return { ok: false, reason: 'invalid-sanction-kind', allowedKinds: SANCTION_KINDS };
-    if (!normalizedReason) return { ok: false, reason: 'invalid-sanction-reason', allowedReasons: SANCTION_REASONS };
+    if (!normalizedReason)
+      return { ok: false, reason: 'invalid-sanction-reason', allowedReasons: SANCTION_REASONS };
     if (!normalizedNote) return { ok: false, reason: 'sanction-note-required' };
     if (!adminId || !this.statements.admin.get(adminId)) return { ok: false, reason: 'invalid-admin-actor' };
     if (audit != null && typeof audit !== 'function') return { ok: false, reason: 'invalid-audit-hook' };

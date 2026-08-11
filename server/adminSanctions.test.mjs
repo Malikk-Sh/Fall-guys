@@ -14,6 +14,20 @@ const { installAdminRoutes } = require('./adminRoutes');
 function setup() {
   const db = openDatabase(':memory:');
   migrateDatabase(db);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS leaderboard_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      mode TEXT NOT NULL,
+      course_key TEXT NOT NULL,
+      player_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      color INTEGER NOT NULL,
+      time_ms INTEGER NOT NULL,
+      achieved_at INTEGER NOT NULL,
+      verification_version INTEGER NOT NULL,
+      match_id TEXT NOT NULL
+    );
+  `);
   db.prepare(
     'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
   ).run('target', 'Target Player', 'hash', 1, 1);

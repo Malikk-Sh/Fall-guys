@@ -50,7 +50,7 @@ test('an active ban blocks existing sessions and recovery login without leaking 
     ctx.db.close();
   });
 
-  const session = ctx.auth.createSession(ctx.created.id, 200);
+  const session = ctx.auth.createSession(ctx.created.id, Date.now());
   assert.ok(session);
   const applied = ctx.sanctions.apply({
     accountId: ctx.created.id,
@@ -59,7 +59,7 @@ test('an active ban blocks existing sessions and recovery login without leaking 
     note: 'Internal moderation evidence must never be public.',
     createdByAdminId: ctx.moderator.user.id,
     durationMs: 60 * 60 * 1000,
-    now: 300
+    now: Date.now()
   });
   assert.equal(applied.ok, true);
 
@@ -67,7 +67,7 @@ test('an active ban blocks existing sessions and recovery login without leaking 
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Cookie: cookieForSession(session.token, { secure: false })
+      Cookie: cookieForSession(session.token, { secure: false }).split(';', 1)[0]
     },
     body: '{}'
   });

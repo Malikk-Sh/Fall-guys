@@ -10,7 +10,15 @@ const MODERATOR_MAX_BAN_MS = 7 * DAY_MS;
 const OWNER_MAX_BAN_MS = 365 * DAY_MS;
 
 class AdminControlService {
-  constructor({ db, health, gameplay, adminAuth, sanctions = null, auth = null, disconnectAccount = null } = {}) {
+  constructor({
+    db,
+    health,
+    gameplay,
+    adminAuth,
+    sanctions = null,
+    auth = null,
+    disconnectAccount = null
+  } = {}) {
     if (!db) throw new Error('AdminControlService requires an open database');
     if (typeof health !== 'function') throw new Error('AdminControlService requires health()');
     if (!gameplay || typeof gameplay.summary !== 'function') {
@@ -130,12 +138,35 @@ class AdminControlService {
         })
     });
     if (!result.ok) {
-      return result.case ? { ...result, case: this.#decorateCase(result.case) } : result;
+      return result.case
+        ? {
+            ...result,
+            case: {
+              ...this.#decorateCase(result.case),
+              sanctions: this.#sanctionContext(targetAccountId, now)
+            }
+          }
+        : result;
     }
-    return { ...result, case: this.#decorateCase(result.case) };
+    return {
+      ...result,
+      case: {
+        ...this.#decorateCase(result.case),
+        sanctions: this.#sanctionContext(targetAccountId, now)
+      }
+    };
   }
 
-  sanctionApply({ targetAccountId, kind, reason, note, durationMs = null, permanent = false, actor, now = Date.now() } = {}) {
+  sanctionApply({
+    targetAccountId,
+    kind,
+    reason,
+    note,
+    durationMs = null,
+    permanent = false,
+    actor,
+    now = Date.now()
+  } = {}) {
     if (!this.sanctions) return { ok: false, reason: 'sanctions-unavailable' };
     if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
     if (!['owner', 'moderator'].includes(actor.role)) return { ok: false, reason: 'sanctions-forbidden' };

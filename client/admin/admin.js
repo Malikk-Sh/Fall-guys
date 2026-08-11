@@ -14,6 +14,7 @@ const state = {
   playerSearchQuery: '',
   moderationCase: null,
   moderationConfirmation: null,
+  sanctionConfirmation: null,
   moderationLoadRevision: 0,
   operations: null,
   operationConfirmation: null,
@@ -42,7 +43,8 @@ const REASON_LABELS = Object.freeze({
   'offensive-name': 'Оскорбительное имя',
   exploitCheat: 'Читы / эксплуатация ошибки',
   'exploit-cheat': 'Читы / эксплуатация ошибки',
-  offensiveName: 'Оскорбительное имя'
+  offensiveName: 'Оскорбительное имя',
+  other: 'Нарушение правил'
 });
 const ROLE_LABELS = Object.freeze({
   owner: 'Владелец',
@@ -59,6 +61,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'admin.user.disable': 'Администратор отключён',
   'admin.user.enable': 'Администратор включён',
   'moderation.case.transition': 'Изменён статус жалобы',
+  'player.sanction.apply': 'Применена санкция к игроку',
+  'player.sanction.revoke': 'Снята санкция с игрока',
   'player.support.view': 'Открыта карточка игрока',
   'ops.operation.requested': 'Запрошена системная операция',
   'ops.operation.completed': 'Системная операция завершена',
@@ -100,6 +104,7 @@ function closeModerationCase() {
   state.moderationLoadRevision += 1;
   state.moderationCase = null;
   resetModerationConfirmation();
+  resetSanctionConfirmation();
   const dialog = $('#moderation-dialog');
   if (dialog.open) dialog.close();
 }
@@ -125,7 +130,8 @@ function clearPlayerSupportView() {
     '#player-achievements',
     '#player-records',
     '#player-inventory',
-    '#player-partners'
+    '#player-partners',
+    '#player-sanctions'
   ]) {
     const node = $(selector);
     if (node) node.replaceChildren();
@@ -301,6 +307,48 @@ function statusLabel(value) {
 
 function reasonLabel(value) {
   return REASON_LABELS[value] || value || '—';
+}
+
+function sanctionStatusLabel(item) {
+  if (!item) return 'Нет активного ограничения';
+  if (item.kind === 'warning') return 'Предупреждение';
+  if (item.status === 'active') return item.permanent ? 'Активный бан без срока' : 'Активный временный бан';
+  if (item.status === 'revoked') return 'Бан снят досрочно';
+  if (item.status === 'expired') return 'Срок бана истёк';
+  return item.status || '—';
+}
+
+function sanctionTimeLabel(item) {
+  if (!item) return '—';
+  if (item.kind === 'warning') return `выдано ${formatTime(item.createdAt)}`;
+  if (item.permanent) return 'без срока';
+  return item.expiresAt ? `до ${formatTime(item.expiresAt)}` : '—';
+}
+
+function renderPlayerSanctions(context = {}) {
+  const root = $('#player-sanctions');
+  root.replaceChildren();
+  const active = context.active;
+  if (active) {
+    playerListItem(
+      root,
+      `${sanctionStatusLabel(active)} · ${reasonLabel(active.reason)}`,
+      `${sanctionTimeLabel(active)} · выдал ${active.createdByName || active.createdByAdminId}`
+    );
+  }
+  for (const item of context.history || []) {
+    if (active && item.id === active.id) continue;
+    const note = item.note ? ` · заметка: ${item.note}` : '';
+    const revoked = item.revokedAt
+      ? ` · снято ${formatTime(item.revokedAt)} (${item.revokedByName || item.revokedByAdminId || 'администратор'})`
+      : '';
+    playerListItem(
+      root,
+      `${sanctionStatusLabel(item)} · ${reasonLabel(item.reason)}`,
+      `${sanctionTimeLabel(item)} · ${formatTime(item.createdAt)} · ${item.createdByName || item.createdByAdminId}${revoked}${note}`
+    );
+  }
+  if (!active && !context.history?.length) appendText(root, 'p', 'Санкций и предупреждений нет.', 'muted');
 }
 
 function deviceLabel(value) {
@@ -691,6 +739,7 @@ function renderPlayerDetail(player) {
   const inventory = player.inventory || {};
   const social = player.social || {};
   const moderation = player.moderation;
+  const sanctions = player.sanctions || { active: null, history: [] };
   const providers =
     (login.providers || []).map(item => providerLabel(item.provider)).join(', ') || 'не привязан';
 
@@ -713,6 +762,14 @@ function renderPlayerDetail(player) {
       'Модерация',
       moderation ? statusLabel(moderation.status) : 'Нет дела',
       moderation ? `${formatNumber(moderation.totalReports)} жалоб в деле` : 'активного moderation case нет'
+    ),
+    statCard(
+      'Ограничение',
+      sanctions.active ? sanctionStatusLabel(sanctions.active) : 'НЕТ',
+      sanctions.active
+        ? `${reasonLabel(sanctions.active.reason)} · ${sanctionTimeLabel(sanctions.active)}`
+        : 'активного бана нет',
+      sanctions.active ? 'bad' : 'good'
     )
   );
 
@@ -800,6 +857,7 @@ function renderPlayerDetail(player) {
     ],
     'Недавних напарников нет.'
   );
+  renderPlayerSanctions(sanctions);
   $('#player-detail').hidden = false;
   $('#player-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -931,6 +989,223 @@ function resetModerationConfirmation(message = '') {
   if (hint && message) hint.textContent = message;
 }
 
+function resetSanctionConfirmation(message = '') {
+  state.sanctionConfirmation = null;
+  const apply = $('#sanction-apply');
+  const revoke = $('#sanction-revoke');
+  if (apply) {
+    apply.disabled = false;
+    apply.textContent = 'Подготовить санкцию';
+    apply.classList.remove('confirm');
+  }
+  if (revoke) {
+    revoke.disabled = false;
+    revoke.textContent = 'Снять активный бан';
+    revoke.classList.remove('confirm');
+  }
+  const hint = $('#sanction-action-hint');
+  if (hint && message) hint.textContent = message;
+}
+
+function updateSanctionFields() {
+  const kind = $('#sanction-kind').value;
+  const duration = $('#sanction-duration');
+  const durationLabel = $('#sanction-duration-label');
+  const customLabel = $('#sanction-custom-label');
+  const owner = state.capabilities.has('sanctions.permanent');
+  durationLabel.hidden = kind !== 'ban';
+  duration.disabled = kind !== 'ban';
+  for (const option of duration.querySelectorAll('[data-owner-only], [data-permanent]')) {
+    option.disabled = !owner;
+  }
+  if (!owner && (duration.value === 'permanent' || Number(duration.value) > 604800000)) {
+    duration.value = '604800000';
+  }
+  customLabel.hidden = kind !== 'ban' || duration.value !== 'custom';
+  $('#sanction-custom-hours').max = owner ? '8760' : '168';
+  resetSanctionConfirmation();
+}
+
+function renderCaseSanctions(item) {
+  const context = item.sanctions || { active: null, history: [] };
+  const currentRoot = $('#case-sanction-current');
+  const historyRoot = $('#case-sanction-history');
+  currentRoot.replaceChildren();
+  historyRoot.replaceChildren();
+  const active = context.active;
+  if (active) {
+    itemCard(
+      currentRoot,
+      `${sanctionStatusLabel(active)} · ${reasonLabel(active.reason)}`,
+      [
+        sanctionTimeLabel(active),
+        `выдал: ${active.createdByName || active.createdByAdminId}`,
+        `ID санкции: ${active.id}`
+      ],
+      active.note || ''
+    );
+  } else {
+    appendText(currentRoot, 'p', 'Активного бана нет.', 'muted');
+  }
+  for (const sanction of context.history || []) {
+    itemCard(
+      historyRoot,
+      `${sanctionStatusLabel(sanction)} · ${reasonLabel(sanction.reason)}`,
+      [
+        formatTime(sanction.createdAt),
+        sanctionTimeLabel(sanction),
+        `выдал: ${sanction.createdByName || sanction.createdByAdminId}`,
+        sanction.revokedAt
+          ? `снял: ${sanction.revokedByName || sanction.revokedByAdminId || 'администратор'} · ${formatTime(sanction.revokedAt)}`
+          : null
+      ],
+      [sanction.note, sanction.revokeNote ? `Снятие: ${sanction.revokeNote}` : ''].filter(Boolean).join('\n')
+    );
+  }
+  if (!context.history?.length) appendText(historyRoot, 'p', 'История санкций пока пуста.', 'muted');
+
+  const form = $('#sanction-action');
+  form.hidden = !state.capabilities.has('sanctions.write');
+  $('#sanction-revoke').hidden = !active || !state.capabilities.has('sanctions.write');
+  if (active?.permanent && !state.capabilities.has('sanctions.permanent'))
+    $('#sanction-revoke').hidden = true;
+  $('#sanction-note').value = '';
+  updateSanctionFields();
+  resetSanctionConfirmation(
+    active?.permanent && !state.capabilities.has('sanctions.permanent')
+      ? 'Постоянный бан может снять только владелец.'
+      : 'Первое нажатие только готовит действие; второе подтверждает его в течение 10 секунд.'
+  );
+}
+
+function sanctionRequestFromForm() {
+  const kind = $('#sanction-kind').value;
+  const reason = $('#sanction-reason').value;
+  const note = $('#sanction-note').value.trim();
+  let durationMs = null;
+  let permanent = false;
+  if (kind === 'ban') {
+    const selected = $('#sanction-duration').value;
+    if (selected === 'permanent') permanent = true;
+    else if (selected === 'custom') {
+      const hours = Number($('#sanction-custom-hours').value);
+      durationMs = Number.isSafeInteger(hours) && hours > 0 ? hours * 60 * 60 * 1000 : null;
+    } else {
+      durationMs = Number(selected);
+    }
+  }
+  return { kind, reason, note, durationMs, permanent };
+}
+
+async function refreshModerationCaseAfterSanction(targetAccountId) {
+  const payload = await api('/api/admin/moderation/case', { targetAccountId });
+  renderModerationCase(payload.case);
+  if (state.currentPanel === 'moderation') await loadModeration();
+  return payload.case;
+}
+
+async function submitSanction(event) {
+  event.preventDefault();
+  const item = state.moderationCase;
+  if (!item || !state.capabilities.has('sanctions.write')) return;
+  const request = sanctionRequestFromForm();
+  if (!request.note) {
+    resetSanctionConfirmation('Внутренняя заметка обязательна для любой санкции.');
+    return;
+  }
+  if (request.kind === 'ban' && !request.permanent && !Number.isSafeInteger(request.durationMs)) {
+    resetSanctionConfirmation('Укажите корректный срок бана.');
+    return;
+  }
+  if (request.permanent && !state.capabilities.has('sanctions.permanent')) {
+    resetSanctionConfirmation('Постоянный бан может выдать только владелец.');
+    return;
+  }
+
+  const signature = JSON.stringify(['apply', item.targetAccountId, request]);
+  const now = Date.now();
+  if (
+    !state.sanctionConfirmation ||
+    state.sanctionConfirmation.signature !== signature ||
+    state.sanctionConfirmation.expiresAt < now
+  ) {
+    state.sanctionConfirmation = { signature, expiresAt: now + 10_000 };
+    $('#sanction-apply').textContent =
+      request.kind === 'warning' ? 'Подтвердить предупреждение' : 'Подтвердить бан';
+    $('#sanction-apply').classList.add('confirm');
+    $('#sanction-action-hint').textContent =
+      'Действие ещё не применено. Нажмите подтверждение в течение 10 секунд.';
+    return;
+  }
+
+  $('#sanction-apply').disabled = true;
+  $('#sanction-action-hint').textContent = 'Применяю санкцию и завершаю активные игровые сессии…';
+  try {
+    const result = await api('/api/admin/sanctions/apply', {
+      targetAccountId: item.targetAccountId,
+      ...request
+    });
+    await refreshModerationCaseAfterSanction(item.targetAccountId);
+    setStatus(
+      result.sanction.kind === 'ban'
+        ? `Бан применён · завершено входов: ${formatNumber(result.revokedSessions)} · отключено соединений: ${formatNumber(result.disconnectedSockets)}`
+        : 'Предупреждение записано',
+      result.sanction.kind === 'ban' ? 'warn' : 'good'
+    );
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    const labels = {
+      'active-ban-exists': 'У игрока уже есть активный бан. Сначала снимите его или дождитесь окончания.',
+      'sanction-duration-forbidden': 'Для вашей роли такой срок недоступен.',
+      'permanent-sanction-owner-only': 'Постоянный бан доступен только владельцу.'
+    };
+    resetSanctionConfirmation(labels[error.payload?.error] || `Ошибка: ${error.message}`);
+    setStatus('Санкция не применена', 'bad');
+  } finally {
+    $('#sanction-apply').disabled = false;
+  }
+}
+
+async function revokeCurrentSanction() {
+  const item = state.moderationCase;
+  const active = item?.sanctions?.active;
+  if (!active || !state.capabilities.has('sanctions.write')) return;
+  const note = $('#sanction-note').value.trim();
+  if (!note) {
+    resetSanctionConfirmation('Перед снятием бана напишите внутреннюю причину решения.');
+    return;
+  }
+  const signature = JSON.stringify(['revoke', active.id, note]);
+  const now = Date.now();
+  if (
+    !state.sanctionConfirmation ||
+    state.sanctionConfirmation.signature !== signature ||
+    state.sanctionConfirmation.expiresAt < now
+  ) {
+    state.sanctionConfirmation = { signature, expiresAt: now + 10_000 };
+    $('#sanction-revoke').textContent = 'Подтвердить снятие бана';
+    $('#sanction-revoke').classList.add('confirm');
+    $('#sanction-action-hint').textContent = 'Бан ещё действует. Подтвердите снятие в течение 10 секунд.';
+    return;
+  }
+  $('#sanction-revoke').disabled = true;
+  try {
+    await api('/api/admin/sanctions/revoke', { sanctionId: active.id, note });
+    await refreshModerationCaseAfterSanction(item.targetAccountId);
+    setStatus('Бан снят досрочно', 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    resetSanctionConfirmation(
+      error.payload?.error === 'permanent-sanction-owner-only'
+        ? 'Постоянный бан может снять только владелец.'
+        : `Ошибка: ${error.message}`
+    );
+    setStatus('Не удалось снять бан', 'bad');
+  } finally {
+    $('#sanction-revoke').disabled = false;
+  }
+}
+
 function renderModerationCase(item) {
   state.moderationCase = item;
   resetModerationConfirmation(
@@ -974,6 +1249,7 @@ function renderModerationCase(item) {
   }
   if (!item.history?.length) appendText(historyRoot, 'p', 'Решений по делу пока нет.', 'muted');
 
+  renderCaseSanctions(item);
   const action = $('#case-action');
   action.hidden = !state.capabilities.has('moderation.write');
   $('#case-next-status').value = defaultModerationStatus(item.status);
@@ -1464,10 +1740,18 @@ $('#case-close').addEventListener('click', closeModerationCase);
 $('#case-action').addEventListener('submit', submitModerationTransition);
 $('#case-next-status').addEventListener('change', () => resetModerationConfirmation());
 $('#case-note').addEventListener('input', () => resetModerationConfirmation());
+$('#sanction-action').addEventListener('submit', submitSanction);
+$('#sanction-revoke').addEventListener('click', revokeCurrentSanction);
+$('#sanction-kind').addEventListener('change', updateSanctionFields);
+$('#sanction-duration').addEventListener('change', updateSanctionFields);
+$('#sanction-custom-hours').addEventListener('input', () => resetSanctionConfirmation());
+$('#sanction-reason').addEventListener('change', () => resetSanctionConfirmation());
+$('#sanction-note').addEventListener('input', () => resetSanctionConfirmation());
 $('#moderation-dialog').addEventListener('cancel', () => {
   state.moderationLoadRevision += 1;
   state.moderationCase = null;
   resetModerationConfirmation();
+  resetSanctionConfirmation();
 });
 for (const button of $$('#tabs [data-panel]')) {
   button.addEventListener('click', () => switchPanel(button.dataset.panel));

@@ -1,0 +1,34 @@
+name: Temporary run player support patch
+
+on:
+  push:
+    branches: [feat/admin-player-support]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-player-support
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply staged patch
+        run: python3 scripts/tmp-player-support-patch.py
+      - name: Format changed files
+        run: npx prettier --write client/admin/index.html client/admin/admin.js client/admin/admin.css docs/ADMIN-PANEL.md server/adminPlayerSupportRoutes.test.mjs
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add client/admin/index.html client/admin/admin.js client/admin/admin.css docs/ADMIN-PANEL.md server/adminPlayerSupportRoutes.test.mjs
+          git commit -m 'Add understandable player support workspace'
+          git push origin HEAD:feat/admin-player-support

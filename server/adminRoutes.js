@@ -156,20 +156,14 @@ function installAdminRoutes({
   app.post('/api/admin/moderation/transition', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'moderation.write');
     if (!resolved) return undefined;
-    if (
-      !keysOnly(
-        req.body,
-        new Set(['targetAccountId', 'status', 'note', 'expectedStatus', 'expectedLastReportedAt'])
-      )
-    ) {
+    if (!keysOnly(req.body, new Set(['targetAccountId', 'status', 'note', 'expectedRevision']))) {
       return res.status(400).json({ ok: false, error: 'invalid-payload' });
     }
     const result = control.moderationTransition({
       targetAccountId: req.body?.targetAccountId,
       status: req.body?.status,
       note: req.body?.note,
-      expectedStatus: req.body?.expectedStatus,
-      expectedLastReportedAt: req.body?.expectedLastReportedAt,
+      expectedRevision: req.body?.expectedRevision,
       actor: resolved.session.user
     });
     if (!result.ok) {

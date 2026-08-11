@@ -150,11 +150,12 @@ Read-only представление `GameplayMetrics.summary()` с выборо
 Интерфейс делает изменение двухшаговым: первый tap только готовит действие, второй в течение 10
 секунд подтверждает тот же status/note.
 
-Дополнительно сервер использует optimistic guard. При открытии case браузер запоминает current status
-и `lastReportedAt`. Если до подтверждения пришла новая жалоба или другой moderator изменил дело,
-сервер отвечает `case-changed`, не применяет старое решение и возвращает свежий case для повторного
-review. Так новая evidence не может случайно попасть под решение, принятое до того, как moderator её
-увидел.
+Для каждого detail-response сервер возвращает `revision`, построенный из последних immutable evidence
+и moderation-event IDs. Во время transition сервер берёт SQLite write lock, повторно читает case и
+сверяет этот revision **внутри той же transaction**, в которой затем пишет решение. Поэтому новая
+жалоба не теряется даже при совпавшем millisecond timestamp, а цепочка переходов вроде
+`open → reviewing → open` всё равно меняет revision. При несовпадении сервер отвечает
+`case-changed`, ничего не применяет и возвращает свежий case для повторного review.
 
 Control Plane **не** банит, не suspend-ит и не делает forced rename. Status `resolved` означает только,
 что moderation review закрыт согласно note и реально выполненным внешним действиям. Не пишите в note

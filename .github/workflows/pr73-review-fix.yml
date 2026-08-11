@@ -69,7 +69,6 @@ jobs:
             server/adminSanctions.test.mjs \
             server/authSanctions.test.mjs \
             server/networkSanctions.test.mjs \
-            server/networkManagerSanctions.test.mjs \
             server/legacySanctions.test.mjs \
             server/adminModeration.test.mjs \
             server/adminControlPlane.test.mjs \
@@ -79,6 +78,7 @@ jobs:
             server/socketAuthIntegration.test.mjs \
             server/migrations.test.mjs
           node --experimental-loader ./server/client-loader.mjs --test \
+            server/networkManagerSanctions.test.mjs \
             server/network.test.mjs \
             server/networkClientAuth.test.mjs \
             server/account.client.test.mjs

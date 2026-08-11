@@ -29,6 +29,9 @@ const { InventoryService } = require('./inventory');
 const { RewardService } = require('./rewards');
 const { installRewardRoutes } = require('./rewardRoutes');
 const { installSocialRoutes } = require('./socialRoutes');
+const { AdminAuthService } = require('./adminAuth');
+const { AdminControlService } = require('./adminControl');
+const { installAdminRoutes } = require('./adminRoutes');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
 
@@ -36,7 +39,14 @@ const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
 const inventory = new InventoryService({ db: core.accounts.db, accounts: core.accounts });
 const rewards = new RewardService({ db: core.accounts.db, inventory });
+const adminAuth = new AdminAuthService({ db: core.accounts.db });
+const adminControl = new AdminControlService({
+  db: core.accounts.db,
+  health: core.health,
+  gameplay: core.gameplay
+});
 const recoveryLogin = core.accounts.login.bind(core.accounts);
+const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
 
 // WST принадлежит только рукопожатию WebSocket. NetworkIdentity поглощает его один раз и дальше
 // игровой протокол использует уже ws.accountId; CREATE/JOIN/FIND не видят credential вообще.
@@ -83,6 +93,16 @@ installSocialRoutes({
   requireSession: authRoutes.requireSession
 });
 installRewardRoutes({ app: core.app, auth, rewards });
+installAdminRoutes({
+  app: core.app,
+  adminAuth,
+  control: adminControl,
+  enabled: adminPanelEnabled,
+  clientIp,
+  secureCookies: process.env.ADMIN_COOKIE_SECURE
+    ? process.env.ADMIN_COOKIE_SECURE !== '0'
+    : process.env.NODE_ENV === 'production'
+});
 
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || '0.0.0.0';
@@ -101,6 +121,7 @@ if (require.main === module) {
         socialCosmetics: true,
         socialSafety: true,
         rewardPlatform: true,
+        adminPanel: adminPanelEnabled,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',
         google: google.enabled
       })
@@ -110,4 +131,4 @@ if (require.main === module) {
   process.on('SIGINT', () => core.shutdown('SIGINT'));
 }
 
-module.exports = { ...core, auth, google, inventory, rewards };
+module.exports = { ...core, auth, google, inventory, rewards, adminAuth, adminControl };

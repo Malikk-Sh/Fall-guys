@@ -1,5 +1,7 @@
 'use strict';
 
+const { RECOVERY_ROTATION_TTL_MS } = require('./accountSelfService');
+
 const MAX_SEARCH_QUERY = 80;
 const MAX_SEARCH_RESULTS = 50;
 const DEFAULT_SEARCH_RESULTS = 20;
@@ -28,8 +30,14 @@ function clampLimit(value, fallback = DEFAULT_SEARCH_RESULTS) {
   return Math.min(parsed, MAX_SEARCH_RESULTS);
 }
 
-function escapeLike(value) {
-  return String(value).replace(/[\\%_]/g, match => `\\${match}`);
+function escapeGlob(value) {
+  return String(value).replace(/[?*[]/g, match => `[${match}]`);
+}
+
+function ftsPrefixQuery(value) {
+  const tokens = String(value || '').match(/[\p{L}\p{N}]+/gu) || [];
+  if (!tokens.length) return '';
+  return tokens.map(token => `"${token.replaceAll('"', '""')}"*`).join(' AND ');
 }
 
 function nullableNumber(value) {
@@ -54,17 +62,12 @@ class AdminPlayerSupport {
       };
     }
     const safeLimit = clampLimit(limit);
-    const like = `%${escapeLike(normalized)}%`;
-    const prefix = `${escapeLike(normalized)}%`;
-    const rows = this.statements.search.all(
-      now,
-      normalized,
-      prefix,
-      like,
-      normalized,
-      normalized,
-      safeLimit
-    );
+    const idPrefix = `${escapeGlob(normalized)}*`;
+    const ftsQuery = ftsPrefixQuery(normalized);
+    const statement = ftsQuery ? this.statements.searchWithName : this.statements.searchIdOnly;
+    const rows = ftsQuery
+      ? statement.all(normalized, idPrefix, normalized, safeLimit, ftsQuery, safeLimit, now, safeLimit)
+      : statement.all(normalized, idPrefix, normalized, safeLimit, now, safeLimit);
     return {
       ok: true,
       query: normalized,
@@ -72,7 +75,7 @@ class AdminPlayerSupport {
         id: row.id,
         name: row.display_name,
         createdAt: Number(row.created_at),
-        lastSeenAt: Number(row.last_seen_at),
+        lastSeenAt: Number(row.effective_last_seen_at || row.last_seen_at || 0),
         activeSessions: Number(row.active_sessions || 0),
         hasExternalLogin: Boolean(row.has_external_login)
       }))
@@ -91,15 +94,20 @@ class AdminPlayerSupport {
     const reportSummary = this.statements.reportSummary.get(id);
     const reportsSubmitted = this.statements.reportsSubmitted.get(id);
     const avoidCount = this.statements.avoidCount.get(id, id);
+    const rotationStartedAt = nullableNumber(account.pending_secret_created_at);
+    const recoveryRotationPending =
+      rotationStartedAt != null &&
+      rotationStartedAt <= now &&
+      now - rotationStartedAt <= RECOVERY_ROTATION_TTL_MS;
 
     return {
       account: {
         id: account.id,
         name: account.display_name,
         createdAt: Number(account.created_at),
-        lastSeenAt: Number(account.last_seen_at),
-        recoveryRotationPending: account.pending_secret_created_at != null,
-        recoveryRotationStartedAt: nullableNumber(account.pending_secret_created_at)
+        lastSeenAt: Number(account.effective_last_seen_at || account.last_seen_at || 0),
+        recoveryRotationPending,
+        recoveryRotationStartedAt: recoveryRotationPending ? rotationStartedAt : null
       },
       login: {
         providers: this.statements.identities.all(id).map(row => ({
@@ -189,40 +197,88 @@ class AdminPlayerSupport {
   }
 }
 
-function prepare(db) {
-  return {
-    search: db.prepare(`
-      WITH candidates AS (
-        SELECT
-          a.id AS id,
-          a.display_name AS display_name,
-          a.created_at AS created_at,
-          a.last_seen_at AS last_seen_at,
-          SUM(CASE WHEN s.expires_at > ? THEN 1 ELSE 0 END) AS active_sessions,
-          EXISTS(SELECT 1 FROM account_identities ai WHERE ai.account_id = a.id) AS has_external_login
-        FROM accounts a
-        LEFT JOIN account_sessions s ON s.account_id = a.id
-        WHERE a.id = ?
-           OR a.id LIKE ? ESCAPE '\\'
-           OR a.display_name LIKE ? ESCAPE '\\'
-        GROUP BY a.id, a.display_name, a.created_at, a.last_seen_at
+function supportSearchSelect(candidateCte) {
+  return `
+    WITH
+      ${candidateCte},
+      ranked AS (
+        SELECT id, MIN(rank) AS rank
+        FROM candidate_ids
+        GROUP BY id
       )
-      SELECT id, display_name, created_at, last_seen_at, active_sessions, has_external_login
-      FROM candidates
-      ORDER BY
-        CASE
-          WHEN id = ? THEN 0
-          WHEN display_name = ? COLLATE NOCASE THEN 1
-          ELSE 2
-        END,
-        last_seen_at DESC,
-        id ASC
-      LIMIT ?
-    `),
-    account: db.prepare(`
-      SELECT id, display_name, created_at, last_seen_at, pending_secret_created_at
+    SELECT
+      a.id,
+      a.display_name,
+      a.created_at,
+      a.last_seen_at,
+      MAX(
+        a.last_seen_at,
+        COALESCE((SELECT MAX(s1.last_seen_at) FROM account_sessions s1 WHERE s1.account_id = a.id), 0)
+      ) AS effective_last_seen_at,
+      (SELECT COUNT(*) FROM account_sessions s2 WHERE s2.account_id = a.id AND s2.expires_at > ?) AS active_sessions,
+      EXISTS(SELECT 1 FROM account_identities ai WHERE ai.account_id = a.id) AS has_external_login
+    FROM ranked r
+    JOIN accounts a ON a.id = r.id
+    ORDER BY r.rank ASC, effective_last_seen_at DESC, a.id ASC
+    LIMIT ?
+  `;
+}
+
+function prepare(db) {
+  const exactAndPrefix = `
+    exact_id AS (
+      SELECT id FROM accounts WHERE id = ?
+    ),
+    prefix_ids AS (
+      SELECT id
       FROM accounts
-      WHERE id = ?
+      WHERE id GLOB ? AND id <> ?
+      ORDER BY id ASC
+      LIMIT ?
+    )
+  `;
+  return {
+    searchWithName: db.prepare(
+      supportSearchSelect(`
+        ${exactAndPrefix},
+        name_ids AS (
+          SELECT account_id AS id
+          FROM account_support_search
+          WHERE account_support_search MATCH ?
+          LIMIT ?
+        ),
+        candidate_ids AS (
+          SELECT id, 0 AS rank FROM exact_id
+          UNION ALL
+          SELECT id, 1 AS rank FROM prefix_ids
+          UNION ALL
+          SELECT id, 2 AS rank FROM name_ids
+        )
+      `)
+    ),
+    searchIdOnly: db.prepare(
+      supportSearchSelect(`
+        ${exactAndPrefix},
+        candidate_ids AS (
+          SELECT id, 0 AS rank FROM exact_id
+          UNION ALL
+          SELECT id, 1 AS rank FROM prefix_ids
+        )
+      `)
+    ),
+    account: db.prepare(`
+      SELECT
+        a.id,
+        a.display_name,
+        a.created_at,
+        a.last_seen_at,
+        a.pending_secret_created_at,
+        MAX(
+          a.last_seen_at,
+          COALESCE((SELECT MAX(s.last_seen_at) FROM account_sessions s WHERE s.account_id = a.id), 0)
+        ) AS effective_last_seen_at
+      FROM accounts a
+      WHERE a.id = ?
     `),
     identities: db.prepare(`
       SELECT provider, MIN(created_at) AS linked_at
@@ -337,5 +393,6 @@ module.exports = {
   MAX_SEARCH_RESULTS,
   normalizeSearchQuery,
   clampLimit,
-  escapeLike
+  escapeGlob,
+  ftsPrefixQuery
 };

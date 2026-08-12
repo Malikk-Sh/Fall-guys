@@ -27,8 +27,11 @@ ProtectHostname=true
 ProtectClock=true
 ProtectKernelLogs=true
 PrivateDevices=true
-# systemctl общается с PID 1 по Unix socket. nginx -t не должен открывать внешнюю сеть.
-RestrictAddressFamilies=AF_UNIX
+# systemctl общается с PID 1 по Unix socket. AF_INET нужен только для фиксированной readiness-
+# проверки 127.0.0.1:3000; IPAddressDeny/Allow не дают root-helper выйти во внешнюю сеть.
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
 RestrictNamespaces=true
 LockPersonality=true
 # nginx -t открывает configured error_log, поэтому даём helper ровно этот writable каталог.

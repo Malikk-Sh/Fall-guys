@@ -21,4 +21,10 @@ if text.count(old) != 1:
     raise SystemExit(f'backup export replacement repair expected exactly one match, got {text.count(old)}')
 text = text.replace(old, new, 1)
 
+old = "type: 'find_coop'"
+new = "type: 'findCoop'"
+if text.count(old) != 1:
+    raise SystemExit(f'drain regression message repair expected exactly one match, got {text.count(old)}')
+text = text.replace(old, new, 1)
+
 path.write_text(text, encoding='utf-8')

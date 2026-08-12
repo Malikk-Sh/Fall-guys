@@ -124,7 +124,11 @@ test('structured log capture ignores raw messages and fingerprints only normaliz
   assert.equal(captured.event, 'message_handler_threw');
   assert.equal(captured.severity, 'error');
   assert.match(captured.fingerprint, /^[0-9a-f]{24}$/);
-  assert.equal(captured.fingerprint, capturedAgain.fingerprint, 'dynamic messages and line numbers do not split a code-location group');
+  assert.equal(
+    captured.fingerprint,
+    capturedAgain.fingerprint,
+    'dynamic messages and line numbers do not split a code-location group'
+  );
   const serialized = JSON.stringify(captured);
   assert.equal(serialized.includes('first-secret'), false);
   assert.equal(serialized.includes('private-player-id'), false);

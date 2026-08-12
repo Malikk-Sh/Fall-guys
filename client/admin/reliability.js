@@ -208,7 +208,12 @@
     const lifecycle = document.createElement('article');
     lifecycle.className = 'card';
     text(lifecycle, 'h2', 'Жизненный цикл сервера');
-    text(lifecycle, 'p', 'Запуски, drain и штатные завершения помогают связать сбой с перезапуском.', 'section-help');
+    text(
+      lifecycle,
+      'p',
+      'Запуски, drain и штатные завершения помогают связать сбой с перезапуском.',
+      'section-help'
+    );
     const lifeWrap = document.createElement('div');
     lifeWrap.className = 'table-wrap';
     const lifeTable = document.createElement('table');

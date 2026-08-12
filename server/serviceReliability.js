@@ -52,7 +52,10 @@ function nonNegativeInt(value) {
 }
 
 function safeBuild(health = {}) {
-  const clean = value => String(value || '').trim().slice(0, 120);
+  const clean = value =>
+    String(value || '')
+      .trim()
+      .slice(0, 120);
   return {
     version: clean(health.version) || 'unknown',
     commit: clean(health.commit) || 'unknown',
@@ -61,7 +64,9 @@ function safeBuild(health = {}) {
 }
 
 function safeFingerprint(value) {
-  const text = String(value || '').trim().toLowerCase();
+  const text = String(value || '')
+    .trim()
+    .toLowerCase();
   return /^[0-9a-f]{12,64}$/.test(text) ? text : '';
 }
 
@@ -94,10 +99,7 @@ class ServiceReliability {
     this.health = health;
     this.now = now;
     this.retentionDays = Math.max(1, Math.min(90, Number(retentionDays) || DEFAULT_RETENTION_DAYS));
-    this.maxEventRows = Math.max(
-      1000,
-      Math.min(100_000, Number(maxEventRows) || DEFAULT_MAX_EVENT_ROWS)
-    );
+    this.maxEventRows = Math.max(1000, Math.min(100_000, Number(maxEventRows) || DEFAULT_MAX_EVENT_ROWS));
     this.previousCounters = null;
     this.lastPrunedAt = 0;
     migrateDatabase(db);
@@ -234,20 +236,18 @@ class ServiceReliability {
       }
     }));
 
-    const series = this.statements.series
-      .all(spec.bucketMs, spec.bucketMs, from, at)
-      .map(row => ({
-        at: Number(row.bucket_at),
-        eventLoopP95Ms: Number(row.event_loop_p95_ms || 0),
-        rssMb: Number(row.rss_mb || 0),
-        sockets: Number(row.socket_count || 0),
-        activeMatches: Number(row.active_matches || 0),
-        reconnectSucceeded: Number(row.resume_succeeded || 0),
-        reconnectFailed: Number(row.resume_failed || 0),
-        handlerErrors: Number(row.handler_errors || 0),
-        socketSendFailures: Number(row.socket_send_failures || 0),
-        capacityRejected: Number(row.capacity_rejected || 0)
-      }));
+    const series = this.statements.series.all(spec.bucketMs, spec.bucketMs, from, at).map(row => ({
+      at: Number(row.bucket_at),
+      eventLoopP95Ms: Number(row.event_loop_p95_ms || 0),
+      rssMb: Number(row.rss_mb || 0),
+      sockets: Number(row.socket_count || 0),
+      activeMatches: Number(row.active_matches || 0),
+      reconnectSucceeded: Number(row.resume_succeeded || 0),
+      reconnectFailed: Number(row.resume_failed || 0),
+      handlerErrors: Number(row.handler_errors || 0),
+      socketSendFailures: Number(row.socket_send_failures || 0),
+      capacityRejected: Number(row.capacity_rejected || 0)
+    }));
 
     const reasons = [];
     let status = 'healthy';

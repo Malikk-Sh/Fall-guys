@@ -38,12 +38,19 @@ function prepare({ reconnectFailure = false } = {}) {
   const auth = new AuthService({ db });
   const disconnected = [];
   const reconnectRevocations = [];
+  const incidentEvents = [];
   const adminAuth = new AdminAuthService({ db });
   const control = new AdminControlService({
     db,
     adminAuth,
     accounts,
     auth,
+    incidents: {
+      record: event => {
+        incidentEvents.push(event);
+        return true;
+      }
+    },
     disconnectAccount: (accountId, options) => {
       disconnected.push({ accountId, options });
       return accountId === 'support-player' ? 2 : 0;
@@ -59,7 +66,7 @@ function prepare({ reconnectFailure = false } = {}) {
   });
   const app = express();
   installAdminRoutes({ app, adminAuth, control, enabled: true, secureCookies: false });
-  return { db, adminAuth, app, auth, accounts, disconnected, reconnectRevocations };
+  return { db, adminAuth, app, auth, accounts, disconnected, reconnectRevocations, incidentEvents };
 }
 
 async function start(app) {
@@ -169,7 +176,7 @@ test('player support routes reject malformed payloads and unknown accounts', asy
 });
 
 test('support actions enforce split capabilities, revoke every login path and audit mutations', async t => {
-  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare();
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations, incidentEvents } = prepare();
   const { server, base } = await start(app);
   t.after(() => {
     server.close();
@@ -201,6 +208,10 @@ test('support actions enforce split capabilities, revoke every login path and au
   assert.deepEqual(reconnectRevocations, ['support-player']);
   assert.equal(disconnected[0].accountId, 'support-player');
   assert.equal(disconnected[0].options.reason, 'support-logout');
+  assert.equal(incidentEvents.length, 1);
+  assert.equal(incidentEvents[0].accountId, 'support-player');
+  assert.equal(incidentEvents[0].kind, 'support');
+  assert.equal(incidentEvents[0].code, 'forced-logout');
 
   const logoutAudit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
   assert.ok(logoutAudit);
@@ -256,7 +267,7 @@ test('support actions enforce split capabilities, revoke every login path and au
 });
 
 test('support logout reports partial cleanup failures instead of claiming success', async t => {
-  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare({
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations, incidentEvents } = prepare({
     reconnectFailure: true
   });
   const { server, base } = await start(app);
@@ -290,6 +301,7 @@ test('support logout reports partial cleanup failures instead of claiming succes
   assert.equal(auth.consumeSocketTicket(ticket.token, 20_200), null);
   assert.deepEqual(reconnectRevocations, ['support-player']);
   assert.equal(disconnected.length, 1, 'later cleanup steps still run after an earlier local failure');
+  assert.deepEqual(incidentEvents, [], 'partial cleanup must not claim forced-logout completion');
 
   const audit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
   assert.deepEqual(audit.detail, {
@@ -304,7 +316,7 @@ test('support logout reports partial cleanup failures instead of claiming succes
 });
 
 test('support logout continues local cleanup when HTTP session revocation fails', async t => {
-  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare();
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations, incidentEvents } = prepare();
   const { server, base } = await start(app);
   t.after(() => {
     server.close();
@@ -339,6 +351,7 @@ test('support logout continues local cleanup when HTTP session revocation fails'
   assert.equal(auth.consumeSocketTicket(ticket.token, 30_200), null);
   assert.deepEqual(reconnectRevocations, ['support-player']);
   assert.equal(disconnected.length, 1, 'all process-local cleanup still runs');
+  assert.deepEqual(incidentEvents, [], 'durable cleanup failure must not claim logout completion');
 
   const audit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
   assert.deepEqual(audit.detail, {

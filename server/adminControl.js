@@ -229,10 +229,12 @@ class AdminControlService {
       failedSteps.push('audit');
     }
 
-    try {
-      this.incidents?.record({ accountId: id, kind: 'support', code: 'forced-logout', occurredAt: now });
-    } catch {
-      // Diagnostics are observability only; failure must never weaken or roll back a completed logout.
+    if (auditedFailedSteps.length === 0) {
+      try {
+        this.incidents?.record({ accountId: id, kind: 'support', code: 'forced-logout', occurredAt: now });
+      } catch {
+        // Diagnostics are observability only; failure must never weaken or roll back a completed logout.
+      }
     }
 
     const result = {

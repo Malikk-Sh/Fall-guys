@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const express = require('express');
 const { openDatabase } = require('./db');
 const { AdminAuthService } = require('./adminAuth');
 const { installAdminRoutes } = require('./adminRoutes');
+const adminClient = readFileSync(new URL('../client/admin/admin.js', import.meta.url), 'utf8');
 
 async function start(role) {
   const db = openDatabase(':memory:');
@@ -119,4 +120,17 @@ test('admin logout clears account-linked incident state and privacy copy describ
   assert.match(adminHtml, /mobile\/desktop/);
   assert.match(adminHtml, /raw\s+User-Agent/i);
   assert.match(adminHtml, /device fingerprint/i);
+});
+
+test('incident search responses cannot repopulate account data after admin session invalidation', () => {
+  const start = adminClient.indexOf('async function searchIncidents()');
+  const end = adminClient.indexOf('async function loadIncidents()', start);
+  assert.ok(start >= 0 && end > start);
+  const source = adminClient.slice(start, end);
+  assert.match(source, /const revision = \+\+state\.incidentRevision;/);
+  assert.match(source, /const sessionGeneration = state\.sessionGeneration;/);
+  assert.match(
+    source,
+    /revision !== state\.incidentRevision \|\| sessionGeneration !== state\.sessionGeneration/
+  );
 });

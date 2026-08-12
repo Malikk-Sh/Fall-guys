@@ -1257,8 +1257,11 @@ async function searchIncidents() {
     $('#incident-search-meta').textContent = 'Введите хотя бы 2 символа.';
     return false;
   }
+  const revision = ++state.incidentRevision;
+  const sessionGeneration = state.sessionGeneration;
   state.incidentSearchQuery = query;
   const payload = await api('/api/admin/players/search', { query, limit: 30 });
+  if (revision !== state.incidentRevision || sessionGeneration !== state.sessionGeneration) return false;
   const body = $('#incident-results-body');
   body.replaceChildren();
   for (const player of payload.results || []) {

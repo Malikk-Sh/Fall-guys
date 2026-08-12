@@ -6,6 +6,7 @@ import buildInfo from './buildInfo.js';
 const { buildIdentity } = buildInfo;
 const install = readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
 const smoke = readFileSync(new URL('../deploy/smoke.sh', import.meta.url), 'utf8');
+const restore = readFileSync(new URL('../deploy/restore.sh', import.meta.url), 'utf8');
 
 test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /RELEASE_TAG="\$\{RELEASE_TAG-\$\{SAVED_RELEASE_TAG:-\}\}"/);
@@ -36,4 +37,18 @@ test('build identity exposes a release tag only when production supplies one', (
   });
   assert.equal(tagged.release, 'v2.6.0-beta.1');
   assert.equal(tagged.commit, 'abcdef012345');
+});
+
+test('restore protects the requested recovery point before backup retention can run', () => {
+  const protect = restore.indexOf(
+    'install -o "$APP_USER" -g "$APP_GROUP" -m 0600 "$REQUESTED_BACKUP" "$protected_source"'
+  );
+  const retentionRun = restore.indexOf('systemctl start wobble-backup.service');
+  assert.ok(protect >= 0, 'restore must create a protected source copy');
+  assert.ok(
+    retentionRun > protect,
+    'selected restore point must be protected before retention-producing backup'
+  );
+  assert.match(restore, /trap cleanup_restore_source EXIT/);
+  assert.match(restore, /BACKUP="\$protected_source"/);
 });

@@ -32,15 +32,30 @@ if [ -z "$BACKUP" ]; then
   exit 2
 fi
 BACKUP="$(readlink -f "$BACKUP")"
+REQUESTED_BACKUP="$BACKUP"
 
 say "Verify requested backup"
-/usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$BACKUP"
+/usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$REQUESTED_BACKUP"
 
-# Prepare rollback storage and create a fresh verified snapshot before touching the running service.
+# Protect the selected recovery point before creating any new backup. The backup service applies
+# retention, so the oldest selected tier file must not remain a deletion target while rollback
+# preparation runs.
 mkdir -p "$BACKUP_DIR/restore-rollback"
 chown "$APP_USER:$APP_GROUP" "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
 chmod 700 "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
+protected_source="$BACKUP_DIR/restore-rollback/.restore-source-$(date -u +%Y%m%dT%H%M%SZ)-$$.db"
+cleanup_restore_source() {
+  rm -f -- "$protected_source"
+}
+trap cleanup_restore_source EXIT
+if ! install -o "$APP_USER" -g "$APP_GROUP" -m 0600 "$REQUESTED_BACKUP" "$protected_source" ||
+  ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$protected_source"; then
+  warn "requested restore point could not be protected before retention"
+  exit 1
+fi
+BACKUP="$protected_source"
 
+# Prepare a fresh verified rollback snapshot before touching the running service.
 rollback=""
 if [ -f "$DB" ]; then
   say "Create verified pre-restore rollback snapshot"
@@ -120,7 +135,7 @@ fi
 
 say "Restore complete"
 echo "database: $DB"
-echo "source backup: $BACKUP"
+echo "source backup: $REQUESTED_BACKUP"
 if [ -n "$rollback" ]; then
   echo "pre-restore rollback snapshot kept at: $rollback"
 fi

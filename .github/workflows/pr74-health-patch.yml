@@ -1,0 +1,77 @@
+name: PR74 operational health patch
+
+on:
+  push:
+    branches: [feat/maintenance-operations]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/maintenance-operations
+          fetch-depth: 0
+
+      - name: Put operational readiness inside the core routing boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('server/index.js')
+          text = path.read_text()
+
+          live = "app.get('/health/live', (_req, res) => res.json({ ok: true }));\n"
+          health_route = """app.get('/health/live', (_req, res) => res.json({ ok: true }));
+          // Private readiness handshake for the root-owned operations helper. This route is registered
+          // before the SPA catch-all, requires the canonical lower-case path and accepts only direct
+          // loopback traffic. Nginx additionally blocks every case variant from the public proxy.
+          app.get('/health/ops', (req, res) => {
+            if (req.path !== '/health/ops') return res.status(404).end();
+            if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress || '')) {
+              return res.status(403).json({ ok: false, error: 'forbidden' });
+            }
+            res.setHeader('Cache-Control', 'no-store');
+            return res.json({ ok: true, pid: process.pid, draining: operationalState.isDraining() });
+          });
+          """
+          health_route = '\n'.join(line[10:] if line.startswith('          ') else line for line in health_route.splitlines()) + '\n'
+          if text.count(live) != 1 or "app.get('/health/ops'" in text:
+              raise SystemExit('unexpected health route anchor')
+          text = text.replace(live, health_route, 1)
+
+          ready_old = "const ready = !shuttingDown && !!wss && server.listening && !capacity.socketsFull && !load.overloaded;"
+          ready_new = "const ready =\n    !shuttingDown &&\n    !operationalState.isDraining() &&\n    !!wss &&\n    server.listening &&\n    !capacity.socketsFull &&\n    !load.overloaded;"
+          if text.count(ready_old) != 1:
+              raise SystemExit('unexpected health ready anchor')
+          text = text.replace(ready_old, ready_new, 1)
+
+          verify_old = "verifyClient: ({ origin, req }) => !shuttingDown && originAllowed(origin, req.headers.host)"
+          verify_new = "verifyClient: ({ origin, req }) =>\n    !shuttingDown && !operationalState.isDraining() && originAllowed(origin, req.headers.host)"
+          if text.count(verify_old) != 1:
+              raise SystemExit('unexpected websocket verify anchor')
+          text = text.replace(verify_old, verify_new, 1)
+
+          path.write_text(text)
+          PY
+
+          npx prettier --write server/index.js
+          git diff --check
+          grep -n "health/ops" server/index.js
+          grep -n "operationalState.isDraining" server/index.js
+
+      - name: Commit operational health change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/index.js
+          git commit -m "Expose drain readiness before SPA routing"
+          git push origin HEAD:feat/maintenance-operations

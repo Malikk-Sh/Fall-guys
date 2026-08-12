@@ -9,6 +9,13 @@ Type=simple
 User=root
 Group=root
 ExecStart=/usr/bin/node /usr/local/lib/wobble-ops/helper.mjs
+
+# Единственное изменяемое состояние privileged helper живёт в собственном runtime-каталоге.
+# Флаг maintenance не содержит секретов; Nginx и Wobble только проверяют его наличие.
+RuntimeDirectory=wobble-ops
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -20,7 +27,10 @@ ProtectHostname=true
 ProtectClock=true
 ProtectKernelLogs=true
 PrivateDevices=true
+# systemctl общается с PID 1 по Unix socket. nginx -t не должен открывать внешнюю сеть.
 RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
+# nginx -t открывает configured error_log, поэтому даём helper ровно этот writable каталог.
+ReadWritePaths=/var/log/nginx
 UMask=0077

@@ -5,7 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
-import { ACTIONS, createServer, validateRequest } from '../deploy/wobble-ops-helper.mjs';
+import {
+  ACTIONS,
+  MAINTENANCE_FLAG,
+  createServer,
+  maintenanceEnabled,
+  setMaintenance,
+  validateRequest
+} from '../deploy/wobble-ops-helper.mjs';
 
 const require = createRequire(import.meta.url);
 const express = require('express');
@@ -63,29 +70,81 @@ test('web client and root helper share the same closed operation allowlist', () 
     Object.keys(ACTIONS).sort()
   );
   assert.equal(validOperation('backup.create'), 'backup.create');
+  assert.equal(validOperation('maintenance.enable'), 'maintenance.enable');
+  assert.equal(validOperation('nginx.reload'), 'nginx.reload');
   assert.equal(validOperation('anything; rm -rf /'), null);
 
   const allowedUnits = new Set([
     'wobble-backup.service',
     'wobble-backup-verify.service',
-    'wobble-smoke.service',
-    'wobble.service'
+    'wobble-smoke.service'
   ]);
-  for (const [action, spec] of Object.entries(ACTIONS)) {
+  const systemdActions = Object.entries(ACTIONS).filter(([, spec]) => spec.kind === 'systemd');
+  assert.equal(systemdActions.length, allowedUnits.size);
+  for (const [action, spec] of systemdActions) {
     assert.equal(allowedUnits.has(spec.unit), true, `${action} may use only an explicitly approved unit`);
-    assert.ok(['start', 'restart'].includes(spec.verb));
-    assert.equal(typeof OPERATION_DEFINITIONS[action].description, 'string');
-    assert.ok(OPERATION_DEFINITIONS[action].description.length > 20);
+    assert.equal(spec.verb, 'start');
   }
-  assert.equal(allowedUnits.size, Object.keys(ACTIONS).length);
+
+  assert.equal(ACTIONS['nginx.reload'].kind, 'nginx-reload');
+  assert.equal(ACTIONS['wobble.restart'].kind, 'graceful-restart');
+  assert.equal(ACTIONS['wobble.restart'].deferred, true);
+  assert.deepEqual(
+    [ACTIONS['maintenance.enable'].enabled, ACTIONS['maintenance.disable'].enabled],
+    [true, false]
+  );
+  for (const definition of Object.values(OPERATION_DEFINITIONS)) {
+    assert.equal(typeof definition.description, 'string');
+    assert.ok(definition.description.length > 20);
+  }
 });
 
-test('helper rejects extra fields and unknown actions before systemctl', () => {
+test('helper rejects extra fields and unknown actions before privileged work', () => {
   const requestId = '4d4a51e8-f32b-4f97-8d48-95640ad5084d';
   assert.deepEqual(validateRequest({ requestId, action: 'smoke.run' }), { requestId, action: 'smoke.run' });
+  assert.deepEqual(validateRequest({ requestId, action: 'nginx.reload' }), {
+    requestId,
+    action: 'nginx.reload'
+  });
   assert.equal(validateRequest({ requestId, action: 'shell.exec' }), null);
   assert.equal(validateRequest({ requestId, action: 'smoke.run', command: 'id' }), null);
+  assert.equal(validateRequest({ requestId, action: 'maintenance.enable', path: '/tmp/owned' }), null);
   assert.equal(validateRequest({ requestId: 'not-a-uuid', action: 'smoke.run' }), null);
+});
+
+test('maintenance flag uses one fixed runtime path and enable/disable is idempotent', () => {
+  assert.equal(MAINTENANCE_FLAG, '/run/wobble-ops/maintenance');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-maintenance-test-'));
+  const flag = path.join(dir, 'maintenance');
+  try {
+    assert.equal(maintenanceEnabled(flag), false);
+    assert.equal(setMaintenance(true, flag).ok, true);
+    assert.equal(maintenanceEnabled(flag), true);
+    assert.equal(setMaintenance(true, flag).ok, true);
+    assert.equal(setMaintenance(false, flag).ok, true);
+    assert.equal(setMaintenance(false, flag).ok, true);
+    assert.equal(maintenanceEnabled(flag), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('operation status exposes only the maintenance transition that currently makes sense', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-maintenance-status-'));
+  const flag = path.join(dir, 'maintenance');
+  try {
+    const client = new AdminOperationsClient({ socketPath: path.join(dir, 'missing.sock'), maintenanceFlag: flag });
+    let ids = client.status().operations.map(item => item.id);
+    assert.ok(ids.includes('maintenance.enable'));
+    assert.equal(ids.includes('maintenance.disable'), false);
+
+    fs.writeFileSync(flag, 'on\n');
+    ids = client.status().operations.map(item => item.id);
+    assert.equal(ids.includes('maintenance.enable'), false);
+    assert.ok(ids.includes('maintenance.disable'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('client keeps the IPC connection alive until a slow allowlisted operation replies', async t => {
@@ -115,7 +174,7 @@ test('client keeps the IPC connection alive until a slow allowlisted operation r
   assert.equal(result.durationMs, 50);
 });
 
-test('privileged helper is installed from a root-owned path while app scripts run unprivileged', () => {
+test('privileged helper keeps a private runtime flag while app scripts stay unprivileged', () => {
   const root = path.resolve(import.meta.dirname, '..');
   const helperUnit = fs.readFileSync(path.join(root, 'deploy/wobble-ops.service'), 'utf8');
   const smokeUnit = fs.readFileSync(path.join(root, 'deploy/wobble-smoke.service'), 'utf8');
@@ -125,10 +184,46 @@ test('privileged helper is installed from a root-owned path while app scripts ru
   assert.match(helperUnit, /^User=root$/m);
   assert.match(helperUnit, /ExecStart=\/usr\/bin\/node \/usr\/local\/lib\/wobble-ops\/helper\.mjs/);
   assert.doesNotMatch(helperUnit, /ExecStart=.*\/opt\/wobble/);
+  assert.match(helperUnit, /^RuntimeDirectory=wobble-ops$/m);
+  assert.match(helperUnit, /^RuntimeDirectoryMode=0755$/m);
+  assert.match(helperUnit, /^RuntimeDirectoryPreserve=yes$/m);
+  assert.match(helperUnit, /^RestrictAddressFamilies=AF_UNIX$/m);
   assert.match(smokeUnit, /^User=wobble$/m);
   assert.match(verifyUnit, /^User=wobble$/m);
   assert.match(socketUnit, /^SocketGroup=wobble$/m);
   assert.match(socketUnit, /^SocketMode=0660$/m);
+});
+
+test('maintenance gates only new WebSocket upgrades and nginx reload is validate-first', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const nginxLocations = fs.readFileSync(path.join(root, 'deploy/nginx-locations.conf'), 'utf8');
+  const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
+
+  assert.equal((nginxLocations.match(/\/run\/wobble-ops\/maintenance/g) || []).length, 1);
+  assert.match(
+    nginxLocations,
+    /location \/ws \{[\s\S]*if \(-f \/run\/wobble-ops\/maintenance\) \{[\s\S]*return 503;/
+  );
+  assert.doesNotMatch(nginxLocations.split('location /ws {', 1)[0], /wobble-ops\/maintenance/);
+
+  const nginxTestAt = helper.indexOf("runCommand(NGINX, ['-t']");
+  const nginxReloadAt = helper.indexOf("runCommand(SYSTEMCTL, ['reload', 'nginx.service']");
+  assert.ok(nginxTestAt >= 0);
+  assert.ok(nginxReloadAt > nginxTestAt);
+  assert.doesNotMatch(helper, /exec\(|shell:\s*true/);
+});
+
+test('operational restart drains active matches through SIGUSR2 with a bounded timeout', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');
+  const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
+
+  assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
+  assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
+  assert.match(bootstrap, /process\.on\('SIGUSR2', \(\) => beginGracefulDrain\('SIGUSR2'\)\)/);
+  assert.match(bootstrap, /core\.shutdown\(`\$\{signal\}:\$\{reason\}`\)/);
+  assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
+  assert.match(helper, /restart timed out; maintenance remains enabled/);
 });
 
 test('only owner can execute operations and every accepted request is audited', async t => {
@@ -189,8 +284,8 @@ test('only owner can execute operations and every accepted request is audited', 
 
   const operator = await login(base, adminAuth, 'operator');
   const forbidden = await post(base, '/api/admin/operations/run', operator, {
-    operation: 'smoke.run',
-    confirmation: 'smoke.run'
+    operation: 'nginx.reload',
+    confirmation: 'nginx.reload'
   });
   assert.equal(forbidden.status, 403);
   assert.deepEqual(calls, ['backup.create']);
@@ -219,8 +314,8 @@ test('failed helper calls are returned safely and recorded without raw command o
 
   const owner = await login(base, adminAuth, 'owner');
   const response = await post(base, '/api/admin/operations/run', owner, {
-    operation: 'smoke.run',
-    confirmation: 'smoke.run'
+    operation: 'nginx.reload',
+    confirmation: 'nginx.reload'
   });
   assert.equal(response.status, 503);
   const body = await response.json();

@@ -1,12 +1,17 @@
 'use strict';
 
 const { RECOVERY_ROTATION_TTL_MS } = require('./accountSelfService');
+const { PUBLIC_SESSION_ID_LENGTH } = require('./auth');
 
 const MAX_SEARCH_QUERY = 80;
 const MAX_SEARCH_RESULTS = 50;
 const DEFAULT_SEARCH_RESULTS = 20;
 const MAX_RECENT_PARTNERS = 12;
 const MAX_RECENT_REWARDS = 50;
+const MAX_SUPPORT_SESSIONS = 20;
+const MAX_SUPPORT_HISTORY = 30;
+const SUPPORT_ID_PREFIX = 'WBL-';
+const SUPPORT_ID_HEX_LENGTH = 12;
 
 function hasAsciiControl(value) {
   const text = String(value || '');
@@ -44,6 +49,30 @@ function nullableNumber(value) {
   return value == null ? null : Number(value);
 }
 
+function supportIdForAccount(accountId) {
+  const compact = String(accountId || '').replaceAll('-', '');
+  if (!/^[a-f0-9]{32}$/i.test(compact)) return null;
+  return `${SUPPORT_ID_PREFIX}${compact.slice(0, SUPPORT_ID_HEX_LENGTH).toUpperCase()}`;
+}
+
+function accountPrefixFromSupportId(value) {
+  const match = new RegExp(`^${SUPPORT_ID_PREFIX}([A-F0-9]{${SUPPORT_ID_HEX_LENGTH}})$`, 'i').exec(
+    String(value || '').trim()
+  );
+  if (!match) return '';
+  const compact = match[1].toLowerCase();
+  return `${compact.slice(0, 8)}-${compact.slice(8)}`;
+}
+
+function parseAuditDetail(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { unavailable: true };
+  }
+}
+
 class AdminPlayerSupport {
   constructor({ db } = {}) {
     if (!db) throw new Error('AdminPlayerSupport requires an open database');
@@ -68,17 +97,20 @@ class AdminPlayerSupport {
     }
     const statements = this.#prepare();
     const safeLimit = clampLimit(limit);
-    const idPrefix = `${escapeGlob(normalized)}*`;
-    const ftsQuery = ftsPrefixQuery(normalized);
+    const supportAccountPrefix = accountPrefixFromSupportId(normalized);
+    const accountQuery = supportAccountPrefix || normalized;
+    const idPrefix = `${escapeGlob(accountQuery)}*`;
+    const ftsQuery = supportAccountPrefix ? '' : ftsPrefixQuery(normalized);
     const statement = ftsQuery ? statements.searchWithName : statements.searchIdOnly;
     const rows = ftsQuery
-      ? statement.all(normalized, idPrefix, normalized, safeLimit, ftsQuery, safeLimit, now, safeLimit)
-      : statement.all(normalized, idPrefix, normalized, safeLimit, now, safeLimit);
+      ? statement.all(accountQuery, idPrefix, accountQuery, safeLimit, ftsQuery, safeLimit, now, safeLimit)
+      : statement.all(accountQuery, idPrefix, accountQuery, safeLimit, now, safeLimit);
     return {
       ok: true,
       query: normalized,
       results: rows.map(row => ({
         id: row.id,
+        supportId: supportIdForAccount(row.id),
         name: row.display_name,
         createdAt: Number(row.created_at),
         lastSeenAt: Number(row.effective_last_seen_at || row.last_seen_at || 0),
@@ -110,6 +142,7 @@ class AdminPlayerSupport {
     return {
       account: {
         id: account.id,
+        supportId: supportIdForAccount(account.id),
         name: account.display_name,
         createdAt: Number(account.created_at),
         lastSeenAt: Number(account.effective_last_seen_at || account.last_seen_at || 0),
@@ -127,7 +160,13 @@ class AdminPlayerSupport {
           latestSeenAt: nullableNumber(session?.latest_seen_at),
           oldestActiveCreatedAt: nullableNumber(session?.oldest_active_created_at),
           soonestActiveExpiresAt: nullableNumber(session?.soonest_active_expires_at)
-        }
+        },
+        sessionList: statements.sessionList.all(id, now, MAX_SUPPORT_SESSIONS).map(row => ({
+          id: row.public_id,
+          createdAt: Number(row.created_at),
+          lastSeenAt: Number(row.last_seen_at),
+          expiresAt: Number(row.expires_at)
+        }))
       },
       progress: {
         stats: {
@@ -199,7 +238,15 @@ class AdminPlayerSupport {
           }))
         },
         reportsSubmitted: Number(reportsSubmitted?.count || 0)
-      }
+      },
+      supportHistory: statements.supportHistory.all(id, MAX_SUPPORT_HISTORY).map(row => ({
+        id: Number(row.id),
+        actorName: row.actor_name,
+        actorRole: row.actor_role,
+        action: row.action,
+        detail: parseAuditDetail(row.detail_json),
+        createdAt: Number(row.created_at)
+      }))
     };
   }
 }
@@ -304,6 +351,17 @@ function prepare(db) {
       FROM account_sessions
       WHERE account_id = ?
     `),
+    sessionList: db.prepare(`
+      SELECT
+        substr(token_hash, 1, ${PUBLIC_SESSION_ID_LENGTH}) AS public_id,
+        created_at,
+        last_seen_at,
+        expires_at
+      FROM account_sessions
+      WHERE account_id = ? AND expires_at > ?
+      ORDER BY last_seen_at DESC, created_at DESC, token_hash ASC
+      LIMIT ?
+    `),
     stats: db.prepare(`
       SELECT coop_matches_completed, coop_chapters_completed, coop_revives, updated_at
       FROM account_stats
@@ -390,6 +448,15 @@ function prepare(db) {
       SELECT COALESCE(SUM(report_count), 0) AS count
       FROM social_reports
       WHERE reporter_account_id = ?
+    `),
+    supportHistory: db.prepare(`
+      SELECT id, actor_name, actor_role, action, detail_json, created_at
+      FROM admin_audit_events
+      WHERE target_type = 'player-account'
+        AND target_id = ?
+        AND action <> 'player.support.view'
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
     `)
   };
 }
@@ -401,5 +468,7 @@ module.exports = {
   normalizeSearchQuery,
   clampLimit,
   escapeGlob,
-  ftsPrefixQuery
+  ftsPrefixQuery,
+  supportIdForAccount,
+  accountPrefixFromSupportId
 };

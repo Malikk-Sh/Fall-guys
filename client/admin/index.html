@@ -301,13 +301,14 @@
           <details class="help-card" open>
             <summary>Для чего нужен раздел «Игроки»?</summary>
             <p>
-              Это безопасная карточка поддержки. Найдите игрока по имени или ID, чтобы проверить его прогресс,
-              активность, достижения, косметику, количество активных входов и связанный социальный контекст.
+              Это безопасная карточка поддержки. Найдите игрока по имени, ID аккаунта или короткому Support
+              ID, чтобы проверить его прогресс, активность, достижения, косметику, игровые подключения и
+              социальный контекст.
             </p>
             <p>
               Панель принципиально не показывает recovery-коды, хеши кодов, session tokens, Google ID или
-              другие данные, с которыми можно войти в аккаунт. История санкций доступна здесь для поддержки, а
-              применять ограничения можно только ролям с отдельным правом модерации.
+              другие данные, с которыми можно войти в аккаунт. Короткие ID сессий ниже не являются токенами.
+              Опасные действия разделены отдельными правами и всегда записываются в журнал.
             </p>
           </details>
 
@@ -324,7 +325,7 @@
                 type="search"
                 minlength="2"
                 maxlength="80"
-                placeholder="Например: Malik или UUID аккаунта"
+                placeholder="Например: Malik, WBL-… или UUID"
                 required
               />
               <button class="primary support-search-button" type="submit">Найти игрока</button>
@@ -359,11 +360,63 @@
               <strong>Что важно знать</strong>
               <span
                 >Открытие этой карточки записывается в «Журнал действий». IP-адреса и данные устройства
-                игровых сессий Wobble сейчас не собирает, поэтому панель честно показывает только количество и
-                время сессий.</span
+                игровых сессий Wobble сейчас не собирает. Панель показывает только безопасные короткие ID и
+                время сессий — они не позволяют войти в аккаунт.</span
               >
             </div>
             <div id="player-summary-cards" class="cards"></div>
+            <section class="support-actions" aria-labelledby="player-support-actions-title">
+              <div class="card-head support-actions-head">
+                <div>
+                  <p class="eyebrow">ИНСТРУМЕНТЫ ПОДДЕРЖКИ</p>
+                  <h3 id="player-support-actions-title">Действия с аккаунтом</h3>
+                  <p class="section-help">
+                    Support ID безопасно сообщать игроку. Изменяющие действия требуют внутреннюю причину и
+                    двойное подтверждение.
+                  </p>
+                </div>
+                <div class="support-id-box">
+                  <span class="muted">Support ID</span>
+                  <strong id="player-support-id" class="mono">—</strong>
+                  <button id="player-copy-support-id" class="ghost" type="button">Скопировать ID</button>
+                </div>
+              </div>
+              <label class="support-note-label">
+                Внутренняя причина действия
+                <input
+                  id="player-support-note"
+                  maxlength="300"
+                  placeholder="Например: запрос владельца аккаунта"
+                />
+              </label>
+              <div class="support-action-grid">
+                <section id="player-name-actions" class="support-action-box" hidden>
+                  <strong>Имя игрока</strong>
+                  <p class="muted">
+                    Меняет сохранённое имя. Текущий матч не прерывается; новое имя гарантированно применяется
+                    в следующей комнате.
+                  </p>
+                  <input id="player-rename-input" maxlength="16" placeholder="Новое имя" />
+                  <div class="support-action-buttons">
+                    <button id="player-rename" class="ghost" type="button">Изменить имя</button>
+                    <button id="player-reset-name" class="ghost" type="button">Сбросить на Wobbler</button>
+                  </div>
+                </section>
+                <section id="player-session-actions" class="support-action-box danger-zone" hidden>
+                  <strong>Сессии и подключения</strong>
+                  <p class="muted">
+                    Завершает HTTP-сессии, WebSocket tickets, reconnect-сеансы и активные игровые подключения.
+                  </p>
+                  <button id="player-force-logout" class="danger" type="button">Завершить все сессии</button>
+                </section>
+              </div>
+              <div class="support-action-buttons support-secondary-actions">
+                <button id="player-open-moderation" class="ghost" type="button" hidden>
+                  Открыть дело модерации
+                </button>
+              </div>
+              <p id="player-support-action-hint" class="muted"></p>
+            </section>
             <div class="support-grid">
               <section class="support-section">
                 <h3>Аккаунт и вход</h3>
@@ -383,6 +436,14 @@
               </section>
             </div>
             <div class="support-lists">
+              <details class="support-details" open>
+                <summary>Активные сессии и игровые подключения</summary>
+                <div id="player-sessions" class="rank-list"></div>
+              </details>
+              <details class="support-details" open>
+                <summary>История действий поддержки</summary>
+                <div id="player-support-history" class="rank-list"></div>
+              </details>
               <details class="support-details" open>
                 <summary>Санкции и предупреждения</summary>
                 <div id="player-sanctions" class="rank-list"></div>

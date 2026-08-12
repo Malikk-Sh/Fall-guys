@@ -59,3 +59,16 @@ test('resume наследует accountId игрока и отклоняет к�
   assert.equal(identity.bindResumedPlayer(conflict, player), false);
   assert.equal(conflict.accountId, 'acc-2');
 });
+
+test('connectionCount exposes only the number of tracked sockets for support diagnostics', () => {
+  const identity = new NetworkIdentity();
+  const first = {};
+  const second = {};
+  identity.trackSocket(first, 'acc-support');
+  identity.trackSocket(second, 'acc-support');
+  identity.trackSocket({}, 'other');
+  assert.equal(identity.connectionCount('acc-support'), 2);
+  identity.untrackSocket(first, 'acc-support');
+  assert.equal(identity.connectionCount('acc-support'), 1);
+  assert.equal(identity.connectionCount('missing'), 0);
+});

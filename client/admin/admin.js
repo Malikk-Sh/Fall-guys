@@ -12,6 +12,9 @@ const state = {
   analyticsLoadRevision: 0,
   playerDetailRevision: 0,
   playerSearchQuery: '',
+  playerDetail: null,
+  playerActionConfirmation: null,
+  playerActionTimer: null,
   moderationCase: null,
   moderationConfirmation: null,
   sanctionConfirmation: null,
@@ -64,6 +67,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'player.sanction.apply': 'Применена санкция к игроку',
   'player.sanction.revoke': 'Снята санкция с игрока',
   'player.support.view': 'Открыта карточка игрока',
+  'player.support.logout': 'Завершены сессии игрока',
+  'player.support.rename': 'Изменено имя игрока',
   'ops.operation.requested': 'Запрошена системная операция',
   'ops.operation.completed': 'Системная операция завершена',
   'ops.operation.accepted': 'Принят запрос на перезапуск Wobble',
@@ -131,11 +136,15 @@ function clearPlayerSupportView() {
     '#player-records',
     '#player-inventory',
     '#player-partners',
-    '#player-sanctions'
+    '#player-sanctions',
+    '#player-sessions',
+    '#player-support-history'
   ]) {
     const node = $(selector);
     if (node) node.replaceChildren();
   }
+  state.playerDetail = null;
+  resetPlayerActionConfirmation();
   const name = $('#player-detail-name');
   if (name) name.textContent = 'Игрок';
   const id = $('#player-detail-id');
@@ -725,8 +734,145 @@ function renderSimpleList(selector, rows, formatter, emptyText) {
   if (!rows?.length) appendText(root, 'p', emptyText, 'muted');
 }
 
+function clearPlayerActionTimer() {
+  if (state.playerActionTimer) clearTimeout(state.playerActionTimer);
+  state.playerActionTimer = null;
+}
+
+function resetPlayerActionConfirmation(message = '') {
+  clearPlayerActionTimer();
+  state.playerActionConfirmation = null;
+  const labels = [
+    ['#player-force-logout', 'Завершить все сессии'],
+    ['#player-rename', 'Изменить имя'],
+    ['#player-reset-name', 'Сбросить на Wobbler']
+  ];
+  for (const [selector, text] of labels) {
+    const button = $(selector);
+    if (!button) continue;
+    button.disabled = false;
+    button.textContent = text;
+    button.classList.remove('confirm');
+  }
+  const hint = $('#player-support-action-hint');
+  if (hint) hint.textContent = message;
+}
+
+function armPlayerAction(key, button, confirmationText) {
+  if (state.playerActionConfirmation === key) return true;
+  resetPlayerActionConfirmation();
+  state.playerActionConfirmation = key;
+  button.textContent = confirmationText;
+  button.classList.add('confirm');
+  $('#player-support-action-hint').textContent =
+    'Проверьте данные и нажмите ту же кнопку ещё раз в течение 10 секунд.';
+  state.playerActionTimer = setTimeout(() => resetPlayerActionConfirmation('Подтверждение истекло.'), 10_000);
+  return false;
+}
+
+function supportActionNote() {
+  const note = $('#player-support-note').value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  if (note.length < 3) {
+    setStatus('Укажите внутреннюю причину действия минимум из 3 символов.', 'warn');
+    return '';
+  }
+  return note;
+}
+
+function supportHistoryMeta(event) {
+  const actor = event.actorName || 'Система';
+  const role = ROLE_LABELS[event.actorRole] || event.actorRole || 'system';
+  const note = event.detail?.note ? ` · причина: ${event.detail.note}` : '';
+  const renamed =
+    event.action === 'player.support.rename'
+      ? ` · ${event.detail?.fromName || '—'} → ${event.detail?.toName || '—'}`
+      : '';
+  return `${formatTime(event.createdAt)} · ${actor} (${role})${renamed}${note}`;
+}
+
+async function copyPlayerSupportId() {
+  const supportId = state.playerDetail?.account?.supportId;
+  if (!supportId) return setStatus('У этого legacy-аккаунта нет короткого Support ID.', 'warn');
+  try {
+    await navigator.clipboard.writeText(supportId);
+    setStatus(`Support ID ${supportId} скопирован`, 'good');
+  } catch {
+    setStatus(`Не удалось скопировать автоматически. Support ID: ${supportId}`, 'warn');
+  }
+}
+
+async function forceLogoutPlayer() {
+  const player = state.playerDetail;
+  if (!player?.account?.id) return;
+  const note = supportActionNote();
+  if (!note) return;
+  const button = $('#player-force-logout');
+  const key = `logout:${player.account.id}:${note}`;
+  if (!armPlayerAction(key, button, 'Подтвердить завершение всех сессий')) return;
+  button.disabled = true;
+  try {
+    const result = await api('/api/admin/players/logout', { accountId: player.account.id, note });
+    resetPlayerActionConfirmation();
+    setStatus(
+      `Сессии завершены: HTTP ${formatNumber(result.revokedSessions)}, WST ${formatNumber(result.revokedSocketTickets)}, reconnect ${formatNumber(result.revokedReconnectSessions)}, WebSocket ${formatNumber(result.disconnectedSockets)}.`,
+      'good'
+    );
+    await openPlayerDetail(player.account.id, { preserveStatus: true });
+  } catch (error) {
+    resetPlayerActionConfirmation();
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Не удалось завершить сессии: ${error.message}`, 'bad');
+  }
+}
+
+async function renamePlayer(name) {
+  const player = state.playerDetail;
+  if (!player?.account?.id) return;
+  const requested = String(name || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!requested) return setStatus('Введите новое имя.', 'warn');
+  const note = supportActionNote();
+  if (!note) return;
+  const reset = requested === 'Wobbler';
+  const button = reset ? $('#player-reset-name') : $('#player-rename');
+  const key = `rename:${player.account.id}:${requested}:${note}`;
+  if (!armPlayerAction(key, button, reset ? 'Подтвердить сброс имени' : `Подтвердить имя «${requested}»`))
+    return;
+  button.disabled = true;
+  try {
+    const result = await api('/api/admin/players/rename', {
+      accountId: player.account.id,
+      name: requested,
+      note
+    });
+    resetPlayerActionConfirmation();
+    setStatus(`Имя изменено: ${result.previousName} → ${result.name}`, 'good');
+    await openPlayerDetail(player.account.id, { preserveStatus: true });
+  } catch (error) {
+    resetPlayerActionConfirmation();
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    const message =
+      error.payload?.error === 'invalid-player-name'
+        ? 'Имя содержит недопустимые символы или длиннее 16 знаков.'
+        : error.payload?.error === 'no-change'
+          ? 'Это имя уже установлено.'
+          : error.message;
+    setStatus(`Не удалось изменить имя: ${message}`, 'bad');
+  }
+}
+
+function openPlayerModeration() {
+  const player = state.playerDetail;
+  if (!player?.account?.id || !player.moderation) return;
+  openModerationCase(player.account.id);
+}
+
 function hidePlayerDetail() {
   state.playerDetailRevision += 1;
+  state.playerDetail = null;
+  resetPlayerActionConfirmation();
   $('#player-detail').hidden = true;
 }
 
@@ -740,13 +886,28 @@ function renderPlayerDetail(player) {
   const social = player.social || {};
   const moderation = player.moderation;
   const sanctions = player.sanctions || { active: null, history: [] };
+  const live = player.live || {};
+  state.playerDetail = player;
+  resetPlayerActionConfirmation();
   const providers =
     (login.providers || []).map(item => providerLabel(item.provider)).join(', ') || 'не привязан';
 
   $('#player-detail-name').textContent = account.name || 'Wobbler';
   $('#player-detail-id').textContent = `ID аккаунта: ${account.id}`;
+  $('#player-support-id').textContent = account.supportId || 'legacy — недоступен';
+  $('#player-copy-support-id').disabled = !account.supportId;
+  $('#player-support-note').value = '';
+  $('#player-rename-input').value = account.name || 'Wobbler';
+  $('#player-name-actions').hidden = !state.capabilities.has('player-support.name.write');
+  $('#player-session-actions').hidden = !state.capabilities.has('player-support.sessions.write');
+  const moderationButton = $('#player-open-moderation');
+  moderationButton.hidden = !(state.capabilities.has('moderation.read') && moderation);
   $('#player-summary-cards').replaceChildren(
-    statCard('Активных входов', formatNumber(sessions.active), 'только количество, без token/IP'),
+    statCard(
+      'Активных входов',
+      formatNumber(sessions.active),
+      `${formatNumber(live.sockets)} игровых WebSocket сейчас`
+    ),
     statCard(
       'Пройдено глав',
       `${formatNumber(stats.coopChaptersCompleted)} / 10`,
@@ -774,6 +935,7 @@ function renderPlayerDetail(player) {
   );
 
   fillDetailsElement($('#player-account-details'), [
+    ['Support ID', account.supportId || 'legacy — недоступен'],
     ['Создан', formatTime(account.createdAt)],
     ['Последняя активность аккаунта', formatTime(account.lastSeenAt)],
     ['Способы входа', providers],
@@ -857,19 +1019,41 @@ function renderPlayerDetail(player) {
     ],
     'Недавних напарников нет.'
   );
+  renderSimpleList(
+    '#player-sessions',
+    login.sessionList,
+    row => [
+      `Сессия ${row.id}`,
+      `создана ${formatTime(row.createdAt)} · активность ${formatTime(row.lastSeenAt)} · истекает ${formatTime(row.expiresAt)}`
+    ],
+    'Активных HTTP-сессий нет.'
+  );
+  if (Number(live.sockets || 0) > 0) {
+    playerListItem(
+      $('#player-sessions'),
+      `Игровые WebSocket: ${formatNumber(live.sockets)}`,
+      'Показывается только количество; сетевые адреса панель не раскрывает.'
+    );
+  }
+  renderSimpleList(
+    '#player-support-history',
+    player.supportHistory,
+    event => [AUDIT_ACTION_LABELS[event.action] || event.action, supportHistoryMeta(event)],
+    'Изменяющих действий поддержки по этому аккаунту ещё не было.'
+  );
   renderPlayerSanctions(sanctions);
   $('#player-detail').hidden = false;
   $('#player-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-async function openPlayerDetail(accountId) {
+async function openPlayerDetail(accountId, { preserveStatus = false } = {}) {
   const revision = ++state.playerDetailRevision;
-  setStatus('Загружаю карточку игрока…');
+  if (!preserveStatus) setStatus('Загружаю карточку игрока…');
   try {
     const payload = await api('/api/admin/players/detail', { accountId });
     if (revision !== state.playerDetailRevision) return;
     renderPlayerDetail(payload.player);
-    setStatus('Карточка игрока загружена', 'good');
+    if (!preserveStatus) setStatus('Карточка игрока загружена', 'good');
   } catch (error) {
     if (revision !== state.playerDetailRevision) return;
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
@@ -889,7 +1073,7 @@ async function searchPlayers() {
   body.replaceChildren();
   for (const player of payload.results || []) {
     const row = rowWithCells([
-      `${player.name} · ${player.id}`,
+      `${player.name} · ${player.supportId ? `${player.supportId} · ` : ''}${player.id}`,
       formatTime(player.lastSeenAt),
       formatNumber(player.activeSessions),
       player.hasExternalLogin ? 'есть' : 'нет'
@@ -1735,6 +1919,13 @@ $('#player-search-form').addEventListener('submit', async event => {
   }
 });
 $('#player-detail-close').addEventListener('click', hidePlayerDetail);
+$('#player-copy-support-id').addEventListener('click', copyPlayerSupportId);
+$('#player-force-logout').addEventListener('click', forceLogoutPlayer);
+$('#player-rename').addEventListener('click', () => renamePlayer($('#player-rename-input').value));
+$('#player-reset-name').addEventListener('click', () => renamePlayer('Wobbler'));
+$('#player-open-moderation').addEventListener('click', openPlayerModeration);
+$('#player-support-note').addEventListener('input', () => resetPlayerActionConfirmation());
+$('#player-rename-input').addEventListener('input', () => resetPlayerActionConfirmation());
 $('#moderation-status').addEventListener('change', refreshCurrent);
 $('#case-close').addEventListener('click', closeModerationCase);
 $('#case-action').addEventListener('submit', submitModerationTransition);

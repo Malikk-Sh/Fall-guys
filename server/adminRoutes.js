@@ -166,6 +166,84 @@ function installAdminRoutes({
     return res.json(result);
   });
 
+  app.post('/api/admin/players/logout', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'player-support.sessions.write');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['accountId', 'note'])) || !req.body?.accountId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!control || typeof control.playerLogout !== 'function') {
+      return res.status(503).json({ ok: false, error: 'player-support-actions-unavailable' });
+    }
+    const result = control.playerLogout({
+      targetAccountId: req.body.accountId,
+      note: req.body.note,
+      actor: resolved.session.user
+    });
+    if (!result.ok) {
+      const status =
+        result.reason === 'unknown-account'
+          ? 404
+          : result.reason === 'support-action-forbidden'
+            ? 403
+            : result.reason === 'player-support-actions-unavailable' ||
+                result.reason === 'support-logout-incomplete'
+              ? 503
+              : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.reason,
+        ...(result.maxLength ? { maxLength: result.maxLength } : {}),
+        ...(result.reason === 'support-logout-incomplete'
+          ? {
+              accountId: result.accountId,
+              revokedSessions: result.revokedSessions,
+              revokedSocketTickets: result.revokedSocketTickets,
+              revokedReconnectSessions: result.revokedReconnectSessions,
+              disconnectedSockets: result.disconnectedSockets,
+              failedSteps: result.failedSteps
+            }
+          : {})
+      });
+    }
+    return res.json(result);
+  });
+
+  app.post('/api/admin/players/rename', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'player-support.name.write');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['accountId', 'name', 'note'])) || !req.body?.accountId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!control || typeof control.playerRename !== 'function') {
+      return res.status(503).json({ ok: false, error: 'player-support-actions-unavailable' });
+    }
+    const result = control.playerRename({
+      targetAccountId: req.body.accountId,
+      name: req.body.name,
+      note: req.body.note,
+      actor: resolved.session.user
+    });
+    if (!result.ok) {
+      const status =
+        result.reason === 'unknown-account'
+          ? 404
+          : result.reason === 'support-action-forbidden'
+            ? 403
+            : result.reason === 'player-support-actions-unavailable'
+              ? 503
+              : result.reason === 'no-change'
+                ? 409
+                : 400;
+      return res.status(status).json({
+        ok: false,
+        error: result.reason,
+        ...(result.maxLength ? { maxLength: result.maxLength } : {})
+      });
+    }
+    return res.json(result);
+  });
+
   app.post('/api/admin/moderation/queue', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'moderation.read');
     if (!resolved) return undefined;

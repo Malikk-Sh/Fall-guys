@@ -52,7 +52,10 @@ function nonNegativeInt(value) {
 }
 
 function safeBuild(health = {}) {
-  const clean = value => String(value || '').trim().slice(0, 120);
+  const clean = value =>
+    String(value || '')
+      .trim()
+      .slice(0, 120);
   return {
     version: clean(health.version) || 'unknown',
     commit: clean(health.commit) || 'unknown',
@@ -61,7 +64,9 @@ function safeBuild(health = {}) {
 }
 
 function safeFingerprint(value) {
-  const text = String(value || '').trim().toLowerCase();
+  const text = String(value || '')
+    .trim()
+    .toLowerCase();
   return /^[0-9a-f]{12,64}$/.test(text) ? text : '';
 }
 
@@ -193,7 +198,8 @@ class ServiceReliability {
       capacityRejected: Number(raw.capacity_rejected || 0),
       snapshotsSkippedForLoad: Number(raw.snapshots_skipped_for_load || 0),
       eventLoopP95MsMax: Number(raw.event_loop_max || 0),
-      eventLoopP95MsAverage: raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
+      eventLoopP95MsAverage:
+        raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
       rssMbMax: Number(raw.rss_max || 0),
       heapUsedMbMax: Number(raw.heap_max || 0),
       socketsMax: Number(raw.sockets_max || 0),

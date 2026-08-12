@@ -1038,6 +1038,7 @@ function bindAuthenticatedSocketToRoom(ws, accountId) {
     session.accountId = id;
   }
   room.updatedAt = Date.now();
+  if (room.state === ROOM_STATE.LOBBY) emitLobby(room);
   return true;
 }
 

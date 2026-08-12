@@ -113,12 +113,14 @@ test('late WebSocket AUTH synchronizes room identity and reconnect revocation', 
   assert.equal(reconnectSession.accountId, null);
 
   const authReply = waitFor(client, 'authenticated');
+  const updatedLobbyReply = waitFor(client, 'lobby');
   client.send(JSON.stringify({ type: 'auth', ticket }));
-  const authenticated = await authReply;
+  const [authenticated, updatedLobby] = await Promise.all([authReply, updatedLobbyReply]);
   assert.equal(authenticated.accountId, account.id);
   assert.equal(player.accountId, account.id);
   assert.equal(player.name, account.name);
   assert.equal(reconnectSession.accountId, account.id);
+  assert.equal(updatedLobby.players[0].name, account.name);
 
   // Defense in depth: even if the copied room/session identity regresses, the live authenticated
   // socket is sufficient to identify and revoke its reconnect token.
@@ -127,4 +129,43 @@ test('late WebSocket AUTH synchronizes room identity and reconnect revocation', 
   assert.equal(player.ws.accountId, account.id);
   assert.equal(core.revokeAccountReconnectSessions(account.id), 1);
   assert.equal(core.sessions.has(reconnectToken), false);
+});
+
+test('late WebSocket AUTH does not emit room-state while a match is already playing', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Playing Bound');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: 'Before Auth', protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  assert.ok(room);
+  room.state = 'playing';
+
+  let unexpectedRoomState = 0;
+  const listener = raw => {
+    const message = JSON.parse(raw.toString());
+    if (message.type === 'lobby') unexpectedRoomState += 1;
+  };
+  client.on('message', listener);
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  const authenticated = await authReply;
+  assert.equal(authenticated.accountId, account.id);
+  await new Promise(resolve => setTimeout(resolve, 75));
+  client.off('message', listener);
+  assert.equal(unexpectedRoomState, 0);
 });

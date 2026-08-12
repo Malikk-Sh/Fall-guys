@@ -132,6 +132,73 @@ installAdminRoutes({
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || '0.0.0.0';
 
+// Operational restart uses SIGUSR2 instead of `systemctl restart`. The privileged helper first
+// enables the Nginx maintenance gate, so no new WebSocket clients enter while we drain. Existing
+// matches continue; as soon as no COUNTDOWN/PLAYING room remains, the normal core.shutdown path
+// sends SERVER_SHUTDOWN to the remaining sockets, flushes metrics/SQLite and exits. Restart=always
+// in wobble.service then starts the fresh process. A bounded timeout prevents a stuck match from
+// blocking an urgent restart forever.
+const ACTIVE_MATCH_STATES = new Set(['COUNTDOWN', 'PLAYING']);
+const DRAIN_POLL_MS = 1000;
+const DRAIN_TIMEOUT_MS = 180_000;
+let drainInterval = null;
+let drainTimeout = null;
+let draining = false;
+
+function activeMatchesForDrain() {
+  return [...core.rooms.values()].filter(room => ACTIVE_MATCH_STATES.has(room?.state)).length;
+}
+
+function clearDrainTimers() {
+  if (drainInterval) clearInterval(drainInterval);
+  if (drainTimeout) clearTimeout(drainTimeout);
+  drainInterval = null;
+  drainTimeout = null;
+}
+
+function beginGracefulDrain(signal = 'SIGUSR2') {
+  if (draining) return false;
+  draining = true;
+  const startedAt = Date.now();
+  const initialMatches = activeMatchesForDrain();
+  console.log(
+    JSON.stringify({
+      level: 'info',
+      event: 'server_drain_started',
+      signal,
+      activeMatches: initialMatches,
+      timeoutMs: DRAIN_TIMEOUT_MS
+    })
+  );
+
+  let finishing = false;
+  const finish = reason => {
+    if (finishing) return;
+    finishing = true;
+    clearDrainTimers();
+    console.log(
+      JSON.stringify({
+        level: reason === 'timeout' ? 'warn' : 'info',
+        event: 'server_drain_finished',
+        reason,
+        waitedMs: Date.now() - startedAt,
+        activeMatches: activeMatchesForDrain()
+      })
+    );
+    core.shutdown(`${signal}:${reason}`);
+  };
+
+  // Даём HTTP-ответу на команду restart успеть вернуться в Wobble Control до возможного выхода.
+  // После этого пустой сервер выключится сразу, а занятый — будет ждать завершения матча.
+  drainInterval = setInterval(() => {
+    if (activeMatchesForDrain() === 0) finish('drained');
+  }, DRAIN_POLL_MS);
+  drainInterval.unref?.();
+  drainTimeout = setTimeout(() => finish('timeout'), DRAIN_TIMEOUT_MS);
+  drainTimeout.unref?.();
+  return true;
+}
+
 if (require.main === module) {
   core.server.listen(port, host, () => {
     console.log(
@@ -153,8 +220,15 @@ if (require.main === module) {
       })
     );
   });
-  process.on('SIGTERM', () => core.shutdown('SIGTERM'));
-  process.on('SIGINT', () => core.shutdown('SIGINT'));
+  process.on('SIGUSR2', () => beginGracefulDrain('SIGUSR2'));
+  process.on('SIGTERM', () => {
+    clearDrainTimers();
+    core.shutdown('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    clearDrainTimers();
+    core.shutdown('SIGINT');
+  });
 }
 
 module.exports = {
@@ -167,5 +241,7 @@ module.exports = {
   adminAuth,
   adminControl,
   adminInfrastructure,
-  adminOperations
+  adminOperations,
+  activeMatchesForDrain,
+  beginGracefulDrain
 };

@@ -1,0 +1,60 @@
+name: PR76 Final Review Gate
+
+on:
+  push:
+    branches: [feat/live-incident-diagnostics]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/live-incident-diagnostics
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply final review fixes
+        run: python3 tools/pr76_final3_fixes.py
+
+      - name: Format changed source
+        run: npx prettier --write client/admin/admin.js server/adminIncidentRoutes.test.mjs server/adminControl.js server/adminPlayerSupportRoutes.test.mjs deploy/restore.sh server/releaseDeploy.test.mjs
+
+      - name: Run focused regressions
+        run: node --test server/adminIncidentRoutes.test.mjs server/adminPlayerSupportRoutes.test.mjs server/releaseDeploy.test.mjs
+
+      - name: Lint source
+        run: npm run check
+
+      - name: Run full unit and integration suite
+        run: npm test
+
+      - name: Commit verified implementation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            client/admin/admin.js \
+            server/adminIncidentRoutes.test.mjs \
+            server/adminControl.js \
+            server/adminPlayerSupportRoutes.test.mjs \
+            deploy/restore.sh \
+            server/releaseDeploy.test.mjs
+          git diff --cached --check
+          git commit -m 'Close final Incident Center review gaps'
+          git push origin HEAD:feat/live-incident-diagnostics

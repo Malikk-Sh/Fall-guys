@@ -251,7 +251,7 @@ function prepare(db) {
     latestBuild: db.prepare(`
       SELECT version, commit_sha, release_tag
       FROM service_reliability_samples
-      ORDER BY sampled_at DESC, id DESC
+      ORDER BY sampled_at DESC, commit_sha DESC
       LIMIT 1
     `)
   };

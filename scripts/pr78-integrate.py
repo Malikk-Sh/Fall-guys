@@ -28,15 +28,20 @@ replace_once(
     """systemctl restart wobble
 
 say "Независимый Wobble Control"
-game_ready=0
-for _ in $(seq 1 30); do
-  if curl -fsS --max-time 2 http://127.0.0.1:3000/health/live >/dev/null 2>&1; then
-    game_ready=1
-    break
-  fi
-  sleep 1
-done
-[ "$game_ready" -eq 1 ] || fail "Wobble не успел запуститься перед стартом Control Plane"
+# Control Plane должен подняться даже если новый gameplay process сломан. Его единственная
+# обязательная dependency здесь — существующая persistent DB (или намеренно :memory: в dev).
+# Не ждём /health/live: иначе неудачный deploy снова лишил бы оператора панели диагностики.
+if [ "$database_file" != ":memory:" ]; then
+  database_ready=0
+  for _ in $(seq 1 20); do
+    if [ -f "$database_file" ]; then
+      database_ready=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$database_ready" -eq 1 ] || fail "persistent DB не появилась перед стартом Wobble Control"
+fi
 
 systemctl restart wobble-control
 control_ready=0

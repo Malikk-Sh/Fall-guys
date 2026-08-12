@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write
 
+# Temporary gate for the final four Codex findings. Removed before the merge-ready head.
 jobs:
   verify:
     if: github.actor != 'github-actions[bot]'

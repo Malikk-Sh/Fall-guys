@@ -12,6 +12,7 @@ const DEFAULT_MAX_WRITES_PER_MINUTE = 60;
 const MAX_RATE_TRACKED_ACCOUNTS = 10_000;
 const MAX_VALUE_MS = 7 * DAY_MS;
 const HOUSEKEEPING_INTERVAL_MS = 60 * 60 * 1000;
+const DELETE_CHECKPOINT_RETRY_MS = 60 * 1000;
 const CORRELATION_KEY = crypto.randomBytes(32);
 
 const FIXED_CODES = Object.freeze({
@@ -90,6 +91,8 @@ class IncidentDiagnostics {
     );
     this.writeBuckets = new Map();
     this.lastPrunedAt = 0;
+    this.lastDeleteCheckpointAt = 0;
+    this.deleteCheckpointPending = false;
     this.statements = prepare(db);
   }
 
@@ -127,7 +130,8 @@ class IncidentDiagnostics {
       safeEnum(device, DEVICES),
       safeValueMs(valueMs)
     );
-    this.statements.capAccount.run(id, id, this.maxPerAccount);
+    const capped = this.statements.capAccount.run(id, id, this.maxPerAccount);
+    if (Number(capped?.changes || 0) > 0) this.#noteDeletedData(rateNow);
     return true;
   }
 
@@ -199,10 +203,39 @@ class IncidentDiagnostics {
   pruneExpired(now = this.now(), { force = false } = {}) {
     const at = Number(now);
     if (!Number.isSafeInteger(at) || at < 0) return 0;
+    // A cap deletion may have left a busy WAL checkpoint pending. Heartbeat reaches this path even
+    // when no new player activity occurs, so retry it independently of the hourly retention DELETE.
+    this.#flushDeletedData(at);
     if (!force && at - this.lastPrunedAt < HOUSEKEEPING_INTERVAL_MS) return 0;
     const result = this.statements.prune.run(at - this.retentionDays * DAY_MS);
+    const changes = Number(result?.changes || 0);
     this.lastPrunedAt = at;
-    return Number(result?.changes || 0);
+    if (changes > 0) this.#noteDeletedData(at, { force: true });
+    return changes;
+  }
+
+  #noteDeletedData(now, { force = false } = {}) {
+    this.deleteCheckpointPending = true;
+    return this.#flushDeletedData(now, { force });
+  }
+
+  #flushDeletedData(now, { force = false } = {}) {
+    if (!this.deleteCheckpointPending) return true;
+    const at = Number(now);
+    if (!Number.isSafeInteger(at) || at < 0) return false;
+    if (!force && at - this.lastDeleteCheckpointAt < DELETE_CHECKPOINT_RETRY_MS) return false;
+    this.lastDeleteCheckpointAt = at;
+    try {
+      const result = this.statements.checkpoint.get() || {};
+      const busy = Number(Object.values(result)[0] ?? 1);
+      if (busy === 0) {
+        this.deleteCheckpointPending = false;
+        return true;
+      }
+    } catch {
+      // Observability cleanup is best-effort for gameplay availability. A later heartbeat retries.
+    }
+    return false;
   }
 }
 
@@ -227,6 +260,7 @@ function prepare(db) {
         )
     `),
     prune: db.prepare('DELETE FROM player_incident_events WHERE occurred_at < ?'),
+    checkpoint: db.prepare('PRAGMA wal_checkpoint(TRUNCATE)'),
     timeline: db.prepare(`
       SELECT id, occurred_at, kind, code, room_ref, match_ref, mode, phase, device, value_ms
       FROM player_incident_events

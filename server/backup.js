@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { DatabaseSync } = require('node:sqlite');
 const { MIGRATIONS } = require('./migrations');
 
@@ -11,6 +10,8 @@ const DEFAULT_RETENTION = Object.freeze({ hourly: 48, daily: 7, weekly: 4, month
 const DEFAULT_OFFSITE_KEEP = 30;
 const DEFAULT_OFFSITE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_OFFSITE_SENTINEL = '.wobble-offsite';
+const RAW_STAGE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const RAW_STAGE_DIRECTORY = '.wobble-backup-staging';
 
 function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
@@ -26,6 +27,32 @@ function ensureDirectory(dir) {
   const resolved = path.resolve(String(dir || ''));
   fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
   return resolved;
+}
+
+function backupStagingRoot(databaseFile) {
+  const root = ensureDirectory(
+    path.join(path.dirname(ensureFileDatabase(databaseFile)), RAW_STAGE_DIRECTORY)
+  );
+  fs.chmodSync(root, 0o700);
+  return root;
+}
+
+function cleanupAbandonedBackupStages(root, now = Date.now()) {
+  let removed = 0;
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.name.startsWith('stage-')) continue;
+    const target = path.join(root, entry.name);
+    let stat;
+    try {
+      stat = fs.statSync(target);
+    } catch {
+      continue;
+    }
+    if (now - stat.mtimeMs < RAW_STAGE_MAX_AGE_MS) continue;
+    fs.rmSync(target, { recursive: true, force: true });
+    removed += 1;
+  }
+  return removed;
 }
 
 function timestamp(now = Date.now()) {
@@ -134,7 +161,10 @@ function createSnapshot({ databaseFile, outputFile }) {
   ensureDirectory(path.dirname(output));
   if (fs.existsSync(output)) throw new Error(`backup already exists: ${output}`);
 
-  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-backup-stage-'));
+  const stagingRoot = backupStagingRoot(sourceFile);
+  cleanupAbandonedBackupStages(stagingRoot);
+  const stagingDir = fs.mkdtempSync(path.join(stagingRoot, 'stage-'));
+  fs.chmodSync(stagingDir, 0o700);
   const rawStage = path.join(stagingDir, 'snapshot.db');
   const publishStage = `${output}.publish-${process.pid}-${Date.now()}`;
   try {
@@ -145,6 +175,7 @@ function createSnapshot({ databaseFile, outputFile }) {
       // The raw snapshot is created outside the managed backup tree so a killed process cannot
       // expose unsanitized incident history as a visible hourly/daily backup.
       db.exec(`VACUUM INTO ${sqlString(rawStage)}`);
+      fs.chmodSync(rawStage, 0o600);
     } finally {
       db.close();
     }
@@ -155,8 +186,10 @@ function createSnapshot({ databaseFile, outputFile }) {
     // Only scrubbed bytes enter the destination filesystem. The adjacent temporary name is not a
     // managed .db snapshot, and rename publishes it atomically after a second verification.
     fs.copyFileSync(rawStage, publishStage, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(publishStage, 0o600);
     const verification = verifyBackup(publishStage);
     fs.renameSync(publishStage, output);
+    fs.chmodSync(output, 0o600);
     return { file: output, ...verification };
   } finally {
     fs.rmSync(publishStage, { force: true });
@@ -183,6 +216,7 @@ function createLegacySnapshot({ databaseFile, outputFile }) {
   try {
     db.exec('PRAGMA busy_timeout = 5000');
     db.exec(`VACUUM INTO ${sqlString(output)}`);
+    fs.chmodSync(output, 0o600);
     return { file: output, ...verifyLegacyBackup(output) };
   } catch (error) {
     try {

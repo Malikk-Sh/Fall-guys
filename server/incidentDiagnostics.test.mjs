@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
@@ -161,4 +164,28 @@ test('incident timeline reports truncation and can return the full bounded retai
   assert.equal(full.maxEventsPerAccount, 10);
   assert.equal(full.truncated, false);
   db.close();
+});
+
+test('live incident retention uses secure_delete and truncates WAL after physical cleanup', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'wobble-incident-live-'));
+  const file = join(dir, 'live.db');
+  const db = openDatabase(file);
+  try {
+    migrateDatabase(db);
+    assert.equal(Number(Object.values(db.prepare('PRAGMA secure_delete').get())[0]), 1);
+    const id = account(db, 'eeeeeeee-ffff-0000-1111-222222222222');
+    let now = 10_000;
+    const day = 24 * 60 * 60 * 1000;
+    const incidents = new IncidentDiagnostics({ db, now: () => now, retentionDays: 1 });
+    assert.equal(incidents.record({ accountId: id, kind: 'connection', code: 'disconnected' }), true);
+    now += 2 * day;
+    assert.equal(incidents.pruneExpired(now, { force: true }), 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 0);
+    const wal = `${file}-wal`;
+    if (existsSync(wal))
+      assert.equal(statSync(wal).size, 0, 'retention checkpoint must truncate old WAL frames');
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

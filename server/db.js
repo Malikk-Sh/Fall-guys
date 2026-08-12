@@ -8,6 +8,10 @@ const { DatabaseSync } = require('node:sqlite');
 
 function openDatabase(file = ':memory:') {
   const db = new DatabaseSync(file);
+  // Privacy-retained tables rely on physical deletion, not only logical DELETE visibility.
+  // secure_delete overwrites deleted cells before pages can be reused. WAL frames are truncated
+  // by the owning diagnostics service after bounded cleanup batches.
+  db.exec('PRAGMA secure_delete = ON');
   // Для файла на диске: WAL переживает падение процесса без потери уже записанных строк, а NORMAL
   // убирает fsync на каждой вставке. В памяти оба параметра бессмысленны.
   if (file !== ':memory:') {

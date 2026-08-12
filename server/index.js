@@ -974,6 +974,10 @@ function handleDisconnect(ws) {
   }
   player.ws = null;
   player.disconnectedAt = Date.now();
+  player.disconnectMatchContext =
+    !player.finished && (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)
+      ? { roomId: room.code, matchId: room.matchId, mode: room.mode, phase: room.state }
+      : null;
   incidentForSocket(ws, { accountId: player.accountId, kind: 'connection', code: 'disconnected' });
   if (
     room.mode === GAME_MODE.COOP &&
@@ -1002,7 +1006,8 @@ function expireDisconnectedPlayers(now = Date.now()) {
   for (const room of [...rooms.values()]) {
     for (const player of [...room.players.values()]) {
       if (!player.disconnectedAt || now - player.disconnectedAt <= RECONNECT_GRACE_MS) continue;
-      if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
+      const abandoned = player.disconnectMatchContext;
+      if (abandoned) {
         if (!room.abandonTracked) {
           room.abandonTracked = true;
           trackEvent(productEvents, 'matchAbandoned');
@@ -1012,11 +1017,12 @@ function expireDisconnectedPlayers(now = Date.now()) {
           accountId: player.accountId,
           kind: 'match',
           code: 'abandoned',
-          roomId: room.code,
-          matchId: room.matchId,
-          mode: room.mode,
-          phase: room.state
+          roomId: abandoned.roomId,
+          matchId: abandoned.matchId,
+          mode: abandoned.mode,
+          phase: abandoned.phase
         });
+        player.disconnectMatchContext = null;
       }
       dropPlayer(room, player.id);
     }
@@ -1054,6 +1060,7 @@ function addPlayer(room, ws, name, playerId = null) {
     lastAt: 0,
     lastSequence: -1,
     disconnectedAt: null,
+    disconnectMatchContext: null,
     away: false,
     // Тип устройства нужен метрикам: телефон и компьютер играют по-разному, и мерить их вместе
     // значит не увидеть ни того, ни другого.
@@ -1248,6 +1255,7 @@ function resume(ws, token) {
   const previousWs = player.ws;
   player.ws = ws;
   player.disconnectedAt = null;
+  player.disconnectMatchContext = null;
   // `disconnectHandled` здесь НЕ ставим: закрытие старого сокета всё ещё должно вернуть
   // счётчик подключений с адреса. Отвязки от комнаты достаточно — до игрока обработчик
   // после неё не доходит.

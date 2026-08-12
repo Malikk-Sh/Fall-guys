@@ -283,6 +283,47 @@ test('blocked late WebSocket AUTH cannot resume the anonymous room slot', async 
   assert.equal(denied.code, 'ACCOUNT_SANCTIONED');
 });
 
+test('disconnect abandonment keeps original race context after room advances to results', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Race Grace Diagnostic');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: account.name, protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  const player = room.players.values().next().value;
+  room.state = 'PLAYING';
+  room.matchId = 'race-before-results';
+  player.finished = false;
+
+  await closeClient(client);
+  assert.ok(player.disconnectedAt, 'disconnect must start reconnect grace');
+  assert.equal(player.disconnectMatchContext?.matchId, 'race-before-results');
+  room.state = 'RESULTS';
+  room.matchId = null;
+  core.expireDisconnectedPlayers(player.disconnectedAt + 31_000);
+
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  const abandoned = timeline.events.find(event => event.kind === 'match' && event.code === 'abandoned');
+  assert.ok(abandoned, 'grace expiry must still emit abandonment after RESULTS');
+  assert.match(abandoned.matchRef || '', /^[a-f0-9]{12}$/);
+});
+
 test('explicit LEAVE_ROOM during an active match records an immediate abandon incident', async t => {
   core.resetRateLimits();
   const auth = new AuthService({ db: core.accounts.db });

@@ -8,6 +8,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -410,6 +412,7 @@ test('snapshot is scrubbed before atomic publication to its visible path', () =>
     assert.equal(inspectedPublication, true);
     assert.equal(result.file, outputFile);
     assert.equal(existsSync(outputFile), true);
+    assert.equal(statSync(outputFile).mode & 0o777, 0o600, 'published snapshot must be mode 0600');
     assert.equal(
       readdirSync(f.backupDir).some(name => name.includes('.publish-')),
       false,
@@ -417,6 +420,27 @@ test('snapshot is scrubbed before atomic publication to its visible path', () =>
     );
   } finally {
     fs.renameSync = originalRename;
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('next snapshot proactively removes abandoned private raw stages', () => {
+  const f = fixture();
+  try {
+    const stagingRoot = join(f.dir, '.wobble-backup-staging');
+    const abandoned = join(stagingRoot, 'stage-abandoned');
+    mkdirSync(abandoned, { recursive: true, mode: 0o700 });
+    writeFileSync(join(abandoned, 'snapshot.db'), 'sensitive-test-placeholder', { mode: 0o600 });
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(abandoned, old, old);
+
+    const outputFile = join(f.backupDir, 'cleanup-stage.db');
+    createSnapshot({ databaseFile: f.databaseFile, outputFile });
+    assert.equal(existsSync(abandoned), false, 'stale raw stage must be removed by the next snapshot');
+    assert.equal(statSync(stagingRoot).mode & 0o777, 0o700);
+    assert.equal(statSync(outputFile).mode & 0o777, 0o600);
+  } finally {
     f.db.close();
     rmSync(f.dir, { recursive: true, force: true });
   }

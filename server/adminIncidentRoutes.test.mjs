@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const express = require('express');
@@ -97,4 +98,25 @@ test('incident route rejects extra fields before calling control service', async
   });
   assert.equal((await post(ctx, { accountId: 'target', rawIp: '203.0.113.9' })).status, 400);
   assert.equal(ctx.calls.length, 0);
+});
+
+test('admin logout clears account-linked incident state and privacy copy describes coarse device class', () => {
+  const adminJs = readFileSync(new URL('../client/admin/admin.js', import.meta.url), 'utf8');
+  const adminHtml = readFileSync(new URL('../client/admin/index.html', import.meta.url), 'utf8');
+  const clearStart = adminJs.indexOf('function clearIncidentView()');
+  const loginStart = adminJs.indexOf("function showLogin(message = '')");
+  assert.ok(clearStart >= 0 && loginStart > clearStart);
+  const clearBody = adminJs.slice(clearStart, loginStart);
+  for (const fragment of [
+    'state.incidentRevision += 1',
+    "state.incidentSearchQuery = ''",
+    'state.incidentData = null',
+    "$('#incident-results-body')",
+    "$('#incident-events-body')"
+  ])
+    assert.ok(clearBody.includes(fragment), `missing incident cleanup: ${fragment}`);
+  assert.match(adminJs.slice(loginStart, loginStart + 220), /clearIncidentView\(\)/);
+  assert.match(adminHtml, /mobile\/desktop/);
+  assert.match(adminHtml, /raw\s+User-Agent/i);
+  assert.match(adminHtml, /device fingerprint/i);
 });

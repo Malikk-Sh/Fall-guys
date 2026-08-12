@@ -155,9 +155,34 @@ function clearPlayerSupportView() {
   if (id) id.textContent = '';
 }
 
+function clearIncidentView() {
+  state.incidentRevision += 1;
+  state.incidentSearchQuery = '';
+  state.incidentData = null;
+  const detail = $('#incident-detail');
+  if (detail) detail.hidden = true;
+  const query = $('#incident-search-query');
+  if (query) query.value = '';
+  const meta = $('#incident-search-meta');
+  if (meta) meta.textContent = '';
+  const results = $('#incident-results-body');
+  if (results) results.replaceChildren();
+  const summary = $('#incident-summary-cards');
+  if (summary) summary.replaceChildren();
+  const events = $('#incident-events-body');
+  if (events) events.replaceChildren();
+  const name = $('#incident-detail-name');
+  if (name) name.textContent = 'Игрок';
+  const id = $('#incident-detail-id');
+  if (id) id.textContent = '';
+  const incidentMeta = $('#incident-meta');
+  if (incidentMeta) incidentMeta.textContent = '';
+}
+
 function showLogin(message = '') {
   closeModerationCase();
   clearPlayerSupportView();
+  clearIncidentView();
   state.csrf = '';
   state.admin = null;
   state.capabilities = new Set();
@@ -1140,7 +1165,7 @@ const INCIDENT_CODE_LABELS = Object.freeze({
   restart: 'Очередь закрыта обслуживанием',
   started: 'Матч начат',
   completed: 'Матч завершён',
-  abandoned: 'Матч покинут после grace period',
+  abandoned: 'Матч покинут или не восстановлен',
   'forced-logout': 'Поддержка завершила сессии',
   renamed: 'Поддержка изменила имя'
 });

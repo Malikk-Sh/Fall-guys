@@ -36,25 +36,38 @@ BACKUP="$(readlink -f "$BACKUP")"
 say "Verify requested backup"
 /usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$BACKUP"
 
-# Prepare all rollback storage before touching the running service.
+# Prepare rollback storage and create a fresh verified snapshot before touching the running service.
 mkdir -p "$BACKUP_DIR/restore-rollback"
 chown "$APP_USER:$APP_GROUP" "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
 chmod 700 "$BACKUP_DIR" "$BACKUP_DIR/restore-rollback"
 
-say "Stop application"
-systemctl stop wobble
 rollback=""
 if [ -f "$DB" ]; then
+  say "Create verified pre-restore rollback snapshot"
+  backup_started_at="$(date +%s)"
+  if ! systemctl start wobble-backup.service; then
+    warn "pre-restore backup service failed; original database has not been replaced"
+    exit 1
+  fi
+  fresh_backup="$(find "$BACKUP_DIR/hourly" -maxdepth 1 -type f -name '*.db' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)"
+  if [ -z "$fresh_backup" ] || [ "$(stat -c %Y "$fresh_backup" 2>/dev/null || echo 0)" -lt "$backup_started_at" ] ||
+    ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$fresh_backup"; then
+    warn "fresh verified rollback source was not produced; original database has not been replaced"
+    exit 1
+  fi
   rollback="$BACKUP_DIR/restore-rollback/pre-restore-$(date -u +%Y%m%dT%H%M%SZ)-$$.db"
-  if ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" snapshot "$DB" "$rollback" ||
-    ! chown "$APP_USER:$APP_GROUP" "$rollback" ||
-    ! chmod 600 "$rollback"; then
-    warn "pre-restore rollback snapshot failed; original database has not been replaced"
-    systemctl start wobble || warn "could not restart the untouched server"
+  if ! install -o "$APP_USER" -g "$APP_GROUP" -m 0600 "$fresh_backup" "$rollback" ||
+    ! /usr/bin/node "$APP_DIR/server/backupCli.mjs" verify "$rollback"; then
+    warn "pre-restore rollback copy failed; original database has not been replaced"
+    rm -f "$rollback"
+    rollback=""
     exit 1
   fi
   echo "rollback snapshot: $rollback"
 fi
+
+say "Stop application"
+systemctl stop wobble
 
 rollback_previous() {
   local reason="$1"

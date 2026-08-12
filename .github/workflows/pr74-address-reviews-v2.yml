@@ -40,20 +40,19 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('server/adminOperations.test.mjs')
-          text = path.read_text()
-          old = """  const markerWriteAt = helper.indexOf('if (!writeRestartMarker(marker))');
-          const signalAt = helper.indexOf("['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service']");
-          assert.ok(markerWriteAt >= 0 && signalAt > markerWriteAt);
-          """
-          new = """  const markerWriteAt = helper.indexOf('if (!writeRestartMarker(marker))');
-          const startRestartAt = helper.indexOf('async function startGracefulRestart');
-          const signalAt = helper.indexOf('const signal = await sendGracefulRestartSignal();', startRestartAt);
-          assert.ok(markerWriteAt >= 0 && signalAt > markerWriteAt);
-          """
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one old signal-order assertion, got {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          lines = path.read_text().splitlines()
+          needle = '  const signalAt = helper.indexOf("[\'kill\', \'--kill-whom=main\', \'--signal=SIGUSR2\', \'wobble.service\']");'
+          matches = [i for i, line in enumerate(lines) if line == needle]
+          if len(matches) != 1:
+              raise SystemExit(f'expected one old signal-order line, got {len(matches)}')
+          i = matches[0]
+          lines[i:i + 1] = [
+              "  const startRestartAt = helper.indexOf('async function startGracefulRestart');",
+              "  const signalAt = helper.indexOf('const signal = await sendGracefulRestartSignal();', startRestartAt);"
+          ]
+          path.write_text('\n'.join(lines) + '\n')
           PY
 
       - name: Format focused changes

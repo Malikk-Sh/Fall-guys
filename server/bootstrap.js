@@ -178,6 +178,7 @@ const DRAIN_POLL_MS = 1000;
 const DRAIN_TIMEOUT_MS = 180_000;
 let drainInterval = null;
 let drainTimeout = null;
+let shutdownCompletionArmed = false;
 
 function activeMatchesForDrain() {
   return [...core.rooms.values()].filter(room => ACTIVE_MATCH_STATES.has(room?.state)).length;
@@ -197,6 +198,23 @@ function finalReliabilitySample() {
   } catch {
     // Shutdown must continue even when observability storage is unavailable.
   }
+}
+
+function armReliabilityShutdownCompletion() {
+  if (shutdownCompletionArmed) return false;
+  shutdownCompletionArmed = true;
+  // core.shutdown() closes WebSocket/HTTP first and closes SQLite inside server.close()'s callback.
+  // Registering this listener before core.shutdown() means the actual HTTP server close event is
+  // persisted while the shared DB is still open. The later structured shutdown_complete log is
+  // still written to journald; its duplicate telemetry write happens after DB close and is ignored.
+  core.server.once('close', () => {
+    try {
+      reliability.recordEvent({ event: 'shutdown_complete', severity: 'info' });
+    } catch {
+      // A completion marker is useful observability, never a reason to block process exit.
+    }
+  });
+  return true;
 }
 
 function beginGracefulDrain(signal = 'SIGUSR2') {
@@ -230,6 +248,7 @@ function beginGracefulDrain(signal = 'SIGUSR2') {
         activeMatches: activeMatchesForDrain()
       })
     );
+    armReliabilityShutdownCompletion();
     finalReliabilitySample();
     core.shutdown(`${signal}:${reason}`);
   };
@@ -270,11 +289,13 @@ if (require.main === module) {
   process.on('SIGUSR2', () => beginGracefulDrain('SIGUSR2'));
   process.on('SIGTERM', () => {
     clearDrainTimers();
+    armReliabilityShutdownCompletion();
     finalReliabilitySample();
     core.shutdown('SIGTERM');
   });
   process.on('SIGINT', () => {
     clearDrainTimers();
+    armReliabilityShutdownCompletion();
     finalReliabilitySample();
     core.shutdown('SIGINT');
   });
@@ -293,5 +314,6 @@ module.exports = {
   adminOperations,
   reliability,
   activeMatchesForDrain,
-  beginGracefulDrain
+  beginGracefulDrain,
+  armReliabilityShutdownCompletion
 };

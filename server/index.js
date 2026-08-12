@@ -336,12 +336,29 @@ app.get('/metrics/gameplay', (req, res) =>
 // Разделение live и ready (ТЗ 15.3): live отвечает, пока процесс жив, ready — пока сокет-сервер
 // действительно принимает подключения. Балансировщику нужны разные ответы на эти вопросы.
 app.get('/health/live', (_req, res) => res.json({ ok: true }));
+// Private readiness handshake for the root-owned operations helper. This route is registered
+// before the SPA catch-all, requires the canonical lower-case path and accepts only direct
+// loopback traffic. Nginx additionally blocks every case variant from the public proxy.
+app.get('/health/ops', (req, res) => {
+  if (req.path !== '/health/ops') return res.status(404).end();
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress || '')) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ ok: true, pid: process.pid, draining: operationalState.isDraining() });
+});
 app.get('/health/ready', (_req, res) => {
   // Во время выключения — 503, хотя сокет ещё слушает. Это и есть смысл разделения live и ready:
   // процесс жив и доигрывает начатое, но новых игроков сюда направлять уже не нужно.
   const capacity = capacityStatus();
   const load = loadStatus();
-  const ready = !shuttingDown && !!wss && server.listening && !capacity.socketsFull && !load.overloaded;
+  const ready =
+    !shuttingDown &&
+    !operationalState.isDraining() &&
+    !!wss &&
+    server.listening &&
+    !capacity.socketsFull &&
+    !load.overloaded;
   res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
 });
 
@@ -611,7 +628,8 @@ const wss = new WebSocketServer({
   // Во время выключения новые подключения не принимаем: пускать игрока в комнату, которая через
   // секунду перестанет существовать, — худший вариант из возможных. Отказ он увидит сразу и
   // попробует ещё раз, когда служба поднимется.
-  verifyClient: ({ origin, req }) => !shuttingDown && originAllowed(origin, req.headers.host)
+  verifyClient: ({ origin, req }) =>
+    !shuttingDown && !operationalState.isDraining() && originAllowed(origin, req.headers.host)
 });
 
 // Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.

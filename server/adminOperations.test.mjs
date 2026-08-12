@@ -9,11 +9,15 @@ import { createRequire } from 'node:module';
 import {
   ACTIONS,
   MAINTENANCE_FLAG,
+  RESTART_MARKER,
+  clearRestartMarker,
   createServer,
   maintenanceEnabled,
+  readRestartMarker,
   readWobbleOperationalHealth,
   setMaintenance,
-  validateRequest
+  validateRequest,
+  writeRestartMarker
 } from '../deploy/wobble-ops-helper.mjs';
 
 const require = createRequire(import.meta.url);
@@ -135,6 +139,25 @@ test('maintenance flag uses one fixed runtime path and enable/disable is idempot
   }
 });
 
+test('restart monitor state survives helper restart through one fixed durable marker', () => {
+  assert.equal(RESTART_MARKER, '/run/wobble-ops/restart.json');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-restart-marker-test-'));
+  const markerPath = path.join(dir, 'restart.json');
+  const marker = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+  try {
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(marker, markerPath), true);
+    assert.deepEqual(readRestartMarker(markerPath), marker);
+    fs.writeFileSync(markerPath, '{broken json');
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(marker, markerPath), true);
+    assert.equal(clearRestartMarker(markerPath), true);
+    assert.equal(readRestartMarker(markerPath), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('operational drain state is process-wide and one-way for the retiring process', () => {
   assert.equal(operationalState.isDraining(), false);
   assert.equal(operationalState.beginDrain(), true);
@@ -232,6 +255,8 @@ test('privileged helper limits its readiness network access to localhost', () =>
   assert.match(helperUnit, /^RuntimeDirectory=wobble-ops$/m);
   assert.match(helperUnit, /^RuntimeDirectoryMode=0755$/m);
   assert.match(helperUnit, /^RuntimeDirectoryPreserve=yes$/m);
+  assert.match(helperUnit, /^Restart=on-failure$/m);
+  assert.match(helperUnit, /^RestartSec=1s$/m);
   assert.match(helperUnit, /^RestrictAddressFamilies=AF_UNIX AF_INET$/m);
   assert.match(helperUnit, /^IPAddressDeny=any$/m);
   assert.match(helperUnit, /^IPAddressAllow=127\.0\.0\.1\/32$/m);
@@ -268,6 +293,7 @@ test('operational restart is serialized and clears maintenance only after stable
   const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');
   const index = fs.readFileSync(path.join(root, 'server/index.js'), 'utf8');
   const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
+  const install = fs.readFileSync(path.join(root, 'deploy/install.sh'), 'utf8');
 
   assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
   assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
@@ -289,6 +315,14 @@ test('operational restart is serialized and clears maintenance only after stable
   const firstAwaitAt = helper.indexOf('const oldPid = await wobbleMainPid();');
   assert.ok(reserveAt >= 0 && firstAwaitAt > reserveAt);
   assert.match(helper, /const READY_STREAK_REQUIRED = 3/);
+  assert.match(helper, /export const RESTART_MARKER = '\/run\/wobble-ops\/restart\.json'/);
+  assert.match(helper, /recoverRestartMonitor\(\);/);
+  const markerWriteAt = helper.indexOf('if (!writeRestartMarker(marker))');
+  const signalAt = helper.indexOf("['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service']");
+  assert.ok(markerWriteAt >= 0 && signalAt > markerWriteAt);
+  const socketRestartAt = install.indexOf('systemctl restart wobble-ops.socket');
+  const helperStartAt = install.indexOf('systemctl start wobble-ops.service');
+  assert.ok(socketRestartAt >= 0 && helperStartAt > socketRestartAt);
   assert.match(
     helper,
     /health\?\.pid === candidatePid && health\.draining === false && confirmedPid === candidatePid/
@@ -301,6 +335,22 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /await confirmOldProcessNotDraining\(oldPid\)/);
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);
+
+  const enqueueAt = index.indexOf('function enqueueCoop(ws, message)');
+  const enqueueDrainAt = index.indexOf('if (operationalState.isDraining())', enqueueAt);
+  const enqueueLeaveAt = index.indexOf('leave(ws);', enqueueAt);
+  assert.ok(enqueueAt >= 0 && enqueueDrainAt > enqueueAt && enqueueDrainAt < enqueueLeaveAt);
+
+  const resultsAt = index.indexOf('function resolveResultsDecision(room');
+  const nextChoiceAt = index.indexOf("player.resultChoice === 'next'", resultsAt);
+  const nextDrainAt = index.indexOf('if (operationalState.isDraining())', nextChoiceAt);
+  const nextMutationAt = index.indexOf('room.chapterId = nextChapterId;', nextChoiceAt);
+  assert.ok(nextChoiceAt >= 0 && nextDrainAt > nextChoiceAt && nextDrainAt < nextMutationAt);
+
+  const rematchChoiceAt = index.indexOf("player.resultChoice === 'rematch'", resultsAt);
+  const rematchDrainAt = index.indexOf('if (operationalState.isDraining())', rematchChoiceAt);
+  const rematchMetricAt = index.indexOf("gameplay.count('pair_continued'", rematchChoiceAt);
+  assert.ok(rematchChoiceAt >= 0 && rematchDrainAt > rematchChoiceAt && rematchDrainAt < rematchMetricAt);
 });
 
 test('only owner can execute operations and every accepted request is audited', async t => {

@@ -1034,6 +1034,10 @@ function coopMatchCompatible(ws, entry, requested, safety = socialSafety) {
 }
 
 function enqueueCoop(ws, message) {
+  if (operationalState.isDraining()) {
+    send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    return false;
+  }
   leave(ws);
   const requested = COOP_CHAPTER_IDS.includes(message.chapterId) ? message.chapterId : null;
   const now = Date.now();
@@ -1353,6 +1357,10 @@ function resolveResultsDecision(room, now = Date.now()) {
     decided &&
     active.every(player => player.resultChoice === 'next')
   ) {
+    if (operationalState.isDraining()) {
+      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      return true;
+    }
     const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
     const nextChapterId = COOP_CHAPTER_IDS[current + 1];
     if (nextChapterId) {
@@ -1373,6 +1381,10 @@ function resolveResultsDecision(room, now = Date.now()) {
   // и когда кто-то выбрал лобби, и когда время вышло, а кто-то так и не решил. Молчание не должно
   // толковаться как согласие на ещё один забег — человек мог просто отложить телефон.
   if (enoughPlayers && decided && active.every(player => player.resultChoice === 'rematch')) {
+    if (operationalState.isDraining()) {
+      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      return true;
+    }
     if (room.mode === GAME_MODE.COOP)
       for (const player of active) gameplay.count('pair_continued', dims(room, player, 'rematch'));
     log('info', 'rematch', { roomId: room.code, players: active.length });

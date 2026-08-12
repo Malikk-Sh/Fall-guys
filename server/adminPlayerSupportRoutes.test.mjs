@@ -12,7 +12,7 @@ const { AdminAuthService, hasCapability } = require('./adminAuth');
 const { AdminControlService } = require('./adminControl');
 const { installAdminRoutes } = require('./adminRoutes');
 
-function prepare() {
+function prepare({ reconnectFailure = false } = {}) {
   const db = openDatabase(':memory:');
   migrateDatabase(db);
   db.exec(`
@@ -51,6 +51,7 @@ function prepare() {
     connectionCount: accountId => (accountId === 'support-player' ? 2 : 0),
     revokeReconnectSessions: accountId => {
       reconnectRevocations.push(accountId);
+      if (reconnectFailure) throw new Error('injected reconnect cleanup failure');
       return accountId === 'support-player' ? 1 : 0;
     },
     health: () => ({ ok: true }),
@@ -203,8 +204,15 @@ test('support actions enforce split capabilities, revoke every login path and au
 
   const logoutAudit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
   assert.ok(logoutAudit);
-  assert.equal(logoutAudit.detail.note, 'Игрок попросил завершить все входы');
-  assert.equal(logoutAudit.detail.revokedSessions, 2);
+  assert.deepEqual(logoutAudit.detail, {
+    note: 'Игрок попросил завершить все входы',
+    revokedSessions: 2,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 1,
+    disconnectedSockets: 2,
+    complete: true,
+    failedSteps: []
+  });
 
   const moderator = await login(base, adminAuth, 'moderator');
   const moderatorLogout = await post(base, '/api/admin/players/logout', moderator, {
@@ -245,4 +253,52 @@ test('support actions enforce split capabilities, revoke every login path and au
   assert.equal(renameAudit.detail.fromName, 'Support Player');
   assert.equal(renameAudit.detail.toName, 'Clean Name');
   assert.equal(renameAudit.detail.note, 'Исправлено имя по жалобе');
+});
+
+test('support logout reports partial cleanup failures instead of claiming success', async t => {
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare({
+    reconnectFailure: true
+  });
+  const { server, base } = await start(app);
+  t.after(() => {
+    server.close();
+    db.close();
+  });
+
+  const session = auth.createSession('support-player', 20_000);
+  const ticket = auth.createSocketTicket('support-player', 20_100);
+  assert.ok(session && ticket);
+  const operator = await login(base, adminAuth, 'operator');
+
+  const response = await post(base, '/api/admin/players/logout', operator, {
+    accountId: 'support-player',
+    note: 'Проверка частичного сбоя очистки'
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    error: 'support-logout-incomplete',
+    accountId: 'support-player',
+    revokedSessions: 1,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 0,
+    disconnectedSockets: 2,
+    failedSteps: ['reconnect-sessions']
+  });
+
+  assert.equal(auth.resolveSession(session.token, 20_200), null);
+  assert.equal(auth.consumeSocketTicket(ticket.token, 20_200), null);
+  assert.deepEqual(reconnectRevocations, ['support-player']);
+  assert.equal(disconnected.length, 1, 'later cleanup steps still run after an earlier local failure');
+
+  const audit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
+  assert.deepEqual(audit.detail, {
+    note: 'Проверка частичного сбоя очистки',
+    revokedSessions: 1,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 0,
+    disconnectedSockets: 2,
+    complete: false,
+    failedSteps: ['reconnect-sessions']
+  });
 });

@@ -142,15 +142,51 @@ class AdminControlService {
     if (!internalNote) return { ok: false, reason: 'invalid-support-note', maxLength: MAX_SUPPORT_NOTE };
 
     let revokedSessions = 0;
+    let revokedSocketTickets = 0;
+    let revokedReconnectSessions = 0;
+    let disconnectedSockets = 0;
+    const failedSteps = [];
+
     this.db.exec('BEGIN IMMEDIATE');
     try {
       revokedSessions = Number(this.auth.revokeAccountSessions(id) || 0);
+      try {
+        if (typeof this.auth.revokeAccountSocketTickets !== 'function') {
+          throw new Error('socket-ticket revocation unavailable');
+        }
+        revokedSocketTickets = Number(this.auth.revokeAccountSocketTickets(id) || 0);
+      } catch {
+        failedSteps.push('socket-tickets');
+      }
+      try {
+        if (!this.revokeReconnectSessions) throw new Error('reconnect-session revocation unavailable');
+        revokedReconnectSessions = Number(this.revokeReconnectSessions(id) || 0);
+      } catch {
+        failedSteps.push('reconnect-sessions');
+      }
+      try {
+        if (!this.disconnectAccount) throw new Error('socket disconnection unavailable');
+        disconnectedSockets = Number(
+          this.disconnectAccount(id, { code: 4004, reason: 'support-logout' }) || 0
+        );
+      } catch {
+        failedSteps.push('active-sockets');
+      }
+
       this.adminAuth.audit({
         actor,
         action: 'player.support.logout',
         targetType: 'player-account',
         targetId: id,
-        detail: { note: internalNote, revokedSessions },
+        detail: {
+          note: internalNote,
+          revokedSessions,
+          revokedSocketTickets,
+          revokedReconnectSessions,
+          disconnectedSockets,
+          complete: failedSteps.length === 0,
+          failedSteps
+        },
         now
       });
       this.db.exec('COMMIT');
@@ -159,34 +195,16 @@ class AdminControlService {
       throw error;
     }
 
-    let revokedSocketTickets = 0;
-    let revokedReconnectSessions = 0;
-    let disconnectedSockets = 0;
-    try {
-      revokedSocketTickets = Number(this.auth.revokeAccountSocketTickets?.(id) || 0);
-    } catch {
-      revokedSocketTickets = 0;
-    }
-    try {
-      revokedReconnectSessions = Number(this.revokeReconnectSessions?.(id) || 0);
-    } catch {
-      revokedReconnectSessions = 0;
-    }
-    try {
-      disconnectedSockets = Number(
-        this.disconnectAccount?.(id, { code: 4004, reason: 'support-logout' }) || 0
-      );
-    } catch {
-      disconnectedSockets = 0;
-    }
-    return {
-      ok: true,
+    const result = {
       accountId: id,
       revokedSessions,
       revokedSocketTickets,
       revokedReconnectSessions,
       disconnectedSockets
     };
+    return failedSteps.length
+      ? { ok: false, reason: 'support-logout-incomplete', ...result, failedSteps }
+      : { ok: true, ...result };
   }
 
   playerRename({ targetAccountId, name, note, actor, now = Date.now() } = {}) {

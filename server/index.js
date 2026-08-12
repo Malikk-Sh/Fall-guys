@@ -697,17 +697,23 @@ function incidentForSocket(ws, { accountId = null, kind, code, roomId, matchId, 
   const player = room?.players.get(ws?.id);
   const id = String(accountId || ws?.accountId || player?.accountId || '');
   if (!id) return false;
-  return incidentDiagnostics.record({
-    accountId: id,
-    kind,
-    code,
-    roomId: roomId === undefined ? room?.code : roomId,
-    matchId: matchId === undefined ? room?.matchId : matchId,
-    mode: mode === undefined ? room?.mode : mode,
-    phase: phase === undefined ? room?.state || (ws?.room ? null : 'roomless') : phase,
-    device: ws?.device,
-    valueMs
-  });
+  try {
+    return incidentDiagnostics.record({
+      accountId: id,
+      kind,
+      code,
+      roomId: roomId === undefined ? room?.code : roomId,
+      matchId: matchId === undefined ? room?.matchId : matchId,
+      mode: mode === undefined ? room?.mode : mode,
+      phase: phase === undefined ? room?.state || (ws?.room ? null : 'roomless') : phase,
+      device: ws?.device,
+      valueMs
+    });
+  } catch {
+    // Diagnostics are observability only. A SQLite/storage failure must never change gameplay,
+    // authentication, moderation enforcement or the protocol response the player receives.
+    return false;
+  }
 }
 
 const sendError = (ws, code, message, recoverable = true) => {

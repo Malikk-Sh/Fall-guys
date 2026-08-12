@@ -203,3 +203,35 @@ test('incident diagnostics follows authenticated socket lifecycle without storin
   assert.equal(serialized.includes(ticket), false);
   assert.equal(serialized.includes('Ignored Cached Name'), false);
 });
+
+test('incident storage failure does not change the gameplay protocol response', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Diagnostics Failure');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  const originalRecord = core.incidentDiagnostics.record;
+  t.after(async () => {
+    core.incidentDiagnostics.record = originalRecord;
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+
+  core.incidentDiagnostics.record = () => {
+    throw new Error('injected diagnostics write failure');
+  };
+
+  const errorReply = waitFor(client, 'error');
+  client.send(JSON.stringify({ type: 'join', code: 'ZZZZZZ', name: account.name, protocolVersion: 10 }));
+  const response = await errorReply;
+  assert.equal(response.code, 'ROOM_NOT_FOUND');
+});

@@ -16,12 +16,24 @@ function normalizeFingerprintSource(value) {
     .slice(0, 16 * 1024);
 }
 
+function stackFramesOnly(value) {
+  return String(value || '')
+    .split('\n')
+    .filter(line => /^\s*at\s+/.test(line))
+    .join('\n');
+}
+
 function fingerprintFor(payload) {
   if (!ERROR_EVENT_SET.has(payload.event)) return '';
-  const source = normalizeFingerprintSource(
-    payload.stack || payload.message || payload.reason || `${payload.from || ''}->${payload.to || ''}`
-  );
-  return crypto.createHash('sha256').update(`${payload.event}\n${source}`).digest('hex').slice(0, 24);
+  // Never hash the raw exception message. Besides being unnecessary for grouping, the first line
+  // of an Error stack can contain dynamic application values. Frames identify the code location;
+  // events without frames deliberately group by the closed event name only.
+  const frames = normalizeFingerprintSource(stackFramesOnly(payload.stack));
+  return crypto
+    .createHash('sha256')
+    .update(`${payload.event}\n${frames || '<no-stack>'}`)
+    .digest('hex')
+    .slice(0, 24);
 }
 
 function structuredReliabilityEvent(value, fallbackLevel = 'info', now = Date.now()) {
@@ -116,5 +128,6 @@ module.exports = {
   structuredReliabilityEvent,
   fingerprintFor,
   normalizeFingerprintSource,
+  stackFramesOnly,
   MAX_PENDING
 };

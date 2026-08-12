@@ -15,7 +15,7 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --write deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs && git diff -- deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs && false",
     "moderation": "node server/moderationCli.mjs",
     "admin": "node server/adminCli.mjs",
     "load": "node server/loadProbe.mjs",

@@ -16,9 +16,24 @@ const RESTART_MONITOR_TIMEOUT_MS = 210_000;
 export const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
 
 export const ACTIONS = Object.freeze({
-  'backup.create': Object.freeze({ kind: 'systemd', verb: 'start', unit: 'wobble-backup.service', timeoutMs: 125_000 }),
-  'backup.verify': Object.freeze({ kind: 'systemd', verb: 'start', unit: 'wobble-backup-verify.service', timeoutMs: 45_000 }),
-  'smoke.run': Object.freeze({ kind: 'systemd', verb: 'start', unit: 'wobble-smoke.service', timeoutMs: 45_000 }),
+  'backup.create': Object.freeze({
+    kind: 'systemd',
+    verb: 'start',
+    unit: 'wobble-backup.service',
+    timeoutMs: 125_000
+  }),
+  'backup.verify': Object.freeze({
+    kind: 'systemd',
+    verb: 'start',
+    unit: 'wobble-backup-verify.service',
+    timeoutMs: 45_000
+  }),
+  'smoke.run': Object.freeze({
+    kind: 'systemd',
+    verb: 'start',
+    unit: 'wobble-smoke.service',
+    timeoutMs: 45_000
+  }),
   'maintenance.enable': Object.freeze({ kind: 'maintenance', enabled: true }),
   'maintenance.disable': Object.freeze({ kind: 'maintenance', enabled: false }),
   'nginx.reload': Object.freeze({ kind: 'nginx-reload', timeoutMs: 20_000 }),
@@ -73,7 +88,11 @@ function runCommand(command, args, { timeoutMs = 45_000, captureStdout = false }
     });
     child.once('error', () => {
       clearTimeout(timer);
-      resolve({ ok: false, reason: 'systemctl-error', durationMs: Date.now() - startedAt });
+      resolve({
+        ok: false,
+        reason: 'systemctl-error',
+        durationMs: Date.now() - startedAt
+      });
     });
     child.once('close', code => {
       clearTimeout(timer);
@@ -90,7 +109,9 @@ function runCommand(command, args, { timeoutMs = 45_000, captureStdout = false }
 }
 
 function runSystemctl(spec) {
-  return runCommand(SYSTEMCTL, [spec.verb, spec.unit], { timeoutMs: spec.timeoutMs || 45_000 });
+  return runCommand(SYSTEMCTL, [spec.verb, spec.unit], {
+    timeoutMs: spec.timeoutMs || 45_000
+  });
 }
 
 export function maintenanceEnabled(flagPath = MAINTENANCE_FLAG) {
@@ -104,7 +125,10 @@ export function maintenanceEnabled(flagPath = MAINTENANCE_FLAG) {
 export function setMaintenance(enabled, flagPath = MAINTENANCE_FLAG) {
   try {
     if (enabled) {
-      fs.writeFileSync(flagPath, `${new Date().toISOString()}\n`, { encoding: 'utf8', mode: 0o600 });
+      fs.writeFileSync(flagPath, `${new Date().toISOString()}\n`, {
+        encoding: 'utf8',
+        mode: 0o600
+      });
     } else {
       fs.rmSync(flagPath, { force: true });
     }
@@ -116,7 +140,9 @@ export function setMaintenance(enabled, flagPath = MAINTENANCE_FLAG) {
 
 async function runNginxReload(spec) {
   const startedAt = Date.now();
-  const check = await runCommand(NGINX, ['-t'], { timeoutMs: spec.timeoutMs || 20_000 });
+  const check = await runCommand(NGINX, ['-t'], {
+    timeoutMs: spec.timeoutMs || 20_000
+  });
   if (!check.ok) {
     return {
       ok: false,
@@ -213,7 +239,9 @@ export async function executeRequest(request, now = Date.now()) {
 
   if (spec.kind === 'graceful-restart') return startGracefulRestart(now);
   if (spec.kind === 'maintenance') {
-    if (restartInFlight && spec.enabled === false) return { ok: false, reason: 'operation-busy' };
+    if (restartInFlight && spec.enabled === false) {
+      return { ok: false, reason: 'operation-busy' };
+    }
     return setMaintenance(spec.enabled);
   }
 
@@ -234,7 +262,10 @@ function send(socket, payload) {
   }
 }
 
-export function createServer({ execute = executeRequest, requestTimeoutMs = REQUEST_READ_TIMEOUT_MS } = {}) {
+export function createServer({
+  execute = executeRequest,
+  requestTimeoutMs = REQUEST_READ_TIMEOUT_MS
+} = {}) {
   return net.createServer(socket => {
     socket.setEncoding('utf8');
     // The short timeout protects only the tiny unauthenticated local request frame. Once a valid

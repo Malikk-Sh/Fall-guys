@@ -53,6 +53,7 @@ const { backupHealthStatus } = require('./backupStatus');
 const { buildIdentity } = require('./buildInfo');
 const { trackSignatureMetrics } = require('./signatureMetrics');
 const { SocialSafety } = require('./socialSafety');
+const operationalState = require('./operationalState');
 const {
   auditCoopMovement,
   verifyCoopCheckpoint,
@@ -1220,7 +1221,15 @@ function trackCheckpointDuration(room, player, checkpoint, now) {
 // раньше обе кнопки экрана результатов вели в resetLobby, то есть делали в точности одно и то же,
 // и «голосование за реванш» ничего не решало.
 function beginCountdown(room) {
-  if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return;
+  // Drain is a process-wide admission boundary, not just an Nginx connection gate. Existing
+  // lobby/results sockets stay alive while current matches finish, but none of them may start
+  // another countdown after SIGUSR2. Every path (host start, matchmaking, rematch, next chapter)
+  // funnels through this one function.
+  if (operationalState.isDraining()) {
+    broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    return false;
+  }
+  if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return false;
   // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
   // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
   room.matchId = crypto.randomBytes(8).toString('hex');

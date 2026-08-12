@@ -9,6 +9,16 @@ Type=simple
 User=root
 Group=root
 ExecStart=/usr/bin/node /usr/local/lib/wobble-ops/helper.mjs
+Restart=on-failure
+RestartSec=1s
+
+# Единственное изменяемое состояние privileged helper живёт в собственном runtime-каталоге.
+# Флаг maintenance и restart-marker не содержат секретов; Nginx/Wobble читают только maintenance,
+# а новый helper восстанавливает monitor по marker после собственного crash/restart.
+RuntimeDirectory=wobble-ops
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -20,7 +30,13 @@ ProtectHostname=true
 ProtectClock=true
 ProtectKernelLogs=true
 PrivateDevices=true
-RestrictAddressFamilies=AF_UNIX
+# systemctl общается с PID 1 по Unix socket. AF_INET нужен только для фиксированной readiness-
+# проверки 127.0.0.1:3000; IPAddressDeny/Allow не дают root-helper выйти во внешнюю сеть.
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1/32
 RestrictNamespaces=true
 LockPersonality=true
+# nginx -t открывает configured error_log, поэтому даём helper ровно этот writable каталог.
+ReadWritePaths=/var/log/nginx
 UMask=0077

@@ -302,6 +302,9 @@ systemctl stop wobble-ops.service >/dev/null 2>&1 || true
 systemctl enable wobble >/dev/null
 systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket >/dev/null
 systemctl restart wobble-ops.socket
+# Start the helper immediately so a persisted graceful-restart monitor is recovered even before
+# another admin request arrives. Restart=on-failure handles an unexpected helper crash afterwards.
+systemctl start wobble-ops.service
 
 say "Преддеплойная резервная копия"
 database_file="$(

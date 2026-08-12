@@ -53,6 +53,7 @@ const { backupHealthStatus } = require('./backupStatus');
 const { buildIdentity } = require('./buildInfo');
 const { trackSignatureMetrics } = require('./signatureMetrics');
 const { SocialSafety } = require('./socialSafety');
+const operationalState = require('./operationalState');
 const {
   auditCoopMovement,
   verifyCoopCheckpoint,
@@ -335,12 +336,29 @@ app.get('/metrics/gameplay', (req, res) =>
 // Разделение live и ready (ТЗ 15.3): live отвечает, пока процесс жив, ready — пока сокет-сервер
 // действительно принимает подключения. Балансировщику нужны разные ответы на эти вопросы.
 app.get('/health/live', (_req, res) => res.json({ ok: true }));
+// Private readiness handshake for the root-owned operations helper. This route is registered
+// before the SPA catch-all, requires the canonical lower-case path and accepts only direct
+// loopback traffic. Nginx additionally blocks every case variant from the public proxy.
+app.get('/health/ops', (req, res) => {
+  if (req.path !== '/health/ops') return res.status(404).end();
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress || '')) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ ok: true, pid: process.pid, draining: operationalState.isDraining() });
+});
 app.get('/health/ready', (_req, res) => {
   // Во время выключения — 503, хотя сокет ещё слушает. Это и есть смысл разделения live и ready:
   // процесс жив и доигрывает начатое, но новых игроков сюда направлять уже не нужно.
   const capacity = capacityStatus();
   const load = loadStatus();
-  const ready = !shuttingDown && !!wss && server.listening && !capacity.socketsFull && !load.overloaded;
+  const ready =
+    !shuttingDown &&
+    !operationalState.isDraining() &&
+    !!wss &&
+    server.listening &&
+    !capacity.socketsFull &&
+    !load.overloaded;
   res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
 });
 
@@ -610,7 +628,8 @@ const wss = new WebSocketServer({
   // Во время выключения новые подключения не принимаем: пускать игрока в комнату, которая через
   // секунду перестанет существовать, — худший вариант из возможных. Отказ он увидит сразу и
   // попробует ещё раз, когда служба поднимется.
-  verifyClient: ({ origin, req }) => !shuttingDown && originAllowed(origin, req.headers.host)
+  verifyClient: ({ origin, req }) =>
+    !shuttingDown && !operationalState.isDraining() && originAllowed(origin, req.headers.host)
 });
 
 // Типы, чей хвост после окончания матча надо гасить молча, а не считать нарушением протокола.
@@ -1015,6 +1034,10 @@ function coopMatchCompatible(ws, entry, requested, safety = socialSafety) {
 }
 
 function enqueueCoop(ws, message) {
+  if (operationalState.isDraining()) {
+    send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    return false;
+  }
   leave(ws);
   const requested = COOP_CHAPTER_IDS.includes(message.chapterId) ? message.chapterId : null;
   const now = Date.now();
@@ -1049,6 +1072,29 @@ function enqueueCoop(ws, message) {
   beginCountdown(room);
 }
 
+function beginOperationalDrain() {
+  if (!operationalState.beginDrain()) return false;
+
+  // No queued player can ever be matched after admission closes. Remove the impossible queue
+  // immediately and record the exit without counting it as a capacity rejection.
+  const queued = coopMatchmaking.splice(0);
+  for (const entry of queued) {
+    gameplay.count('matchmaking_queue_exit', {
+      detail: 'restart',
+      device: entry.ws?.device || 'desktop'
+    });
+  }
+
+  // core.shutdown broadcasts only to room players. Roomless sockets (including matchmaking) must
+  // learn about maintenance now instead of waiting up to the match-drain deadline for a generic
+  // network close.
+  for (const client of wss.clients) {
+    if (!client.room && canSend(client)) {
+      send(client, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    }
+  }
+  return true;
+}
 // Возврат в комнату по токену прошлой сессии.
 function resume(ws, token) {
   ws.accountAccessDenied = false;
@@ -1220,7 +1266,15 @@ function trackCheckpointDuration(room, player, checkpoint, now) {
 // раньше обе кнопки экрана результатов вели в resetLobby, то есть делали в точности одно и то же,
 // и «голосование за реванш» ничего не решало.
 function beginCountdown(room) {
-  if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return;
+  // Drain is a process-wide admission boundary, not just an Nginx connection gate. Existing
+  // lobby/results sockets stay alive while current matches finish, but none of them may start
+  // another countdown after SIGUSR2. Every path (host start, matchmaking, rematch, next chapter)
+  // funnels through this one function.
+  if (operationalState.isDraining()) {
+    broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    return false;
+  }
+  if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return false;
   // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
   // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
   room.matchId = crypto.randomBytes(8).toString('hex');
@@ -1326,6 +1380,10 @@ function resolveResultsDecision(room, now = Date.now()) {
     decided &&
     active.every(player => player.resultChoice === 'next')
   ) {
+    if (operationalState.isDraining()) {
+      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      return true;
+    }
     const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
     const nextChapterId = COOP_CHAPTER_IDS[current + 1];
     if (nextChapterId) {
@@ -1346,6 +1404,10 @@ function resolveResultsDecision(room, now = Date.now()) {
   // и когда кто-то выбрал лобби, и когда время вышло, а кто-то так и не решил. Молчание не должно
   // толковаться как согласие на ещё один забег — человек мог просто отложить телефон.
   if (enoughPlayers && decided && active.every(player => player.resultChoice === 'rematch')) {
+    if (operationalState.isDraining()) {
+      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      return true;
+    }
     if (room.mode === GAME_MODE.COOP)
       for (const player of active) gameplay.count('pair_continued', dims(room, player, 'rematch'));
     log('info', 'rematch', { roomId: room.code, players: active.length });
@@ -1653,6 +1715,9 @@ wss.on('connection', (ws, req) => {
     }
 
     if (message.type === C2S.FIND_COOP) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (loadStatus().overloaded || rooms.size >= MAX_ROOMS) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
@@ -1813,6 +1878,9 @@ wss.on('connection', (ws, req) => {
     if (message.type === C2S.START_MATCH) {
       if (room.host !== ws.id) {
         return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
       }
       if (capacityStatus().matchesFull) {
         metrics.capacityRejected++;
@@ -2039,6 +2107,9 @@ wss.on('connection', (ws, req) => {
     // Выбор можно менять, пока комната не решила: передумать — нормальное поведение, а запрет
     // на смену и создавал тупик. Пересчёт после каждого нажатия.
     if (message.type === C2S.REMATCH_VOTE) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (player.resultChoice === 'rematch') return;
       player.resultChoice = 'rematch';
       return resolveResultsDecision(room);
@@ -2049,6 +2120,9 @@ wss.on('connection', (ws, req) => {
       const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
       if (room.mode !== GAME_MODE.COOP || current < 0) {
         return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
       }
       if (player.resultChoice === 'next') return;
       player.resultChoice = 'next';
@@ -2269,6 +2343,7 @@ module.exports = {
   gameplay,
   socialSafety,
   coopMatchCompatible,
+  beginOperationalDrain,
   leave,
   resetLobby,
   originAllowed,

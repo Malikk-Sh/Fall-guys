@@ -11,5 +11,24 @@ old_session = "{ id: 'SECRET-ACTIVE-SESSION-H', createdAt: 10_000, lastSeenAt: 4
 new_session = "{ id: 'SECRET-ACTIVE-SESSION-HA', createdAt: 10_000, lastSeenAt: 48_000, expiresAt: 80_000 }"
 if text.count(old_session) != 1:
     raise SystemExit(f'expected one session assertion, got {text.count(old_session)}')
-path.write_text(text.replace(old_session, new_session, 1), encoding='utf-8')
+text = text.replace(old_session, new_session, 1)
+repairs = [
+    (
+        "    } catch {}\n    try {\n      revokedReconnectSessions",
+        "    } catch {\n      revokedSocketTickets = 0;\n    }\n    try {\n      revokedReconnectSessions"
+    ),
+    (
+        "    } catch {}\n    try {\n      disconnectedSockets",
+        "    } catch {\n      revokedReconnectSessions = 0;\n    }\n    try {\n      disconnectedSockets"
+    ),
+    (
+        "    } catch {}\n    return {\n      ok: true,",
+        "    } catch {\n      disconnectedSockets = 0;\n    }\n    return {\n      ok: true,"
+    )
+]
+for before, after in repairs:
+    if text.count(before) != 1:
+        raise SystemExit(f'expected one cleanup block, got {text.count(before)} for {before!r}')
+    text = text.replace(before, after, 1)
+path.write_text(text, encoding='utf-8')
 print('PR75 staging repairs applied')

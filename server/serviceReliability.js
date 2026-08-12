@@ -52,10 +52,7 @@ function nonNegativeInt(value) {
 }
 
 function safeBuild(health = {}) {
-  const clean = value =>
-    String(value || '')
-      .trim()
-      .slice(0, 120);
+  const clean = value => String(value || '').trim().slice(0, 120);
   return {
     version: clean(health.version) || 'unknown',
     commit: clean(health.commit) || 'unknown',
@@ -64,9 +61,7 @@ function safeBuild(health = {}) {
 }
 
 function safeFingerprint(value) {
-  const text = String(value || '')
-    .trim()
-    .toLowerCase();
+  const text = String(value || '').trim().toLowerCase();
   return /^[0-9a-f]{12,64}$/.test(text) ? text : '';
 }
 
@@ -119,7 +114,6 @@ class ServiceReliability {
       snapshotsSkippedForLoad: nonNegativeInt(metrics.snapshotsSkippedForLoad)
     };
     const previous = this.previousCounters;
-    this.previousCounters = current;
     const delta = name => (previous ? Math.max(0, current[name] - previous[name]) : 0);
     const build = safeBuild(health);
     const sampledAt = Math.floor(at / MINUTE_MS) * MINUTE_MS;
@@ -141,6 +135,8 @@ class ServiceReliability {
       delta('capacityRejected'),
       delta('snapshotsSkippedForLoad')
     );
+    // Advance only after persistence succeeds; transient storage failure must not lose deltas.
+    this.previousCounters = current;
     this.prune(at);
     return true;
   }
@@ -185,7 +181,8 @@ class ServiceReliability {
     const at = Number(now);
     if (!Number.isSafeInteger(at) || at < 0) throw new Error('invalid reliability report time');
     this.prune(at, { force: true });
-    const from = at - spec.ms;
+    // Stored event occurrences are minute-bucketed, so expose the same aligned boundary.
+    const from = Math.floor((at - spec.ms) / MINUTE_MS) * MINUTE_MS;
     const raw = this.statements.summary.get(from, at) || {};
     const summary = {
       samples: Number(raw.samples || 0),
@@ -196,8 +193,7 @@ class ServiceReliability {
       capacityRejected: Number(raw.capacity_rejected || 0),
       snapshotsSkippedForLoad: Number(raw.snapshots_skipped_for_load || 0),
       eventLoopP95MsMax: Number(raw.event_loop_max || 0),
-      eventLoopP95MsAverage:
-        raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
+      eventLoopP95MsAverage: raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
       rssMbMax: Number(raw.rss_max || 0),
       heapUsedMbMax: Number(raw.heap_max || 0),
       socketsMax: Number(raw.sockets_max || 0),
@@ -258,6 +254,7 @@ class ServiceReliability {
     if (summary.handlerErrors > 0 || errors.some(item => item.severity === 'error')) {
       raise('critical', 'internal-errors');
     }
+    if (errors.some(item => item.severity === 'warn')) raise('warning', 'operational-warnings');
     if (summary.eventLoopP95MsMax >= 250) raise('critical', 'event-loop-critical');
     else if (summary.eventLoopP95MsMax >= 120) raise('warning', 'event-loop-high');
     if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.5) {
@@ -359,7 +356,7 @@ function prepare(db) {
              MIN(first_occurred_at) AS first_occurred_at,
              MAX(last_occurred_at) AS last_occurred_at
       FROM service_reliability_events
-      WHERE last_occurred_at >= ? AND first_occurred_at <= ?
+      WHERE bucket_at >= ? AND bucket_at <= ?
         AND event IN (${errorList})
       GROUP BY event, severity, fingerprint, version, commit_sha, release_tag
       ORDER BY CASE severity WHEN 'error' THEN 3 WHEN 'warn' THEN 2 ELSE 1 END DESC,
@@ -370,7 +367,7 @@ function prepare(db) {
       SELECT event, severity, version, commit_sha, release_tag, occurrences,
              first_occurred_at, last_occurred_at
       FROM service_reliability_events
-      WHERE last_occurred_at >= ? AND first_occurred_at <= ?
+      WHERE bucket_at >= ? AND bucket_at <= ?
         AND event IN (${lifecycleList})
       ORDER BY last_occurred_at DESC, id DESC
       LIMIT ?

@@ -45,9 +45,9 @@
     return card;
   }
 
-  function row(values) {
+  function row(values, cellTag = 'td') {
     const tr = document.createElement('tr');
-    for (const value of values) text(tr, 'td', value);
+    for (const value of values) text(tr, cellTag, value);
     return tr;
   }
 
@@ -91,7 +91,8 @@
       'reconnect-failure-rate-critical': 'очень высокая доля неудачных reconnect',
       'reconnect-failure-rate-high': 'повышенная доля неудачных reconnect',
       'socket-send-failures': 'повторяются ошибки отправки WebSocket',
-      'capacity-rejections': 'сервер отклонял подключения из-за лимитов ёмкости'
+      'capacity-rejections': 'сервер отклонял подключения из-за лимитов ёмкости',
+      'lifecycle-warning': 'одно из событий запуска/остановки завершилось с предупреждением'
     };
     return labels[reason] || reason;
   }
@@ -193,7 +194,9 @@
     errorWrap.className = 'table-wrap';
     const errorTable = document.createElement('table');
     const errorHead = document.createElement('thead');
-    errorHead.append(row(['Ошибка', 'Уровень', 'Сколько', 'Первое / последнее', 'Build', 'Fingerprint']));
+    errorHead.append(
+      row(['Ошибка', 'Уровень', 'Сколько', 'Первое / последнее', 'Build', 'Fingerprint'], 'th')
+    );
     errorTable.append(errorHead);
     const errorBody = document.createElement('tbody');
     errorBody.id = 'reliability-errors';
@@ -210,7 +213,7 @@
     lifeWrap.className = 'table-wrap';
     const lifeTable = document.createElement('table');
     const lifeHead = document.createElement('thead');
-    lifeHead.append(row(['Время', 'Событие', 'Build']));
+    lifeHead.append(row(['Время', 'Событие', 'Build'], 'th'));
     lifeTable.append(lifeHead);
     const lifeBody = document.createElement('tbody');
     lifeBody.id = 'reliability-lifecycle';
@@ -233,7 +236,12 @@
     seriesWrap.className = 'table-wrap';
     const seriesTable = document.createElement('table');
     const seriesHead = document.createElement('thead');
-    seriesHead.append(row(['Время', 'Event loop p95', 'RSS', 'Sockets', 'Матчи', 'Reconnect ok/fail', 'Ошибки', 'Capacity']));
+    seriesHead.append(
+      row(
+        ['Время', 'Event loop p95', 'RSS', 'Sockets', 'Матчи', 'Reconnect ok/fail', 'Ошибки', 'Capacity'],
+        'th'
+      )
+    );
     seriesTable.append(seriesHead);
     const seriesBody = document.createElement('tbody');
     seriesBody.id = 'reliability-series';
@@ -244,7 +252,7 @@
 
     $('#app-view')?.append(panel);
 
-    tab.addEventListener('click', () => openPanel());
+    tab.addEventListener('click', openPanel);
     select.addEventListener('change', loadReliability);
     bundle.addEventListener('click', copyBundle);
 
@@ -475,7 +483,7 @@
   }
 
   createUi();
-  const observer = new MutationObserver(() => syncAccess());
+  const observer = new MutationObserver(syncAccess);
   observer.observe(document.body, { attributes: true, attributeFilter: ['data-admin-session'] });
   syncAccess();
 })();

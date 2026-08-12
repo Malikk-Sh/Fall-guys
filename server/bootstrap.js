@@ -38,6 +38,7 @@ const { PlayerSanctions } = require('./playerSanctions');
 const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
+const operationalState = require('./operationalState');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
@@ -141,21 +142,8 @@ const host = process.env.HOST || '0.0.0.0';
 const ACTIVE_MATCH_STATES = new Set(['COUNTDOWN', 'PLAYING']);
 const DRAIN_POLL_MS = 1000;
 const DRAIN_TIMEOUT_MS = 180_000;
-const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 let drainInterval = null;
 let drainTimeout = null;
-let draining = false;
-
-// Root helper снимает автоматически включённый maintenance только после ответа именно нового PID.
-// Endpoint намеренно доступен лишь по loopback: Nginx всё равно закрывает /health* снаружи, а эта
-// дополнительная проверка защищает и случай прямого обращения к внутреннему Node-порту.
-core.app.get('/health/ops', (req, res) => {
-  if (!LOOPBACK_ADDRESSES.has(req.socket.remoteAddress || '')) {
-    return res.status(403).json({ ok: false, error: 'forbidden' });
-  }
-  res.set('Cache-Control', 'no-store');
-  return res.json({ ok: true, pid: process.pid, draining });
-});
 
 function activeMatchesForDrain() {
   return [...core.rooms.values()].filter(room => ACTIVE_MATCH_STATES.has(room?.state)).length;
@@ -169,8 +157,10 @@ function clearDrainTimers() {
 }
 
 function beginGracefulDrain(signal = 'SIGUSR2') {
-  if (draining) return false;
-  draining = true;
+  // `operationalState` — один экземпляр CommonJS-модуля для bootstrap и index.js. Поэтому в тот
+  // же тик, когда SIGUSR2 начинает drain, центральный beginCountdown() перестаёт принимать любые
+  // новые старты: host start, matchmaking, rematch и next chapter используют один admission gate.
+  if (!operationalState.beginDrain()) return false;
   const startedAt = Date.now();
   const initialMatches = activeMatchesForDrain();
   console.log(

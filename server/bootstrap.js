@@ -5,6 +5,12 @@
 // Express app, then starts the same HTTP/WebSocket server.
 
 const http = require('http');
+const { installReliabilityCapture } = require('./reliabilityCapture');
+
+// Capture only a closed allowlist of already-structured operational log events. The capture is
+// installed before index.js is loaded so an early startup error can still be grouped. Until the DB
+// backed reliability service is ready, at most a small bounded queue is kept in memory.
+const reliabilityCapture = installReliabilityCapture();
 
 // Security headers are created inside index.js. Patch the response setter BEFORE loading it so the
 // existing strict CSP remains the source of truth and Auth V2 adds only the two Google origins it
@@ -34,6 +40,8 @@ const { AdminControlService } = require('./adminControl');
 const { AdminInfrastructure } = require('./adminInfrastructure');
 const { AdminOperationsClient } = require('./adminOperationsClient');
 const { installAdminRoutes } = require('./adminRoutes');
+const { installAdminReliabilityRoutes } = require('./adminReliabilityRoutes');
+const { ServiceReliability } = require('./serviceReliability');
 const { PlayerSanctions } = require('./playerSanctions');
 const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { networkIdentity } = require('./networkIdentity');
@@ -60,6 +68,24 @@ const adminControl = new AdminControlService({
 });
 const adminInfrastructure = new AdminInfrastructure({ health: core.health });
 const adminOperations = new AdminOperationsClient();
+const reliability = new ServiceReliability({ db: core.accounts.db, health: core.health });
+// Establish a counter baseline immediately. Later samples store only deltas, so process lifetime
+// counters do not get counted again after every minute.
+try {
+  reliability.sample();
+} catch {
+  // Observability must never block game startup.
+}
+reliabilityCapture.setSink(event => reliability.recordEvent(event));
+const reliabilityTimer = setInterval(() => {
+  try {
+    reliability.sample();
+  } catch {
+    // A telemetry write failure must not change gameplay availability.
+  }
+}, 60_000);
+reliabilityTimer.unref?.();
+
 const recoveryLogin = core.accounts.login.bind(core.accounts);
 const adminPanelEnabled = process.env.ADMIN_PANEL_ENABLED === '1';
 
@@ -118,7 +144,7 @@ installSocialRoutes({
   requireSession: authRoutes.requireSession
 });
 installRewardRoutes({ app: core.app, auth, rewards });
-installAdminRoutes({
+const adminRoutes = installAdminRoutes({
   app: core.app,
   adminAuth,
   control: adminControl,
@@ -131,6 +157,11 @@ installAdminRoutes({
   secureCookies: process.env.ADMIN_COOKIE_SECURE
     ? process.env.ADMIN_COOKIE_SECURE !== '0'
     : process.env.NODE_ENV === 'production'
+});
+installAdminReliabilityRoutes({
+  app: core.app,
+  requireAdmin: adminRoutes.requireAdmin,
+  reliability
 });
 
 const port = process.env.PORT || 3000;
@@ -157,6 +188,15 @@ function clearDrainTimers() {
   if (drainTimeout) clearTimeout(drainTimeout);
   drainInterval = null;
   drainTimeout = null;
+}
+
+function finalReliabilitySample() {
+  clearInterval(reliabilityTimer);
+  try {
+    reliability.sample();
+  } catch {
+    // Shutdown must continue even when observability storage is unavailable.
+  }
 }
 
 function beginGracefulDrain(signal = 'SIGUSR2') {
@@ -190,6 +230,7 @@ function beginGracefulDrain(signal = 'SIGUSR2') {
         activeMatches: activeMatchesForDrain()
       })
     );
+    finalReliabilitySample();
     core.shutdown(`${signal}:${reason}`);
   };
 
@@ -220,6 +261,7 @@ if (require.main === module) {
         playerSanctions: true,
         rewardPlatform: true,
         adminPanel: adminPanelEnabled,
+        reliability: true,
         devRewards: process.env.ENABLE_DEV_REWARDS === '1',
         google: google.enabled
       })
@@ -228,10 +270,12 @@ if (require.main === module) {
   process.on('SIGUSR2', () => beginGracefulDrain('SIGUSR2'));
   process.on('SIGTERM', () => {
     clearDrainTimers();
+    finalReliabilitySample();
     core.shutdown('SIGTERM');
   });
   process.on('SIGINT', () => {
     clearDrainTimers();
+    finalReliabilitySample();
     core.shutdown('SIGINT');
   });
 }
@@ -247,6 +291,7 @@ module.exports = {
   adminControl,
   adminInfrastructure,
   adminOperations,
+  reliability,
   activeMatchesForDrain,
   beginGracefulDrain
 };

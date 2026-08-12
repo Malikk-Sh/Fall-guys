@@ -3,11 +3,30 @@
 const { AdminAnalytics } = require('./adminAnalytics');
 const { AdminPlayerSupport } = require('./adminPlayerSupport');
 const { ModerationQueue } = require('./moderation');
+const { safeName: safeAccountName, MAX_NAME: MAX_PLAYER_NAME } = require('./accounts');
 
 const ADMIN_MODERATOR_PREFIX = 'admin:';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MODERATOR_MAX_BAN_MS = 7 * DAY_MS;
 const OWNER_MAX_BAN_MS = 365 * DAY_MS;
+const MAX_SUPPORT_NOTE = 300;
+
+function normalizeSupportNote(value) {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length >= 3 && text.length <= MAX_SUPPORT_NOTE ? text : null;
+}
+
+function normalizeRequestedPlayerName(value) {
+  const normalized = String(value || '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized || normalized.length > MAX_PLAYER_NAME) return null;
+  return safeAccountName(normalized) === normalized ? normalized : null;
+}
 
 class AdminControlService {
   constructor({
@@ -17,7 +36,10 @@ class AdminControlService {
     adminAuth,
     sanctions = null,
     auth = null,
-    disconnectAccount = null
+    accounts = null,
+    disconnectAccount = null,
+    connectionCount = null,
+    revokeReconnectSessions = null
   } = {}) {
     if (!db) throw new Error('AdminControlService requires an open database');
     if (typeof health !== 'function') throw new Error('AdminControlService requires health()');
@@ -33,7 +55,11 @@ class AdminControlService {
     this.adminAuth = adminAuth;
     this.sanctions = sanctions;
     this.auth = auth;
+    this.accounts = accounts;
     this.disconnectAccount = typeof disconnectAccount === 'function' ? disconnectAccount : null;
+    this.connectionCount = typeof connectionCount === 'function' ? connectionCount : null;
+    this.revokeReconnectSessions =
+      typeof revokeReconnectSessions === 'function' ? revokeReconnectSessions : null;
     this.analyticsReport = new AdminAnalytics({ db, gameplay });
     this.playerSupport = new AdminPlayerSupport({ db });
     this.moderation = new ModerationQueue({ db });
@@ -90,7 +116,10 @@ class AdminControlService {
               reviewedThrough: moderation.reviewedThrough
             }
           : null,
-        sanctions: this.#sanctionContext(profile.account.id, now)
+        sanctions: this.#sanctionContext(profile.account.id, now),
+        live: {
+          sockets: Number(this.connectionCount?.(profile.account.id) || 0)
+        }
       }
     };
     this.adminAuth.audit({
@@ -101,6 +130,103 @@ class AdminControlService {
       now
     });
     return result;
+  }
+
+  playerLogout({ targetAccountId, note, actor, now = Date.now() } = {}) {
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    if (!['owner', 'operator'].includes(actor.role)) return { ok: false, reason: 'support-action-forbidden' };
+    if (!this.auth) return { ok: false, reason: 'player-support-actions-unavailable' };
+    const id = String(targetAccountId || '').trim();
+    if (!id || !this.statements.accountName.get(id)) return { ok: false, reason: 'unknown-account' };
+    const internalNote = normalizeSupportNote(note);
+    if (!internalNote) return { ok: false, reason: 'invalid-support-note', maxLength: MAX_SUPPORT_NOTE };
+
+    let revokedSessions = 0;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      revokedSessions = Number(this.auth.revokeAccountSessions(id) || 0);
+      this.adminAuth.audit({
+        actor,
+        action: 'player.support.logout',
+        targetType: 'player-account',
+        targetId: id,
+        detail: { note: internalNote, revokedSessions },
+        now
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+
+    let revokedSocketTickets = 0;
+    let revokedReconnectSessions = 0;
+    let disconnectedSockets = 0;
+    try {
+      revokedSocketTickets = Number(this.auth.revokeAccountSocketTickets?.(id) || 0);
+    } catch {
+      revokedSocketTickets = 0;
+    }
+    try {
+      revokedReconnectSessions = Number(this.revokeReconnectSessions?.(id) || 0);
+    } catch {
+      revokedReconnectSessions = 0;
+    }
+    try {
+      disconnectedSockets = Number(
+        this.disconnectAccount?.(id, { code: 4004, reason: 'support-logout' }) || 0
+      );
+    } catch {
+      disconnectedSockets = 0;
+    }
+    return {
+      ok: true,
+      accountId: id,
+      revokedSessions,
+      revokedSocketTickets,
+      revokedReconnectSessions,
+      disconnectedSockets
+    };
+  }
+
+  playerRename({ targetAccountId, name, note, actor, now = Date.now() } = {}) {
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    if (!['owner', 'moderator'].includes(actor.role))
+      return { ok: false, reason: 'support-action-forbidden' };
+    if (!this.accounts || typeof this.accounts.rename !== 'function') {
+      return { ok: false, reason: 'player-support-actions-unavailable' };
+    }
+    const id = String(targetAccountId || '').trim();
+    const account = id ? this.statements.accountName.get(id) : null;
+    if (!account) return { ok: false, reason: 'unknown-account' };
+    const requestedName = normalizeRequestedPlayerName(name);
+    if (!requestedName) {
+      return { ok: false, reason: 'invalid-player-name', maxLength: MAX_PLAYER_NAME };
+    }
+    const internalNote = normalizeSupportNote(note);
+    if (!internalNote) return { ok: false, reason: 'invalid-support-note', maxLength: MAX_SUPPORT_NOTE };
+    if (account.display_name === requestedName) {
+      return { ok: false, reason: 'no-change', name: requestedName };
+    }
+
+    let updatedName;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      updatedName = this.accounts.rename(id, requestedName);
+      this.adminAuth.audit({
+        actor,
+        action: 'player.support.rename',
+        targetType: 'player-account',
+        targetId: id,
+        detail: { fromName: account.display_name, toName: updatedName, note: internalNote },
+        now
+      });
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ok: true, accountId: id, previousName: account.display_name, name: updatedName };
   }
 
   moderationQueue({ status = 'open', limit = 50 } = {}) {
@@ -322,7 +448,8 @@ function prepare(db) {
       WHERE reported_at >= ?
     `),
     competitiveRecords: db.prepare('SELECT COUNT(*) AS count FROM leaderboard_entries'),
-    adminName: db.prepare('SELECT display_name FROM admin_users WHERE id = ?')
+    adminName: db.prepare('SELECT display_name FROM admin_users WHERE id = ?'),
+    accountName: db.prepare('SELECT display_name FROM accounts WHERE id = ?')
   };
 }
 
@@ -330,5 +457,8 @@ module.exports = {
   AdminControlService,
   ADMIN_MODERATOR_PREFIX,
   MODERATOR_MAX_BAN_MS,
-  OWNER_MAX_BAN_MS
+  OWNER_MAX_BAN_MS,
+  MAX_SUPPORT_NOTE,
+  normalizeSupportNote,
+  normalizeRequestedPlayerName
 };

@@ -6,6 +6,8 @@ const require = createRequire(import.meta.url);
 const express = require('express');
 const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
+const { Accounts } = require('./accounts');
+const { AuthService } = require('./auth');
 const { AdminAuthService, hasCapability } = require('./adminAuth');
 const { AdminControlService } = require('./adminControl');
 const { installAdminRoutes } = require('./adminRoutes');
@@ -32,16 +34,31 @@ function prepare() {
       (id, display_name, secret_hash, created_at, last_seen_at, pending_secret_hash, pending_secret_created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run('support-player', 'Support Player', 'DO-NOT-EXPOSE', 100, 500, null, null);
+  const accounts = new Accounts({ db });
+  const auth = new AuthService({ db });
+  const disconnected = [];
+  const reconnectRevocations = [];
   const adminAuth = new AdminAuthService({ db });
   const control = new AdminControlService({
     db,
     adminAuth,
+    accounts,
+    auth,
+    disconnectAccount: (accountId, options) => {
+      disconnected.push({ accountId, options });
+      return accountId === 'support-player' ? 2 : 0;
+    },
+    connectionCount: accountId => (accountId === 'support-player' ? 2 : 0),
+    revokeReconnectSessions: accountId => {
+      reconnectRevocations.push(accountId);
+      return accountId === 'support-player' ? 1 : 0;
+    },
     health: () => ({ ok: true }),
     gameplay: { summary: () => ({ days: 7, from: '2026-08-01', dropped: 0, rows: [] }) }
   });
   const app = express();
   installAdminRoutes({ app, adminAuth, control, enabled: true, secureCookies: false });
-  return { db, adminAuth, app };
+  return { db, adminAuth, app, auth, accounts, disconnected, reconnectRevocations };
 }
 
 async function start(app) {
@@ -78,7 +95,7 @@ async function post(base, path, loginState, body) {
   });
 }
 
-test('owner and operator can inspect player support while moderator cannot', async t => {
+test('owner, operator and moderator can inspect player support while viewer cannot', async t => {
   const { db, adminAuth, app } = prepare();
   const { server, base } = await start(app);
   t.after(() => {
@@ -88,7 +105,11 @@ test('owner and operator can inspect player support while moderator cannot', asy
 
   assert.equal(hasCapability('owner', 'player-support.read'), true);
   assert.equal(hasCapability('operator', 'player-support.read'), true);
-  assert.equal(hasCapability('moderator', 'player-support.read'), false);
+  assert.equal(hasCapability('moderator', 'player-support.read'), true);
+  assert.equal(hasCapability('operator', 'player-support.sessions.write'), true);
+  assert.equal(hasCapability('operator', 'player-support.name.write'), false);
+  assert.equal(hasCapability('moderator', 'player-support.sessions.write'), false);
+  assert.equal(hasCapability('moderator', 'player-support.name.write'), true);
 
   const operator = await login(base, adminAuth, 'operator');
   const search = await post(base, '/api/admin/players/search', operator, {
@@ -114,7 +135,11 @@ test('owner and operator can inspect player support while moderator cannot', asy
   assert.equal(audit.targetId, 'support-player');
 
   const moderator = await login(base, adminAuth, 'moderator');
-  const forbidden = await post(base, '/api/admin/players/search', moderator, { query: 'Support' });
+  const moderatorSearch = await post(base, '/api/admin/players/search', moderator, { query: 'Support' });
+  assert.equal(moderatorSearch.status, 200);
+
+  const viewer = await login(base, adminAuth, 'viewer');
+  const forbidden = await post(base, '/api/admin/players/search', viewer, { query: 'Support' });
   assert.equal(forbidden.status, 403);
 });
 
@@ -140,4 +165,84 @@ test('player support routes reject malformed payloads and unknown accounts', asy
 
   const missing = await post(base, '/api/admin/players/detail', owner, { accountId: 'missing' });
   assert.equal(missing.status, 404);
+});
+
+test('support actions enforce split capabilities, revoke every login path and audit mutations', async t => {
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare();
+  const { server, base } = await start(app);
+  t.after(() => {
+    server.close();
+    db.close();
+  });
+
+  const sessionA = auth.createSession('support-player', 10_000);
+  const sessionB = auth.createSession('support-player', 10_100);
+  const ticket = auth.createSocketTicket('support-player', 10_200);
+  assert.ok(sessionA && sessionB && ticket);
+
+  const operator = await login(base, adminAuth, 'operator');
+  const logout = await post(base, '/api/admin/players/logout', operator, {
+    accountId: 'support-player',
+    note: 'Игрок попросил завершить все входы'
+  });
+  assert.equal(logout.status, 200);
+  assert.deepEqual(await logout.json(), {
+    ok: true,
+    accountId: 'support-player',
+    revokedSessions: 2,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 1,
+    disconnectedSockets: 2
+  });
+  assert.equal(auth.resolveSession(sessionA.token, 10_300), null);
+  assert.equal(auth.resolveSession(sessionB.token, 10_300), null);
+  assert.equal(auth.consumeSocketTicket(ticket.token, 10_300), null);
+  assert.deepEqual(reconnectRevocations, ['support-player']);
+  assert.equal(disconnected[0].accountId, 'support-player');
+  assert.equal(disconnected[0].options.reason, 'support-logout');
+
+  const logoutAudit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
+  assert.ok(logoutAudit);
+  assert.equal(logoutAudit.detail.note, 'Игрок попросил завершить все входы');
+  assert.equal(logoutAudit.detail.revokedSessions, 2);
+
+  const moderator = await login(base, adminAuth, 'moderator');
+  const moderatorLogout = await post(base, '/api/admin/players/logout', moderator, {
+    accountId: 'support-player',
+    note: 'Не должно пройти'
+  });
+  assert.equal(moderatorLogout.status, 403);
+
+  const operatorRename = await post(base, '/api/admin/players/rename', operator, {
+    accountId: 'support-player',
+    name: 'Clean Name',
+    note: 'Не должно пройти'
+  });
+  assert.equal(operatorRename.status, 403);
+
+  const rename = await post(base, '/api/admin/players/rename', moderator, {
+    accountId: 'support-player',
+    name: 'Clean Name',
+    note: 'Исправлено имя по жалобе'
+  });
+  assert.equal(rename.status, 200);
+  assert.equal((await rename.json()).name, 'Clean Name');
+  assert.equal(
+    db.prepare('SELECT display_name FROM accounts WHERE id = ?').get('support-player').display_name,
+    'Clean Name'
+  );
+
+  const invalidName = await post(base, '/api/admin/players/rename', moderator, {
+    accountId: 'support-player',
+    name: '<script>',
+    note: 'Проверка валидации'
+  });
+  assert.equal(invalidName.status, 400);
+  assert.equal((await invalidName.json()).error, 'invalid-player-name');
+
+  const renameAudit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.rename');
+  assert.ok(renameAudit);
+  assert.equal(renameAudit.detail.fromName, 'Support Player');
+  assert.equal(renameAudit.detail.toName, 'Clean Name');
+  assert.equal(renameAudit.detail.note, 'Исправлено имя по жалобе');
 });

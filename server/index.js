@@ -568,6 +568,19 @@ const setResultsTimeout = ms => {
 const RECONNECT_GRACE_MS = 30 * 1000;
 const SESSION_TTL_MS = 60 * 1000;
 
+function revokeAccountReconnectSessions(accountId) {
+  const id = String(accountId || '');
+  if (!id) return 0;
+  let revoked = 0;
+  for (const [token, session] of sessions) {
+    const player = rooms.get(session?.roomCode)?.players.get(session?.playerId);
+    if (session?.accountId !== id && player?.accountId !== id) continue;
+    sessions.delete(token);
+    revoked += 1;
+  }
+  return revoked;
+}
+
 // Уборка просроченных сессий — и продление живых.
 //
 // Продление здесь принципиально. Срок ставился при входе и обновлялся только на обрыве и на
@@ -997,6 +1010,7 @@ function addPlayer(room, ws, name, playerId = null) {
   sessions.set(ws.token, {
     playerId: ws.id,
     roomCode: room.code,
+    accountId: ws.accountId || null,
     expiresAt: Date.now() + SESSION_TTL_MS
   });
   room.updatedAt = Date.now();
@@ -2362,6 +2376,7 @@ module.exports = {
   setResultsTimeout,
   expireDisconnectedPlayers,
   expireSessions,
+  revokeAccountReconnectSessions,
   SESSION_TTL_MS,
   shutdown
 };

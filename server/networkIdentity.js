@@ -83,6 +83,11 @@ class NetworkIdentity {
     return accounts.get(ws.accountId) || null;
   }
 
+  connectionCount(accountId) {
+    const id = String(accountId || '');
+    return id ? this.socketsByAccount.get(id)?.size || 0 : 0;
+  }
+
   disconnectAccount(accountId, { code = 4003, reason = 'account-sanctioned' } = {}) {
     const id = String(accountId || '');
     if (!id) return 0;

@@ -14,6 +14,8 @@ const ROLE_CAPABILITIES = Object.freeze({
     'infrastructure.read',
     'analytics.read',
     'player-support.read',
+    'player-support.sessions.write',
+    'player-support.name.write',
     'moderation.read',
     'moderation.write',
     'sanctions.write',
@@ -27,10 +29,18 @@ const ROLE_CAPABILITIES = Object.freeze({
     'infrastructure.read',
     'analytics.read',
     'player-support.read',
+    'player-support.sessions.write',
     'moderation.read',
     'audit.read'
   ]),
-  moderator: Object.freeze(['dashboard.read', 'moderation.read', 'moderation.write', 'sanctions.write']),
+  moderator: Object.freeze([
+    'dashboard.read',
+    'player-support.read',
+    'player-support.name.write',
+    'moderation.read',
+    'moderation.write',
+    'sanctions.write'
+  ]),
   analyst: Object.freeze(['dashboard.read', 'analytics.read']),
   viewer: Object.freeze(['dashboard.read'])
 });

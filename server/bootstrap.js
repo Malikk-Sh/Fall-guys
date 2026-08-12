@@ -52,7 +52,10 @@ const adminControl = new AdminControlService({
   adminAuth,
   sanctions,
   auth,
-  disconnectAccount: accountId => networkIdentity.disconnectAccount(accountId)
+  accounts: core.accounts,
+  disconnectAccount: (accountId, options) => networkIdentity.disconnectAccount(accountId, options),
+  connectionCount: accountId => networkIdentity.connectionCount(accountId),
+  revokeReconnectSessions: accountId => core.revokeAccountReconnectSessions(accountId)
 });
 const adminInfrastructure = new AdminInfrastructure({ health: core.health });
 const adminOperations = new AdminOperationsClient();

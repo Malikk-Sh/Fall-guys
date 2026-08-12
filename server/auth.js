@@ -181,6 +181,18 @@ class AuthService {
     return this.statements.deleteAccountSessions.run(String(accountId || '')).changes;
   }
 
+  revokeAccountSocketTickets(accountId) {
+    const id = String(accountId || '');
+    if (!id) return 0;
+    let revoked = 0;
+    for (const [hash, ticket] of this.socketTickets) {
+      if (ticket?.accountId !== id) continue;
+      this.socketTickets.delete(hash);
+      revoked += 1;
+    }
+    return revoked;
+  }
+
   identity(provider, subject) {
     const row = this.statements.identity.get(String(provider || ''), String(subject || ''));
     if (!row) return null;

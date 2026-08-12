@@ -5,7 +5,12 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
-const { AdminPlayerSupport, normalizeSearchQuery, ftsPrefixQuery } = require('./adminPlayerSupport');
+const {
+  AdminPlayerSupport,
+  normalizeSearchQuery,
+  ftsPrefixQuery,
+  supportIdForAccount
+} = require('./adminPlayerSupport');
 
 function seed() {
   const db = openDatabase(':memory:');
@@ -27,6 +32,15 @@ function seed() {
   );
   insertAccount.run('partner-one', 'Напарник', 'PARTNER-HASH', 2000, 30_000, null, null);
   insertAccount.run('other-player', 'Игорь', 'OTHER-HASH', 3000, 20_000, null, null);
+  insertAccount.run(
+    '12345678-90ab-cdef-1234-567890abcdef',
+    'Диагностика',
+    'UUID-HASH',
+    3500,
+    21_000,
+    null,
+    null
+  );
 
   db.prepare(
     'INSERT INTO account_identities (provider, provider_subject, account_id, created_at) VALUES (?, ?, ?, ?)'
@@ -101,6 +115,20 @@ function seed() {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run('player-main', 'partner-one', 'afk', 1, 43_000, 43_000, 'Напарник', 'ch3');
 
+  db.prepare(
+    `INSERT INTO admin_audit_events
+      (admin_user_id, actor_name, actor_role, action, target_type, target_id, detail_json, created_at)
+     VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    'Support Agent',
+    'operator',
+    'player.support.logout',
+    'player-account',
+    'player-main',
+    JSON.stringify({ note: 'Проверка поддержки', revokedSessions: 1 }),
+    49_000
+  );
+
   return { db, now, support: new AdminPlayerSupport({ db }) };
 }
 
@@ -115,6 +143,9 @@ test('player support returns useful account context without credentials', () => 
   assert.equal(profile.login.sessions.active, 1);
   assert.equal(profile.login.sessions.totalStored, 2);
   assert.equal(profile.login.sessions.latestSeenAt, 48_000);
+  assert.deepEqual(profile.login.sessionList, [
+    { id: 'SECRET-ACTIVE-SESSION-HA', createdAt: 10_000, lastSeenAt: 48_000, expiresAt: 80_000 }
+  ]);
   assert.equal(profile.progress.stats.coopMatchesCompleted, 8);
   assert.equal(profile.progress.chapters[0].chapterId, 'ch1');
   assert.equal(profile.progress.personalRecords[0].timeMs, 32_000);
@@ -126,6 +157,8 @@ test('player support returns useful account context without credentials', () => 
   assert.equal(profile.social.reportsReceived.reporters, 1);
   assert.equal(profile.social.reportsReceived.total, 2);
   assert.equal(profile.social.reportsSubmitted, 1);
+  assert.equal(profile.supportHistory[0].action, 'player.support.logout');
+  assert.equal(profile.supportHistory[0].detail.note, 'Проверка поддержки');
 
   const serialized = JSON.stringify(profile);
   for (const forbidden of [
@@ -168,6 +201,11 @@ test('player support search is Unicode case-insensitive, bounded and updated by 
   assert.equal(support.search('x').reason, 'invalid-query');
   assert.equal(normalizeSearchQuery(' bad\nquery '), null);
   assert.equal(ftsPrefixQuery('Иван игрок'), '"Иван"* AND "игрок"*');
+  assert.equal(supportIdForAccount('12345678-90ab-cdef-1234-567890abcdef'), 'WBL-1234567890AB');
+  assert.deepEqual(
+    support.search('WBL-1234567890AB', { now }).results.map(item => item.id),
+    ['12345678-90ab-cdef-1234-567890abcdef']
+  );
   db.close();
 });
 

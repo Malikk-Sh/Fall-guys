@@ -28,7 +28,7 @@ jobs:
         run: npm ci
 
       - name: Apply final review fixes
-        run: python3 tools/pr76_final3_fixes.py
+        run: python3 tools/pr76_final3_fixes_v2.py
 
       - name: Format changed source
         run: npx prettier --write client/admin/admin.js server/adminIncidentRoutes.test.mjs server/adminControl.js server/adminPlayerSupportRoutes.test.mjs deploy/restore.sh server/releaseDeploy.test.mjs

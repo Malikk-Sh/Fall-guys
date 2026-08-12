@@ -100,6 +100,37 @@ test('reliability stores metric deltas, groups errors and keeps build identity',
   db.close();
 });
 
+test('failed sample does not advance counter baseline or lose later deltas', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const health = healthState();
+  let now = 1_000_000;
+  const reliability = new ServiceReliability({ db, health: () => health, now: () => now });
+  reliability.sample();
+
+  db.exec(`
+    CREATE TRIGGER fail_reliability_sample
+    BEFORE INSERT ON service_reliability_samples
+    BEGIN
+      SELECT RAISE(FAIL, 'temporary reliability storage failure');
+    END;
+  `);
+  health.metrics.resumeSucceeded = 3;
+  health.metrics.resumeFailed = 1;
+  now += 60_000;
+  assert.throws(() => reliability.sample(), /temporary reliability storage failure/);
+  db.exec('DROP TRIGGER fail_reliability_sample');
+
+  health.metrics.resumeSucceeded = 5;
+  health.metrics.resumeFailed = 2;
+  now += 60_000;
+  assert.equal(reliability.sample(), true);
+  const report = reliability.report({ period: '1h', now: now + 1 });
+  assert.equal(report.summary.reconnectSucceeded, 5);
+  assert.equal(report.summary.reconnectFailed, 2);
+  db.close();
+});
+
 test('structured log capture ignores raw messages and fingerprints only normalized code location', () => {
   const first = JSON.stringify({
     level: 'error',
@@ -174,6 +205,49 @@ test('warning lifecycle event raises warning without becoming a raw log response
   db.close();
 });
 
+test('warning operational error group cannot leave the headline healthy', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const health = healthState();
+  const reliability = new ServiceReliability({ db, health: () => health, now: () => 500_000 });
+  reliability.sample();
+  reliability.recordEvent({
+    event: 'invalid_room_transition',
+    severity: 'warn',
+    fingerprint: '0123456789abcdef01234567',
+    occurredAt: 500_001
+  });
+  const report = reliability.report({ period: '1h', now: 500_010 });
+  assert.equal(report.status, 'warning');
+  assert.ok(report.reasons.includes('operational-warnings'));
+  assert.equal(report.errors[0].event, 'invalid_room_transition');
+  db.close();
+});
+
+test('report boundary is aligned to stored minute buckets', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const health = healthState();
+  const reliability = new ServiceReliability({ db, health: () => health, now: () => 3_700_123 });
+  reliability.recordEvent({
+    event: 'socket_send_failed',
+    severity: 'warn',
+    fingerprint: '0123456789abcdef01234567',
+    occurredAt: 90_000
+  });
+  reliability.recordEvent({
+    event: 'socket_send_failed',
+    severity: 'warn',
+    fingerprint: '0123456789abcdef01234567',
+    occurredAt: 110_000
+  });
+  const report = reliability.report({ period: '1h', now: 3_700_123 });
+  assert.equal(report.from, 60_000);
+  assert.equal(report.errors[0].occurrences, 2);
+  assert.ok(report.errors[0].firstOccurredAt >= report.from);
+  db.close();
+});
+
 test('reliability capability is restricted to owner and operator', () => {
   assert.equal(hasCapability('owner', 'reliability.read'), true);
   assert.equal(hasCapability('operator', 'reliability.read'), true);
@@ -229,7 +303,7 @@ test('admin reliability route requires the dedicated capability and rejects extr
   assert.equal(payload.reliability.period, '7d');
 });
 
-test('admin page loads the reliability client after the existing control-plane client', () => {
+test('admin page loads reliability through the shared router and session-aware API', () => {
   const root = path.resolve(import.meta.dirname, '..');
   const html = fs.readFileSync(path.join(root, 'client/admin/index.html'), 'utf8');
   const adminAt = html.indexOf('<script src="/admin/admin.js" defer></script>');
@@ -238,8 +312,21 @@ test('admin page loads the reliability client after the existing control-plane c
   assert.ok(reliabilityAt > adminAt);
 
   const client = fs.readFileSync(path.join(root, 'client/admin/reliability.js'), 'utf8');
-  assert.match(client, /data-panel|dataset\.panel/);
   assert.match(client, /reliability\.read/);
   assert.match(client, /\/api\/admin\/reliability/);
+  assert.match(client, /window\.switchPanel/);
+  assert.match(client, /window\.api/);
+  assert.match(client, /window\.showLogin/);
+  assert.match(client, /error\.status === 401/);
   assert.doesNotMatch(client, /innerHTML\s*=/);
+});
+
+test('shutdown completion is armed on the HTTP close event before core closes SQLite', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');
+  assert.match(
+    bootstrap,
+    /core\.server\.once\('close',[\s\S]*reliability\.recordEvent\(\{ event: 'shutdown_complete', severity: 'info' \}\)/
+  );
+  assert.match(bootstrap, /armReliabilityShutdownCompletion\(\);[\s\S]*core\.shutdown\(/);
 });

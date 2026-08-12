@@ -147,32 +147,34 @@ class AdminControlService {
     let disconnectedSockets = 0;
     const failedSteps = [];
 
-    this.db.exec('BEGIN IMMEDIATE');
     try {
       revokedSessions = Number(this.auth.revokeAccountSessions(id) || 0);
-      try {
-        if (typeof this.auth.revokeAccountSocketTickets !== 'function') {
-          throw new Error('socket-ticket revocation unavailable');
-        }
-        revokedSocketTickets = Number(this.auth.revokeAccountSocketTickets(id) || 0);
-      } catch {
-        failedSteps.push('socket-tickets');
+    } catch {
+      failedSteps.push('http-sessions');
+    }
+    try {
+      if (typeof this.auth.revokeAccountSocketTickets !== 'function') {
+        throw new Error('socket-ticket revocation unavailable');
       }
-      try {
-        if (!this.revokeReconnectSessions) throw new Error('reconnect-session revocation unavailable');
-        revokedReconnectSessions = Number(this.revokeReconnectSessions(id) || 0);
-      } catch {
-        failedSteps.push('reconnect-sessions');
-      }
-      try {
-        if (!this.disconnectAccount) throw new Error('socket disconnection unavailable');
-        disconnectedSockets = Number(
-          this.disconnectAccount(id, { code: 4004, reason: 'support-logout' }) || 0
-        );
-      } catch {
-        failedSteps.push('active-sockets');
-      }
+      revokedSocketTickets = Number(this.auth.revokeAccountSocketTickets(id) || 0);
+    } catch {
+      failedSteps.push('socket-tickets');
+    }
+    try {
+      if (!this.revokeReconnectSessions) throw new Error('reconnect-session revocation unavailable');
+      revokedReconnectSessions = Number(this.revokeReconnectSessions(id) || 0);
+    } catch {
+      failedSteps.push('reconnect-sessions');
+    }
+    try {
+      if (!this.disconnectAccount) throw new Error('socket disconnection unavailable');
+      disconnectedSockets = Number(this.disconnectAccount(id, { code: 4004, reason: 'support-logout' }) || 0);
+    } catch {
+      failedSteps.push('active-sockets');
+    }
 
+    const auditedFailedSteps = [...failedSteps];
+    try {
       this.adminAuth.audit({
         actor,
         action: 'player.support.logout',
@@ -184,15 +186,13 @@ class AdminControlService {
           revokedSocketTickets,
           revokedReconnectSessions,
           disconnectedSockets,
-          complete: failedSteps.length === 0,
-          failedSteps
+          complete: auditedFailedSteps.length === 0,
+          failedSteps: auditedFailedSteps
         },
         now
       });
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
+    } catch {
+      failedSteps.push('audit');
     }
 
     const result = {

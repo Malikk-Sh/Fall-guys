@@ -302,3 +302,52 @@ test('support logout reports partial cleanup failures instead of claiming succes
     failedSteps: ['reconnect-sessions']
   });
 });
+
+test('support logout continues local cleanup when HTTP session revocation fails', async t => {
+  const { db, adminAuth, app, auth, disconnected, reconnectRevocations } = prepare();
+  const { server, base } = await start(app);
+  t.after(() => {
+    server.close();
+    db.close();
+  });
+
+  const session = auth.createSession('support-player', 30_000);
+  const ticket = auth.createSocketTicket('support-player', 30_100);
+  assert.ok(session && ticket);
+  auth.revokeAccountSessions = () => {
+    throw new Error('injected durable session failure');
+  };
+  const operator = await login(base, adminAuth, 'operator');
+
+  const response = await post(base, '/api/admin/players/logout', operator, {
+    accountId: 'support-player',
+    note: 'Проверка отказа хранилища сессий'
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    error: 'support-logout-incomplete',
+    accountId: 'support-player',
+    revokedSessions: 0,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 1,
+    disconnectedSockets: 2,
+    failedSteps: ['http-sessions']
+  });
+
+  assert.ok(auth.resolveSession(session.token, 30_200), 'failed durable path is reported, not hidden');
+  assert.equal(auth.consumeSocketTicket(ticket.token, 30_200), null);
+  assert.deepEqual(reconnectRevocations, ['support-player']);
+  assert.equal(disconnected.length, 1, 'all process-local cleanup still runs');
+
+  const audit = adminAuth.recentAudit(20).find(event => event.action === 'player.support.logout');
+  assert.deepEqual(audit.detail, {
+    note: 'Проверка отказа хранилища сессий',
+    revokedSessions: 0,
+    revokedSocketTickets: 1,
+    revokedReconnectSessions: 1,
+    disconnectedSockets: 2,
+    complete: false,
+    failedSteps: ['http-sessions']
+  });
+});

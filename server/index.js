@@ -574,7 +574,7 @@ function revokeAccountReconnectSessions(accountId) {
   let revoked = 0;
   for (const [token, session] of sessions) {
     const player = rooms.get(session?.roomCode)?.players.get(session?.playerId);
-    if (session?.accountId !== id && player?.accountId !== id) continue;
+    if (session?.accountId !== id && player?.accountId !== id && player?.ws?.accountId !== id) continue;
     sessions.delete(token);
     revoked += 1;
   }
@@ -975,9 +975,10 @@ function addPlayer(room, ws, name, playerId = null) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
   const authenticated = networkIdentity.accountForSocket(ws, accounts);
+  const playerName = authenticated?.name ? safeName(authenticated.name) : safeName(name);
   room.players.set(ws.id, {
     id: ws.id,
-    name: safeName(name),
+    name: playerName,
     // Хранится на игроке, но не попадает ни в один рассылаемый пакет: это ключ чужой строки в
     // таблице рекордов, и знать его соседям по комнате незачем.
     anonymousId:
@@ -1016,6 +1017,29 @@ function addPlayer(room, ws, name, playerId = null) {
   room.updatedAt = Date.now();
   assignSlots(room);
   emitLobby(room);
+}
+
+function bindAuthenticatedSocketToRoom(ws, accountId) {
+  const id = String(accountId || '');
+  if (!id || !ws?.room) return false;
+  const room = rooms.get(ws.room);
+  const player = room?.players.get(ws.id);
+  if (!player || player.ws !== ws) return false;
+  const account = networkIdentity.accountForSocket(ws, accounts);
+  if (!account || account.id !== id) return false;
+
+  player.accountId = id;
+  player.anonymousId = id;
+  player.name = safeName(account.name);
+  player.loadout = socialCosmetics.forAccount(id);
+
+  const session = sessions.get(ws.token);
+  if (session && session.playerId === ws.id && session.roomCode === room.code) {
+    session.accountId = id;
+  }
+  room.updatedAt = Date.now();
+  emitLobby(room);
+  return true;
 }
 
 function createCoopRoom(chapterId, hostId) {
@@ -1676,6 +1700,7 @@ wss.on('connection', (ws, req) => {
         }
         return;
       }
+      bindAuthenticatedSocketToRoom(ws, authenticated.accountId);
       return send(ws, { type: S2C.AUTHENTICATED, accountId: authenticated.accountId });
     }
 

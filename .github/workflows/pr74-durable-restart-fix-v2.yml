@@ -197,7 +197,7 @@ jobs:
           node --check server/index.js
           node --check server/bootstrap.js
           node --test server/adminOperations.test.mjs
-          node server/validateDeployScripts.mjs
+          bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh deploy/verify-shared443-config.sh
 
       - name: Commit reviewed fixes
         shell: bash

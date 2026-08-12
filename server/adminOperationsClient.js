@@ -5,6 +5,7 @@ const fs = require('fs');
 const net = require('net');
 
 const DEFAULT_SOCKET_PATH = '/run/wobble-ops.sock';
+const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
 const MAX_RESPONSE_BYTES = 16 * 1024;
 
 const OPERATION_DEFINITIONS = Object.freeze({
@@ -32,12 +33,38 @@ const OPERATION_DEFINITIONS = Object.freeze({
     impact: 'Ничего не перезапускает. Создаёт только короткое тестовое WebSocket-подключение.',
     tone: 'safe'
   }),
+  'maintenance.enable': Object.freeze({
+    id: 'maintenance.enable',
+    title: 'Включить режим обслуживания',
+    description:
+      'Закрывает вход новым WebSocket-подключениям, пока уже подключённые игроки продолжают текущие сессии.',
+    impact:
+      'Новые онлайн-подключения временно недоступны. Сайт, админ-панель, health и уже открытые WebSocket не обрываются.',
+    tone: 'safe'
+  }),
+  'maintenance.disable': Object.freeze({
+    id: 'maintenance.disable',
+    title: 'Выключить режим обслуживания',
+    description: 'Снова разрешает новые WebSocket-подключения после завершения обслуживания.',
+    impact: 'Возвращает обычный онлайн-доступ. Уже работающие подключения не перезапускаются.',
+    tone: 'safe'
+  }),
+  'nginx.reload': Object.freeze({
+    id: 'nginx.reload',
+    title: 'Безопасно перечитать Nginx',
+    description:
+      'Сначала проверяет всю конфигурацию командой nginx -t и только после успешной проверки выполняет reload.',
+    impact:
+      'Не перезапускает Wobble, не меняет конфигурацию и не трогает Xray/VPN. Активные соединения Nginx сохраняются.',
+    tone: 'safe'
+  }),
   'wobble.restart': Object.freeze({
     id: 'wobble.restart',
-    title: 'Перезапустить сервер игры',
-    description: 'Перезапускает только процесс Wobble. Nginx, shared 443 и VPN/Xray эта операция не трогает.',
+    title: 'Плавно перезапустить сервер игры',
+    description:
+      'Включает maintenance, просит Wobble дождаться завершения активных матчей и затем перезапускает только игровой процесс.',
     impact:
-      'Все игроки на несколько секунд потеряют соединение с игрой. Используйте только при необходимости.',
+      'Новые онлайн-подключения временно закрываются. Активным матчам даётся до 3 минут на завершение; после этого Wobble перезапускается принудительно по таймауту. Nginx, shared 443 и VPN/Xray не перезапускаются.',
     tone: 'danger'
   })
 });
@@ -54,9 +81,11 @@ function validOperation(value) {
 class AdminOperationsClient {
   constructor({
     socketPath = process.env.ADMIN_OPS_SOCKET || DEFAULT_SOCKET_PATH,
+    maintenanceFlag = MAINTENANCE_FLAG,
     timeoutMs = 135_000
   } = {}) {
     this.socketPath = socketPath;
+    this.maintenanceFlag = maintenanceFlag;
     this.timeoutMs = timeoutMs;
   }
 
@@ -68,10 +97,22 @@ class AdminOperationsClient {
     }
   }
 
+  maintenanceEnabled() {
+    try {
+      return fs.statSync(this.maintenanceFlag).isFile();
+    } catch {
+      return false;
+    }
+  }
+
   status() {
+    const maintenance = this.maintenanceEnabled();
     return {
       available: this.available(),
-      operations: publicOperations()
+      maintenance,
+      operations: publicOperations().filter(item =>
+        maintenance ? item.id !== 'maintenance.enable' : item.id !== 'maintenance.disable'
+      )
     };
   }
 
@@ -147,6 +188,7 @@ class AdminOperationsClient {
 module.exports = {
   AdminOperationsClient,
   DEFAULT_SOCKET_PATH,
+  MAINTENANCE_FLAG,
   OPERATION_DEFINITIONS,
   publicOperations,
   validOperation

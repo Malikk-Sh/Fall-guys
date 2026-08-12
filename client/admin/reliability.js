@@ -2,9 +2,8 @@
 
 (() => {
   const capability = 'reliability.read';
-  const state = { csrf: '', data: null, revision: 0 };
+  const state = { data: null, revision: 0 };
   const $ = selector => document.querySelector(selector);
-  const $$ = selector => [...document.querySelectorAll(selector)];
 
   function text(parent, tag, value, className = '') {
     const node = document.createElement(tag);
@@ -86,6 +85,7 @@
   function reasonLabel(reason) {
     const labels = {
       'internal-errors': 'зафиксированы внутренние ошибки сервера',
+      'operational-warnings': 'зафиксированы предупреждения внутренних операций',
       'event-loop-critical': 'event loop сильно задерживается',
       'event-loop-high': 'event loop работает медленнее нормы',
       'reconnect-failure-rate-critical': 'очень высокая доля неудачных reconnect',
@@ -95,6 +95,38 @@
       'lifecycle-warning': 'одно из событий запуска/остановки завершилось с предупреждением'
     };
     return labels[reason] || reason;
+  }
+
+  function sharedApi(path, body = {}, options = {}) {
+    if (typeof window.api !== 'function') throw new Error('admin-api-unavailable');
+    return window.api(path, body, options);
+  }
+
+  function sharedSwitchPanel(name) {
+    if (typeof window.switchPanel !== 'function') throw new Error('admin-navigation-unavailable');
+    return window.switchPanel(name);
+  }
+
+  function sharedShowLogin(message) {
+    state.revision += 1;
+    clearView();
+    if (typeof window.showLogin === 'function') return window.showLogin(message);
+    window.location.reload();
+  }
+
+  function clearView() {
+    state.data = null;
+    const meta = $('#reliability-meta');
+    if (meta) meta.textContent = '';
+    for (const selector of [
+      '#reliability-cards',
+      '#reliability-errors',
+      '#reliability-lifecycle',
+      '#reliability-series'
+    ]) {
+      const node = $(selector);
+      if (node) node.replaceChildren();
+    }
   }
 
   function createUi() {
@@ -274,64 +306,44 @@
     );
   }
 
-  async function session() {
-    const response = await fetch('/api/admin/session', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}'
-    });
-    if (!response.ok) throw new Error('admin-session-required');
-    return response.json();
-  }
-
   async function syncAccess() {
     const tab = $('#tabs [data-panel="reliability"]');
     if (!tab) return;
     if (document.body.dataset.adminSession !== 'active') {
       tab.hidden = true;
       $('#panel-reliability').hidden = true;
-      state.csrf = '';
+      clearView();
       return;
     }
     try {
-      const value = await session();
-      state.csrf = value.csrf || '';
+      const value = await sharedApi('/api/admin/session', {}, { csrf: false });
       tab.hidden = !(value.capabilities || []).includes(capability);
-      if (tab.hidden) $('#panel-reliability').hidden = true;
-    } catch {
+      if (tab.hidden) {
+        $('#panel-reliability').hidden = true;
+        clearView();
+      }
+    } catch (error) {
       tab.hidden = true;
-      state.csrf = '';
+      $('#panel-reliability').hidden = true;
+      clearView();
+      if (error.status === 401 && document.body.dataset.adminSession === 'active') {
+        sharedShowLogin('Сессия администратора завершена. Войдите снова.');
+      }
     }
   }
 
   async function reliabilityApi(period) {
-    if (!state.csrf) await syncAccess();
-    const response = await fetch('/api/admin/reliability', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Wobble-Admin-CSRF': state.csrf
-      },
-      body: JSON.stringify({ period })
-    });
-    const payload = await response.json().catch(() => ({ ok: false, error: `http-${response.status}` }));
-    if (!response.ok) throw new Error(payload.error || `http-${response.status}`);
+    const payload = await sharedApi('/api/admin/reliability', { period });
     return payload.reliability;
   }
 
   function openPanel() {
     const tab = $('#tabs [data-panel="reliability"]');
     if (!tab || tab.hidden) return;
-    for (const panel of $$('.panel')) panel.hidden = panel.id !== 'panel-reliability';
-    for (const item of $$('#tabs [data-panel]')) {
-      const active = item === tab;
-      item.classList.toggle('active', active);
-      if (active) item.setAttribute('aria-current', 'page');
-      else item.removeAttribute('aria-current');
-    }
-    tab.scrollIntoView({ block: 'nearest', inline: 'center' });
+    // Use the existing panel router instead of toggling DOM manually. Besides keeping the shared
+    // currentPanel state correct, switchPanel() invalidates outstanding views and clears any armed
+    // privileged operation confirmation when leaving Operations.
+    sharedSwitchPanel('reliability');
     loadReliability();
   }
 
@@ -458,6 +470,10 @@
       render(data);
     } catch (error) {
       if (revision !== state.revision) return;
+      if (error.status === 401) {
+        sharedShowLogin('Сессия администратора завершена. Войдите снова.');
+        return;
+      }
       setStatus(`Не удалось загрузить Reliability Center: ${error.message}`, 'bad');
     }
   }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -8,10 +9,16 @@ import { fileURLToPath } from 'node:url';
 const SYSTEMCTL = '/usr/bin/systemctl';
 const NGINX = '/usr/sbin/nginx';
 const MAX_REQUEST_BYTES = 4096;
+const MAX_HEALTH_BYTES = 4096;
 const REQUEST_READ_TIMEOUT_MS = 5000;
 const RESTART_COOLDOWN_MS = 30_000;
 const RESTART_MONITOR_MS = 1000;
 const RESTART_MONITOR_TIMEOUT_MS = 210_000;
+const READY_STREAK_REQUIRED = 3;
+const WOBBLE_HEALTH_TIMEOUT_MS = 1500;
+const WOBBLE_HEALTH_HOST = '127.0.0.1';
+const WOBBLE_HEALTH_PORT = 3000;
+const WOBBLE_HEALTH_PATH = '/health/ops';
 
 export const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
 
@@ -170,25 +177,106 @@ async function wobbleMainPid() {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
 }
 
+export function readWobbleOperationalHealth({
+  host = WOBBLE_HEALTH_HOST,
+  port = WOBBLE_HEALTH_PORT,
+  path = WOBBLE_HEALTH_PATH,
+  timeoutMs = WOBBLE_HEALTH_TIMEOUT_MS
+} = {}) {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const request = http.get(
+      {
+        hostname: host,
+        port,
+        path,
+        headers: { Host: `${host}:${port}` },
+        agent: false
+      },
+      response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => {
+          body += chunk;
+          if (Buffer.byteLength(body, 'utf8') > MAX_HEALTH_BYTES) {
+            request.destroy();
+            finish(null);
+          }
+        });
+        response.on('end', () => {
+          if (response.statusCode !== 200) return finish(null);
+          try {
+            const value = JSON.parse(body);
+            const pid = Number(value?.pid);
+            if (!value?.ok || !Number.isSafeInteger(pid) || pid <= 0 || typeof value.draining !== 'boolean') {
+              return finish(null);
+            }
+            return finish({ pid, draining: value.draining });
+          } catch {
+            return finish(null);
+          }
+        });
+      }
+    );
+    request.setTimeout(timeoutMs, () => request.destroy(new Error('health-timeout')));
+    request.once('error', () => finish(null));
+  });
+}
+
+async function confirmOldProcessNotDraining(oldPid) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const health = await readWobbleOperationalHealth();
+    const pid = await wobbleMainPid();
+    if (!health || health.pid !== oldPid || health.draining || pid !== oldPid) return false;
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  return true;
+}
+
 function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
   const startedAt = Date.now();
   let checking = false;
+  let candidatePid = 0;
+  let readyStreak = 0;
   const timer = setInterval(async () => {
     if (checking) return;
     checking = true;
     try {
       const pid = await wobbleMainPid();
       if (pid && pid !== oldPid) {
-        clearInterval(timer);
-        restartInFlight = false;
-        if (clearMaintenance) setMaintenance(false);
-        return;
+        if (candidatePid !== pid) {
+          candidatePid = pid;
+          readyStreak = 0;
+        }
+        const health = await readWobbleOperationalHealth();
+        const confirmedPid = await wobbleMainPid();
+        if (health?.pid === candidatePid && health.draining === false && confirmedPid === candidatePid) {
+          readyStreak += 1;
+        } else {
+          readyStreak = 0;
+        }
+        if (readyStreak >= READY_STREAK_REQUIRED) {
+          clearInterval(timer);
+          restartInFlight = false;
+          if (clearMaintenance) setMaintenance(false);
+          return;
+        }
+      } else {
+        candidatePid = 0;
+        readyStreak = 0;
       }
+
       if (Date.now() - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
         clearInterval(timer);
         restartInFlight = false;
-        // Безопасный отказ: если Wobble так и не поднялся новым процессом, maintenance остаётся.
-        // Это не даёт клиентам устроить reconnect-storm на неисправный сервис.
+        // Безопасный отказ: если новый Wobble не подтвердил readiness своим PID, maintenance остаётся.
+        // Это не даёт клиентам устроить reconnect-storm на неисправный или циклически падающий сервис.
         console.error('wobble graceful restart timed out; maintenance remains enabled');
       }
     } finally {
@@ -204,12 +292,22 @@ async function startGracefulRestart(now) {
     return { ok: false, reason: 'restart-cooldown', retryAfterMs: restartCooldownUntil - now };
   }
 
+  // Резервируем переход ДО первого await. Иначе параллельный maintenance.disable или второй
+  // restart может пройти между проверкой выше и фактической отправкой SIGUSR2.
+  restartInFlight = true;
+
   const oldPid = await wobbleMainPid();
-  if (!oldPid) return { ok: false, reason: 'operation-failed' };
+  if (!oldPid) {
+    restartInFlight = false;
+    return { ok: false, reason: 'operation-failed' };
+  }
 
   const alreadyInMaintenance = maintenanceEnabled();
   const maintenance = setMaintenance(true);
-  if (!maintenance.ok) return maintenance;
+  if (!maintenance.ok) {
+    restartInFlight = false;
+    return maintenance;
+  }
 
   const signal = await runCommand(
     SYSTEMCTL,
@@ -217,15 +315,26 @@ async function startGracefulRestart(now) {
     { timeoutMs: 5000 }
   );
   if (!signal.ok) {
-    if (!alreadyInMaintenance) setMaintenance(false);
+    // timeout неоднозначен: SIGUSR2 мог уже попасть в Node до убийства зависшего systemctl.
+    // Любая другая ошибка тоже откатывает флаг только после тройного подтверждения тем же PID,
+    // что старый процесс жив, отвечает локальному health и НЕ вошёл в drain.
+    const safeToRollback =
+      signal.reason !== 'operation-timeout' && (await confirmOldProcessNotDraining(oldPid));
+    if (safeToRollback) {
+      restartInFlight = false;
+      if (!alreadyInMaintenance) setMaintenance(false);
+    } else {
+      restartCooldownUntil = now + RESTART_COOLDOWN_MS;
+      scheduleRestartCompletion(oldPid, { clearMaintenance: !alreadyInMaintenance });
+    }
     return {
       ok: false,
       reason: signal.reason || 'operation-failed',
-      durationMs: signal.durationMs
+      durationMs: signal.durationMs,
+      maintenance: maintenanceEnabled()
     };
   }
 
-  restartInFlight = true;
   restartCooldownUntil = now + RESTART_COOLDOWN_MS;
   scheduleRestartCompletion(oldPid, { clearMaintenance: !alreadyInMaintenance });
   return { ok: true, accepted: true, deferred: true, maintenance: true };

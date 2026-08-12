@@ -38,7 +38,6 @@ const { PlayerSanctions } = require('./playerSanctions');
 const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { networkIdentity } = require('./networkIdentity');
 const { socialCosmetics } = require('./socialCosmetics');
-const operationalState = require('./operationalState');
 
 const auth = new AuthService({ db: core.accounts.db });
 const google = new GoogleIdentityVerifier({ clientId: process.env.GOOGLE_CLIENT_ID });
@@ -157,10 +156,10 @@ function clearDrainTimers() {
 }
 
 function beginGracefulDrain(signal = 'SIGUSR2') {
-  // `operationalState` — один экземпляр CommonJS-модуля для bootstrap и index.js. Поэтому в тот
-  // же тик, когда SIGUSR2 начинает drain, центральный beginCountdown() перестаёт принимать любые
-  // новые старты: host start, matchmaking, rematch и next chapter используют один admission gate.
-  if (!operationalState.beginDrain()) return false;
+  // Core owns the process-wide drain transition: in the same tick it closes new admission,
+  // clears impossible matchmaking waits and notifies roomless sockets. Active room sockets stay
+  // connected while bootstrap waits for COUNTDOWN/PLAYING matches to finish.
+  if (!core.beginOperationalDrain()) return false;
   const startedAt = Date.now();
   const initialMatches = activeMatchesForDrain();
   console.log(

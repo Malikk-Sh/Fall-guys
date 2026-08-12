@@ -304,7 +304,7 @@ test('operational restart is serialized and clears maintenance only after stable
 
   assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
   assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
-  assert.match(bootstrap, /operationalState\.beginDrain\(\)/);
+  assert.match(bootstrap, /core\.beginOperationalDrain\(\)/);
   assert.match(index, /app\.get\('\/health\/ops'/);
   assert.match(index, /req\.path !== '\/health\/ops'/);
   assert.match(index, /pid: process\.pid/);
@@ -351,6 +351,16 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.ok(startHandlerAt >= 0 && startDrainAt > startHandlerAt && startDrainAt < capacityAt);
   assert.ok(capacityAt < capacityMetricAt);
 
+  const findHandlerAt = index.indexOf('if (message.type === C2S.FIND_COOP)');
+  const findDrainAt = index.indexOf('if (operationalState.isDraining())', findHandlerAt);
+  const findCapacityAt = index.indexOf(
+    'if (loadStatus().overloaded || rooms.size >= MAX_ROOMS)',
+    findHandlerAt
+  );
+  const findCapacityMetricAt = index.indexOf('metrics.capacityRejected++', findHandlerAt);
+  assert.ok(findHandlerAt >= 0 && findDrainAt > findHandlerAt && findDrainAt < findCapacityAt);
+  assert.ok(findCapacityAt < findCapacityMetricAt);
+
   const rematchHandlerAt = index.indexOf('if (message.type === C2S.REMATCH_VOTE)');
   const rematchHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', rematchHandlerAt);
   const rematchMutationAt = index.indexOf("player.resultChoice = 'rematch';", rematchHandlerAt);
@@ -372,17 +382,29 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /phase: 'signal-pending'/);
   assert.match(helper, /phase: 'signal-delivered'/);
   assert.match(helper, /phase: 'signal-uncertain'/);
+  const advanceAt = helper.indexOf('async function advancePendingRestartSignal');
   const recoveryAt = helper.indexOf('export async function recoverRestartMonitor');
-  const pendingRecoveryAt = helper.indexOf("marker.phase === 'signal-pending'", recoveryAt);
-  const recoverySignalAt = helper.indexOf('await sendGracefulRestartSignal()', pendingRecoveryAt);
-  const recoveryMonitorAt = helper.indexOf('scheduleRestartCompletion(marker.oldPid', recoveryAt);
-  assert.ok(
-    recoveryAt >= 0 &&
-      pendingRecoveryAt > recoveryAt &&
-      recoverySignalAt > pendingRecoveryAt &&
-      recoverySignalAt < recoveryMonitorAt
+  const recoveryAdvanceAt = helper.indexOf(
+    'await advancePendingRestartSignal(marker, markerPath)',
+    recoveryAt
   );
+  const recoveryMonitorAt = helper.indexOf('scheduleRestartCompletion(marker.oldPid', recoveryAt);
+  const completionAt = helper.indexOf('function scheduleRestartCompletion');
+  const persistedPendingAt = helper.indexOf("persisted?.phase === 'signal-pending'", completionAt);
+  const monitorAdvanceAt = helper.indexOf(
+    'await advancePendingRestartSignal(persisted, markerPath)',
+    persistedPendingAt
+  );
+  assert.ok(advanceAt >= 0 && recoveryAdvanceAt > recoveryAt && recoveryAdvanceAt < recoveryMonitorAt);
+  assert.ok(completionAt >= 0 && persistedPendingAt > completionAt && monitorAdvanceAt > persistedPendingAt);
   assert.match(helper, /await recoverRestartMonitor\(\);/);
+
+  const drainFnAt = index.indexOf('function beginOperationalDrain()');
+  const queueClearAt = index.indexOf('coopMatchmaking.splice(0)', drainFnAt);
+  const roomlessClientsAt = index.indexOf('for (const client of wss.clients)', drainFnAt);
+  const roomlessShutdownAt = index.indexOf('S2C.SERVER_SHUTDOWN', roomlessClientsAt);
+  assert.ok(drainFnAt >= 0 && queueClearAt > drainFnAt && roomlessClientsAt > queueClearAt);
+  assert.ok(roomlessShutdownAt > roomlessClientsAt);
 
   const enqueueAt = index.indexOf('function enqueueCoop(ws, message)');
   const enqueueDrainAt = index.indexOf('if (operationalState.isDraining())', enqueueAt);

@@ -313,6 +313,56 @@ async function confirmOldProcessNotDraining(oldPid) {
   return true;
 }
 
+async function advancePendingRestartSignal(marker, markerPath = RESTART_MARKER) {
+  if (!marker || marker.phase !== 'signal-pending') return { marker, rolledBack: false };
+
+  const pid = await wobbleMainPid();
+  const health = await readWobbleOperationalHealth();
+  const confirmedPid = await wobbleMainPid();
+
+  if (pid === marker.oldPid && confirmedPid === marker.oldPid && health?.pid === marker.oldPid) {
+    if (health.draining === true) {
+      marker = { ...marker, phase: 'signal-delivered' };
+      writeRestartMarker(marker, markerPath);
+      return { marker, rolledBack: false };
+    }
+
+    const signal = await sendGracefulRestartSignal();
+    if (signal.ok) {
+      marker = { ...marker, phase: 'signal-delivered' };
+      writeRestartMarker(marker, markerPath);
+      return { marker, rolledBack: false };
+    }
+    if (signal.reason === 'operation-timeout') {
+      marker = { ...marker, phase: 'signal-uncertain' };
+      writeRestartMarker(marker, markerPath);
+      return { marker, rolledBack: false };
+    }
+
+    const safeToRollback = await confirmOldProcessNotDraining(marker.oldPid);
+    if (safeToRollback) {
+      clearRestartMarker(markerPath);
+      if (marker.clearMaintenance) setMaintenance(false);
+      restartInFlight = false;
+      return { marker: null, rolledBack: true };
+    }
+
+    marker = { ...marker, phase: 'signal-uncertain' };
+    writeRestartMarker(marker, markerPath);
+    return { marker, rolledBack: false };
+  }
+
+  if (pid && pid !== marker.oldPid && confirmedPid === pid) {
+    // The replacement is already the MainPID. Never send SIGUSR2 to the fresh process.
+    marker = { ...marker, phase: 'signal-delivered' };
+    writeRestartMarker(marker, markerPath);
+  }
+
+  // Missing/discordant PID or health is transient/ambiguous: keep signal-pending. The bounded
+  // monitor will retry this exact state on a later tick while maintenance stays fail-closed.
+  return { marker, rolledBack: false };
+}
+
 function scheduleRestartCompletion(
   oldPid,
   { clearMaintenance, startedAt = Date.now(), markerPath = RESTART_MARKER }
@@ -327,6 +377,15 @@ function scheduleRestartCompletion(
       // The marker owns the maintenance gate. If another process or a helper restart removed the
       // flag while the marker still exists, recreate it before doing any readiness work.
       if (!maintenanceEnabled()) setMaintenance(true);
+
+      const persisted = readRestartMarker(markerPath);
+      if (persisted?.phase === 'signal-pending') {
+        const advanced = await advancePendingRestartSignal(persisted, markerPath);
+        if (advanced.rolledBack) {
+          clearInterval(timer);
+          return;
+        }
+      }
 
       const pid = await wobbleMainPid();
       if (pid && pid !== oldPid) {
@@ -389,44 +448,9 @@ export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now =
   if (!maintenanceEnabled()) setMaintenance(true);
 
   if (marker.phase === 'signal-pending') {
-    const pid = await wobbleMainPid();
-    const health = await readWobbleOperationalHealth();
-    const confirmedPid = await wobbleMainPid();
-
-    if (pid === marker.oldPid && confirmedPid === marker.oldPid && health?.pid === marker.oldPid) {
-      if (health.draining === true) {
-        marker = { ...marker, phase: 'signal-delivered' };
-        writeRestartMarker(marker, markerPath);
-      } else {
-        // The helper may have died after persisting ownership but before systemctl delivered
-        // SIGUSR2. Re-send only after two MainPID reads and operational health agree that the
-        // original process is still alive and not draining. Duplicate SIGUSR2 is harmless.
-        const signal = await sendGracefulRestartSignal();
-        if (signal.ok) {
-          marker = { ...marker, phase: 'signal-delivered' };
-          writeRestartMarker(marker, markerPath);
-        } else if (signal.reason === 'operation-timeout') {
-          marker = { ...marker, phase: 'signal-uncertain' };
-          writeRestartMarker(marker, markerPath);
-        } else {
-          const safeToRollback = await confirmOldProcessNotDraining(marker.oldPid);
-          if (safeToRollback) {
-            clearRestartMarker(markerPath);
-            if (marker.clearMaintenance) setMaintenance(false);
-            restartInFlight = false;
-            return false;
-          }
-          marker = { ...marker, phase: 'signal-uncertain' };
-          writeRestartMarker(marker, markerPath);
-        }
-      }
-    } else if (pid && pid !== marker.oldPid && confirmedPid === pid) {
-      // A new MainPID proves the old process already exited; never signal the replacement.
-      marker = { ...marker, phase: 'signal-delivered' };
-      writeRestartMarker(marker, markerPath);
-    }
-    // Any other observation is intentionally ambiguous. Keep the pending marker + maintenance
-    // and let the bounded completion monitor fail closed rather than guessing about PID ownership.
+    const advanced = await advancePendingRestartSignal(marker, markerPath);
+    if (advanced.rolledBack) return false;
+    marker = advanced.marker || marker;
   }
 
   scheduleRestartCompletion(marker.oldPid, {

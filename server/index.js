@@ -1072,6 +1072,29 @@ function enqueueCoop(ws, message) {
   beginCountdown(room);
 }
 
+function beginOperationalDrain() {
+  if (!operationalState.beginDrain()) return false;
+
+  // No queued player can ever be matched after admission closes. Remove the impossible queue
+  // immediately and record the exit without counting it as a capacity rejection.
+  const queued = coopMatchmaking.splice(0);
+  for (const entry of queued) {
+    gameplay.count('matchmaking_queue_exit', {
+      detail: 'restart',
+      device: entry.ws?.device || 'desktop'
+    });
+  }
+
+  // core.shutdown broadcasts only to room players. Roomless sockets (including matchmaking) must
+  // learn about maintenance now instead of waiting up to the match-drain deadline for a generic
+  // network close.
+  for (const client of wss.clients) {
+    if (!client.room && canSend(client)) {
+      send(client, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    }
+  }
+  return true;
+}
 // Возврат в комнату по токену прошлой сессии.
 function resume(ws, token) {
   ws.accountAccessDenied = false;
@@ -1692,6 +1715,9 @@ wss.on('connection', (ws, req) => {
     }
 
     if (message.type === C2S.FIND_COOP) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (loadStatus().overloaded || rooms.size >= MAX_ROOMS) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
@@ -2317,6 +2343,7 @@ module.exports = {
   gameplay,
   socialSafety,
   coopMatchCompatible,
+  beginOperationalDrain,
   leave,
   resetLobby,
   originAllowed,

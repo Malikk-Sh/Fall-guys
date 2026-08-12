@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -10,6 +11,7 @@ import {
   MAINTENANCE_FLAG,
   createServer,
   maintenanceEnabled,
+  readWobbleOperationalHealth,
   setMaintenance,
   validateRequest
 } from '../deploy/wobble-ops-helper.mjs';
@@ -72,7 +74,7 @@ test('web client and root helper share the same closed operation allowlist', () 
   assert.equal(validOperation('backup.create'), 'backup.create');
   assert.equal(validOperation('maintenance.enable'), 'maintenance.enable');
   assert.equal(validOperation('nginx.reload'), 'nginx.reload');
-  assert.equal(validOperation('anything; rm -rf /'), null);
+  assert.equal(validOperation('unknown.operation'), null);
 
   const allowedUnits = new Set([
     'wobble-backup.service',
@@ -111,7 +113,7 @@ test('helper rejects extra fields and unknown actions before privileged work', (
   });
   assert.equal(validateRequest({ requestId, action: 'shell.exec' }), null);
   assert.equal(validateRequest({ requestId, action: 'smoke.run', command: 'id' }), null);
-  assert.equal(validateRequest({ requestId, action: 'maintenance.enable', path: '/tmp/owned' }), null);
+  assert.equal(validateRequest({ requestId, action: 'maintenance.enable', path: '/tmp/example' }), null);
   assert.equal(validateRequest({ requestId: 'not-a-uuid', action: 'smoke.run' }), null);
 });
 
@@ -130,6 +132,35 @@ test('maintenance flag uses one fixed runtime path and enable/disable is idempot
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('operational health parser accepts only a valid PID and drain state', async t => {
+  let payload = { ok: true, pid: 4321, draining: false };
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, '/health/ops');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(payload));
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const port = server.address().port;
+
+  assert.deepEqual(await readWobbleOperationalHealth({ port }), {
+    pid: 4321,
+    draining: false
+  });
+
+  payload = { ok: true, pid: 4321, draining: true };
+  assert.deepEqual(await readWobbleOperationalHealth({ port }), {
+    pid: 4321,
+    draining: true
+  });
+
+  payload = { ok: true, pid: 'not-a-pid', draining: false };
+  assert.equal(await readWobbleOperationalHealth({ port }), null);
 });
 
 test('operation status exposes only the maintenance transition that currently makes sense', () => {
@@ -180,7 +211,7 @@ test('client keeps the IPC connection alive until a slow allowlisted operation r
   assert.equal(result.durationMs, 50);
 });
 
-test('privileged helper keeps a private runtime flag while app scripts stay unprivileged', () => {
+test('privileged helper limits its readiness network access to localhost', () => {
   const root = path.resolve(import.meta.dirname, '..');
   const helperUnit = fs.readFileSync(path.join(root, 'deploy/wobble-ops.service'), 'utf8');
   const smokeUnit = fs.readFileSync(path.join(root, 'deploy/wobble-smoke.service'), 'utf8');
@@ -193,7 +224,10 @@ test('privileged helper keeps a private runtime flag while app scripts stay unpr
   assert.match(helperUnit, /^RuntimeDirectory=wobble-ops$/m);
   assert.match(helperUnit, /^RuntimeDirectoryMode=0755$/m);
   assert.match(helperUnit, /^RuntimeDirectoryPreserve=yes$/m);
-  assert.match(helperUnit, /^RestrictAddressFamilies=AF_UNIX$/m);
+  assert.match(helperUnit, /^RestrictAddressFamilies=AF_UNIX AF_INET$/m);
+  assert.match(helperUnit, /^IPAddressDeny=any$/m);
+  assert.match(helperUnit, /^IPAddressAllow=127\.0\.0\.1\/32$/m);
+  assert.doesNotMatch(helperUnit, /AF_INET6/);
   assert.match(smokeUnit, /^User=wobble$/m);
   assert.match(verifyUnit, /^User=wobble$/m);
   assert.match(socketUnit, /^SocketGroup=wobble$/m);
@@ -219,15 +253,28 @@ test('maintenance gates only new WebSocket upgrades and nginx reload is validate
   assert.doesNotMatch(helper, /exec\(|shell:\s*true/);
 });
 
-test('operational restart drains active matches through SIGUSR2 with a bounded timeout', () => {
+test('operational restart is serialized and clears maintenance only after stable new-PID health', () => {
   const root = path.resolve(import.meta.dirname, '..');
   const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');
   const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
 
   assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
   assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
+  assert.match(bootstrap, /core\.app\.get\('\/health\/ops'/);
+  assert.match(bootstrap, /return res\.json\(\{ ok: true, pid: process\.pid, draining \}\)/);
   assert.match(bootstrap, /process\.on\('SIGUSR2', \(\) => beginGracefulDrain\('SIGUSR2'\)\)/);
   assert.match(bootstrap, /core\.shutdown\(`\$\{signal\}:\$\{reason\}`\)/);
+
+  const reserveAt = helper.indexOf('restartInFlight = true;');
+  const firstAwaitAt = helper.indexOf('const oldPid = await wobbleMainPid();');
+  assert.ok(reserveAt >= 0 && firstAwaitAt > reserveAt);
+  assert.match(helper, /const READY_STREAK_REQUIRED = 3/);
+  assert.match(
+    helper,
+    /health\?\.pid === candidatePid && health\.draining === false && confirmedPid === candidatePid/
+  );
+  assert.match(helper, /signal\.reason !== 'operation-timeout'/);
+  assert.match(helper, /await confirmOldProcessNotDraining\(oldPid\)/);
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);
 });

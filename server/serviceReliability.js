@@ -74,10 +74,10 @@ function safeHealth(getHealth) {
   }
 }
 
-function severityRank(value) {
-  if (value === 'error') return 3;
-  if (value === 'warn') return 2;
-  return 1;
+function statusRank(value) {
+  if (value === 'critical') return 2;
+  if (value === 'warning') return 1;
+  return 0;
 }
 
 class ServiceReliability {
@@ -248,21 +248,21 @@ class ServiceReliability {
     const reasons = [];
     let status = 'healthy';
     const raise = (next, code) => {
-      if (severityRank(next) > severityRank(status === 'critical' ? 'error' : status === 'warning' ? 'warn' : 'info')) {
-        status = next === 'error' ? 'critical' : next === 'warn' ? 'warning' : status;
-      }
+      if (statusRank(next) > statusRank(status)) status = next;
       if (!reasons.includes(code)) reasons.push(code);
     };
     if (summary.handlerErrors > 0 || errors.some(item => item.severity === 'error'))
-      raise('error', 'internal-errors');
-    if (summary.eventLoopP95MsMax >= 250) raise('error', 'event-loop-critical');
-    else if (summary.eventLoopP95MsMax >= 120) raise('warn', 'event-loop-high');
+      raise('critical', 'internal-errors');
+    if (summary.eventLoopP95MsMax >= 250) raise('critical', 'event-loop-critical');
+    else if (summary.eventLoopP95MsMax >= 120) raise('warning', 'event-loop-high');
     if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.5)
-      raise('error', 'reconnect-failure-rate-critical');
+      raise('critical', 'reconnect-failure-rate-critical');
     else if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.25)
-      raise('warn', 'reconnect-failure-rate-high');
-    if (summary.socketSendFailures >= 5) raise('warn', 'socket-send-failures');
-    if (summary.capacityRejected > 0) raise('warn', 'capacity-rejections');
+      raise('warning', 'reconnect-failure-rate-high');
+    if (summary.socketSendFailures >= 5) raise('warning', 'socket-send-failures');
+    if (summary.capacityRejected > 0) raise('warning', 'capacity-rejections');
+    if (lifecycle.some(item => item.severity === 'warn' || item.severity === 'error'))
+      raise('warning', 'lifecycle-warning');
 
     return {
       generatedAt: at,

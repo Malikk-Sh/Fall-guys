@@ -161,11 +161,10 @@ async function runNginxReload(spec) {
 }
 
 async function wobbleMainPid() {
-  const result = await runCommand(
-    SYSTEMCTL,
-    ['show', '--property=MainPID', '--value', 'wobble.service'],
-    { timeoutMs: 5000, captureStdout: true }
-  );
+  const result = await runCommand(SYSTEMCTL, ['show', '--property=MainPID', '--value', 'wobble.service'], {
+    timeoutMs: 5000,
+    captureStdout: true
+  });
   if (!result.ok) return 0;
   const pid = Number.parseInt(result.stdout, 10);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
@@ -262,10 +261,7 @@ function send(socket, payload) {
   }
 }
 
-export function createServer({
-  execute = executeRequest,
-  requestTimeoutMs = REQUEST_READ_TIMEOUT_MS
-} = {}) {
+export function createServer({ execute = executeRequest, requestTimeoutMs = REQUEST_READ_TIMEOUT_MS } = {}) {
   return net.createServer(socket => {
     socket.setEncoding('utf8');
     // The short timeout protects only the tiny unauthenticated local request frame. Once a valid

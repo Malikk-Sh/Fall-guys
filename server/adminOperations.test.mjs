@@ -143,14 +143,21 @@ test('restart monitor state survives helper restart through one fixed durable ma
   assert.equal(RESTART_MARKER, '/run/wobble-ops/restart.json');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-restart-marker-test-'));
   const markerPath = path.join(dir, 'restart.json');
-  const marker = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+  const legacy = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+  const pending = { ...legacy, phase: 'signal-pending' };
   try {
     assert.equal(readRestartMarker(markerPath), null);
-    assert.equal(writeRestartMarker(marker, markerPath), true);
-    assert.deepEqual(readRestartMarker(markerPath), marker);
+    assert.equal(writeRestartMarker(legacy, markerPath), true);
+    assert.deepEqual(readRestartMarker(markerPath), pending);
+    for (const phase of ['signal-delivered', 'signal-uncertain']) {
+      const marker = { ...legacy, phase };
+      assert.equal(writeRestartMarker(marker, markerPath), true);
+      assert.deepEqual(readRestartMarker(markerPath), marker);
+    }
+    assert.equal(writeRestartMarker({ ...legacy, phase: 'invalid-phase' }, markerPath), false);
     fs.writeFileSync(markerPath, '{broken json');
     assert.equal(readRestartMarker(markerPath), null);
-    assert.equal(writeRestartMarker(marker, markerPath), true);
+    assert.equal(writeRestartMarker(legacy, markerPath), true);
     assert.equal(clearRestartMarker(markerPath), true);
     assert.equal(readRestartMarker(markerPath), null);
   } finally {
@@ -318,7 +325,8 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /export const RESTART_MARKER = '\/run\/wobble-ops\/restart\.json'/);
   assert.match(helper, /recoverRestartMonitor\(\);/);
   const markerWriteAt = helper.indexOf('if (!writeRestartMarker(marker))');
-  const signalAt = helper.indexOf("['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service']");
+  const startRestartAt = helper.indexOf('async function startGracefulRestart');
+  const signalAt = helper.indexOf('const signal = await sendGracefulRestartSignal();', startRestartAt);
   assert.ok(markerWriteAt >= 0 && signalAt > markerWriteAt);
   const socketRestartAt = install.indexOf('systemctl restart wobble-ops.socket');
   const helperStartAt = install.indexOf('systemctl start wobble-ops.service');
@@ -335,6 +343,46 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /await confirmOldProcessNotDraining\(oldPid\)/);
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);
+
+  const startHandlerAt = index.indexOf('if (message.type === C2S.START_MATCH)');
+  const startDrainAt = index.indexOf('if (operationalState.isDraining())', startHandlerAt);
+  const capacityAt = index.indexOf('if (capacityStatus().matchesFull)', startHandlerAt);
+  const capacityMetricAt = index.indexOf('metrics.capacityRejected++', startHandlerAt);
+  assert.ok(startHandlerAt >= 0 && startDrainAt > startHandlerAt && startDrainAt < capacityAt);
+  assert.ok(capacityAt < capacityMetricAt);
+
+  const rematchHandlerAt = index.indexOf('if (message.type === C2S.REMATCH_VOTE)');
+  const rematchHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', rematchHandlerAt);
+  const rematchMutationAt = index.indexOf("player.resultChoice = 'rematch';", rematchHandlerAt);
+  assert.ok(
+    rematchHandlerAt >= 0 &&
+      rematchHandlerDrainAt > rematchHandlerAt &&
+      rematchHandlerDrainAt < rematchMutationAt
+  );
+
+  const nextHandlerAt = index.indexOf('if (message.type === C2S.NEXT_CHAPTER_VOTE)');
+  const nextHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', nextHandlerAt);
+  const nextChoiceMutationAt = index.indexOf("player.resultChoice = 'next';", nextHandlerAt);
+  const nextVoteMetricAt = index.indexOf("gameplay.count('next_chapter_vote'", nextHandlerAt);
+  assert.ok(
+    nextHandlerAt >= 0 && nextHandlerDrainAt > nextHandlerAt && nextHandlerDrainAt < nextChoiceMutationAt
+  );
+  assert.ok(nextChoiceMutationAt < nextVoteMetricAt);
+
+  assert.match(helper, /phase: 'signal-pending'/);
+  assert.match(helper, /phase: 'signal-delivered'/);
+  assert.match(helper, /phase: 'signal-uncertain'/);
+  const recoveryAt = helper.indexOf('export async function recoverRestartMonitor');
+  const pendingRecoveryAt = helper.indexOf("marker.phase === 'signal-pending'", recoveryAt);
+  const recoverySignalAt = helper.indexOf('await sendGracefulRestartSignal()', pendingRecoveryAt);
+  const recoveryMonitorAt = helper.indexOf('scheduleRestartCompletion(marker.oldPid', recoveryAt);
+  assert.ok(
+    recoveryAt >= 0 &&
+      pendingRecoveryAt > recoveryAt &&
+      recoverySignalAt > pendingRecoveryAt &&
+      recoverySignalAt < recoveryMonitorAt
+  );
+  assert.match(helper, /await recoverRestartMonitor\(\);/);
 
   const enqueueAt = index.indexOf('function enqueueCoop(ws, message)');
   const enqueueDrainAt = index.indexOf('if (operationalState.isDraining())', enqueueAt);

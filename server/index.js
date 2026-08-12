@@ -1853,6 +1853,9 @@ wss.on('connection', (ws, req) => {
       if (room.host !== ws.id) {
         return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
       }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (capacityStatus().matchesFull) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Все игровые слоты заняты. Попробуйте чуть позже.');
@@ -2078,6 +2081,9 @@ wss.on('connection', (ws, req) => {
     // Выбор можно менять, пока комната не решила: передумать — нормальное поведение, а запрет
     // на смену и создавал тупик. Пересчёт после каждого нажатия.
     if (message.type === C2S.REMATCH_VOTE) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (player.resultChoice === 'rematch') return;
       player.resultChoice = 'rematch';
       return resolveResultsDecision(room);
@@ -2088,6 +2094,9 @@ wss.on('connection', (ws, req) => {
       const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
       if (room.mode !== GAME_MODE.COOP || current < 0) {
         return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
       }
       if (player.resultChoice === 'next') return;
       player.resultChoice = 'next';

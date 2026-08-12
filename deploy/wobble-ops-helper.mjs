@@ -15,6 +15,7 @@ const RESTART_COOLDOWN_MS = 30_000;
 const RESTART_MONITOR_MS = 1000;
 const RESTART_MONITOR_TIMEOUT_MS = 210_000;
 const RESTART_MARKER_VERSION = 1;
+const RESTART_SIGNAL_PHASES = new Set(['signal-pending', 'signal-delivered', 'signal-uncertain']);
 const READY_STREAK_REQUIRED = 3;
 const WOBBLE_HEALTH_TIMEOUT_MS = 1500;
 const WOBBLE_HEALTH_HOST = '127.0.0.1';
@@ -150,13 +151,17 @@ export function setMaintenance(enabled, flagPath = MAINTENANCE_FLAG) {
 function normalizeRestartMarker(value) {
   const oldPid = Number(value?.oldPid);
   const startedAt = Number(value?.startedAt);
+  // Version-1 markers written before phases existed are conservatively treated as pending.
+  // Re-delivering SIGUSR2 is safe because Wobble drain is process-wide and idempotent.
+  const phase = value?.phase == null ? 'signal-pending' : String(value.phase);
   if (
     value?.version !== RESTART_MARKER_VERSION ||
     !Number.isSafeInteger(oldPid) ||
     oldPid <= 0 ||
     !Number.isSafeInteger(startedAt) ||
     startedAt <= 0 ||
-    typeof value?.clearMaintenance !== 'boolean'
+    typeof value?.clearMaintenance !== 'boolean' ||
+    !RESTART_SIGNAL_PHASES.has(phase)
   ) {
     return null;
   }
@@ -164,7 +169,8 @@ function normalizeRestartMarker(value) {
     version: RESTART_MARKER_VERSION,
     oldPid,
     startedAt,
-    clearMaintenance: value.clearMaintenance
+    clearMaintenance: value.clearMaintenance,
+    phase
   };
 }
 
@@ -237,6 +243,12 @@ async function wobbleMainPid() {
   if (!result.ok) return 0;
   const pid = Number.parseInt(result.stdout, 10);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : 0;
+}
+
+function sendGracefulRestartSignal() {
+  return runCommand(SYSTEMCTL, ['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service'], {
+    timeoutMs: 5000
+  });
 }
 
 export function readWobbleOperationalHealth({
@@ -358,9 +370,9 @@ function scheduleRestartCompletion(
   timer.unref?.();
 }
 
-export function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.now() } = {}) {
+export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.now() } = {}) {
   if (restartInFlight) return true;
-  const marker = readRestartMarker(markerPath);
+  let marker = readRestartMarker(markerPath);
   if (!marker) return false;
 
   // Do not restart a monitor forever after a clock jump or a very old interrupted operation.
@@ -375,6 +387,48 @@ export function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.
   restartInFlight = true;
   restartCooldownUntil = Math.max(restartCooldownUntil, marker.startedAt + RESTART_COOLDOWN_MS);
   if (!maintenanceEnabled()) setMaintenance(true);
+
+  if (marker.phase === 'signal-pending') {
+    const pid = await wobbleMainPid();
+    const health = await readWobbleOperationalHealth();
+    const confirmedPid = await wobbleMainPid();
+
+    if (pid === marker.oldPid && confirmedPid === marker.oldPid && health?.pid === marker.oldPid) {
+      if (health.draining === true) {
+        marker = { ...marker, phase: 'signal-delivered' };
+        writeRestartMarker(marker, markerPath);
+      } else {
+        // The helper may have died after persisting ownership but before systemctl delivered
+        // SIGUSR2. Re-send only after two MainPID reads and operational health agree that the
+        // original process is still alive and not draining. Duplicate SIGUSR2 is harmless.
+        const signal = await sendGracefulRestartSignal();
+        if (signal.ok) {
+          marker = { ...marker, phase: 'signal-delivered' };
+          writeRestartMarker(marker, markerPath);
+        } else if (signal.reason === 'operation-timeout') {
+          marker = { ...marker, phase: 'signal-uncertain' };
+          writeRestartMarker(marker, markerPath);
+        } else {
+          const safeToRollback = await confirmOldProcessNotDraining(marker.oldPid);
+          if (safeToRollback) {
+            clearRestartMarker(markerPath);
+            if (marker.clearMaintenance) setMaintenance(false);
+            restartInFlight = false;
+            return false;
+          }
+          marker = { ...marker, phase: 'signal-uncertain' };
+          writeRestartMarker(marker, markerPath);
+        }
+      }
+    } else if (pid && pid !== marker.oldPid && confirmedPid === pid) {
+      // A new MainPID proves the old process already exited; never signal the replacement.
+      marker = { ...marker, phase: 'signal-delivered' };
+      writeRestartMarker(marker, markerPath);
+    }
+    // Any other observation is intentionally ambiguous. Keep the pending marker + maintenance
+    // and let the bounded completion monitor fail closed rather than guessing about PID ownership.
+  }
+
   scheduleRestartCompletion(marker.oldPid, {
     clearMaintenance: marker.clearMaintenance,
     startedAt,
@@ -409,11 +463,12 @@ async function startGracefulRestart(now) {
   // Durable ownership is written synchronously before SIGUSR2. If wobble-ops.service is restarted
   // by systemd or deploy/install.sh after this point, the next helper process reconstructs the
   // monitor and keeps the same maintenance ownership instead of stranding the server offline.
-  const marker = {
+  let marker = {
     version: RESTART_MARKER_VERSION,
     oldPid,
     startedAt: now,
-    clearMaintenance: !alreadyInMaintenance
+    clearMaintenance: !alreadyInMaintenance,
+    phase: 'signal-pending'
   };
   if (!writeRestartMarker(marker)) {
     restartInFlight = false;
@@ -421,11 +476,14 @@ async function startGracefulRestart(now) {
     return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
   }
 
-  const signal = await runCommand(
-    SYSTEMCTL,
-    ['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service'],
-    { timeoutMs: 5000 }
-  );
+  const signal = await sendGracefulRestartSignal();
+  if (signal.ok) {
+    marker = { ...marker, phase: 'signal-delivered' };
+    writeRestartMarker(marker);
+  } else if (signal.reason === 'operation-timeout') {
+    marker = { ...marker, phase: 'signal-uncertain' };
+    writeRestartMarker(marker);
+  }
   if (!signal.ok) {
     // timeout неоднозначен: SIGUSR2 мог уже попасть в Node до убийства зависшего systemctl.
     // Любая другая ошибка тоже откатывает флаг только после тройного подтверждения тем же PID,
@@ -437,6 +495,10 @@ async function startGracefulRestart(now) {
       if (!alreadyInMaintenance) setMaintenance(false);
       restartInFlight = false;
     } else {
+      if (signal.reason !== 'operation-timeout') {
+        marker = { ...marker, phase: 'signal-uncertain' };
+        writeRestartMarker(marker);
+      }
       restartCooldownUntil = now + RESTART_COOLDOWN_MS;
       scheduleRestartCompletion(oldPid, {
         clearMaintenance: !alreadyInMaintenance,
@@ -544,7 +606,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error('wobble-ops helper must be started by systemd socket activation');
     process.exit(1);
   }
-  recoverRestartMonitor();
+  await recoverRestartMonitor();
   const server = createServer();
   server.listen({ fd });
 }

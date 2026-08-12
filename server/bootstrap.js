@@ -49,6 +49,7 @@ const adminControl = new AdminControlService({
   db: core.accounts.db,
   health: core.health,
   gameplay: core.gameplay,
+  incidents: core.incidentDiagnostics,
   adminAuth,
   sanctions,
   auth,

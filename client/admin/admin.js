@@ -15,6 +15,9 @@ const state = {
   playerDetail: null,
   playerActionConfirmation: null,
   playerActionTimer: null,
+  incidentRevision: 0,
+  incidentSearchQuery: '',
+  incidentData: null,
   moderationCase: null,
   moderationConfirmation: null,
   sanctionConfirmation: null,
@@ -69,6 +72,7 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'player.support.view': 'Открыта карточка игрока',
   'player.support.logout': 'Завершены сессии игрока',
   'player.support.rename': 'Изменено имя игрока',
+  'player.incident.view': 'Открыта диагностика игрока',
   'ops.operation.requested': 'Запрошена системная операция',
   'ops.operation.completed': 'Системная операция завершена',
   'ops.operation.accepted': 'Принят запрос на перезапуск Wobble',
@@ -199,6 +203,7 @@ function switchPanel(name) {
   if (name !== 'moderation') closeModerationCase();
   if (name !== 'analytics') state.analyticsLoadRevision += 1;
   if (name !== 'players') state.playerDetailRevision += 1;
+  if (name !== 'incidents') state.incidentRevision += 1;
   if (name !== 'operations') clearOperationConfirmation();
   state.currentPanel = name;
   for (const item of $$('.panel')) item.hidden = item.id !== `panel-${name}`;
@@ -863,6 +868,13 @@ async function renamePlayer(name) {
   }
 }
 
+async function openPlayerIncidents() {
+  const player = state.playerDetail;
+  if (!player?.account?.id || !state.capabilities.has('incidents.read')) return;
+  switchPanel('incidents');
+  await openIncidentTimeline(player.account.id);
+}
+
 function openPlayerModeration() {
   const player = state.playerDetail;
   if (!player?.account?.id || !player.moderation) return;
@@ -900,6 +912,8 @@ function renderPlayerDetail(player) {
   $('#player-rename-input').value = account.name || 'Wobbler';
   $('#player-name-actions').hidden = !state.capabilities.has('player-support.name.write');
   $('#player-session-actions').hidden = !state.capabilities.has('player-support.sessions.write');
+  const incidentButton = $('#player-open-incidents');
+  incidentButton.hidden = !state.capabilities.has('incidents.read');
   const moderationButton = $('#player-open-moderation');
   moderationButton.hidden = !(state.capabilities.has('moderation.read') && moderation);
   $('#player-summary-cards').replaceChildren(
@@ -1100,6 +1114,190 @@ async function loadPlayers() {
   if (!state.playerSearchQuery) return true;
   $('#player-search-query').value = state.playerSearchQuery;
   return searchPlayers();
+}
+
+const INCIDENT_KIND_LABELS = Object.freeze({
+  auth: 'Авторизация',
+  connection: 'Соединение',
+  room: 'Комната',
+  matchmaking: 'Подбор напарника',
+  match: 'Матч',
+  support: 'Поддержка',
+  'network-error': 'Сетевая ошибка'
+});
+const INCIDENT_CODE_LABELS = Object.freeze({
+  authenticated: 'Аккаунт подтверждён',
+  'account-sanctioned': 'Доступ ограничен санкцией',
+  disconnected: 'Соединение потеряно',
+  resumed: 'Соединение восстановлено',
+  'socket-error': 'Ошибка WebSocket транспорта',
+  created: 'Комната создана',
+  joined: 'Вход в комнату',
+  queued: 'Встал в очередь',
+  matched: 'Напарник найден',
+  cancelled: 'Очередь отменена',
+  away: 'Очередь отменена из-за свёрнутой игры',
+  restart: 'Очередь закрыта обслуживанием',
+  started: 'Матч начат',
+  completed: 'Матч завершён',
+  abandoned: 'Матч покинут после grace period',
+  'forced-logout': 'Поддержка завершила сессии',
+  renamed: 'Поддержка изменила имя'
+});
+
+function incidentEventLabel(event) {
+  const code = INCIDENT_CODE_LABELS[event.code] || event.code;
+  const kind = INCIDENT_KIND_LABELS[event.kind] || event.kind;
+  return `${kind}: ${code}`;
+}
+
+function incidentContext(event) {
+  const values = [];
+  if (event.mode) values.push(modeLabel(event.mode));
+  if (event.phase) values.push(`состояние ${event.phase}`);
+  if (event.device) values.push(deviceLabel(event.device));
+  if (event.roomRef) values.push(`room ref ${event.roomRef}`);
+  if (event.matchRef) values.push(`match ref ${event.matchRef}`);
+  if (event.valueMs != null) values.push(`время ${formatMilliseconds(event.valueMs)}`);
+  return values.join(' · ') || 'без дополнительного контекста';
+}
+
+function renderIncidentTimeline(incident) {
+  state.incidentData = incident;
+  const account = incident.account || {};
+  const summary = incident.summary || {};
+  $('#incident-detail-name').textContent = account.name || 'Wobbler';
+  $('#incident-detail-id').textContent =
+    `${account.supportId || 'Support ID недоступен'} · ID аккаунта: ${account.id}`;
+  $('#incident-meta').textContent =
+    `История хранится ${formatNumber(incident.retentionDays)} дней · сформировано ${formatTime(incident.generatedAt)} · сейчас ${formatNumber(incident.live?.sockets)} игровых WebSocket.`;
+  $('#incident-summary-cards').replaceChildren(
+    statCard('Событий', formatNumber(summary.events), `последнее ${formatTime(summary.lastEventAt)}`),
+    statCard(
+      'Обрывов',
+      formatNumber(summary.disconnects),
+      `${formatNumber(summary.resumes)} успешных resume`,
+      summary.disconnects ? 'warn' : ''
+    ),
+    statCard(
+      'Сетевых ошибок',
+      formatNumber(summary.networkErrors),
+      'только серверные коды, без текста payload',
+      summary.networkErrors ? 'warn' : ''
+    ),
+    statCard(
+      'Матчи',
+      formatNumber(summary.matchesCompleted),
+      `${formatNumber(summary.matchesAbandoned)} abandon`,
+      summary.matchesAbandoned ? 'warn' : 'good'
+    )
+  );
+  const body = $('#incident-events-body');
+  body.replaceChildren();
+  for (const event of incident.events || []) {
+    body.append(
+      rowWithCells([formatTime(event.occurredAt), incidentEventLabel(event), incidentContext(event)])
+    );
+  }
+  if (!incident.events?.length) {
+    const row = document.createElement('tr');
+    const cell = appendText(row, 'td', 'За период хранения диагностических событий пока нет.', 'empty');
+    cell.colSpan = 3;
+    body.append(row);
+  }
+  $('#incident-detail').hidden = false;
+}
+
+async function openIncidentTimeline(accountId, { preserveStatus = false } = {}) {
+  const revision = ++state.incidentRevision;
+  if (!preserveStatus) setStatus('Загружаю диагностику игрока…');
+  try {
+    const payload = await api('/api/admin/incidents/player', { accountId, limit: 150 });
+    if (revision !== state.incidentRevision) return;
+    renderIncidentTimeline(payload.incident);
+    if (!preserveStatus) setStatus('Диагностика игрока загружена', 'good');
+  } catch (error) {
+    if (revision !== state.incidentRevision) return;
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Не удалось загрузить диагностику: ${error.message}`, 'bad');
+  }
+}
+
+async function searchIncidents() {
+  const query = $('#incident-search-query').value.trim();
+  if (query.length < 2) {
+    $('#incident-search-meta').textContent = 'Введите хотя бы 2 символа.';
+    return false;
+  }
+  state.incidentSearchQuery = query;
+  const payload = await api('/api/admin/players/search', { query, limit: 30 });
+  const body = $('#incident-results-body');
+  body.replaceChildren();
+  for (const player of payload.results || []) {
+    const row = rowWithCells([
+      `${player.name} · ${player.supportId ? `${player.supportId} · ` : ''}${player.id}`,
+      formatTime(player.lastSeenAt),
+      formatNumber(player.activeSessions)
+    ]);
+    const action = document.createElement('td');
+    const button = appendText(action, 'button', 'Открыть события', 'case-open');
+    button.type = 'button';
+    button.addEventListener('click', () => openIncidentTimeline(player.id));
+    row.append(action);
+    body.append(row);
+  }
+  if (!payload.results?.length) {
+    const row = document.createElement('tr');
+    const cell = appendText(row, 'td', 'Игроки по этому запросу не найдены.', 'empty');
+    cell.colSpan = 4;
+    body.append(row);
+  }
+  $('#incident-search-meta').textContent = `Найдено: ${formatNumber(payload.results?.length)}.`;
+  return true;
+}
+
+async function loadIncidents() {
+  if (state.incidentData?.account?.id) {
+    return openIncidentTimeline(state.incidentData.account.id, { preserveStatus: true });
+  }
+  if (!state.incidentSearchQuery) return true;
+  $('#incident-search-query').value = state.incidentSearchQuery;
+  return searchIncidents();
+}
+
+async function copyIncidentPackage() {
+  const incident = state.incidentData;
+  if (!incident) return setStatus('Сначала откройте диагностику игрока.', 'warn');
+  const safePackage = {
+    version: 1,
+    generatedAt: incident.generatedAt,
+    retentionDays: incident.retentionDays,
+    player: {
+      supportId: incident.account?.supportId || null,
+      name: incident.account?.name || 'Wobbler'
+    },
+    summary: incident.summary,
+    events: incident.events
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(safePackage, null, 2));
+    setStatus('Безопасный диагностический пакет скопирован.', 'good');
+  } catch {
+    setStatus('Не удалось скопировать диагностический пакет автоматически.', 'warn');
+  }
+}
+
+async function incidentOpenPlayer() {
+  const accountId = state.incidentData?.account?.id;
+  if (!accountId) return;
+  switchPanel('players');
+  await openPlayerDetail(accountId);
+}
+
+function closeIncidentDetail() {
+  state.incidentRevision += 1;
+  state.incidentData = null;
+  $('#incident-detail').hidden = true;
 }
 
 function reasonsText(reasons = {}) {
@@ -1828,6 +2026,7 @@ async function refreshCurrent() {
     infrastructure: loadInfrastructure,
     analytics: loadAnalytics,
     players: loadPlayers,
+    incidents: loadIncidents,
     moderation: loadModeration,
     operations: loadOperations,
     audit: loadAudit
@@ -1923,7 +2122,22 @@ $('#player-copy-support-id').addEventListener('click', copyPlayerSupportId);
 $('#player-force-logout').addEventListener('click', forceLogoutPlayer);
 $('#player-rename').addEventListener('click', () => renamePlayer($('#player-rename-input').value));
 $('#player-reset-name').addEventListener('click', () => renamePlayer('Wobbler'));
+$('#player-open-incidents').addEventListener('click', openPlayerIncidents);
 $('#player-open-moderation').addEventListener('click', openPlayerModeration);
+$('#incident-search-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  setStatus('Ищу игрока для диагностики…');
+  try {
+    await searchIncidents();
+    setStatus('Поиск завершён', 'good');
+  } catch (error) {
+    if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+    setStatus(`Ошибка поиска: ${error.message}`, 'bad');
+  }
+});
+$('#incident-copy-package').addEventListener('click', copyIncidentPackage);
+$('#incident-open-player').addEventListener('click', incidentOpenPlayer);
+$('#incident-detail-close').addEventListener('click', closeIncidentDetail);
 $('#player-support-note').addEventListener('input', () => resetPlayerActionConfirmation());
 $('#player-rename-input').addEventListener('input', () => resetPlayerActionConfirmation());
 $('#moderation-status').addEventListener('change', refreshCurrent);

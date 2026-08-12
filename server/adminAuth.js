@@ -16,6 +16,7 @@ const ROLE_CAPABILITIES = Object.freeze({
     'player-support.read',
     'player-support.sessions.write',
     'player-support.name.write',
+    'incidents.read',
     'moderation.read',
     'moderation.write',
     'sanctions.write',
@@ -30,6 +31,7 @@ const ROLE_CAPABILITIES = Object.freeze({
     'analytics.read',
     'player-support.read',
     'player-support.sessions.write',
+    'incidents.read',
     'moderation.read',
     'audit.read'
   ]),

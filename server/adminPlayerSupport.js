@@ -454,7 +454,7 @@ function prepare(db) {
       FROM admin_audit_events
       WHERE target_type = 'player-account'
         AND target_id = ?
-        AND action <> 'player.support.view'
+        AND action NOT IN ('player.support.view', 'player.incident.view')
       ORDER BY created_at DESC, id DESC
       LIMIT ?
     `)

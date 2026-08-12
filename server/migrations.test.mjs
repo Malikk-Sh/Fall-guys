@@ -8,7 +8,7 @@ const { MIGRATIONS, migrateDatabase } = require('./migrations');
 
 test('миграции поднимают чистую базу по порядку и повторно ничего не делают', () => {
   const db = openDatabase(':memory:');
-  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 123 }), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
   const applied = db
     .prepare('SELECT version, applied_at FROM schema_migrations ORDER BY version')
     .all()
@@ -26,7 +26,8 @@ test('миграции поднимают чистую базу по поряд�
     { version: 10, applied_at: 123 },
     { version: 11, applied_at: 123 },
     { version: 12, applied_at: 123 },
-    { version: 13, applied_at: 123 }
+    { version: 13, applied_at: 123 },
+    { version: 14, applied_at: 123 }
   ]);
   assert.deepEqual(migrateDatabase(db, { now: 999 }), []);
   for (const table of [
@@ -46,7 +47,8 @@ test('миграции поднимают чистую базу по поряд�
     'admin_sessions',
     'admin_audit_events',
     'account_support_search',
-    'player_sanctions'
+    'player_sanctions',
+    'player_incident_events'
   ]) {
     assert.equal(
       db.prepare('SELECT COUNT(*) AS count FROM sqlite_master WHERE name = ?').get(table).count,
@@ -117,7 +119,7 @@ test('migration 008 preserves old avoid as the creator personal choice', () => {
     'INSERT INTO matchmaking_avoids (account_a, account_b, created_by_account_id, created_at) VALUES (?, ?, ?, ?)'
   ).run('a', 'b', 'a', 55);
 
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [8, 9, 10, 11, 12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [8, 9, 10, 11, 12, 13, 14]);
   const row = db
     .prepare(
       'SELECT account_a_avoided_at, account_b_avoided_at FROM matchmaking_avoids WHERE account_a = ? AND account_b = ?'
@@ -151,7 +153,7 @@ test('migration 009 backfills the best available report evidence', () => {
   `
   ).run('reporter', 'target', 'offensive-name', 400, 600);
 
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [9, 10, 11, 12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [9, 10, 11, 12, 13, 14]);
   const report = db.prepare('SELECT target_name_snapshot, chapter_id_snapshot FROM social_reports').get();
   assert.deepEqual({ ...report }, { target_name_snapshot: 'Имя на миграции', chapter_id_snapshot: 'ch7' });
   const evidence = db
@@ -183,7 +185,7 @@ test('migration 010 stages recovery without changing the active recovery hash', 
     'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
   ).run('legacy', 'Legacy', 'active-hash', 1, 1);
 
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [10, 11, 12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [10, 11, 12, 13, 14]);
   const row = db
     .prepare('SELECT secret_hash, pending_secret_hash, pending_secret_created_at FROM accounts WHERE id = ?')
     .get('legacy');
@@ -201,7 +203,7 @@ test('migration 010 stages recovery without changing the active recovery hash', 
 test('migration 011 adds admin control plane without creating any administrator implicitly', () => {
   const db = openDatabase(':memory:');
   migrateDatabase(db, { migrations: MIGRATIONS.slice(0, 10), now: 100 });
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [11, 12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [11, 12, 13, 14]);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM admin_users').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM admin_sessions').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM admin_audit_events').get().count, 0);
@@ -215,7 +217,7 @@ test('migration 012 indexes existing accounts for support search without creatin
     'INSERT INTO accounts (id, display_name, secret_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)'
   ).run('legacy-search', 'Иван Игрок', 'hash-search', 1, 1);
 
-  assert.deepEqual(migrateDatabase(db, { now: 200 }), [12, 13]);
+  assert.deepEqual(migrateDatabase(db, { now: 200 }), [12, 13, 14]);
   const row = db
     .prepare(
       'SELECT account_id, display_name FROM account_support_search WHERE account_support_search MATCH ?'

@@ -169,3 +169,37 @@ test('late WebSocket AUTH does not emit room-state while a match is already play
   client.off('message', listener);
   assert.equal(unexpectedRoomState, 0);
 });
+
+test('incident diagnostics follows authenticated socket lifecycle without storing credentials', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Incident Socket');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: 'Ignored Cached Name', protocolVersion: 10 }));
+  await lobbyReply;
+  await closeClient(client);
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  assert.ok(timeline.events.some(event => event.kind === 'auth' && event.code === 'authenticated'));
+  assert.ok(timeline.events.some(event => event.kind === 'room' && event.code === 'created'));
+  assert.ok(timeline.events.some(event => event.kind === 'connection' && event.code === 'disconnected'));
+  const serialized = JSON.stringify(timeline);
+  assert.equal(serialized.includes(ticket), false);
+  assert.equal(serialized.includes('Ignored Cached Name'), false);
+});

@@ -45,6 +45,7 @@ const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
 const { Accounts } = require('./accounts');
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
+const { IncidentDiagnostics } = require('./incidentDiagnostics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
 const { accountAccessPolicy } = require('./accountAccessPolicy');
@@ -166,6 +167,7 @@ migrateDatabase(gameDb);
 const verifiedLeaderboard = new VerifiedLeaderboard({ db: gameDb });
 const accounts = new Accounts({ db: gameDb });
 const gameplay = new GameplayMetrics({ db: gameDb });
+const incidentDiagnostics = new IncidentDiagnostics({ db: gameDb });
 const socialSafety = new SocialSafety({ db: gameDb });
 
 // Сессии для переподключения: токен → место игрока в комнате.
@@ -690,8 +692,28 @@ function socketSend(ws, payload) {
 
 const send = (ws, data) => socketSend(ws, JSON.stringify(data));
 
-const sendError = (ws, code, message, recoverable = true) =>
-  send(ws, { type: S2C.ERROR, code, message, recoverable });
+function incidentForSocket(ws, { accountId = null, kind, code, roomId, matchId, mode, phase, valueMs } = {}) {
+  const room = ws?.room ? rooms.get(ws.room) : null;
+  const player = room?.players.get(ws?.id);
+  const id = String(accountId || ws?.accountId || player?.accountId || '');
+  if (!id) return false;
+  return incidentDiagnostics.record({
+    accountId: id,
+    kind,
+    code,
+    roomId: roomId === undefined ? room?.code : roomId,
+    matchId: matchId === undefined ? room?.matchId : matchId,
+    mode: mode === undefined ? room?.mode : mode,
+    phase: phase === undefined ? room?.state || (ws?.room ? null : 'roomless') : phase,
+    device: ws?.device,
+    valueMs
+  });
+}
+
+const sendError = (ws, code, message, recoverable = true) => {
+  incidentForSocket(ws, { kind: 'network-error', code });
+  return send(ws, { type: S2C.ERROR, code, message, recoverable });
+};
 
 // Сериализуем полезную нагрузку один раз на всю комнату. Раньше JSON.stringify вызывался на каждого
 // получателя: при 16 игроках и 15 рассылках в секунду это 240 сериализаций одного и того же объекта.
@@ -909,6 +931,11 @@ function handleDisconnect(ws) {
 
   if (!ws.room) {
     const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
+    incidentForSocket(ws, {
+      kind: 'connection',
+      code: 'disconnected',
+      phase: queued === -1 ? 'roomless' : 'matchmaking'
+    });
     if (queued !== -1) {
       coopMatchmaking.splice(queued, 1);
       gameplay.count('matchmaking_queue_exit', {
@@ -932,6 +959,7 @@ function handleDisconnect(ws) {
   }
   player.ws = null;
   player.disconnectedAt = Date.now();
+  incidentForSocket(ws, { accountId: player.accountId, kind: 'connection', code: 'disconnected' });
   if (
     room.mode === GAME_MODE.COOP &&
     (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)
@@ -965,6 +993,15 @@ function expireDisconnectedPlayers(now = Date.now()) {
           trackEvent(productEvents, 'matchAbandoned');
         }
         gameplay.count('match_abandoned', dims(room, player, `cp${player.checkpoint ?? 0}`));
+        incidentForSocket(player.ws, {
+          accountId: player.accountId,
+          kind: 'match',
+          code: 'abandoned',
+          roomId: room.code,
+          matchId: room.matchId,
+          mode: room.mode,
+          phase: room.state
+        });
       }
       dropPlayer(room, player.id);
     }
@@ -1090,6 +1127,7 @@ function enqueueCoop(ws, message) {
       queuedAt: now
     });
     trackEvent(productEvents, 'matchmakingStarted');
+    incidentForSocket(ws, { kind: 'matchmaking', code: 'queued', phase: 'matchmaking' });
     return send(ws, { type: S2C.MATCHMAKING_WAITING, waitedMs: 0 });
   }
 
@@ -1106,6 +1144,13 @@ function enqueueCoop(ws, message) {
     dims(room, room.players.get(partner.ws.id))
   );
   trackEvent(productEvents, 'matchmakingMatched');
+  incidentForSocket(partner.ws, {
+    kind: 'matchmaking',
+    code: 'matched',
+    phase: room.state,
+    valueMs: now - partner.queuedAt
+  });
+  incidentForSocket(ws, { kind: 'matchmaking', code: 'matched', phase: room.state });
   log('info', 'matchmaking_matched', { roomId: room.code, chapterId, waitedMs: now - partner.queuedAt });
   beginCountdown(room);
 }
@@ -1153,6 +1198,7 @@ function resume(ws, token) {
   // accountId этого player; заранее привязанный другой account занять его место не может.
   if (player.accountId && !networkIdentity.allowed(player.accountId)) {
     ws.accountAccessDenied = true;
+    ws.accountAccessDeniedAccountId = player.accountId;
     return false;
   }
   if (!networkIdentity.bindResumedPlayer(ws, player)) return false;
@@ -1189,6 +1235,7 @@ function resume(ws, token) {
   metrics.reconnects++;
   metrics.resumeSucceeded++;
   trackEvent(productEvents, 'connectionRecovered');
+  incidentForSocket(ws, { accountId: player.accountId, kind: 'connection', code: 'resumed' });
 
   // Токен возвращается вместе с ответом. Клиенту он нужен: при подключении сервер выдал ему
   // новый временный токен в `hello`, и без этой строки клиент сохранил бы у себя токен,
@@ -1328,7 +1375,18 @@ function beginCountdown(room) {
   room.pairEndedTracked = false;
   metrics.matchesStarted++;
   trackEvent(productEvents, 'matchStarted');
-  for (const item of room.players.values()) gameplay.count('match_started', dims(room, item));
+  for (const item of room.players.values()) {
+    gameplay.count('match_started', dims(room, item));
+    incidentForSocket(item.ws, {
+      accountId: item.accountId,
+      kind: 'match',
+      code: 'started',
+      roomId: room.code,
+      matchId: room.matchId,
+      mode: room.mode,
+      phase: room.state
+    });
+  }
   if (room.mode === GAME_MODE.COOP) {
     for (const item of room.players.values()) gameplay.count('chapter_started', dims(room, item));
   }
@@ -1498,6 +1556,16 @@ function finishMatch(room) {
       entry.time,
       dims(room, player, entry.verified ? 'verified' : 'unverified')
     );
+    incidentForSocket(player?.ws, {
+      accountId: player?.accountId,
+      kind: 'match',
+      code: 'completed',
+      roomId: room.code,
+      matchId: room.matchId,
+      mode: room.mode,
+      phase: room.state,
+      valueMs: entry.time
+    });
   }
   const verificationFailed = board.some(entry => !entry.verified);
   const coopTime = board.length ? Math.max(...board.map(entry => entry.time)) : null;
@@ -1692,6 +1760,11 @@ wss.on('connection', (ws, req) => {
                 : 'WebSocket ticket недействителен, истёк или уже использован.';
         sendError(ws, code, detail, false);
         if (authenticated.reason === 'blocked-account') {
+          incidentForSocket(ws, {
+            accountId: ws.accountAccessDeniedAccountId,
+            kind: 'auth',
+            code: 'account-sanctioned'
+          });
           try {
             ws.close(4003, 'account-sanctioned');
           } catch {
@@ -1701,6 +1774,7 @@ wss.on('connection', (ws, req) => {
         return;
       }
       bindAuthenticatedSocketToRoom(ws, authenticated.accountId);
+      incidentForSocket(ws, { accountId: authenticated.accountId, kind: 'auth', code: 'authenticated' });
       return send(ws, { type: S2C.AUTHENTICATED, accountId: authenticated.accountId });
     }
 
@@ -1710,6 +1784,11 @@ wss.on('connection', (ws, req) => {
       if (resume(ws, message.token)) return;
       metrics.resumeFailed++;
       if (ws.accountAccessDenied) {
+        incidentForSocket(ws, {
+          accountId: ws.accountAccessDeniedAccountId,
+          kind: 'auth',
+          code: 'account-sanctioned'
+        });
         log('info', 'resume_sanctioned', { playerId: ws.id });
         sendError(ws, ERROR_CODES.ACCOUNT_SANCTIONED, 'Онлайн-доступ аккаунта ограничен модерацией.', false);
         try {
@@ -1749,6 +1828,7 @@ wss.on('connection', (ws, req) => {
           device: ws.device || 'desktop'
         });
         gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'button', device: ws.device });
+        incidentForSocket(ws, { kind: 'matchmaking', code: 'cancelled', phase: 'matchmaking' });
       }
       return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, waitedMs: 0 });
     }
@@ -1775,6 +1855,7 @@ wss.on('connection', (ws, req) => {
           device: ws.device || 'desktop'
         });
         gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'away', device: ws.device });
+        incidentForSocket(ws, { kind: 'matchmaking', code: 'away', phase: 'matchmaking' });
         return send(ws, {
           type: S2C.MATCHMAKING_WAITING,
           cancelled: true,
@@ -1822,7 +1903,9 @@ wss.on('connection', (ws, req) => {
       rooms.set(code, room);
       trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
-      return addPlayer(room, ws, message.name, message.playerId);
+      addPlayer(room, ws, message.name, message.playerId);
+      incidentForSocket(ws, { kind: 'room', code: 'created' });
+      return;
     }
 
     if (message.type === C2S.JOIN_ROOM) {
@@ -1836,7 +1919,9 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
       trackEvent(productEvents, 'roomJoined');
-      return addPlayer(room, ws, message.name, message.playerId);
+      addPlayer(room, ws, message.name, message.playerId);
+      incidentForSocket(ws, { kind: 'room', code: 'joined' });
+      return;
     }
 
     const room = rooms.get(ws.room);
@@ -2182,6 +2267,7 @@ wss.on('connection', (ws, req) => {
   // `error` тоже ведёт к разрыву, но состояние меняем один раз — этим занимается
   // `disconnectHandled` внутри. Здесь только причина в лог.
   ws.on('error', error => {
+    incidentForSocket(ws, { kind: 'connection', code: 'socket-error' });
     log('warn', 'socket_error', { playerId: ws.id, message: error?.message });
     handleDisconnect(ws);
   });
@@ -2380,6 +2466,7 @@ module.exports = {
   verifiedLeaderboard,
   accounts,
   gameplay,
+  incidentDiagnostics,
   socialSafety,
   coopMatchCompatible,
   beginOperationalDrain,

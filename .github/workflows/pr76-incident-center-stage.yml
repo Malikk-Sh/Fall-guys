@@ -1,0 +1,85 @@
+name: PR76 Incident Center Stage
+
+on:
+  push:
+    branches: [feat/live-incident-diagnostics]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/live-incident-diagnostics
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply Incident Center implementation
+        run: python3 tools/pr76_incident_center.py
+
+      - name: Format changed source
+        run: |
+          npx prettier --write \
+            server/migrations/014_player_incident_diagnostics.js \
+            server/incidentDiagnostics.js \
+            server/incidentDiagnostics.test.mjs \
+            server/adminIncidentRoutes.test.mjs \
+            server/migrations/index.js \
+            server/migrations.test.mjs \
+            server/adminAuth.js \
+            server/adminPlayerSupport.js \
+            server/adminControl.js \
+            server/adminRoutes.js \
+            server/bootstrap.js \
+            server/networkIdentity.js \
+            server/index.js \
+            server/socketAuthIntegration.test.mjs \
+            client/admin/index.html \
+            client/admin/admin.js \
+            package.json
+
+      - name: Run focused Incident Center tests
+        run: |
+          node --test \
+            server/incidentDiagnostics.test.mjs \
+            server/adminIncidentRoutes.test.mjs \
+            server/adminPlayerSupport.test.mjs \
+            server/adminPlayerSupportRoutes.test.mjs \
+            server/adminControlPlane.test.mjs \
+            server/networkIdentity.test.mjs \
+            server/socketAuthIntegration.test.mjs \
+            server/migrations.test.mjs
+
+      - name: Lint source
+        run: npm run check
+
+      - name: Run full unit and integration suite
+        run: npm test
+
+      - name: Commit verified implementation
+        run: |
+          set -euo pipefail
+          git restore tools/pr76_incident_center.py .github/workflows/pr76-incident-center-stage.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No verified implementation changes to commit.' >&2
+            exit 1
+          fi
+          git commit -m 'Add live player incident diagnostics'
+          git push origin HEAD:feat/live-incident-diagnostics

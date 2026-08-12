@@ -4,7 +4,7 @@ module.exports = {
   version: 15,
   sql: `
     CREATE TABLE service_reliability_samples (
-      sampled_at INTEGER PRIMARY KEY,
+      sampled_at INTEGER NOT NULL,
       version TEXT NOT NULL,
       commit_sha TEXT NOT NULL,
       release_tag TEXT NOT NULL DEFAULT '',
@@ -19,7 +19,8 @@ module.exports = {
       handler_errors INTEGER NOT NULL,
       socket_send_failures INTEGER NOT NULL,
       capacity_rejected INTEGER NOT NULL,
-      snapshots_skipped_for_load INTEGER NOT NULL
+      snapshots_skipped_for_load INTEGER NOT NULL,
+      PRIMARY KEY (sampled_at, commit_sha)
     );
 
     CREATE TABLE service_reliability_events (

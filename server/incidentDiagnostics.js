@@ -114,7 +114,7 @@ class IncidentDiagnostics {
     if (!Number.isSafeInteger(rateNow) || rateNow < 0 || !this.#allowWrite(id, rateNow)) return false;
     if (!this.statements.accountExists.get(id)) return false;
 
-    this.#prune(at);
+    this.pruneExpired(at);
     this.statements.insert.run(
       id,
       at,
@@ -137,7 +137,7 @@ class IncidentDiagnostics {
     if (!id || !Number.isSafeInteger(at) || at < 0) return null;
     const account = this.statements.account.get(id);
     if (!account) return null;
-    this.#prune(at, true);
+    this.pruneExpired(at, { force: true });
     const from = at - this.retentionDays * DAY_MS;
     const requestedLimit = clampLimit(limit, this.maxPerAccount);
     const rowsWithSentinel = this.statements.timeline.all(id, from, requestedLimit + 1);
@@ -196,10 +196,13 @@ class IncidentDiagnostics {
     return true;
   }
 
-  #prune(now, force = false) {
-    if (!force && now - this.lastPrunedAt < HOUSEKEEPING_INTERVAL_MS) return;
-    this.lastPrunedAt = now;
-    this.statements.prune.run(now - this.retentionDays * DAY_MS);
+  pruneExpired(now = this.now(), { force = false } = {}) {
+    const at = Number(now);
+    if (!Number.isSafeInteger(at) || at < 0) return 0;
+    if (!force && at - this.lastPrunedAt < HOUSEKEEPING_INTERVAL_MS) return 0;
+    const result = this.statements.prune.run(at - this.retentionDays * DAY_MS);
+    this.lastPrunedAt = at;
+    return Number(result?.changes || 0);
   }
 }
 

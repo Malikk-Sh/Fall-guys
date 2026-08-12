@@ -23,6 +23,7 @@ const {
   DEFAULT_OFFSITE_SENTINEL,
   createBackup,
   createLegacySnapshot,
+  createSnapshot,
   restoreDatabaseFile,
   verifyBackup,
   verifyLegacyBackup
@@ -365,6 +366,57 @@ test('verified local and offsite backups exclude ephemeral player incident rows'
       }
     }
   } finally {
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('snapshot is scrubbed before atomic publication to its visible path', () => {
+  const f = fixture();
+  const fs = require('node:fs');
+  const originalRename = fs.renameSync;
+  try {
+    const accounts = new Accounts({ db: f.db });
+    const player = accounts.create('Atomic Privacy Snapshot');
+    f.db
+      .prepare(
+        `INSERT INTO player_incident_events
+          (account_id, occurred_at, kind, code, room_ref, match_ref, mode, phase, device, value_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(player.id, 1, 'connection', 'disconnected', null, null, null, null, 'desktop', null);
+
+    const outputFile = join(f.backupDir, 'manual-privacy.db');
+    let inspectedPublication = false;
+    fs.renameSync = (source, target) => {
+      if (target === outputFile) {
+        inspectedPublication = true;
+        assert.equal(existsSync(outputFile), false, 'visible backup must not exist before publication');
+        const staged = new DatabaseSync(source);
+        try {
+          assert.equal(
+            staged.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count,
+            0,
+            'publish-stage bytes must already be scrubbed'
+          );
+        } finally {
+          staged.close();
+        }
+      }
+      return originalRename(source, target);
+    };
+
+    const result = createSnapshot({ databaseFile: f.databaseFile, outputFile });
+    assert.equal(inspectedPublication, true);
+    assert.equal(result.file, outputFile);
+    assert.equal(existsSync(outputFile), true);
+    assert.equal(
+      readdirSync(f.backupDir).some(name => name.includes('.publish-')),
+      false,
+      'publication temp must be cleaned'
+    );
+  } finally {
+    fs.renameSync = originalRename;
     f.db.close();
     rmSync(f.dir, { recursive: true, force: true });
   }

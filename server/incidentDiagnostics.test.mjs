@@ -81,6 +81,22 @@ test('incident diagnostics prunes retention and bounds rows per account', () => 
   db.close();
 });
 
+test('periodic incident housekeeping expires quiet-account rows without new activity', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const id = account(db, 'dddddddd-eeee-ffff-0000-111111111111');
+  let now = 1_000;
+  const day = 24 * 60 * 60 * 1000;
+  const incidents = new IncidentDiagnostics({ db, now: () => now, retentionDays: 1 });
+  assert.equal(incidents.record({ accountId: id, kind: 'connection', code: 'disconnected' }), true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 1);
+
+  now += 2 * day;
+  assert.equal(incidents.pruneExpired(now, { force: true }), 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 0);
+  db.close();
+});
+
 test('incident timeline returns null for an unknown account', () => {
   const db = openDatabase(':memory:');
   migrateDatabase(db);

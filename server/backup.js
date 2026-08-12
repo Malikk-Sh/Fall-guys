@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { DatabaseSync } = require('node:sqlite');
 const { MIGRATIONS } = require('./migrations');
 
@@ -133,35 +134,36 @@ function createSnapshot({ databaseFile, outputFile }) {
   ensureDirectory(path.dirname(output));
   if (fs.existsSync(output)) throw new Error(`backup already exists: ${output}`);
 
-  const db = new DatabaseSync(sourceFile);
+  const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-backup-stage-'));
+  const rawStage = path.join(stagingDir, 'snapshot.db');
+  const publishStage = `${output}.publish-${process.pid}-${Date.now()}`;
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    // VACUUM INTO reads a transactionally consistent snapshot even when the live DB uses WAL.
-    // Copying only leaderboard.db could miss committed rows that still live in leaderboard.db-wal.
-    db.exec(`VACUUM INTO ${sqlString(output)}`);
-  } catch (error) {
+    const db = new DatabaseSync(sourceFile);
     try {
-      fs.rmSync(output, { force: true });
-    } catch {
-      // Preserve the original SQLite error.
+      db.exec('PRAGMA busy_timeout = 5000');
+      // VACUUM INTO reads a transactionally consistent snapshot even when the live DB uses WAL.
+      // The raw snapshot is created outside the managed backup tree so a killed process cannot
+      // expose unsanitized incident history as a visible hourly/daily backup.
+      db.exec(`VACUUM INTO ${sqlString(rawStage)}`);
+    } finally {
+      db.close();
     }
-    throw error;
+
+    scrubEphemeralBackupData(rawStage);
+    verifyBackup(rawStage);
+
+    // Only scrubbed bytes enter the destination filesystem. The adjacent temporary name is not a
+    // managed .db snapshot, and rename publishes it atomically after a second verification.
+    fs.copyFileSync(rawStage, publishStage, fs.constants.COPYFILE_EXCL);
+    const verification = verifyBackup(publishStage);
+    fs.renameSync(publishStage, output);
+    return { file: output, ...verification };
   } finally {
-    db.close();
-  }
-  try {
-    scrubEphemeralBackupData(output);
-    return { file: output, ...verifyBackup(output) };
-  } catch (error) {
-    try {
-      fs.rmSync(output, { force: true });
-      fs.rmSync(`${output}-journal`, { force: true });
-      fs.rmSync(`${output}-wal`, { force: true });
-      fs.rmSync(`${output}-shm`, { force: true });
-    } catch {
-      // Preserve the scrub/verification error.
-    }
-    throw error;
+    fs.rmSync(publishStage, { force: true });
+    fs.rmSync(`${publishStage}-journal`, { force: true });
+    fs.rmSync(`${publishStage}-wal`, { force: true });
+    fs.rmSync(`${publishStage}-shm`, { force: true });
+    fs.rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 

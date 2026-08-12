@@ -909,6 +909,15 @@ function leave(ws) {
     // которого не пошли.
     const leaver = room.players.get(ws.id);
     gameplay.count('match_abandoned', dims(room, leaver, `cp${leaver?.checkpoint ?? 0}`));
+    incidentForSocket(ws, {
+      accountId: leaver?.accountId,
+      kind: 'match',
+      code: 'abandoned',
+      roomId: room.code,
+      matchId: room.matchId,
+      mode: room.mode,
+      phase: room.state
+    });
     markUnranked(room, 'left');
   }
   if (ws.token) {
@@ -2350,6 +2359,16 @@ const snapshotTimer = setInterval(() => {
 }, 66);
 snapshotTimer.unref();
 
+function pruneIncidentDiagnostics(now = Date.now()) {
+  try {
+    return incidentDiagnostics.pruneExpired(now);
+  } catch {
+    // Diagnostics are observability only. A retention cleanup failure must never stop gameplay.
+    process.stderr.write('[wobble] incident_diagnostics_housekeeping_failed\n');
+    return 0;
+  }
+}
+
 const heartbeatTimer = setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
@@ -2361,6 +2380,7 @@ const heartbeatTimer = setInterval(() => {
   }
 
   const now = Date.now();
+  pruneIncidentDiagnostics(now);
 
   // Игроки, не вернувшиеся за отведённое время, освобождают слот и считаются
   // abandon только после истечения grace period — краткий обрыв с успешным resume им не является.
@@ -2491,6 +2511,7 @@ module.exports = {
   accounts,
   gameplay,
   incidentDiagnostics,
+  pruneIncidentDiagnostics,
   socialSafety,
   coopMatchCompatible,
   beginOperationalDrain,

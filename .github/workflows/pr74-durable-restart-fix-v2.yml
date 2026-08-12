@@ -1,0 +1,210 @@
+name: PR74 durable restart and admission fixes v2
+
+on:
+  push:
+    branches: [feat/maintenance-operations]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/maintenance-operations
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Apply reviewed fixes with structural anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 anchor, found {count}')
+              return text.replace(old, new, 1)
+
+          install_path = Path('deploy/install.sh')
+          install = install_path.read_text()
+          install = replace_once(
+              install,
+              'systemctl restart wobble-ops.socket\n\nsay "Преддеплойная резервная копия"',
+              'systemctl restart wobble-ops.socket\n# Start the helper immediately so a persisted graceful-restart monitor is recovered even before\n# another admin request arrives. Restart=on-failure handles an unexpected helper crash afterwards.\nsystemctl start wobble-ops.service\n\nsay "Преддеплойная резервная копия"',
+              'installer helper start',
+          )
+          install_path.write_text(install)
+
+          index_path = Path('server/index.js')
+          index = index_path.read_text()
+          index = replace_once(
+              index,
+              'function enqueueCoop(ws, message) {\n  leave(ws);',
+              "function enqueueCoop(ws, message) {\n  if (operationalState.isDraining()) {\n    send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });\n    return false;\n  }\n  leave(ws);",
+              'matchmaking drain admission',
+          )
+
+          next_pattern = re.compile(
+              r"(  if \(\n"
+              r"    room\.mode === GAME_MODE\.COOP &&\n"
+              r"    enoughPlayers &&\n"
+              r"    decided &&\n"
+              r"    active\.every\(player => player\.resultChoice === 'next'\)\n"
+              r"  \) \{\n)"
+          )
+          index, count = next_pattern.subn(
+              r"\1    if (operationalState.isDraining()) {\n"
+              r"      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });\n"
+              r"      return true;\n"
+              r"    }\n",
+              index,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'next chapter drain admission: expected 1 anchor, found {count}')
+
+          rematch = "  if (enoughPlayers && decided && active.every(player => player.resultChoice === 'rematch')) {\n"
+          index = replace_once(
+              index,
+              rematch,
+              rematch
+              + "    if (operationalState.isDraining()) {\n"
+              + "      broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });\n"
+              + "      return true;\n"
+              + "    }\n",
+              'rematch drain admission',
+          )
+          index_path.write_text(index)
+
+          test_path = Path('server/adminOperations.test.mjs')
+          tests = test_path.read_text()
+          tests = replace_once(
+              tests,
+              "  ACTIONS,\n  MAINTENANCE_FLAG,\n  createServer,\n  maintenanceEnabled,\n  readWobbleOperationalHealth,\n  setMaintenance,\n  validateRequest\n",
+              "  ACTIONS,\n  MAINTENANCE_FLAG,\n  RESTART_MARKER,\n  clearRestartMarker,\n  createServer,\n  maintenanceEnabled,\n  readRestartMarker,\n  readWobbleOperationalHealth,\n  setMaintenance,\n  validateRequest,\n  writeRestartMarker\n",
+              'marker imports',
+          )
+
+          marker_anchor = "test('operational drain state is process-wide and one-way for the retiring process', () => {\n"
+          marker_test = """test('restart monitor state survives helper restart through one fixed durable marker', () => {
+            assert.equal(RESTART_MARKER, '/run/wobble-ops/restart.json');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-restart-marker-test-'));
+            const markerPath = path.join(dir, 'restart.json');
+            const marker = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+            try {
+              assert.equal(readRestartMarker(markerPath), null);
+              assert.equal(writeRestartMarker(marker, markerPath), true);
+              assert.deepEqual(readRestartMarker(markerPath), marker);
+              fs.writeFileSync(markerPath, '{broken json');
+              assert.equal(readRestartMarker(markerPath), null);
+              assert.equal(writeRestartMarker(marker, markerPath), true);
+              assert.equal(clearRestartMarker(markerPath), true);
+              assert.equal(readRestartMarker(markerPath), null);
+            } finally {
+              fs.rmSync(dir, { recursive: true, force: true });
+            }
+          });
+
+          """.replace('          ', '')
+          tests = replace_once(tests, marker_anchor, marker_test + marker_anchor, 'restart marker test')
+
+          preserve = "  assert.match(helperUnit, /^RuntimeDirectoryPreserve=yes$/m);\n"
+          tests = replace_once(
+              tests,
+              preserve,
+              preserve
+              + "  assert.match(helperUnit, /^Restart=on-failure$/m);\n"
+              + "  assert.match(helperUnit, /^RestartSec=1s$/m);\n",
+              'helper restart assertions',
+          )
+
+          restart_at = tests.index("test('operational restart is serialized")
+          if restart_at < 0:
+              raise SystemExit('operational restart test not found')
+          head, tail = tests[:restart_at], tests[restart_at:]
+          source = "  const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');\n"
+          tail = replace_once(
+              tail,
+              source,
+              source + "  const install = fs.readFileSync(path.join(root, 'deploy/install.sh'), 'utf8');\n",
+              'restart installer source',
+          )
+          tests = head + tail
+
+          ready = "  assert.match(helper, /const READY_STREAK_REQUIRED = 3/);\n"
+          tests = replace_once(
+              tests,
+              ready,
+              ready
+              + "  assert.match(helper, /export const RESTART_MARKER = '\\/run\\/wobble-ops\\/restart\\.json'/);\n"
+              + "  assert.match(helper, /recoverRestartMonitor\\(\\);/);\n"
+              + "  const markerWriteAt = helper.indexOf('if (!writeRestartMarker(marker))');\n"
+              + "  const signalAt = helper.indexOf(\"['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service']\");\n"
+              + "  assert.ok(markerWriteAt >= 0 && signalAt > markerWriteAt);\n"
+              + "  const socketRestartAt = install.indexOf('systemctl restart wobble-ops.socket');\n"
+              + "  const helperStartAt = install.indexOf('systemctl start wobble-ops.service');\n"
+              + "  assert.ok(socketRestartAt >= 0 && helperStartAt > socketRestartAt);\n",
+              'durable monitor assertions',
+          )
+
+          final = "  assert.match(helper, /restart timed out; maintenance remains enabled/);\n"
+          ordering = """
+            const enqueueAt = index.indexOf('function enqueueCoop(ws, message)');
+            const enqueueDrainAt = index.indexOf('if (operationalState.isDraining())', enqueueAt);
+            const enqueueLeaveAt = index.indexOf('leave(ws);', enqueueAt);
+            assert.ok(enqueueAt >= 0 && enqueueDrainAt > enqueueAt && enqueueDrainAt < enqueueLeaveAt);
+
+            const resultsAt = index.indexOf('function resolveResultsDecision(room');
+            const nextChoiceAt = index.indexOf("player.resultChoice === 'next'", resultsAt);
+            const nextDrainAt = index.indexOf('if (operationalState.isDraining())', nextChoiceAt);
+            const nextMutationAt = index.indexOf('room.chapterId = nextChapterId;', nextChoiceAt);
+            assert.ok(nextChoiceAt >= 0 && nextDrainAt > nextChoiceAt && nextDrainAt < nextMutationAt);
+
+            const rematchChoiceAt = index.indexOf("player.resultChoice === 'rematch'", resultsAt);
+            const rematchDrainAt = index.indexOf('if (operationalState.isDraining())', rematchChoiceAt);
+            const rematchMetricAt = index.indexOf("gameplay.count('pair_continued'", rematchChoiceAt);
+            assert.ok(
+              rematchChoiceAt >= 0 &&
+                rematchDrainAt > rematchChoiceAt &&
+                rematchDrainAt < rematchMetricAt
+            );
+          """.replace('          ', '')
+          tests = replace_once(tests, final, final + ordering, 'admission ordering assertions')
+          test_path.write_text(tests)
+          PY
+
+          npx prettier --write deploy/wobble-ops-helper.mjs server/index.js server/adminOperations.test.mjs
+          git diff --check
+
+      - name: Focused production checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check server/index.js
+          node --check server/bootstrap.js
+          node --test server/adminOperations.test.mjs
+          node server/validateDeployScripts.mjs
+
+      - name: Commit reviewed fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/install.sh deploy/wobble-ops-helper.mjs server/index.js server/adminOperations.test.mjs
+          git commit -m "Recover restart monitor and guard drain side effects"
+          git push origin HEAD:feat/maintenance-operations

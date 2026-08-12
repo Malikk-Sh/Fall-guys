@@ -1,0 +1,166 @@
+name: PR74 final review fixes v2
+
+on:
+  push:
+    branches: [feat/maintenance-operations]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/maintenance-operations
+          fetch-depth: 0
+
+      - name: Apply final reviewed fixes with structural anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 anchor, found {count}')
+              return text.replace(old, new, 1)
+
+          helper_path = Path('deploy/wobble-ops-helper.mjs')
+          helper = helper_path.read_text()
+          helper_pattern = re.compile(
+              r"  if \(spec\.kind === 'maintenance'\) \{\n"
+              r"    if \(restartInFlight && spec\.enabled === false\) \{\n"
+              r"      return \{ ok: false, reason: 'operation-busy' \};\n"
+              r"    \}\n"
+              r"    return setMaintenance\(spec\.enabled\);\n"
+              r"  \}"
+          )
+          helper_replacement = """  if (spec.kind === 'maintenance') {
+            // Restart owns the maintenance flag until the new PID has passed readiness. Blocking both
+            // transitions prevents a manual enable during restart from being mistaken for the helper's
+            // temporary flag and removed by the completion monitor.
+            if (restartInFlight) return { ok: false, reason: 'operation-busy' };
+            return setMaintenance(spec.enabled);
+          }"""
+          helper_replacement = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in helper_replacement.splitlines()
+          )
+          helper, count = helper_pattern.subn(helper_replacement, helper, count=1)
+          if count != 1:
+              raise SystemExit(f'helper maintenance serialization: expected 1 anchor, found {count}')
+          helper_path.write_text(helper)
+
+          nginx_path = Path('deploy/nginx-locations.conf')
+          nginx = nginx_path.read_text()
+          nginx = replace_once(
+              nginx,
+              'location = /health/ops {\n    return 404;\n}',
+              'location ~* ^/health/ops$ {\n    return 404;\n}',
+              'nginx operational health',
+          )
+          nginx_path.write_text(nginx)
+
+          test_path = Path('server/adminOperations.test.mjs')
+          tests = test_path.read_text()
+          tests = replace_once(
+              tests,
+              "const { installAdminRoutes } = require('./adminRoutes');\n",
+              "const { installAdminRoutes } = require('./adminRoutes');\nconst operationalState = require('./operationalState');\n",
+              'operational state import',
+          )
+          tests = replace_once(
+              tests,
+              "test('operational health parser accepts only a valid PID and drain state', async t => {\n",
+              """test('operational drain state is process-wide and one-way for the retiring process', () => {
+                assert.equal(operationalState.isDraining(), false);
+                assert.equal(operationalState.beginDrain(), true);
+                assert.equal(operationalState.isDraining(), true);
+                assert.equal(operationalState.beginDrain(), false);
+              });
+
+              test('operational health parser accepts only a valid PID and drain state', async t => {
+              """.replace('              ', ''),
+              'operational state test',
+          )
+          nginx_anchor = "  assert.equal((nginxLocations.match(/\\/run\\/wobble-ops\\/maintenance/g) || []).length, 1);\n"
+          tests = replace_once(
+              tests,
+              nginx_anchor,
+              nginx_anchor
+              + "  assert.match(nginxLocations, /location ~\\* \\^\\/health\\/ops\\$/);\n"
+              + "  assert.doesNotMatch(nginxLocations, /location = \\/health\\/ops/);\n",
+              'nginx assertions',
+          )
+          restart_vars = (
+              "  const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');\n"
+              "  const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');\n"
+          )
+          tests = replace_once(
+              tests,
+              restart_vars,
+              "  const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');\n"
+              "  const index = fs.readFileSync(path.join(root, 'server/index.js'), 'utf8');\n"
+              "  const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');\n",
+              'restart source variables',
+          )
+          tests = replace_once(
+              tests,
+              "  assert.match(bootstrap, /core\\.app\\.get\\('\\/health\\/ops'/);\n",
+              "  assert.match(bootstrap, /operationalState\\.beginDrain\\(\\)/);\n"
+              "  assert.match(index, /app\\.get\\('\\/health\\/ops'/);\n"
+              "  assert.match(index, /req\\.path !== '\\/health\\/ops'/);\n"
+              "  assert.match(index, /pid: process\\.pid/);\n"
+              "  assert.match(index, /draining: operationalState\\.isDraining\\(\\)/);\n"
+              "  assert.match(index, /const ready =[\\s\\S]*!operationalState\\.isDraining\\(\\)/);\n"
+              "  assert.match(index, /verifyClient:[\\s\\S]*!operationalState\\.isDraining\\(\\)/);\n"
+              "  assert.match(\n"
+              "    index,\n"
+              "    /function beginCountdown\\(room\\) \\{[\\s\\S]*operationalState\\.isDraining\\(\\)[\\s\\S]*S2C\\.SERVER_SHUTDOWN/\n"
+              "  );\n",
+              'restart health assertions',
+          )
+          tests = replace_once(
+              tests,
+              "  assert.match(bootstrap, /return res\\.json\\(\\{ ok: true, pid: process\\.pid, draining \\}\\)/);\n",
+              '',
+              'obsolete bootstrap health assertion',
+          )
+          helper_anchor = "  assert.match(helper, /signal\\.reason !== 'operation-timeout'/);\n"
+          tests = replace_once(
+              tests,
+              helper_anchor,
+              helper_anchor
+              + "  assert.match(\n"
+              + "    helper,\n"
+              + "    /if \\(spec\\.kind === 'maintenance'\\) \\{[\\s\\S]*if \\(restartInFlight\\) return \\{ ok: false, reason: 'operation-busy' \\}/\n"
+              + "  );\n",
+              'restart maintenance ownership assertion',
+          )
+          test_path.write_text(tests)
+          PY
+
+          npx prettier --write deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs
+          git diff --check
+          grep -Fn "location ~* ^/health/ops$" deploy/nginx-locations.conf
+          grep -Fn "if (restartInFlight) return" deploy/wobble-ops-helper.mjs
+          grep -Fn "operationalState.isDraining" server/index.js
+
+      - name: Run focused operation tests
+        run: node --test server/adminOperations.test.mjs
+
+      - name: Commit fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/wobble-ops-helper.mjs deploy/nginx-locations.conf server/adminOperations.test.mjs
+          git commit -m "Close graceful restart lifecycle races"
+          git push origin HEAD:feat/maintenance-operations

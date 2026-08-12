@@ -1,0 +1,68 @@
+name: PR75 Logout Hardening
+
+on:
+  push:
+    branches: [feat/player-support-center]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/player-support-center
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply logout hardening
+        run: python3 tools/pr75_hardening.py
+
+      - name: Format changed source
+        run: |
+          npx prettier --write \
+            server/adminControl.js \
+            server/adminRoutes.js \
+            server/adminPlayerSupportRoutes.test.mjs
+
+      - name: Run focused support tests
+        run: |
+          node --test \
+            server/adminPlayerSupport.test.mjs \
+            server/adminPlayerSupportRoutes.test.mjs \
+            server/networkIdentity.test.mjs \
+            server/auth.test.mjs \
+            server/adminControlPlane.test.mjs
+
+      - name: Lint source
+        run: npm run check
+
+      - name: Run full unit and integration suite
+        run: npm test
+
+      - name: Commit verified hardening
+        run: |
+          set -euo pipefail
+          git restore tools/pr75_hardening.py .github/workflows/pr75-hardening.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No verified hardening changes to commit.' >&2
+            exit 1
+          fi
+          git commit -m 'Harden player support logout cleanup'
+          git push origin HEAD:feat/player-support-center

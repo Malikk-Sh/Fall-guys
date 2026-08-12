@@ -28,52 +28,19 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Repair staging selectors
-        run: python3 tools/pr76_stage_repair.py
+      - name: Apply observability fail-safe hardening
+        run: python3 tools/pr76_observability_hardening.py
 
-      - name: Apply Incident Center implementation
-        run: python3 tools/pr76_incident_center.py
+      - name: Format hardening changes
+        run: npx prettier --write server/index.js server/socketAuthIntegration.test.mjs
 
-      - name: Repair generated lint boundary
-        run: python3 tools/pr76_generated_repair.py
-
-      - name: Preserve NetworkIdentity blocked-auth contract
-        run: python3 tools/pr76_network_contract_repair.py
-
-      - name: Format changed source
-        run: |
-          npx prettier --write \
-            server/migrations/014_player_incident_diagnostics.js \
-            server/incidentDiagnostics.js \
-            server/incidentDiagnostics.test.mjs \
-            server/adminIncidentRoutes.test.mjs \
-            server/migrations/index.js \
-            server/migrations.test.mjs \
-            server/adminAuth.js \
-            server/adminPlayerSupport.js \
-            server/adminControl.js \
-            server/adminRoutes.js \
-            server/bootstrap.js \
-            server/networkIdentity.js \
-            server/networkSanctions.test.mjs \
-            server/index.js \
-            server/socketAuthIntegration.test.mjs \
-            client/admin/index.html \
-            client/admin/admin.js \
-            package.json
-
-      - name: Run focused Incident Center tests
+      - name: Run focused diagnostics and socket tests
         run: |
           node --test \
             server/incidentDiagnostics.test.mjs \
             server/adminIncidentRoutes.test.mjs \
-            server/adminPlayerSupport.test.mjs \
-            server/adminPlayerSupportRoutes.test.mjs \
-            server/adminControlPlane.test.mjs \
-            server/networkIdentity.test.mjs \
             server/networkSanctions.test.mjs \
-            server/socketAuthIntegration.test.mjs \
-            server/migrations.test.mjs
+            server/socketAuthIntegration.test.mjs
 
       - name: Lint source
         run: npm run check
@@ -81,16 +48,16 @@ jobs:
       - name: Run full unit and integration suite
         run: npm test
 
-      - name: Commit verified implementation
+      - name: Commit verified hardening
         run: |
           set -euo pipefail
-          git restore tools/pr76_incident_center.py tools/pr76_stage_repair.py tools/pr76_generated_repair.py tools/pr76_network_contract_repair.py .github/workflows/pr76-incident-center-stage.yml
+          git restore tools/pr76_observability_hardening.py .github/workflows/pr76-incident-center-stage.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           if git diff --cached --quiet; then
-            echo 'No verified implementation changes to commit.' >&2
+            echo 'No verified hardening changes to commit.' >&2
             exit 1
           fi
-          git commit -m 'Add live player incident diagnostics'
+          git commit -m 'Keep incident diagnostics fail-safe'
           git push origin HEAD:feat/live-incident-diagnostics

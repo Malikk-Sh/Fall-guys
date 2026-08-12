@@ -319,3 +319,53 @@ test('in-memory development database does not create a false production backup a
   assert.equal(status.stale, false);
   assert.equal(backupFresh(status), true);
 });
+
+test('verified local and offsite backups exclude ephemeral player incident rows', () => {
+  const f = fixture();
+  try {
+    const accounts = new Accounts({ db: f.db });
+    const player = accounts.create('Private Incident Backup');
+    f.db
+      .prepare(
+        `INSERT INTO player_incident_events
+          (account_id, occurred_at, kind, code, room_ref, match_ref, mode, phase, device, value_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        player.id,
+        1234,
+        'connection',
+        'disconnected',
+        'abcdef123456',
+        null,
+        'coop',
+        'PLAYING',
+        'mobile',
+        null
+      );
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 1);
+
+    const offsiteDir = mountedOffsite(f.dir);
+    const result = createBackup({
+      databaseFile: f.databaseFile,
+      backupDir: f.backupDir,
+      statusFile: f.statusFile,
+      offsiteDir,
+      now: Date.UTC(2026, 7, 12, 12, 0, 0)
+    });
+
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 1);
+    for (const file of [result.backupFile, join(offsiteDir, result.status.offsite.file)]) {
+      const copy = new DatabaseSync(file);
+      try {
+        assert.equal(copy.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 0);
+        assert.equal(verifyBackup(file).schemaVersion, CURRENT_SCHEMA_VERSION);
+      } finally {
+        copy.close();
+      }
+    }
+  } finally {
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});

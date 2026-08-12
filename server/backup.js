@@ -110,6 +110,22 @@ function verifyBackup(file, { maxSchemaVersion = CURRENT_SCHEMA_VERSION } = {}) 
   }
 }
 
+function scrubEphemeralBackupData(file) {
+  const db = new DatabaseSync(path.resolve(String(file || '')));
+  try {
+    const exists = db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'player_incident_events'")
+      .get();
+    if (!exists) return false;
+    // `secure_delete` overwrites deleted cells and VACUUM rebuilds the snapshot, so copied backup
+    // bytes do not preserve incident payload in free pages. The live database is never modified.
+    db.exec('PRAGMA secure_delete = ON; DELETE FROM player_incident_events; VACUUM;');
+    return true;
+  } finally {
+    db.close();
+  }
+}
+
 function createSnapshot({ databaseFile, outputFile }) {
   const sourceFile = ensureFileDatabase(databaseFile);
   if (!fs.existsSync(sourceFile)) throw new Error(`database does not exist: ${sourceFile}`);
@@ -133,7 +149,20 @@ function createSnapshot({ databaseFile, outputFile }) {
   } finally {
     db.close();
   }
-  return { file: output, ...verifyBackup(output) };
+  try {
+    scrubEphemeralBackupData(output);
+    return { file: output, ...verifyBackup(output) };
+  } catch (error) {
+    try {
+      fs.rmSync(output, { force: true });
+      fs.rmSync(`${output}-journal`, { force: true });
+      fs.rmSync(`${output}-wal`, { force: true });
+      fs.rmSync(`${output}-shm`, { force: true });
+    } catch {
+      // Preserve the scrub/verification error.
+    }
+    throw error;
+  }
 }
 
 function createLegacySnapshot({ databaseFile, outputFile }) {
@@ -409,6 +438,7 @@ module.exports = {
   verifyLegacyBackup,
   verifyBackup,
   createLegacySnapshot,
+  scrubEphemeralBackupData,
   createSnapshot,
   createBackup,
   restoreDatabaseFile,

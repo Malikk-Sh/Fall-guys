@@ -1169,8 +1169,11 @@ function renderIncidentTimeline(incident) {
   $('#incident-detail-name').textContent = account.name || 'Wobbler';
   $('#incident-detail-id').textContent =
     `${account.supportId || 'Support ID недоступен'} · ID аккаунта: ${account.id}`;
+  const coverage = incident.truncated
+    ? `показано ${formatNumber(incident.returnedEvents)} из ${formatNumber(summary.events)} событий`
+    : `показаны все ${formatNumber(incident.returnedEvents)} сохранённых событий`;
   $('#incident-meta').textContent =
-    `История хранится ${formatNumber(incident.retentionDays)} дней · сформировано ${formatTime(incident.generatedAt)} · сейчас ${formatNumber(incident.live?.sockets)} игровых WebSocket.`;
+    `История хранится ${formatNumber(incident.retentionDays)} дней · ${coverage} · сформировано ${formatTime(incident.generatedAt)} · сейчас ${formatNumber(incident.live?.sockets)} игровых WebSocket.`;
   $('#incident-summary-cards').replaceChildren(
     statCard('Событий', formatNumber(summary.events), `последнее ${formatTime(summary.lastEventAt)}`),
     statCard(
@@ -1212,7 +1215,7 @@ async function openIncidentTimeline(accountId, { preserveStatus = false } = {}) 
   const revision = ++state.incidentRevision;
   if (!preserveStatus) setStatus('Загружаю диагностику игрока…');
   try {
-    const payload = await api('/api/admin/incidents/player', { accountId, limit: 150 });
+    const payload = await api('/api/admin/incidents/player', { accountId, limit: 2000 });
     if (revision !== state.incidentRevision) return;
     renderIncidentTimeline(payload.incident);
     if (!preserveStatus) setStatus('Диагностика игрока загружена', 'good');
@@ -1272,6 +1275,9 @@ async function copyIncidentPackage() {
     version: 1,
     generatedAt: incident.generatedAt,
     retentionDays: incident.retentionDays,
+    maxEventsPerAccount: incident.maxEventsPerAccount,
+    returnedEvents: incident.returnedEvents,
+    truncated: incident.truncated,
     player: {
       supportId: incident.account?.supportId || null,
       name: incident.account?.name || 'Wobbler'

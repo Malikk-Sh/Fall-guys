@@ -43,6 +43,7 @@ test('incident diagnostics stores only allowlisted privacy-safe event fields', (
   const timeline = incidents.timeline(id, { now: 10_001 });
   assert.equal(timeline.summary.networkErrors, 1);
   assert.equal(timeline.events.length, 1);
+  assert.equal(Object.hasOwn(timeline.events[0], 'id'), false);
   assert.match(timeline.events[0].roomRef, /^[a-f0-9]{12}$/);
   assert.match(timeline.events[0].matchRef, /^[a-f0-9]{12}$/);
   const serialized = JSON.stringify(timeline);
@@ -86,5 +87,62 @@ test('incident timeline returns null for an unknown account', () => {
   const incidents = new IncidentDiagnostics({ db });
   assert.equal(incidents.timeline('missing'), null);
   assert.equal(incidents.record({ accountId: 'missing', kind: 'connection', code: 'disconnected' }), false);
+  db.close();
+});
+
+test('incident diagnostics rate-limits synchronous writes per account before storage', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const id = account(db, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff');
+  let now = 60_000;
+  const incidents = new IncidentDiagnostics({ db, now: () => now, maxWritesPerMinute: 5 });
+
+  for (let index = 0; index < 5; index += 1) {
+    assert.equal(incidents.record({ accountId: id, kind: 'network-error', code: 'INVALID_MESSAGE' }), true);
+  }
+  assert.equal(incidents.record({ accountId: id, kind: 'network-error', code: 'INVALID_MESSAGE' }), false);
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS count FROM player_incident_events WHERE account_id = ?').get(id).count,
+    5
+  );
+
+  now += 12_000;
+  assert.equal(incidents.record({ accountId: id, kind: 'connection', code: 'socket-error' }), true);
+  const timeline = incidents.timeline(id, { now });
+  assert.equal(
+    timeline.summary.networkErrors,
+    6,
+    'transport socket errors belong in the network-error total'
+  );
+  db.close();
+});
+
+test('incident timeline reports truncation and can return the full bounded retained history', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const id = account(db, 'cccccccc-dddd-eeee-ffff-000000000000');
+  let now = 100_000;
+  const incidents = new IncidentDiagnostics({
+    db,
+    now: () => now,
+    maxPerAccount: 10,
+    maxWritesPerMinute: 100
+  });
+  for (let index = 0; index < 10; index += 1) {
+    now += 1;
+    assert.equal(incidents.record({ accountId: id, kind: 'connection', code: 'disconnected' }), true);
+  }
+
+  const partial = incidents.timeline(id, { limit: 3, now });
+  assert.equal(partial.events.length, 3);
+  assert.equal(partial.returnedEvents, 3);
+  assert.equal(partial.summary.events, 10);
+  assert.equal(partial.truncated, true);
+
+  const full = incidents.timeline(id, { limit: 2000, now });
+  assert.equal(full.events.length, 10);
+  assert.equal(full.returnedEvents, 10);
+  assert.equal(full.maxEventsPerAccount, 10);
+  assert.equal(full.truncated, false);
   db.close();
 });

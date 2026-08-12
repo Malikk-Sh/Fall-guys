@@ -235,3 +235,81 @@ test('incident storage failure does not change the gameplay protocol response', 
   const response = await errorReply;
   assert.equal(response.code, 'ROOM_NOT_FOUND');
 });
+
+test('blocked late WebSocket AUTH cannot resume the anonymous room slot', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  const account = core.accounts.create('Blocked Late Auth');
+  networkIdentity.configure(
+    ticket => auth.consumeSocketTicket(ticket),
+    id => id !== account.id
+  );
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const first = await openClient(url);
+  const clients = [first];
+  t.after(async () => {
+    await Promise.all(clients.map(closeClient));
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const lobbyReply = waitFor(first, 'lobby');
+  first.send(JSON.stringify({ type: 'create', name: 'Anonymous Before Block', protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  const player = [...room.players.values()][0];
+  const reconnectToken = first.token || player.ws.token;
+  assert.equal(player.accountId, null);
+
+  const blockedReply = waitFor(first, 'error');
+  first.send(JSON.stringify({ type: 'auth', ticket }));
+  const blocked = await blockedReply;
+  assert.equal(blocked.code, 'ACCOUNT_SANCTIONED');
+  assert.equal(
+    player.accountId,
+    account.id,
+    'the proven denied identity remains attached for resume enforcement'
+  );
+  assert.equal(core.sessions.get(reconnectToken)?.accountId, account.id);
+
+  const second = await openClient(url);
+  clients.push(second);
+  const resumeDenied = waitFor(second, 'error');
+  second.send(JSON.stringify({ type: 'resume', token: reconnectToken }));
+  const denied = await resumeDenied;
+  assert.equal(denied.code, 'ACCOUNT_SANCTIONED');
+});
+
+test('operational drain records restart as the terminal matchmaking event', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Drain Diagnostic');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const waitingReply = waitFor(client, 'matchmakingWaiting');
+  client.send(JSON.stringify({ type: 'findCoop', name: account.name, chapterId: '', protocolVersion: 10 }));
+  await waitingReply;
+
+  assert.equal(core.beginOperationalDrain(), true);
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  assert.ok(
+    timeline.events.some(event => event.kind === 'matchmaking' && event.code === 'restart'),
+    'drain must explain why a queued player stopped waiting'
+  );
+});

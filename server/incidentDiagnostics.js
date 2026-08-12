@@ -6,8 +6,10 @@ const { ERROR_CODES } = require('../shared/protocol.js');
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 14;
 const DEFAULT_MAX_PER_ACCOUNT = 400;
-const DEFAULT_QUERY_LIMIT = 100;
-const MAX_QUERY_LIMIT = 200;
+const DEFAULT_QUERY_LIMIT = DEFAULT_MAX_PER_ACCOUNT;
+const MAX_QUERY_LIMIT = 2000;
+const DEFAULT_MAX_WRITES_PER_MINUTE = 60;
+const MAX_RATE_TRACKED_ACCOUNTS = 10_000;
 const MAX_VALUE_MS = 7 * DAY_MS;
 const HOUSEKEEPING_INTERVAL_MS = 60 * 60 * 1000;
 const CORRELATION_KEY = crypto.randomBytes(32);
@@ -62,10 +64,11 @@ function safeValueMs(value) {
   return number;
 }
 
-function clampLimit(value) {
+function clampLimit(value, ceiling = MAX_QUERY_LIMIT) {
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) return DEFAULT_QUERY_LIMIT;
-  return Math.min(parsed, MAX_QUERY_LIMIT);
+  const boundedCeiling = Math.max(1, Math.min(MAX_QUERY_LIMIT, Number(ceiling) || MAX_QUERY_LIMIT));
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return Math.min(DEFAULT_QUERY_LIMIT, boundedCeiling);
+  return Math.min(parsed, boundedCeiling);
 }
 
 class IncidentDiagnostics {
@@ -73,13 +76,19 @@ class IncidentDiagnostics {
     db,
     now = () => Date.now(),
     retentionDays = DEFAULT_RETENTION_DAYS,
-    maxPerAccount = DEFAULT_MAX_PER_ACCOUNT
+    maxPerAccount = DEFAULT_MAX_PER_ACCOUNT,
+    maxWritesPerMinute = DEFAULT_MAX_WRITES_PER_MINUTE
   } = {}) {
     if (!db) throw new Error('IncidentDiagnostics requires an open database');
     this.db = db;
     this.now = now;
     this.retentionDays = Math.max(1, Math.min(90, Number(retentionDays) || DEFAULT_RETENTION_DAYS));
     this.maxPerAccount = Math.max(10, Math.min(2000, Number(maxPerAccount) || DEFAULT_MAX_PER_ACCOUNT));
+    this.maxWritesPerMinute = Math.max(
+      5,
+      Math.min(600, Number(maxWritesPerMinute) || DEFAULT_MAX_WRITES_PER_MINUTE)
+    );
+    this.writeBuckets = new Map();
     this.lastPrunedAt = 0;
     this.statements = prepare(db);
   }
@@ -101,6 +110,8 @@ class IncidentDiagnostics {
     const normalizedCode = validCode(normalizedKind, code);
     const at = Number(occurredAt);
     if (!id || !normalizedCode || !Number.isSafeInteger(at) || at < 0) return false;
+    const rateNow = Number(this.now());
+    if (!Number.isSafeInteger(rateNow) || rateNow < 0 || !this.#allowWrite(id, rateNow)) return false;
     if (!this.statements.accountExists.get(id)) return false;
 
     this.#prune(at);
@@ -120,7 +131,7 @@ class IncidentDiagnostics {
     return true;
   }
 
-  timeline(accountId, { limit = DEFAULT_QUERY_LIMIT, now = this.now() } = {}) {
+  timeline(accountId, { limit = this.maxPerAccount, now = this.now() } = {}) {
     const id = cleanAccountId(accountId);
     const at = Number(now);
     if (!id || !Number.isSafeInteger(at) || at < 0) return null;
@@ -128,11 +139,17 @@ class IncidentDiagnostics {
     if (!account) return null;
     this.#prune(at, true);
     const from = at - this.retentionDays * DAY_MS;
-    const rows = this.statements.timeline.all(id, from, clampLimit(limit));
+    const requestedLimit = clampLimit(limit, this.maxPerAccount);
+    const rowsWithSentinel = this.statements.timeline.all(id, from, requestedLimit + 1);
+    const truncated = rowsWithSentinel.length > requestedLimit;
+    const rows = truncated ? rowsWithSentinel.slice(0, requestedLimit) : rowsWithSentinel;
     const summary = this.statements.summary.get(id, from) || {};
     return {
       generatedAt: at,
       retentionDays: this.retentionDays,
+      maxEventsPerAccount: this.maxPerAccount,
+      returnedEvents: rows.length,
+      truncated,
       account: { id: account.id, name: account.display_name },
       summary: {
         events: Number(summary.events || 0),
@@ -144,7 +161,6 @@ class IncidentDiagnostics {
         lastEventAt: summary.last_event_at == null ? null : Number(summary.last_event_at)
       },
       events: rows.map(row => ({
-        id: Number(row.id),
         occurredAt: Number(row.occurred_at),
         kind: row.kind,
         code: row.code,
@@ -156,6 +172,28 @@ class IncidentDiagnostics {
         valueMs: row.value_ms == null ? null : Number(row.value_ms)
       }))
     };
+  }
+
+  #allowWrite(accountId, now) {
+    let bucket = this.writeBuckets.get(accountId);
+    if (!bucket) {
+      if (this.writeBuckets.size >= MAX_RATE_TRACKED_ACCOUNTS) {
+        const oldest = this.writeBuckets.keys().next().value;
+        if (oldest !== undefined) this.writeBuckets.delete(oldest);
+      }
+      bucket = { tokens: this.maxWritesPerMinute, updatedAt: now };
+      this.writeBuckets.set(accountId, bucket);
+    } else {
+      const elapsed = Math.max(0, now - bucket.updatedAt);
+      bucket.tokens = Math.min(
+        this.maxWritesPerMinute,
+        bucket.tokens + (elapsed * this.maxWritesPerMinute) / 60_000
+      );
+      bucket.updatedAt = now;
+    }
+    if (bucket.tokens < 1) return false;
+    bucket.tokens -= 1;
+    return true;
   }
 
   #prune(now, force = false) {
@@ -198,7 +236,12 @@ function prepare(db) {
         COUNT(*) AS events,
         SUM(CASE WHEN kind = 'connection' AND code = 'disconnected' THEN 1 ELSE 0 END) AS disconnects,
         SUM(CASE WHEN kind = 'connection' AND code = 'resumed' THEN 1 ELSE 0 END) AS resumes,
-        SUM(CASE WHEN kind = 'network-error' THEN 1 ELSE 0 END) AS network_errors,
+            SUM(
+              CASE
+                WHEN kind = 'network-error' OR (kind = 'connection' AND code = 'socket-error') THEN 1
+                ELSE 0
+              END
+            ) AS network_errors,
         SUM(CASE WHEN kind = 'match' AND code = 'completed' THEN 1 ELSE 0 END) AS matches_completed,
         SUM(CASE WHEN kind = 'match' AND code = 'abandoned' THEN 1 ELSE 0 END) AS matches_abandoned,
         MAX(occurred_at) AS last_event_at
@@ -213,6 +256,7 @@ module.exports = {
   DEFAULT_RETENTION_DAYS,
   DEFAULT_MAX_PER_ACCOUNT,
   MAX_QUERY_LIMIT,
+  DEFAULT_MAX_WRITES_PER_MINUTE,
   validCode,
   correlationRef
 };

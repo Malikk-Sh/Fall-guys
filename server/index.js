@@ -1085,6 +1085,22 @@ function bindAuthenticatedSocketToRoom(ws, accountId) {
   return true;
 }
 
+function bindDeniedSocketToRoomForEnforcement(ws, accountId) {
+  const id = String(accountId || '');
+  if (!id || !ws?.room) return false;
+  const room = rooms.get(ws.room);
+  const player = room?.players.get(ws.id);
+  if (!player || player.ws !== ws) return false;
+
+  // A valid ticket proved who owns this socket even though policy denied authentication. Preserve
+  // that identity only for server-side enforcement; public player payloads never expose accountId.
+  player.accountId = id;
+  for (const session of sessions.values()) {
+    if (session.playerId === player.id && session.roomCode === room.code) session.accountId = id;
+  }
+  return true;
+}
+
 function createCoopRoom(chapterId, hostId) {
   const selected = COOP_CHAPTER_IDS.includes(chapterId) ? chapterId : COOP_CHAPTER_IDS[0];
   const code = roomCode();
@@ -1168,6 +1184,7 @@ function beginOperationalDrain() {
   // immediately and record the exit without counting it as a capacity rejection.
   const queued = coopMatchmaking.splice(0);
   for (const entry of queued) {
+    incidentForSocket(entry.ws, { kind: 'matchmaking', code: 'restart', phase: 'matchmaking' });
     gameplay.count('matchmaking_queue_exit', {
       detail: 'restart',
       device: entry.ws?.device || 'desktop'
@@ -1766,6 +1783,7 @@ wss.on('connection', (ws, req) => {
                 : 'WebSocket ticket недействителен, истёк или уже использован.';
         sendError(ws, code, detail, false);
         if (authenticated.reason === 'blocked-account') {
+          bindDeniedSocketToRoomForEnforcement(ws, ws.accountAccessDeniedAccountId);
           incidentForSocket(ws, {
             accountId: ws.accountAccessDeniedAccountId,
             kind: 'auth',

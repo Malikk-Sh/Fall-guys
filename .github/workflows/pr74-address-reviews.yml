@@ -1,0 +1,397 @@
+name: PR74 Address Reviews
+
+on:
+  push:
+    branches: [feat/maintenance-operations]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: contains(github.event.head_commit.message, 'Apply PR74 review fix workflow')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/maintenance-operations
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Apply reviewed fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected 1 match, got {count}')
+              return text.replace(old, new, 1)
+
+          # 1) Drain admission must happen in message handlers before any state/metric side effect.
+          index_path = Path('server/index.js')
+          index = index_path.read_text()
+          index = replace_once(
+              index,
+              """    if (message.type === C2S.START_MATCH) {
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
+      }
+      if (capacityStatus().matchesFull) {
+""",
+              """    if (message.type === C2S.START_MATCH) {
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      if (capacityStatus().matchesFull) {
+""",
+              'START_MATCH drain admission',
+          )
+          index = replace_once(
+              index,
+              """    if (message.type === C2S.REMATCH_VOTE) {
+      if (player.resultChoice === 'rematch') return;
+""",
+              """    if (message.type === C2S.REMATCH_VOTE) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      if (player.resultChoice === 'rematch') return;
+""",
+              'REMATCH_VOTE drain admission',
+          )
+          index = replace_once(
+              index,
+              """      if (room.mode !== GAME_MODE.COOP || current < 0) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (player.resultChoice === 'next') return;
+""",
+              """      if (room.mode !== GAME_MODE.COOP || current < 0) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      if (player.resultChoice === 'next') return;
+""",
+              'NEXT_CHAPTER_VOTE drain admission',
+          )
+          index_path.write_text(index)
+
+          # 2) Durable restart marker records whether SIGUSR2 still needs delivery.
+          helper_path = Path('deploy/wobble-ops-helper.mjs')
+          helper = helper_path.read_text()
+          helper = replace_once(
+              helper,
+              "const RESTART_MARKER_VERSION = 1;\n",
+              "const RESTART_MARKER_VERSION = 1;\nconst RESTART_SIGNAL_PHASES = new Set(['signal-pending', 'signal-delivered', 'signal-uncertain']);\n",
+              'restart marker phase constants',
+          )
+
+          marker_pattern = re.compile(r"function normalizeRestartMarker\(value\) \{.*?\n\}\n\nexport function readRestartMarker", re.S)
+          marker_replacement = """function normalizeRestartMarker(value) {
+  const oldPid = Number(value?.oldPid);
+  const startedAt = Number(value?.startedAt);
+  // Version-1 markers written before phases existed are conservatively treated as pending.
+  // Re-delivering SIGUSR2 is safe because Wobble drain is process-wide and idempotent.
+  const phase = value?.phase == null ? 'signal-pending' : String(value.phase);
+  if (
+    value?.version !== RESTART_MARKER_VERSION ||
+    !Number.isSafeInteger(oldPid) ||
+    oldPid <= 0 ||
+    !Number.isSafeInteger(startedAt) ||
+    startedAt <= 0 ||
+    typeof value?.clearMaintenance !== 'boolean' ||
+    !RESTART_SIGNAL_PHASES.has(phase)
+  ) {
+    return null;
+  }
+  return {
+    version: RESTART_MARKER_VERSION,
+    oldPid,
+    startedAt,
+    clearMaintenance: value.clearMaintenance,
+    phase
+  };
+}
+
+export function readRestartMarker"""
+          helper, count = marker_pattern.subn(marker_replacement, helper, count=1)
+          if count != 1:
+              raise SystemExit(f'normalizeRestartMarker replacement: expected 1 match, got {count}')
+
+          insert_before = "export function readWobbleOperationalHealth({\n"
+          signal_helper = """function sendGracefulRestartSignal() {
+  return runCommand(
+    SYSTEMCTL,
+    ['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service'],
+    { timeoutMs: 5000 }
+  );
+}
+
+"""
+          helper = replace_once(helper, insert_before, signal_helper + insert_before, 'signal helper insertion')
+
+          recovery_pattern = re.compile(
+              r"export function recoverRestartMonitor\(\{ markerPath = RESTART_MARKER, now = Date\.now\(\) \} = \{\}\) \{.*?\n\}\n\nasync function startGracefulRestart",
+              re.S,
+          )
+          recovery_replacement = """export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.now() } = {}) {
+  if (restartInFlight) return true;
+  let marker = readRestartMarker(markerPath);
+  if (!marker) return false;
+
+  // Do not restart a monitor forever after a clock jump or a very old interrupted operation.
+  // The maintenance flag is intentionally left in place so recovery remains fail-closed.
+  const startedAt = Math.min(marker.startedAt, now);
+  if (now - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
+    clearRestartMarker(markerPath);
+    console.error('stale wobble restart marker cleared; maintenance remains enabled');
+    return false;
+  }
+
+  restartInFlight = true;
+  restartCooldownUntil = Math.max(restartCooldownUntil, marker.startedAt + RESTART_COOLDOWN_MS);
+  if (!maintenanceEnabled()) setMaintenance(true);
+
+  if (marker.phase === 'signal-pending') {
+    const pid = await wobbleMainPid();
+    const health = await readWobbleOperationalHealth();
+    const confirmedPid = await wobbleMainPid();
+
+    if (pid === marker.oldPid && confirmedPid === marker.oldPid && health?.pid === marker.oldPid) {
+      if (health.draining === true) {
+        marker = { ...marker, phase: 'signal-delivered' };
+        writeRestartMarker(marker, markerPath);
+      } else {
+        // The helper may have died after persisting ownership but before systemctl delivered
+        // SIGUSR2. Re-send only after two MainPID reads and operational health agree that the
+        // original process is still alive and not draining. Duplicate SIGUSR2 is harmless.
+        const signal = await sendGracefulRestartSignal();
+        if (signal.ok) {
+          marker = { ...marker, phase: 'signal-delivered' };
+          writeRestartMarker(marker, markerPath);
+        } else if (signal.reason === 'operation-timeout') {
+          marker = { ...marker, phase: 'signal-uncertain' };
+          writeRestartMarker(marker, markerPath);
+        } else {
+          const safeToRollback = await confirmOldProcessNotDraining(marker.oldPid);
+          if (safeToRollback) {
+            clearRestartMarker(markerPath);
+            if (marker.clearMaintenance) setMaintenance(false);
+            restartInFlight = false;
+            return false;
+          }
+          marker = { ...marker, phase: 'signal-uncertain' };
+          writeRestartMarker(marker, markerPath);
+        }
+      }
+    } else if (pid && pid !== marker.oldPid && confirmedPid === pid) {
+      // A new MainPID proves the old process already exited; never signal the replacement.
+      marker = { ...marker, phase: 'signal-delivered' };
+      writeRestartMarker(marker, markerPath);
+    }
+    // Any other observation is intentionally ambiguous. Keep the pending marker + maintenance
+    // and let the bounded completion monitor fail closed rather than guessing about PID ownership.
+  }
+
+  scheduleRestartCompletion(marker.oldPid, {
+    clearMaintenance: marker.clearMaintenance,
+    startedAt,
+    markerPath
+  });
+  return true;
+}
+
+async function startGracefulRestart"""
+          helper, count = recovery_pattern.subn(recovery_replacement, helper, count=1)
+          if count != 1:
+              raise SystemExit(f'recoverRestartMonitor replacement: expected 1 match, got {count}')
+
+          helper = replace_once(
+              helper,
+              """  const marker = {
+    version: RESTART_MARKER_VERSION,
+    oldPid,
+    startedAt: now,
+    clearMaintenance: !alreadyInMaintenance
+  };
+""",
+              """  let marker = {
+    version: RESTART_MARKER_VERSION,
+    oldPid,
+    startedAt: now,
+    clearMaintenance: !alreadyInMaintenance,
+    phase: 'signal-pending'
+  };
+""",
+              'initial pending marker',
+          )
+          old_signal = """  const signal = await runCommand(
+    SYSTEMCTL,
+    ['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service'],
+    { timeoutMs: 5000 }
+  );
+  if (!signal.ok) {
+"""
+          new_signal = """  const signal = await sendGracefulRestartSignal();
+  if (signal.ok) {
+    marker = { ...marker, phase: 'signal-delivered' };
+    writeRestartMarker(marker);
+  } else if (signal.reason === 'operation-timeout') {
+    marker = { ...marker, phase: 'signal-uncertain' };
+    writeRestartMarker(marker);
+  }
+  if (!signal.ok) {
+"""
+          helper = replace_once(helper, old_signal, new_signal, 'initial SIGUSR2 phase update')
+          helper = replace_once(
+              helper,
+              """    } else {
+      restartCooldownUntil = now + RESTART_COOLDOWN_MS;
+      scheduleRestartCompletion(oldPid, {
+""",
+              """    } else {
+      if (signal.reason !== 'operation-timeout') {
+        marker = { ...marker, phase: 'signal-uncertain' };
+        writeRestartMarker(marker);
+      }
+      restartCooldownUntil = now + RESTART_COOLDOWN_MS;
+      scheduleRestartCompletion(oldPid, {
+""",
+              'non-timeout uncertain phase',
+          )
+          helper = replace_once(helper, "  recoverRestartMonitor();\n", "  await recoverRestartMonitor();\n", 'await recovery')
+          helper_path.write_text(helper)
+
+          # 3) Focused regression coverage for marker phases and admission ordering.
+          test_path = Path('server/adminOperations.test.mjs')
+          tests = test_path.read_text()
+          old_marker_test = """test('restart monitor state survives helper restart through one fixed durable marker', () => {
+  assert.equal(RESTART_MARKER, '/run/wobble-ops/restart.json');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-restart-marker-test-'));
+  const markerPath = path.join(dir, 'restart.json');
+  const marker = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+  try {
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(marker, markerPath), true);
+    assert.deepEqual(readRestartMarker(markerPath), marker);
+    fs.writeFileSync(markerPath, '{broken json');
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(marker, markerPath), true);
+    assert.equal(clearRestartMarker(markerPath), true);
+    assert.equal(readRestartMarker(markerPath), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+"""
+          new_marker_test = """test('restart monitor state survives helper restart through one fixed durable marker', () => {
+  assert.equal(RESTART_MARKER, '/run/wobble-ops/restart.json');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-restart-marker-test-'));
+  const markerPath = path.join(dir, 'restart.json');
+  const legacy = { version: 1, oldPid: 4321, startedAt: 123456, clearMaintenance: true };
+  const pending = { ...legacy, phase: 'signal-pending' };
+  try {
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(legacy, markerPath), true);
+    assert.deepEqual(readRestartMarker(markerPath), pending);
+    for (const phase of ['signal-delivered', 'signal-uncertain']) {
+      const marker = { ...legacy, phase };
+      assert.equal(writeRestartMarker(marker, markerPath), true);
+      assert.deepEqual(readRestartMarker(markerPath), marker);
+    }
+    assert.equal(writeRestartMarker({ ...legacy, phase: 'invalid-phase' }, markerPath), false);
+    fs.writeFileSync(markerPath, '{broken json');
+    assert.equal(readRestartMarker(markerPath), null);
+    assert.equal(writeRestartMarker(legacy, markerPath), true);
+    assert.equal(clearRestartMarker(markerPath), true);
+    assert.equal(readRestartMarker(markerPath), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+"""
+          tests = replace_once(tests, old_marker_test, new_marker_test, 'marker regression test')
+
+          anchor = """  const enqueueAt = index.indexOf('function enqueueCoop(ws, message)');
+"""
+          extra = """  const startHandlerAt = index.indexOf('if (message.type === C2S.START_MATCH)');
+  const startDrainAt = index.indexOf('if (operationalState.isDraining())', startHandlerAt);
+  const capacityAt = index.indexOf('if (capacityStatus().matchesFull)', startHandlerAt);
+  const capacityMetricAt = index.indexOf('metrics.capacityRejected++', startHandlerAt);
+  assert.ok(startHandlerAt >= 0 && startDrainAt > startHandlerAt && startDrainAt < capacityAt);
+  assert.ok(capacityAt < capacityMetricAt);
+
+  const rematchHandlerAt = index.indexOf('if (message.type === C2S.REMATCH_VOTE)');
+  const rematchHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', rematchHandlerAt);
+  const rematchMutationAt = index.indexOf("player.resultChoice = 'rematch';", rematchHandlerAt);
+  assert.ok(
+    rematchHandlerAt >= 0 && rematchHandlerDrainAt > rematchHandlerAt && rematchHandlerDrainAt < rematchMutationAt
+  );
+
+  const nextHandlerAt = index.indexOf('if (message.type === C2S.NEXT_CHAPTER_VOTE)');
+  const nextHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', nextHandlerAt);
+  const nextChoiceMutationAt = index.indexOf("player.resultChoice = 'next';", nextHandlerAt);
+  const nextVoteMetricAt = index.indexOf("gameplay.count('next_chapter_vote'", nextHandlerAt);
+  assert.ok(
+    nextHandlerAt >= 0 && nextHandlerDrainAt > nextHandlerAt && nextHandlerDrainAt < nextChoiceMutationAt
+  );
+  assert.ok(nextChoiceMutationAt < nextVoteMetricAt);
+
+  assert.match(helper, /phase: 'signal-pending'/);
+  assert.match(helper, /phase: 'signal-delivered'/);
+  assert.match(helper, /phase: 'signal-uncertain'/);
+  const recoveryAt = helper.indexOf('export async function recoverRestartMonitor');
+  const pendingRecoveryAt = helper.indexOf("marker.phase === 'signal-pending'", recoveryAt);
+  const recoverySignalAt = helper.indexOf('await sendGracefulRestartSignal()', pendingRecoveryAt);
+  const recoveryMonitorAt = helper.indexOf('scheduleRestartCompletion(marker.oldPid', recoveryAt);
+  assert.ok(
+    recoveryAt >= 0 && pendingRecoveryAt > recoveryAt && recoverySignalAt > pendingRecoveryAt && recoverySignalAt < recoveryMonitorAt
+  );
+  assert.match(helper, /await recoverRestartMonitor\(\);/);
+
+"""
+          tests = replace_once(tests, anchor, extra + anchor, 'focused ordering regression assertions')
+          test_path.write_text(tests)
+          PY
+
+      - name: Format focused changes
+        run: npx prettier --write server/index.js deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs
+
+      - name: Run focused operation tests
+        run: node --test server/adminOperations.test.mjs
+
+      - name: Lint focused changes
+        run: npx eslint server/index.js deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs
+
+      - name: Run full unit and integration suite
+        run: npm test
+
+      - name: Commit reviewed fixes and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/pr74-address-reviews.yml
+          git add server/index.js deploy/wobble-ops-helper.mjs server/adminOperations.test.mjs
+          git diff --cached --check
+          git config user.name "Malik"
+          git config user.email "93332098+Malikk-Sh@users.noreply.github.com"
+          git commit -m "Close PR74 review race windows"
+          git push origin HEAD:feat/maintenance-operations

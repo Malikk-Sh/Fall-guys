@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import express from 'express';
 import { createRequire } from 'node:module';
 
@@ -98,23 +100,33 @@ test('reliability stores metric deltas, groups errors and keeps build identity',
   db.close();
 });
 
-test('structured log capture emits only an allowlisted sanitized fingerprint', () => {
-  const raw = JSON.stringify({
+test('structured log capture ignores raw messages and fingerprints only normalized code location', () => {
+  const first = JSON.stringify({
     level: 'error',
     event: 'message_handler_threw',
     playerId: 'private-player-id',
     roomId: 'PRIVATE-ROOM',
-    message: 'token=WAS.super-secret-value account=private-player-id',
-    stack: 'Error: token=WAS.super-secret-value\n    at handler (/opt/wobble/server/index.js:1234:56)',
+    message: 'token=WAS.first-secret account=private-player-id',
+    stack: 'Error: token=WAS.first-secret\n    at handler (/opt/wobble/server/index.js:1234:56)',
     ts: '2026-08-13T00:00:00.000Z'
   });
-  const captured = structuredReliabilityEvent(raw, 'error', 1);
+  const second = JSON.stringify({
+    level: 'error',
+    event: 'message_handler_threw',
+    playerId: 'different-private-player',
+    message: 'token=WAS.second-secret',
+    stack: 'Error: completely different secret\n    at handler (/opt/wobble/server/index.js:9999:12)',
+    ts: '2026-08-13T00:00:01.000Z'
+  });
+  const captured = structuredReliabilityEvent(first, 'error', 1);
+  const capturedAgain = structuredReliabilityEvent(second, 'error', 2);
   assert.deepEqual(Object.keys(captured).sort(), ['event', 'fingerprint', 'occurredAt', 'severity']);
   assert.equal(captured.event, 'message_handler_threw');
   assert.equal(captured.severity, 'error');
   assert.match(captured.fingerprint, /^[0-9a-f]{24}$/);
+  assert.equal(captured.fingerprint, capturedAgain.fingerprint, 'dynamic messages and line numbers do not split a code-location group');
   const serialized = JSON.stringify(captured);
-  assert.equal(serialized.includes('super-secret-value'), false);
+  assert.equal(serialized.includes('first-secret'), false);
   assert.equal(serialized.includes('private-player-id'), false);
   assert.equal(serialized.includes('/opt/wobble'), false);
   assert.equal(structuredReliabilityEvent(JSON.stringify({ event: 'arbitrary_user_log' })), null);
@@ -124,7 +136,7 @@ test('reliability retention removes samples and events older than the bounded wi
   const db = openDatabase(':memory:');
   migrateDatabase(db);
   const health = healthState();
-  let now = 40 * 24 * 60 * 60 * 1000;
+  const now = 40 * 24 * 60 * 60 * 1000;
   const reliability = new ServiceReliability({
     db,
     health: () => health,
@@ -136,6 +148,25 @@ test('reliability retention removes samples and events older than the bounded wi
   reliability.prune(now, { force: true });
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM service_reliability_samples').get().count, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM service_reliability_events').get().count, 0);
+  db.close();
+});
+
+test('warning lifecycle event raises warning without becoming a raw log response', () => {
+  const db = openDatabase(':memory:');
+  migrateDatabase(db);
+  const health = healthState();
+  const reliability = new ServiceReliability({ db, health: () => health, now: () => 500_000 });
+  reliability.sample();
+  reliability.recordEvent({
+    event: 'server_drain_finished',
+    severity: 'warn',
+    occurredAt: 500_001
+  });
+  const report = reliability.report({ period: '1h', now: 500_010 });
+  assert.equal(report.status, 'warning');
+  assert.ok(report.reasons.includes('lifecycle-warning'));
+  assert.equal(Object.hasOwn(report.lifecycle[0], 'message'), false);
+  assert.equal(Object.hasOwn(report.lifecycle[0], 'stack'), false);
   db.close();
 });
 
@@ -192,4 +223,19 @@ test('admin reliability route requires the dedicated capability and rejects extr
   assert.equal(response.status, 200);
   const payload = await response.json();
   assert.equal(payload.reliability.period, '7d');
+});
+
+test('admin page loads the reliability client after the existing control-plane client', () => {
+  const root = path.resolve(import.meta.dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'client/admin/index.html'), 'utf8');
+  const adminAt = html.indexOf('<script src="/admin/admin.js" defer></script>');
+  const reliabilityAt = html.indexOf('<script src="/admin/reliability.js" defer></script>');
+  assert.ok(adminAt >= 0);
+  assert.ok(reliabilityAt > adminAt);
+
+  const client = fs.readFileSync(path.join(root, 'client/admin/reliability.js'), 'utf8');
+  assert.match(client, /data-panel|dataset\.panel/);
+  assert.match(client, /reliability\.read/);
+  assert.match(client, /\/api\/admin\/reliability/);
+  assert.doesNotMatch(client, /innerHTML\s*=/);
 });

@@ -14,6 +14,7 @@ const REQUEST_READ_TIMEOUT_MS = 5000;
 const RESTART_COOLDOWN_MS = 30_000;
 const RESTART_MONITOR_MS = 1000;
 const RESTART_MONITOR_TIMEOUT_MS = 210_000;
+const RESTART_MARKER_VERSION = 1;
 const READY_STREAK_REQUIRED = 3;
 const WOBBLE_HEALTH_TIMEOUT_MS = 1500;
 const WOBBLE_HEALTH_HOST = '127.0.0.1';
@@ -21,6 +22,7 @@ const WOBBLE_HEALTH_PORT = 3000;
 const WOBBLE_HEALTH_PATH = '/health/ops';
 
 export const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
+export const RESTART_MARKER = '/run/wobble-ops/restart.json';
 
 export const ACTIONS = Object.freeze({
   'backup.create': Object.freeze({
@@ -145,6 +147,66 @@ export function setMaintenance(enabled, flagPath = MAINTENANCE_FLAG) {
   }
 }
 
+function normalizeRestartMarker(value) {
+  const oldPid = Number(value?.oldPid);
+  const startedAt = Number(value?.startedAt);
+  if (
+    value?.version !== RESTART_MARKER_VERSION ||
+    !Number.isSafeInteger(oldPid) ||
+    oldPid <= 0 ||
+    !Number.isSafeInteger(startedAt) ||
+    startedAt <= 0 ||
+    typeof value?.clearMaintenance !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    version: RESTART_MARKER_VERSION,
+    oldPid,
+    startedAt,
+    clearMaintenance: value.clearMaintenance
+  };
+}
+
+export function readRestartMarker(markerPath = RESTART_MARKER) {
+  try {
+    return normalizeRestartMarker(JSON.parse(fs.readFileSync(markerPath, 'utf8')));
+  } catch {
+    return null;
+  }
+}
+
+export function writeRestartMarker(value, markerPath = RESTART_MARKER) {
+  const marker = normalizeRestartMarker(value);
+  if (!marker) return false;
+  const temporaryPath = `${markerPath}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, `${JSON.stringify(marker)}\n`, {
+      encoding: 'utf8',
+      mode: 0o600
+    });
+    fs.renameSync(temporaryPath, markerPath);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(temporaryPath, { force: true });
+    } catch {
+      // Best effort only: the canonical marker was never replaced.
+    }
+    return false;
+  }
+}
+
+export function clearRestartMarker(markerPath = RESTART_MARKER) {
+  try {
+    fs.rmSync(markerPath, { force: true });
+    fs.rmSync(`${markerPath}.tmp`, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function runNginxReload(spec) {
   const startedAt = Date.now();
   const check = await runCommand(NGINX, ['-t'], {
@@ -239,8 +301,10 @@ async function confirmOldProcessNotDraining(oldPid) {
   return true;
 }
 
-function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
-  const startedAt = Date.now();
+function scheduleRestartCompletion(
+  oldPid,
+  { clearMaintenance, startedAt = Date.now(), markerPath = RESTART_MARKER }
+) {
   let checking = false;
   let candidatePid = 0;
   let readyStreak = 0;
@@ -248,6 +312,10 @@ function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
     if (checking) return;
     checking = true;
     try {
+      // The marker owns the maintenance gate. If another process or a helper restart removed the
+      // flag while the marker still exists, recreate it before doing any readiness work.
+      if (!maintenanceEnabled()) setMaintenance(true);
+
       const pid = await wobbleMainPid();
       if (pid && pid !== oldPid) {
         if (candidatePid !== pid) {
@@ -263,8 +331,11 @@ function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
         }
         if (readyStreak >= READY_STREAK_REQUIRED) {
           clearInterval(timer);
-          restartInFlight = false;
+          // Delete durable operation ownership first. A crash between these two steps can leave
+          // maintenance enabled (safe, operator can disable it), but can never reopen too early.
+          clearRestartMarker(markerPath);
           if (clearMaintenance) setMaintenance(false);
+          restartInFlight = false;
           return;
         }
       } else {
@@ -274,6 +345,7 @@ function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
 
       if (Date.now() - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
         clearInterval(timer);
+        clearRestartMarker(markerPath);
         restartInFlight = false;
         // Безопасный отказ: если новый Wobble не подтвердил readiness своим PID, maintenance остаётся.
         // Это не даёт клиентам устроить reconnect-storm на неисправный или циклически падающий сервис.
@@ -286,13 +358,38 @@ function scheduleRestartCompletion(oldPid, { clearMaintenance }) {
   timer.unref?.();
 }
 
+export function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.now() } = {}) {
+  if (restartInFlight) return true;
+  const marker = readRestartMarker(markerPath);
+  if (!marker) return false;
+
+  // Do not restart a monitor forever after a clock jump or a very old interrupted operation.
+  // The maintenance flag is intentionally left in place so recovery remains fail-closed.
+  const startedAt = Math.min(marker.startedAt, now);
+  if (now - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
+    clearRestartMarker(markerPath);
+    console.error('stale wobble restart marker cleared; maintenance remains enabled');
+    return false;
+  }
+
+  restartInFlight = true;
+  restartCooldownUntil = Math.max(restartCooldownUntil, marker.startedAt + RESTART_COOLDOWN_MS);
+  if (!maintenanceEnabled()) setMaintenance(true);
+  scheduleRestartCompletion(marker.oldPid, {
+    clearMaintenance: marker.clearMaintenance,
+    startedAt,
+    markerPath
+  });
+  return true;
+}
+
 async function startGracefulRestart(now) {
   if (restartInFlight) return { ok: false, reason: 'operation-busy' };
   if (now < restartCooldownUntil) {
     return { ok: false, reason: 'restart-cooldown', retryAfterMs: restartCooldownUntil - now };
   }
 
-  // Резервируем переход ДО первого await. Иначе параллельный maintenance.disable или второй
+  // Резервируем переход ДО первого await. Иначе параллельная maintenance-команда или второй
   // restart может пройти между проверкой выше и фактической отправкой SIGUSR2.
   restartInFlight = true;
 
@@ -309,6 +406,21 @@ async function startGracefulRestart(now) {
     return maintenance;
   }
 
+  // Durable ownership is written synchronously before SIGUSR2. If wobble-ops.service is restarted
+  // by systemd or deploy/install.sh after this point, the next helper process reconstructs the
+  // monitor and keeps the same maintenance ownership instead of stranding the server offline.
+  const marker = {
+    version: RESTART_MARKER_VERSION,
+    oldPid,
+    startedAt: now,
+    clearMaintenance: !alreadyInMaintenance
+  };
+  if (!writeRestartMarker(marker)) {
+    restartInFlight = false;
+    if (!alreadyInMaintenance) setMaintenance(false);
+    return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
+  }
+
   const signal = await runCommand(
     SYSTEMCTL,
     ['kill', '--kill-whom=main', '--signal=SIGUSR2', 'wobble.service'],
@@ -321,11 +433,15 @@ async function startGracefulRestart(now) {
     const safeToRollback =
       signal.reason !== 'operation-timeout' && (await confirmOldProcessNotDraining(oldPid));
     if (safeToRollback) {
-      restartInFlight = false;
+      clearRestartMarker();
       if (!alreadyInMaintenance) setMaintenance(false);
+      restartInFlight = false;
     } else {
       restartCooldownUntil = now + RESTART_COOLDOWN_MS;
-      scheduleRestartCompletion(oldPid, { clearMaintenance: !alreadyInMaintenance });
+      scheduleRestartCompletion(oldPid, {
+        clearMaintenance: !alreadyInMaintenance,
+        startedAt: now
+      });
     }
     return {
       ok: false,
@@ -336,7 +452,10 @@ async function startGracefulRestart(now) {
   }
 
   restartCooldownUntil = now + RESTART_COOLDOWN_MS;
-  scheduleRestartCompletion(oldPid, { clearMaintenance: !alreadyInMaintenance });
+  scheduleRestartCompletion(oldPid, {
+    clearMaintenance: !alreadyInMaintenance,
+    startedAt: now
+  });
   return { ok: true, accepted: true, deferred: true, maintenance: true };
 }
 
@@ -425,6 +544,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error('wobble-ops helper must be started by systemd socket activation');
     process.exit(1);
   }
+  recoverRestartMonitor();
   const server = createServer();
   server.listen({ fd });
 }

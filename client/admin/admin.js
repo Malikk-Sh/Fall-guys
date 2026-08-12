@@ -755,7 +755,7 @@ function resetPlayerActionConfirmation(message = '') {
     button.classList.remove('confirm');
   }
   const hint = $('#player-support-action-hint');
-  if (hint && message) hint.textContent = message;
+  if (hint) hint.textContent = message;
 }
 
 function armPlayerAction(key, button, confirmationText) {
@@ -1048,7 +1048,7 @@ function renderPlayerDetail(player) {
 
 async function openPlayerDetail(accountId, { preserveStatus = false } = {}) {
   const revision = ++state.playerDetailRevision;
-  setStatus('Загружаю карточку игрока…');
+  if (!preserveStatus) setStatus('Загружаю карточку игрока…');
   try {
     const payload = await api('/api/admin/players/detail', { accountId });
     if (revision !== state.playerDetailRevision) return;

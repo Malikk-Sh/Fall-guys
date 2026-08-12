@@ -37,6 +37,9 @@ jobs:
       - name: Repair generated lint boundary
         run: python3 tools/pr76_generated_repair.py
 
+      - name: Preserve NetworkIdentity blocked-auth contract
+        run: python3 tools/pr76_network_contract_repair.py
+
       - name: Format changed source
         run: |
           npx prettier --write \
@@ -52,6 +55,7 @@ jobs:
             server/adminRoutes.js \
             server/bootstrap.js \
             server/networkIdentity.js \
+            server/networkSanctions.test.mjs \
             server/index.js \
             server/socketAuthIntegration.test.mjs \
             client/admin/index.html \
@@ -67,6 +71,7 @@ jobs:
             server/adminPlayerSupportRoutes.test.mjs \
             server/adminControlPlane.test.mjs \
             server/networkIdentity.test.mjs \
+            server/networkSanctions.test.mjs \
             server/socketAuthIntegration.test.mjs \
             server/migrations.test.mjs
 
@@ -79,7 +84,7 @@ jobs:
       - name: Commit verified implementation
         run: |
           set -euo pipefail
-          git restore tools/pr76_incident_center.py tools/pr76_stage_repair.py tools/pr76_generated_repair.py .github/workflows/pr76-incident-center-stage.yml
+          git restore tools/pr76_incident_center.py tools/pr76_stage_repair.py tools/pr76_generated_repair.py tools/pr76_network_contract_repair.py .github/workflows/pr76-incident-center-stage.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A

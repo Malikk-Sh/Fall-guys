@@ -82,11 +82,7 @@ test('web client and root helper share the same closed operation allowlist', () 
   const systemdActions = Object.entries(ACTIONS).filter(([, spec]) => spec.kind === 'systemd');
   assert.equal(systemdActions.length, allowedUnits.size);
   for (const [action, spec] of systemdActions) {
-    assert.equal(
-      allowedUnits.has(spec.unit),
-      true,
-      `${action} may use only an explicitly approved unit`
-    );
+    assert.equal(allowedUnits.has(spec.unit), true, `${action} may use only an explicitly approved unit`);
     assert.equal(spec.verb, 'start');
   }
 
@@ -192,10 +188,7 @@ test('privileged helper keeps a private runtime flag while app scripts stay unpr
   const socketUnit = fs.readFileSync(path.join(root, 'deploy/wobble-ops.socket'), 'utf8');
 
   assert.match(helperUnit, /^User=root$/m);
-  assert.match(
-    helperUnit,
-    /ExecStart=\/usr\/bin\/node \/usr\/local\/lib\/wobble-ops\/helper\.mjs/
-  );
+  assert.match(helperUnit, /ExecStart=\/usr\/bin\/node \/usr\/local\/lib\/wobble-ops\/helper\.mjs/);
   assert.doesNotMatch(helperUnit, /ExecStart=.*\/opt\/wobble/);
   assert.match(helperUnit, /^RuntimeDirectory=wobble-ops$/m);
   assert.match(helperUnit, /^RuntimeDirectoryMode=0755$/m);
@@ -217,10 +210,7 @@ test('maintenance gates only new WebSocket upgrades and nginx reload is validate
     nginxLocations,
     /location \/ws \{[\s\S]*if \(-f \/run\/wobble-ops\/maintenance\) \{[\s\S]*return 503;/
   );
-  assert.doesNotMatch(
-    nginxLocations.split('location /ws {', 1)[0],
-    /wobble-ops\/maintenance/
-  );
+  assert.doesNotMatch(nginxLocations.split('location /ws {', 1)[0], /wobble-ops\/maintenance/);
 
   const nginxTestAt = helper.indexOf("runCommand(NGINX, ['-t']");
   const nginxReloadAt = helper.indexOf("runCommand(SYSTEMCTL, ['reload', 'nginx.service']");
@@ -236,10 +226,7 @@ test('operational restart drains active matches through SIGUSR2 with a bounded t
 
   assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
   assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
-  assert.match(
-    bootstrap,
-    /process\.on\('SIGUSR2', \(\) => beginGracefulDrain\('SIGUSR2'\)\)/
-  );
+  assert.match(bootstrap, /process\.on\('SIGUSR2', \(\) => beginGracefulDrain\('SIGUSR2'\)\)/);
   assert.match(bootstrap, /core\.shutdown\(`\$\{signal\}:\$\{reason\}`\)/);
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);

@@ -12,6 +12,7 @@ const ROLE_CAPABILITIES = Object.freeze({
   owner: Object.freeze([
     'dashboard.read',
     'infrastructure.read',
+    'reliability.read',
     'analytics.read',
     'player-support.read',
     'player-support.sessions.write',
@@ -28,6 +29,7 @@ const ROLE_CAPABILITIES = Object.freeze({
   operator: Object.freeze([
     'dashboard.read',
     'infrastructure.read',
+    'reliability.read',
     'analytics.read',
     'player-support.read',
     'player-support.sessions.write',

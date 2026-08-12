@@ -27,4 +27,10 @@ if text.count(old) != 1:
     raise SystemExit(f'drain regression message repair expected exactly one match, got {text.count(old)}')
 text = text.replace(old, new, 1)
 
+old = "waitFor(client, 'matchmaking_waiting')"
+new = "waitFor(client, 'matchmakingWaiting')"
+if text.count(old) != 1:
+    raise SystemExit(f'matchmaking response repair expected exactly one match, got {text.count(old)}')
+text = text.replace(old, new, 1)
+
 path.write_text(text, encoding='utf-8')

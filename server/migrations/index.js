@@ -11,6 +11,7 @@ const recoveryRotation = require('./010_recovery_rotation');
 const adminControlPlane = require('./011_admin_control_plane');
 const accountSupportSearch = require('./012_account_support_search');
 const playerSanctions = require('./013_player_sanctions');
+const playerIncidentDiagnostics = require('./014_player_incident_diagnostics');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -25,7 +26,8 @@ const MIGRATIONS = Object.freeze([
   recoveryRotation,
   adminControlPlane,
   accountSupportSearch,
-  playerSanctions
+  playerSanctions,
+  playerIncidentDiagnostics
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

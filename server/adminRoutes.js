@@ -166,6 +166,33 @@ function installAdminRoutes({
     return res.json(result);
   });
 
+  app.post('/api/admin/incidents/player', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'incidents.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['accountId', 'limit'])) || !req.body?.accountId) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!control || typeof control.incidentTimeline !== 'function') {
+      return res.status(503).json({ ok: false, error: 'incident-diagnostics-unavailable' });
+    }
+    const result = control.incidentTimeline(req.body.accountId, {
+      actor: resolved.session.user,
+      limit: req.body.limit
+    });
+    if (!result.ok) {
+      const status =
+        result.reason === 'unknown-account'
+          ? 404
+          : result.reason === 'incident-read-forbidden'
+            ? 403
+            : result.reason === 'incident-diagnostics-unavailable'
+              ? 503
+              : 400;
+      return res.status(status).json({ ok: false, error: result.reason });
+    }
+    return res.json(result);
+  });
+
   app.post('/api/admin/players/logout', json, (req, res) => {
     const resolved = requireAdmin(req, res, 'player-support.sessions.write');
     if (!resolved) return undefined;

@@ -33,6 +33,7 @@ class AdminControlService {
     db,
     health,
     gameplay,
+    incidents = null,
     adminAuth,
     sanctions = null,
     auth = null,
@@ -52,6 +53,7 @@ class AdminControlService {
     this.db = db;
     this.health = health;
     this.gameplay = gameplay;
+    this.incidents = incidents;
     this.adminAuth = adminAuth;
     this.sanctions = sanctions;
     this.auth = auth;
@@ -132,6 +134,38 @@ class AdminControlService {
     return result;
   }
 
+  incidentTimeline(accountId, { actor, limit = 100, now = Date.now() } = {}) {
+    if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
+    if (!['owner', 'operator'].includes(actor.role)) return { ok: false, reason: 'incident-read-forbidden' };
+    if (!this.incidents || typeof this.incidents.timeline !== 'function') {
+      return { ok: false, reason: 'incident-diagnostics-unavailable' };
+    }
+    const profile = this.playerSupport.get(accountId, { now });
+    if (!profile) return { ok: false, reason: 'unknown-account' };
+    const timeline = this.incidents.timeline(profile.account.id, { limit, now });
+    if (!timeline) return { ok: false, reason: 'unknown-account' };
+    const result = {
+      ok: true,
+      incident: {
+        ...timeline,
+        account: {
+          id: profile.account.id,
+          supportId: profile.account.supportId,
+          name: profile.account.name
+        },
+        live: { sockets: Number(this.connectionCount?.(profile.account.id) || 0) }
+      }
+    };
+    this.adminAuth.audit({
+      actor,
+      action: 'player.incident.view',
+      targetType: 'player-account',
+      targetId: profile.account.id,
+      now
+    });
+    return result;
+  }
+
   playerLogout({ targetAccountId, note, actor, now = Date.now() } = {}) {
     if (!actor?.id || !actor?.name || !actor?.role) return { ok: false, reason: 'invalid-admin-actor' };
     if (!['owner', 'operator'].includes(actor.role)) return { ok: false, reason: 'support-action-forbidden' };
@@ -195,6 +229,14 @@ class AdminControlService {
       failedSteps.push('audit');
     }
 
+    if (auditedFailedSteps.length === 0) {
+      try {
+        this.incidents?.record({ accountId: id, kind: 'support', code: 'forced-logout', occurredAt: now });
+      } catch {
+        // Diagnostics are observability only; failure must never weaken or roll back a completed logout.
+      }
+    }
+
     const result = {
       accountId: id,
       revokedSessions,
@@ -243,6 +285,11 @@ class AdminControlService {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    }
+    try {
+      this.incidents?.record({ accountId: id, kind: 'support', code: 'renamed', occurredAt: now });
+    } catch {
+      // Rename is already committed; diagnostics must not turn observability into a mutation dependency.
     }
     return { ok: true, accountId: id, previousName: account.display_name, name: updatedName };
   }

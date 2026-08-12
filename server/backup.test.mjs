@@ -8,6 +8,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +25,7 @@ const {
   DEFAULT_OFFSITE_SENTINEL,
   createBackup,
   createLegacySnapshot,
+  createSnapshot,
   restoreDatabaseFile,
   verifyBackup,
   verifyLegacyBackup
@@ -318,4 +321,127 @@ test('in-memory development database does not create a false production backup a
   assert.equal(status.required, false);
   assert.equal(status.stale, false);
   assert.equal(backupFresh(status), true);
+});
+
+test('verified local and offsite backups exclude ephemeral player incident rows', () => {
+  const f = fixture();
+  try {
+    const accounts = new Accounts({ db: f.db });
+    const player = accounts.create('Private Incident Backup');
+    f.db
+      .prepare(
+        `INSERT INTO player_incident_events
+          (account_id, occurred_at, kind, code, room_ref, match_ref, mode, phase, device, value_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        player.id,
+        1234,
+        'connection',
+        'disconnected',
+        'abcdef123456',
+        null,
+        'coop',
+        'PLAYING',
+        'mobile',
+        null
+      );
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 1);
+
+    const offsiteDir = mountedOffsite(f.dir);
+    const result = createBackup({
+      databaseFile: f.databaseFile,
+      backupDir: f.backupDir,
+      statusFile: f.statusFile,
+      offsiteDir,
+      now: Date.UTC(2026, 7, 12, 12, 0, 0)
+    });
+
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 1);
+    for (const file of [result.backupFile, join(offsiteDir, result.status.offsite.file)]) {
+      const copy = new DatabaseSync(file);
+      try {
+        assert.equal(copy.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count, 0);
+        assert.equal(verifyBackup(file).schemaVersion, CURRENT_SCHEMA_VERSION);
+      } finally {
+        copy.close();
+      }
+    }
+  } finally {
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('snapshot is scrubbed before atomic publication to its visible path', () => {
+  const f = fixture();
+  const fs = require('node:fs');
+  const originalRename = fs.renameSync;
+  try {
+    const accounts = new Accounts({ db: f.db });
+    const player = accounts.create('Atomic Privacy Snapshot');
+    f.db
+      .prepare(
+        `INSERT INTO player_incident_events
+          (account_id, occurred_at, kind, code, room_ref, match_ref, mode, phase, device, value_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(player.id, 1, 'connection', 'disconnected', null, null, null, null, 'desktop', null);
+
+    const outputFile = join(f.backupDir, 'manual-privacy.db');
+    let inspectedPublication = false;
+    fs.renameSync = (source, target) => {
+      if (target === outputFile) {
+        inspectedPublication = true;
+        assert.equal(existsSync(outputFile), false, 'visible backup must not exist before publication');
+        const staged = new DatabaseSync(source);
+        try {
+          assert.equal(
+            staged.prepare('SELECT COUNT(*) AS count FROM player_incident_events').get().count,
+            0,
+            'publish-stage bytes must already be scrubbed'
+          );
+        } finally {
+          staged.close();
+        }
+      }
+      return originalRename(source, target);
+    };
+
+    const result = createSnapshot({ databaseFile: f.databaseFile, outputFile });
+    assert.equal(inspectedPublication, true);
+    assert.equal(result.file, outputFile);
+    assert.equal(existsSync(outputFile), true);
+    assert.equal(statSync(outputFile).mode & 0o777, 0o600, 'published snapshot must be mode 0600');
+    assert.equal(
+      readdirSync(f.backupDir).some(name => name.includes('.publish-')),
+      false,
+      'publication temp must be cleaned'
+    );
+  } finally {
+    fs.renameSync = originalRename;
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
+});
+
+test('next snapshot proactively removes abandoned private raw stages', () => {
+  const f = fixture();
+  try {
+    const stagingRoot = join(f.dir, '.wobble-backup-staging');
+    const abandoned = join(stagingRoot, 'stage-abandoned');
+    mkdirSync(abandoned, { recursive: true, mode: 0o700 });
+    writeFileSync(join(abandoned, 'snapshot.db'), 'sensitive-test-placeholder', { mode: 0o600 });
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(abandoned, old, old);
+
+    const outputFile = join(f.backupDir, 'cleanup-stage.db');
+    createSnapshot({ databaseFile: f.databaseFile, outputFile });
+    assert.equal(existsSync(abandoned), false, 'stale raw stage must be removed by the next snapshot');
+    assert.equal(statSync(stagingRoot).mode & 0o777, 0o700);
+    assert.equal(statSync(outputFile).mode & 0o777, 0o600);
+  } finally {
+    f.db.close();
+    rmSync(f.dir, { recursive: true, force: true });
+  }
 });

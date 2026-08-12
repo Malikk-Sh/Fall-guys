@@ -28,6 +28,7 @@ test('sanction policy blocks both fresh socket auth and resume binding', () => {
   const fresh = socket();
   assert.deepEqual(identity.authenticate(fresh, 'ticket'), { ok: false, reason: 'blocked-account' });
   assert.equal(fresh.accountId, undefined);
+  assert.equal(fresh.accountAccessDeniedAccountId, 'blocked-player');
 
   const resumed = socket();
   assert.equal(identity.bindResumedPlayer(resumed, { accountId: 'blocked-player' }), false);

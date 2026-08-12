@@ -54,13 +54,17 @@ class NetworkIdentity {
   }
 
   authenticate(ws, ticket) {
+    ws.accountAccessDeniedAccountId = null;
     if (ws.accountId) return { ok: false, reason: 'already-bound' };
     if (!this.consumeTicket) return { ok: false, reason: 'unavailable' };
 
     const identity = this.consumeTicket(ticket);
     const accountId = String(identity?.accountId || '');
     if (!accountId) return { ok: false, reason: 'invalid-ticket' };
-    if (!this.allowed(accountId)) return { ok: false, reason: 'blocked-account' };
+    if (!this.allowed(accountId)) {
+      ws.accountAccessDeniedAccountId = accountId;
+      return { ok: false, reason: 'blocked-account' };
+    }
 
     ws.accountId = accountId;
     this.trackSocket(ws, accountId);

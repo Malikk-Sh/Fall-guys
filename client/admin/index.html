@@ -51,6 +51,7 @@
           <button data-panel="infrastructure" data-capability="infrastructure.read">Сервер</button>
           <button data-panel="analytics" data-capability="analytics.read">Статистика</button>
           <button data-panel="players" data-capability="player-support.read">Игроки</button>
+          <button data-panel="incidents" data-capability="incidents.read">Инциденты</button>
           <button data-panel="moderation" data-capability="moderation.read">Модерация</button>
           <button data-panel="operations" data-capability="ops.execute">Операции</button>
           <button data-panel="audit" data-capability="audit.read">Журнал действий</button>
@@ -359,9 +360,10 @@
             <div class="explain-box">
               <strong>Что важно знать</strong>
               <span
-                >Открытие этой карточки записывается в «Журнал действий». IP-адреса и данные устройства
-                игровых сессий Wobble сейчас не собирает. Панель показывает только безопасные короткие ID и
-                время сессий — они не позволяют войти в аккаунт.</span
+                >Открытие этой карточки записывается в «Журнал действий». Wobble не сохраняет IP-адрес, raw
+                User-Agent или device fingerprint игровой сессии. Incident Center может до 14 дней хранить
+                только грубый класс устройства «mobile/desktop» для диагностики; он не идентифицирует
+                конкретное устройство. Короткие ID и время сессий не позволяют войти в аккаунт.</span
               >
             </div>
             <div id="player-summary-cards" class="cards"></div>
@@ -411,6 +413,9 @@
                 </section>
               </div>
               <div class="support-action-buttons support-secondary-actions">
+                <button id="player-open-incidents" class="ghost" type="button" hidden>
+                  Открыть диагностику
+                </button>
                 <button id="player-open-moderation" class="ghost" type="button" hidden>
                   Открыть дело модерации
                 </button>
@@ -468,6 +473,88 @@
                 <summary>Недавние напарники</summary>
                 <div id="player-partners" class="rank-list"></div>
               </details>
+            </div>
+          </article>
+        </section>
+
+        <section id="panel-incidents" class="panel" hidden>
+          <details class="help-card" open>
+            <summary>Что такое «Инциденты»?</summary>
+            <p>
+              Это короткая техническая история конкретного аккаунта: авторизация, вход в комнату, matchmaking,
+              начало/завершение матча, disconnect/resume и безопасные коды сетевых ошибок. Она нужна, когда
+              игрок сообщает «не подключается», «вылетело» или «сломался кооп».
+            </p>
+            <p>
+              История хранится ограниченное время и не содержит IP, raw User-Agent, device fingerprints,
+              токенов, recovery-данных, invite-кодов комнат или сырых match ID. Для диагностики может
+              сохраняться только грубый класс «mobile/desktop». Корреляционные ссылки ниже необратимо
+              маскируются серверным process-key и нужны только чтобы понять, какие события относились к одной
+              комнате/матчу.
+            </p>
+          </details>
+
+          <article class="card">
+            <p class="eyebrow">LIVE DIAGNOSTICS</p>
+            <h2>Найти игрока</h2>
+            <p class="section-help">
+              Поиск работает по имени, ID аккаунта или Support ID и ничего не меняет.
+            </p>
+            <form id="incident-search-form" class="support-search">
+              <input
+                id="incident-search-query"
+                type="search"
+                minlength="2"
+                maxlength="80"
+                placeholder="Malik, WBL-… или UUID"
+                required
+              />
+              <button class="primary support-search-button" type="submit">Найти диагностику</button>
+            </form>
+            <p id="incident-search-meta" class="muted"></p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Игрок</th>
+                    <th>Последняя активность</th>
+                    <th>Активных входов</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="incident-results-body"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article id="incident-detail" class="card player-detail" hidden>
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">INCIDENT CENTER</p>
+                <h2 id="incident-detail-name">Игрок</h2>
+                <p id="incident-detail-id" class="mono muted"></p>
+              </div>
+              <div class="support-action-buttons">
+                <button id="incident-open-player" class="ghost" type="button">Открыть карточку</button>
+                <button id="incident-copy-package" class="ghost" type="button">
+                  Скопировать диагностический пакет
+                </button>
+                <button id="incident-detail-close" class="ghost" type="button">Закрыть</button>
+              </div>
+            </div>
+            <p id="incident-meta" class="muted"></p>
+            <div id="incident-summary-cards" class="cards"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Событие</th>
+                    <th>Контекст</th>
+                  </tr>
+                </thead>
+                <tbody id="incident-events-body"></tbody>
+              </table>
             </div>
           </article>
         </section>

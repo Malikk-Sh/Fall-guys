@@ -200,11 +200,14 @@ curl -s localhost:3000/health | head -c 400   # метрики
 выполняет один и тот же SQL снова. Каждая миграция и отметка о ней находятся в одной транзакции:
 если SQL завершился ошибкой, база откатывается целиком и служба не стартует на половине схемы.
 
-Перед обновлением всё равно полезно сохранить SQLite-файл:
+Перед обновлением всё равно полезно создать свежий проверенный SQLite snapshot. Не копируй
+`leaderboard.db` обычным `cp`: при WAL это может быть неполная копия, а после migration 014 raw
+копия также обойдёт privacy-scrub диагностического журнала. Используй штатный backup service —
+он запускает тот же verified pipeline в `PrivateTmp` и публикует snapshot только после scrub:
 
 ```bash
+systemctl start wobble-backup.service
 systemctl stop wobble
-cp /var/lib/wobble/leaderboard.db /var/lib/wobble/leaderboard.db.bak
 systemctl start wobble
 sqlite3 /var/lib/wobble/leaderboard.db 'SELECT version, applied_at FROM schema_migrations;'
 ```

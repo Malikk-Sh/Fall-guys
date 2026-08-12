@@ -169,3 +169,224 @@ test('late WebSocket AUTH does not emit room-state while a match is already play
   client.off('message', listener);
   assert.equal(unexpectedRoomState, 0);
 });
+
+test('incident diagnostics follows authenticated socket lifecycle without storing credentials', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Incident Socket');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: 'Ignored Cached Name', protocolVersion: 10 }));
+  await lobbyReply;
+  await closeClient(client);
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  assert.ok(timeline.events.some(event => event.kind === 'auth' && event.code === 'authenticated'));
+  assert.ok(timeline.events.some(event => event.kind === 'room' && event.code === 'created'));
+  assert.ok(timeline.events.some(event => event.kind === 'connection' && event.code === 'disconnected'));
+  const serialized = JSON.stringify(timeline);
+  assert.equal(serialized.includes(ticket), false);
+  assert.equal(serialized.includes('Ignored Cached Name'), false);
+});
+
+test('incident storage failure does not change the gameplay protocol response', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Diagnostics Failure');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  const originalRecord = core.incidentDiagnostics.record;
+  t.after(async () => {
+    core.incidentDiagnostics.record = originalRecord;
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+
+  core.incidentDiagnostics.record = () => {
+    throw new Error('injected diagnostics write failure');
+  };
+
+  const errorReply = waitFor(client, 'error');
+  client.send(JSON.stringify({ type: 'join', code: 'ZZZZZZ', name: account.name, protocolVersion: 10 }));
+  const response = await errorReply;
+  assert.equal(response.code, 'ROOM_NOT_FOUND');
+});
+
+test('blocked late WebSocket AUTH cannot resume the anonymous room slot', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  const account = core.accounts.create('Blocked Late Auth');
+  networkIdentity.configure(
+    ticket => auth.consumeSocketTicket(ticket),
+    id => id !== account.id
+  );
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const first = await openClient(url);
+  const clients = [first];
+  t.after(async () => {
+    await Promise.all(clients.map(closeClient));
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const lobbyReply = waitFor(first, 'lobby');
+  first.send(JSON.stringify({ type: 'create', name: 'Anonymous Before Block', protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  const player = [...room.players.values()][0];
+  const reconnectToken = first.token || player.ws.token;
+  assert.equal(player.accountId, null);
+
+  const blockedReply = waitFor(first, 'error');
+  first.send(JSON.stringify({ type: 'auth', ticket }));
+  const blocked = await blockedReply;
+  assert.equal(blocked.code, 'ACCOUNT_SANCTIONED');
+  assert.equal(
+    player.accountId,
+    account.id,
+    'the proven denied identity remains attached for resume enforcement'
+  );
+  assert.equal(core.sessions.get(reconnectToken)?.accountId, account.id);
+
+  const second = await openClient(url);
+  clients.push(second);
+  const resumeDenied = waitFor(second, 'error');
+  second.send(JSON.stringify({ type: 'resume', token: reconnectToken }));
+  const denied = await resumeDenied;
+  assert.equal(denied.code, 'ACCOUNT_SANCTIONED');
+});
+
+test('disconnect abandonment keeps original race context after room advances to results', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Race Grace Diagnostic');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: account.name, protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  const player = room.players.values().next().value;
+  room.state = 'PLAYING';
+  room.matchId = 'race-before-results';
+  player.finished = false;
+
+  await closeClient(client);
+  assert.ok(player.disconnectedAt, 'disconnect must start reconnect grace');
+  assert.equal(player.disconnectMatchContext?.matchId, 'race-before-results');
+  room.state = 'RESULTS';
+  room.matchId = null;
+  core.expireDisconnectedPlayers(player.disconnectedAt + 31_000);
+
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  const abandoned = timeline.events.find(event => event.kind === 'match' && event.code === 'abandoned');
+  assert.ok(abandoned, 'grace expiry must still emit abandonment after RESULTS');
+  assert.match(abandoned.matchRef || '', /^[a-f0-9]{12}$/);
+});
+
+test('explicit LEAVE_ROOM during an active match records an immediate abandon incident', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Explicit Leave Diagnostic');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const lobbyReply = waitFor(client, 'lobby');
+  client.send(JSON.stringify({ type: 'create', name: account.name, protocolVersion: 10 }));
+  const lobby = await lobbyReply;
+  const room = core.rooms.get(lobby.code);
+  assert.ok(room);
+  room.state = 'PLAYING';
+  room.matchId = 'explicit-leave-match';
+
+  client.send(JSON.stringify({ type: 'leave' }));
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  assert.ok(
+    timeline.events.some(event => event.kind === 'match' && event.code === 'abandoned'),
+    'explicit leave must be visible as match abandonment immediately'
+  );
+});
+
+test('operational drain records restart as the terminal matchmaking event', async t => {
+  core.resetRateLimits();
+  const auth = new AuthService({ db: core.accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const account = core.accounts.create('Drain Diagnostic');
+  const ticket = auth.createSocketTicket(account.id).token;
+
+  await new Promise(resolve => core.server.listen(0, '127.0.0.1', resolve));
+  const url = `ws://127.0.0.1:${core.server.address().port}/ws`;
+  const client = await openClient(url);
+  t.after(async () => {
+    await closeClient(client);
+    await new Promise(resolve => core.server.close(resolve));
+    networkIdentity.reset();
+  });
+
+  const authReply = waitFor(client, 'authenticated');
+  client.send(JSON.stringify({ type: 'auth', ticket }));
+  await authReply;
+  const waitingReply = waitFor(client, 'matchmakingWaiting');
+  client.send(JSON.stringify({ type: 'findCoop', name: account.name, chapterId: '', protocolVersion: 10 }));
+  await waitingReply;
+
+  assert.equal(core.beginOperationalDrain(), true);
+  const timeline = core.incidentDiagnostics.timeline(account.id);
+  assert.ok(
+    timeline.events.some(event => event.kind === 'matchmaking' && event.code === 'restart'),
+    'drain must explain why a queued player stopped waiting'
+  );
+});

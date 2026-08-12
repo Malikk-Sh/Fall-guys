@@ -94,7 +94,10 @@ class ServiceReliability {
     this.health = health;
     this.now = now;
     this.retentionDays = Math.max(1, Math.min(90, Number(retentionDays) || DEFAULT_RETENTION_DAYS));
-    this.maxEventRows = Math.max(1000, Math.min(100_000, Number(maxEventRows) || DEFAULT_MAX_EVENT_ROWS));
+    this.maxEventRows = Math.max(
+      1000,
+      Math.min(100_000, Number(maxEventRows) || DEFAULT_MAX_EVENT_ROWS)
+    );
     this.previousCounters = null;
     this.lastPrunedAt = 0;
     migrateDatabase(db);
@@ -191,7 +194,8 @@ class ServiceReliability {
       capacityRejected: Number(raw.capacity_rejected || 0),
       snapshotsSkippedForLoad: Number(raw.snapshots_skipped_for_load || 0),
       eventLoopP95MsMax: Number(raw.event_loop_max || 0),
-      eventLoopP95MsAverage: raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
+      eventLoopP95MsAverage:
+        raw.event_loop_avg == null ? 0 : Math.round(Number(raw.event_loop_avg) * 10) / 10,
       rssMbMax: Number(raw.rss_max || 0),
       heapUsedMbMax: Number(raw.heap_max || 0),
       socketsMax: Number(raw.sockets_max || 0),
@@ -251,18 +255,21 @@ class ServiceReliability {
       if (statusRank(next) > statusRank(status)) status = next;
       if (!reasons.includes(code)) reasons.push(code);
     };
-    if (summary.handlerErrors > 0 || errors.some(item => item.severity === 'error'))
+    if (summary.handlerErrors > 0 || errors.some(item => item.severity === 'error')) {
       raise('critical', 'internal-errors');
+    }
     if (summary.eventLoopP95MsMax >= 250) raise('critical', 'event-loop-critical');
     else if (summary.eventLoopP95MsMax >= 120) raise('warning', 'event-loop-high');
-    if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.5)
+    if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.5) {
       raise('critical', 'reconnect-failure-rate-critical');
-    else if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.25)
+    } else if (reconnectAttempts >= 5 && summary.reconnectFailed / reconnectAttempts >= 0.25) {
       raise('warning', 'reconnect-failure-rate-high');
+    }
     if (summary.socketSendFailures >= 5) raise('warning', 'socket-send-failures');
     if (summary.capacityRejected > 0) raise('warning', 'capacity-rejections');
-    if (lifecycle.some(item => item.severity === 'warn' || item.severity === 'error'))
+    if (lifecycle.some(item => item.severity === 'warn' || item.severity === 'error')) {
       raise('warning', 'lifecycle-warning');
+    }
 
     return {
       generatedAt: at,
@@ -291,9 +298,8 @@ function prepare(db) {
          socket_count, active_matches, matchmaking_waiting, resume_succeeded, resume_failed,
          handler_errors, socket_send_failures, capacity_rejected, snapshots_skipped_for_load)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(sampled_at) DO UPDATE SET
+      ON CONFLICT(sampled_at, commit_sha) DO UPDATE SET
         version = excluded.version,
-        commit_sha = excluded.commit_sha,
         release_tag = excluded.release_tag,
         event_loop_p95_ms = MAX(service_reliability_samples.event_loop_p95_ms, excluded.event_loop_p95_ms),
         rss_mb = MAX(service_reliability_samples.rss_mb, excluded.rss_mb),

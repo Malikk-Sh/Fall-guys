@@ -22,6 +22,7 @@ const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
 const { AdminAuthService, hasCapability } = require('./adminAuth');
 const { installAdminRoutes } = require('./adminRoutes');
+const operationalState = require('./operationalState');
 const {
   AdminOperationsClient,
   OPERATION_DEFINITIONS,
@@ -134,6 +135,13 @@ test('maintenance flag uses one fixed runtime path and enable/disable is idempot
   }
 });
 
+test('operational drain state is process-wide and one-way for the retiring process', () => {
+  assert.equal(operationalState.isDraining(), false);
+  assert.equal(operationalState.beginDrain(), true);
+  assert.equal(operationalState.isDraining(), true);
+  assert.equal(operationalState.beginDrain(), false);
+});
+
 test('operational health parser accepts only a valid PID and drain state', async t => {
   let payload = { ok: true, pid: 4321, draining: false };
   const server = http.createServer((req, res) => {
@@ -240,6 +248,8 @@ test('maintenance gates only new WebSocket upgrades and nginx reload is validate
   const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
 
   assert.equal((nginxLocations.match(/\/run\/wobble-ops\/maintenance/g) || []).length, 1);
+  assert.match(nginxLocations, /location ~\* \^\/health\/ops\$/);
+  assert.doesNotMatch(nginxLocations, /location = \/health\/ops/);
   assert.match(
     nginxLocations,
     /location \/ws \{[\s\S]*if \(-f \/run\/wobble-ops\/maintenance\) \{[\s\S]*return 503;/
@@ -256,12 +266,22 @@ test('maintenance gates only new WebSocket upgrades and nginx reload is validate
 test('operational restart is serialized and clears maintenance only after stable new-PID health', () => {
   const root = path.resolve(import.meta.dirname, '..');
   const bootstrap = fs.readFileSync(path.join(root, 'server/bootstrap.js'), 'utf8');
+  const index = fs.readFileSync(path.join(root, 'server/index.js'), 'utf8');
   const helper = fs.readFileSync(path.join(root, 'deploy/wobble-ops-helper.mjs'), 'utf8');
 
   assert.match(bootstrap, /const ACTIVE_MATCH_STATES = new Set\(\['COUNTDOWN', 'PLAYING'\]\)/);
   assert.match(bootstrap, /const DRAIN_TIMEOUT_MS = 180_000/);
-  assert.match(bootstrap, /core\.app\.get\('\/health\/ops'/);
-  assert.match(bootstrap, /return res\.json\(\{ ok: true, pid: process\.pid, draining \}\)/);
+  assert.match(bootstrap, /operationalState\.beginDrain\(\)/);
+  assert.match(index, /app\.get\('\/health\/ops'/);
+  assert.match(index, /req\.path !== '\/health\/ops'/);
+  assert.match(index, /pid: process\.pid/);
+  assert.match(index, /draining: operationalState\.isDraining\(\)/);
+  assert.match(index, /const ready =[\s\S]*!operationalState\.isDraining\(\)/);
+  assert.match(index, /verifyClient:[\s\S]*!operationalState\.isDraining\(\)/);
+  assert.match(
+    index,
+    /function beginCountdown\(room\) \{[\s\S]*operationalState\.isDraining\(\)[\s\S]*S2C\.SERVER_SHUTDOWN/
+  );
   assert.match(bootstrap, /process\.on\('SIGUSR2', \(\) => beginGracefulDrain\('SIGUSR2'\)\)/);
   assert.match(bootstrap, /core\.shutdown\(`\$\{signal\}:\$\{reason\}`\)/);
 
@@ -274,6 +294,10 @@ test('operational restart is serialized and clears maintenance only after stable
     /health\?\.pid === candidatePid && health\.draining === false && confirmedPid === candidatePid/
   );
   assert.match(helper, /signal\.reason !== 'operation-timeout'/);
+  assert.match(
+    helper,
+    /if \(spec\.kind === 'maintenance'\) \{[\s\S]*if \(restartInFlight\) return \{ ok: false, reason: 'operation-busy' \}/
+  );
   assert.match(helper, /await confirmOldProcessNotDraining\(oldPid\)/);
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);

@@ -347,9 +347,10 @@ export async function executeRequest(request, now = Date.now()) {
 
   if (spec.kind === 'graceful-restart') return startGracefulRestart(now);
   if (spec.kind === 'maintenance') {
-    if (restartInFlight && spec.enabled === false) {
-      return { ok: false, reason: 'operation-busy' };
-    }
+    // Restart owns the maintenance flag until the new PID has passed readiness. Blocking both
+    // transitions prevents a manual enable during restart from being mistaken for the helper's
+    // temporary flag and removed by the completion monitor.
+    if (restartInFlight) return { ok: false, reason: 'operation-busy' };
     return setMaintenance(spec.enabled);
   }
 

@@ -387,10 +387,7 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /phase: 'signal-uncertain'/);
   const advanceAt = helper.indexOf('async function advancePendingRestartSignal');
   const recoveryAt = helper.indexOf('export async function recoverRestartMonitor');
-  const recoveryAdvanceAt = helper.indexOf(
-    'await advancePendingRestartSignal(marker, markerPath)',
-    recoveryAt
-  );
+  const recoveryAdvanceAt = helper.indexOf('await advanceSignal(marker, markerPath)', recoveryAt);
   const recoveryMonitorAt = helper.indexOf('scheduleRestartCompletion(marker.oldPid', recoveryAt);
   const completionAt = helper.indexOf('function scheduleRestartCompletion');
   const persistedPendingAt = helper.indexOf("persisted?.phase === 'signal-pending'", completionAt);

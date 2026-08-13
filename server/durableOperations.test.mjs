@@ -9,6 +9,7 @@ import {
   beginDurableOperation,
   readOperationJournal,
   recoverDurableOperations,
+  recoverRestartMonitor,
   transitionDurableOperation,
   writeRestartMarker
 } from '../deploy/wobble-ops-helper.mjs';
@@ -209,4 +210,61 @@ test('helper execution exception is persisted as failed rather than leaving an a
   assert.equal(records.length, 1);
   assert.equal(records[0].state, 'failed');
   assert.equal(records[0].reason, 'operation-failed');
+});
+
+test('malformed durable journal fails closed and is never overwritten by a new root action', () => {
+  const ctx = tempState();
+  try {
+    const malformed = '{"version":1,"operations":[';
+    fs.writeFileSync(ctx.journalPath, malformed);
+    const started = beginDurableOperation(request('77777777-7777-4777-8777-777777777777', 'nginx.reload'), {
+      journalPath: ctx.journalPath,
+      now: 7000
+    });
+    assert.equal(started.ok, false);
+    assert.equal(started.reason, 'operation-state-failed');
+    assert.equal(fs.readFileSync(ctx.journalPath, 'utf8'), malformed);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('restart recovery rollback closes the matching durable operation instead of blocking forever', async () => {
+  const ctx = tempState();
+  try {
+    const started = beginDurableOperation(request('88888888-8888-4888-8888-888888888888', 'wobble.restart'), {
+      journalPath: ctx.journalPath,
+      now: 8000
+    });
+    assert.equal(started.ok, true);
+    assert.equal(transitionDurableOperation(started.context, 'running', { now: 8100 }), true);
+    assert.equal(transitionDurableOperation(started.context, 'drain', { now: 8200 }), true);
+    assert.equal(
+      writeRestartMarker(
+        {
+          version: 1,
+          oldPid: 4321,
+          startedAt: 8000,
+          clearMaintenance: true,
+          phase: 'signal-pending',
+          operationId: started.context.id
+        },
+        ctx.markerPath
+      ),
+      true
+    );
+
+    const recovered = await recoverRestartMonitor({
+      markerPath: ctx.markerPath,
+      journalPath: ctx.journalPath,
+      now: 8300,
+      advanceSignal: async () => ({ marker: null, rolledBack: true })
+    });
+    assert.equal(recovered, false);
+    const records = readOperationJournal(ctx.journalPath);
+    assert.equal(records[0].state, 'failed');
+    assert.equal(records[0].reason, 'restart-signal-failed');
+  } finally {
+    ctx.cleanup();
+  }
 });

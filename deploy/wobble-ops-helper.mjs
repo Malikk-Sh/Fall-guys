@@ -137,33 +137,72 @@ function normalizeOperationRecord(value) {
   };
 }
 
-export function readOperationJournal(journalPath = OPERATION_JOURNAL) {
+function loadOperationJournal(journalPath = OPERATION_JOURNAL) {
+  let parsed;
   try {
-    const parsed = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
-    if (parsed?.version !== OPERATION_JOURNAL_VERSION || !Array.isArray(parsed.operations)) return [];
-    return parsed.operations.map(normalizeOperationRecord).filter(Boolean).slice(-OPERATION_HISTORY_LIMIT);
-  } catch {
-    return [];
+    parsed = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { ok: true, records: [] };
+    return { ok: false, records: [] };
   }
+  if (parsed?.version !== OPERATION_JOURNAL_VERSION || !Array.isArray(parsed.operations)) {
+    return { ok: false, records: [] };
+  }
+  const records = parsed.operations.map(normalizeOperationRecord);
+  if (records.some(record => !record)) return { ok: false, records: [] };
+  const ids = new Set(records.map(record => record.id));
+  if (ids.size !== records.length) return { ok: false, records: [] };
+  return { ok: true, records: records.slice(-OPERATION_HISTORY_LIMIT) };
+}
+
+export function readOperationJournal(journalPath = OPERATION_JOURNAL) {
+  const loaded = loadOperationJournal(journalPath);
+  return loaded.ok ? loaded.records : [];
 }
 
 function writeOperationJournal(records, journalPath = OPERATION_JOURNAL) {
   const directory = path.dirname(journalPath);
   const temporaryPath = `${journalPath}.tmp-${process.pid}`;
+  let fileDescriptor = null;
+  let directoryDescriptor = null;
   try {
     fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
-    const operations = records.map(normalizeOperationRecord).filter(Boolean).slice(-OPERATION_HISTORY_LIMIT);
+    const operations = records.map(normalizeOperationRecord);
+    if (operations.some(record => !record)) return false;
+    const bounded = operations.slice(-OPERATION_HISTORY_LIMIT);
+    fileDescriptor = fs.openSync(temporaryPath, 'w', 0o600);
     fs.writeFileSync(
-      temporaryPath,
-      `${JSON.stringify({ version: OPERATION_JOURNAL_VERSION, operations })}\n`,
-      { encoding: 'utf8', mode: 0o600 }
+      fileDescriptor,
+      `${JSON.stringify({ version: OPERATION_JOURNAL_VERSION, operations: bounded })}\n`,
+      'utf8'
     );
+    // The journal contains no secrets. Make the completed temp inode readable by the unprivileged
+    // Control Plane before publishing it, then fsync the file and parent directory around rename.
+    fs.fchmodSync(fileDescriptor, 0o644);
+    fs.fsyncSync(fileDescriptor);
+    fs.closeSync(fileDescriptor);
+    fileDescriptor = null;
     fs.renameSync(temporaryPath, journalPath);
-    // Journal contains only allowlisted action IDs, state, timestamps and safe reason codes.
-    // It is intentionally readable by the unprivileged Control Plane, but only root can replace it.
-    fs.chmodSync(journalPath, 0o644);
+    directoryDescriptor = fs.openSync(directory, 'r');
+    fs.fsyncSync(directoryDescriptor);
+    fs.closeSync(directoryDescriptor);
+    directoryDescriptor = null;
     return true;
   } catch {
+    if (fileDescriptor != null) {
+      try {
+        fs.closeSync(fileDescriptor);
+      } catch {
+        // Best effort cleanup only.
+      }
+    }
+    if (directoryDescriptor != null) {
+      try {
+        fs.closeSync(directoryDescriptor);
+      } catch {
+        // Best effort cleanup only.
+      }
+    }
     try {
       fs.rmSync(temporaryPath, { force: true });
     } catch {
@@ -178,7 +217,9 @@ function activeOperation(records) {
 }
 
 export function beginDurableOperation(request, { journalPath = OPERATION_JOURNAL, now = Date.now() } = {}) {
-  const records = readOperationJournal(journalPath);
+  const loaded = loadOperationJournal(journalPath);
+  if (!loaded.ok) return { ok: false, reason: 'operation-state-failed' };
+  const records = loaded.records;
   const active = activeOperation(records);
   if (active) return { ok: false, reason: 'operation-busy', activeId: active.id };
   const record = {
@@ -204,7 +245,9 @@ export function beginDurableOperation(request, { journalPath = OPERATION_JOURNAL
 export function transitionDurableOperation(context, nextState, detail = {}) {
   if (!context?.id || !context?.action || !context?.journalPath || !OPERATION_STATES.has(nextState))
     return false;
-  const records = readOperationJournal(context.journalPath);
+  const loaded = loadOperationJournal(context.journalPath);
+  if (!loaded.ok) return false;
+  const records = loaded.records;
   const index = records.findIndex(record => record.id === context.id && record.action === context.action);
   if (index < 0) return false;
   const current = records[index];
@@ -239,7 +282,14 @@ export function recoverDurableOperations({
   now = Date.now()
 } = {}) {
   const marker = readRestartMarker(markerPath);
-  const records = readOperationJournal(journalPath);
+  const loaded = loadOperationJournal(journalPath);
+  if (!loaded.ok) {
+    console.error(
+      'wobble operation journal is malformed or unreadable; privileged actions remain fail-closed'
+    );
+    return [];
+  }
+  const records = loaded.records;
   for (const record of records) {
     if (OPERATION_TERMINAL_STATES.has(record.state)) continue;
     if (record.action === 'wobble.restart' && marker?.operationId === record.id) continue;
@@ -648,7 +698,8 @@ function scheduleRestartCompletion(
 export async function recoverRestartMonitor({
   markerPath = RESTART_MARKER,
   journalPath = OPERATION_JOURNAL,
-  now = Date.now()
+  now = Date.now(),
+  advanceSignal = advancePendingRestartSignal
 } = {}) {
   if (restartInFlight) return true;
   let marker = readRestartMarker(markerPath);
@@ -675,8 +726,18 @@ export async function recoverRestartMonitor({
   if (!maintenanceEnabled()) setMaintenance(true);
 
   if (marker.phase === 'signal-pending') {
-    const advanced = await advancePendingRestartSignal(marker, markerPath);
-    if (advanced.rolledBack) return false;
+    const advanced = await advanceSignal(marker, markerPath);
+    if (advanced.rolledBack) {
+      if (marker.operationId) {
+        transitionDurableOperation(
+          { id: marker.operationId, action: 'wobble.restart', startedAt, journalPath },
+          'failed',
+          { now, reason: 'restart-signal-failed' }
+        );
+      }
+      restartInFlight = false;
+      return false;
+    }
     marker = advanced.marker || marker;
   }
 

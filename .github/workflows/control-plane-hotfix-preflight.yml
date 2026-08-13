@@ -1,0 +1,26 @@
+name: Control Plane Hotfix Preflight
+
+on:
+  push:
+    branches: [fix/admin-redirect-loop-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate hotfix scripts
+        run: bash -n deploy/verify-shared443-config.sh
+      - name: Install Nginx test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nginx libnginx-mod-stream
+      - name: Verify canonical Control Plane routing
+        run: bash deploy/verify-shared443-config.sh

@@ -31,7 +31,14 @@ const ERROR_EVENTS = Object.freeze([
   'socket_send_threw',
   'invalid_room_transition',
   'shutdown_forced',
-  'database_close_failed'
+  'database_close_failed',
+  // Не удалось сбросить накопленную статистику. Само по себе не мешает игре — но если событие
+  // повторяется, значит файл базы кто-то держит дольше ожидания, и это стоит увидеть до того,
+  // как оно превратится во что-то заметное игроку.
+  'metrics_flush_failed',
+  // Исключение, до которого не дотянулся ни один обработчик. Процесс после него продолжает
+  // работать (см. bootstrap.js), поэтому единственный способ узнать о таком — телеметрия.
+  'uncaught_exception'
 ]);
 
 const ALLOWED_EVENTS = new Set([...LIFECYCLE_EVENTS, ...ERROR_EVENTS]);

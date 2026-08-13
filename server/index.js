@@ -2408,7 +2408,16 @@ const heartbeatTimer = setInterval(() => {
 
   // Сброс раз в пятнадцать секунд, вместе с прочей уборкой: копить дольше незачем, а писать
   // чаще — значит платить обращением к диску за каждое падение в пропасть.
-  gameplay.flush();
+  //
+  // Обёрнут по той же причине, что и pruneIncidentDiagnostics выше: статистика — наблюдаемость, и
+  // остановить ею игру нельзя. Раньше исключение отсюда поднималось из колбэка таймера, не встречало
+  // ни одного обработчика и завершало процесс — то есть неудачная запись счётчика выбрасывала из
+  // забега всех игроков во всех комнатах разом.
+  try {
+    gameplay.flush();
+  } catch (error) {
+    log('warn', 'metrics_flush_failed', { message: error?.message });
+  }
   expireSessions(now);
   for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
   ipRoomOps.cleanup(now, { force: true });

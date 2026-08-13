@@ -9,9 +9,21 @@ def replace_once(path, old, new):
     path.write_text(text.replace(old, new, 1))
 
 
+def replace_count(path, old, new, expected):
+    text = path.read_text()
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} matches, found {count}: {old[:140]!r}")
+    path.write_text(text.replace(old, new))
+
+
 routes_test = Path("server/controlPlaneRoutes.test.mjs")
-replace_once(routes_test, "      health: async () => null,\n", "      status: async () => null,\n")
-replace_once(routes_test, "      health: async () => ({ ok: true }),\n", "      status: async () => ({ reachable: true, ready: true, ok: true }),\n")
+replace_count(routes_test, "      health: async () => null,\n", "      status: async () => null,\n", 2)
+replace_once(
+    routes_test,
+    "      health: async () => ({ ok: true }),\n",
+    "      status: async () => ({ reachable: true, ready: true, ok: true }),\n",
+)
 
 client_test = Path("server/controlPlaneGameClient.test.mjs")
 client_test.write_text(

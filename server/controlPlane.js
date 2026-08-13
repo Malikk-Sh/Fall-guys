@@ -6,6 +6,7 @@ const express = require('express');
 const { openDatabase } = require('./db');
 const { AdminAuthService } = require('./adminAuth');
 const { AdminOperationsClient } = require('./adminOperationsClient');
+const { buildAlertDeliveryFeed, isLoopbackAddress } = require('./alertDeliveryFeed');
 const { buildIdentity } = require('./buildInfo');
 const { ControlPlaneGameClient } = require('./controlPlaneGameClient');
 const { ControlPlaneAlertCenter } = require('./controlPlaneAlerts');
@@ -65,7 +66,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health/control', (req, res) => {
-  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress || '')) {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
     return res.status(404).json({ ok: false, error: 'not-found' });
   }
   return res.json({
@@ -76,6 +77,14 @@ app.get('/health/control', (req, res) => {
     release: build.release || null,
     uptime: Math.max(0, Math.round(process.uptime()))
   });
+});
+
+app.get('/internal/alerts/delivery', (req, res) => {
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    return res.status(404).json({ ok: false, error: 'not-found' });
+  }
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ ok: true, feed: buildAlertDeliveryFeed(alerts.status()) });
 });
 
 app.get('/admin', (_req, res) => res.redirect(308, '/admin/'));

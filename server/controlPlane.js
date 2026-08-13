@@ -31,8 +31,9 @@ if (!fs.existsSync(databaseFile)) {
   throw new Error(`Refusing to create the gameplay database from control plane: ${databaseFile}`);
 }
 
-const db = openDatabase(databaseFile);
-db.exec('PRAGMA busy_timeout = 3000');
+// Панель ждёт занятый файл меньше, чем игра: администратору лучше увидеть ошибку и повторить, чем
+// смотреть на замерший экран. Игроку наоборот — см. DEFAULT_BUSY_TIMEOUT_MS в db.js.
+const db = openDatabase(databaseFile, { busyTimeoutMs: 3000 });
 const adminAuth = new AdminAuthService({ db, migrate: false });
 const gameClient = new ControlPlaneGameClient({ port: process.env.PORT || 3000 });
 const operations = new AdminOperationsClient();

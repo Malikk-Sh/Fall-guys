@@ -31,8 +31,16 @@ const ERROR_EVENTS = Object.freeze([
   'socket_send_threw',
   'invalid_room_transition',
   'shutdown_forced',
-  'database_close_failed'
+  'database_close_failed',
+  // Исключение, до которого не дотянулся ни один обработчик. Процесс после него продолжает
+  // работать (см. bootstrap.js), поэтому единственный способ узнать о таком — телеметрия.
+  'uncaught_exception'
 ]);
+
+// Сюда намеренно не попал metrics_flush_failed. Он сообщает как раз о том, что база недоступна, и
+// путь доставки событий заканчивается синхронной записью в неё же — регистрация означала бы вторую
+// попытку писать в занятый файл ровно тогда, когда он занят. Это событие идёт прямо в stderr
+// (см. server/index.js), где его видит journald, но не Reliability Center.
 
 const ALLOWED_EVENTS = new Set([...LIFECYCLE_EVENTS, ...ERROR_EVENTS]);
 const ALLOWED_SEVERITIES = new Set(['info', 'warn', 'error']);

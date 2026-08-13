@@ -286,6 +286,31 @@ if (require.main === module) {
       })
     );
   });
+  // Последняя линия обороны: исключение, до которого не дотянулся ни один обработчик.
+  //
+  // Обычный совет для Node — записать и выйти: состояние процесса после такой ошибки неизвестно.
+  // Здесь выбрано иначе, и вот почему. В этом процессе живут все идущие забеги, и выход означает
+  // гарантированную потерю их всех до единого. Неизвестное состояние — риск; выход — уже
+  // случившийся ущерб, причём для каждого, кто сейчас играет. Между «возможно, что-то сломано» и
+  // «точно выбило всех» игра выбирает первое и продолжает обслуживать комнаты.
+  //
+  // Чтобы это не превратилось в тихое проглатывание ошибок, событие идёт в тот же структурный лог,
+  // что и остальные: console.error перехвачен reliability capture, а 'uncaught_exception' внесён в
+  // список отслеживаемых. Ошибка не исчезает — она становится видимой в Reliability Center.
+  const logUnhandled = (event, error) => {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event,
+        ts: new Date().toISOString(),
+        message: String(error?.message || error || '').slice(0, 500),
+        stack: String(error?.stack || '').slice(0, 2000)
+      })
+    );
+  };
+  process.on('uncaughtException', error => logUnhandled('uncaught_exception', error));
+  process.on('unhandledRejection', reason => logUnhandled('uncaught_exception', reason));
+
   process.on('SIGUSR2', () => beginGracefulDrain('SIGUSR2'));
   process.on('SIGTERM', () => {
     clearDrainTimers();

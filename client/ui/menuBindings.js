@@ -198,6 +198,29 @@ export function bindMenu(game) {
   });
   $('#cameraMode').classList.toggle('camera-free', game.cameraController.mode === 'free');
 
+  // Гонка: подбор соперников. Кнопка та же по смыслу, что и в кооперативе, но собирает не пару,
+  // а группу — поэтому и текст ожидания другой: важно не «ищем», а сколько уже собралось.
+  click('#raceFind', async () => {
+    await game.accountReady;
+    const button = $('#raceFind');
+    const net = game.ensureNetwork();
+    if (button.dataset.searching === 'true') {
+      net.cancelMatchmaking();
+      button.dataset.searching = 'false';
+      button.querySelector('span').textContent = 'НАЙТИ ГОНКУ';
+      game.ui.status('Поиск отменён. Можно создать приватную комнату.');
+      return;
+    }
+    button.dataset.searching = 'true';
+    button.querySelector('span').textContent = 'ОТМЕНИТЬ ПОИСК';
+    game.ui.status('Ищем соперников…');
+    net.findRace({
+      name: game.ui.playerName(),
+      playerId: game.ui.playerId(),
+      difficulty: $('#raceDifficulty').value
+    });
+  });
+
   // Кооператив: выбор главы и вход в комнату.
   game.ui.fillChapters(COOP_CHAPTERS, chapter => {
     game.coopChapterId = chapter.id;

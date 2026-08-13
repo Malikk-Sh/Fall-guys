@@ -29,19 +29,41 @@ function syncCoopCampaignResult(message) {
 export function bindNetwork(game) {
   game.net.on('matchmakingWaiting', message => {
     if (message.cancelled) {
-      const button = document.querySelector('#coopFind');
-      if (button) {
+      for (const id of ['#coopFind', '#raceFind']) {
+        const button = document.querySelector(id);
+        if (!button || button.dataset.searching !== 'true') continue;
         button.dataset.searching = 'false';
-        button.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+        button.querySelector('span').textContent = id === '#raceFind' ? 'НАЙТИ ГОНКУ' : 'НАЙТИ НАПАРНИКА';
       }
     }
-    game.ui.status(
-      message.cancelled
-        ? message.reason === 'away'
+    if (message.cancelled) {
+      // Отмена могла обогнать собственный запрос: сервер успевает принять игрока в комнату и
+      // прислать лобби, и только потом обрабатывает отмену. Клиент к этому моменту уже показывает
+      // лобби комнаты, из которой его только что вывели, — и писать статус в скрытое меню значит
+      // оставить человека сидеть в чужой комнате, пока он сам не закроет экран.
+      if (game.state.name === APP_STATE.LOBBY) {
+        game.room = null;
+        game.goHome();
+      }
+      return game.ui.status(
+        message.reason === 'away'
           ? 'Поиск остановлен: игра была свёрнута.'
           : 'Поиск отменён. Можно создать приватную комнату.'
-        : `Ищем напарника… ${Math.max(1, Math.round((message.waitedMs || 0) / 1000))} с`
-    );
+      );
+    }
+    // Гонка сообщает состав, кооператив — время ожидания. Разница не косметическая: пара либо
+    // нашлась, либо нет, и игроку остаётся только ждать, а в гонке он видит, как комната
+    // наполняется, и понимает, чего именно ждёт.
+    if (message.players) {
+      const waiting =
+        message.players < (message.minPlayers || 2)
+          ? 'ждём ещё одного'
+          : message.startsAt
+            ? `старт через ${Math.max(1, Math.round((message.startsAt - Date.now()) / 1000))} с`
+            : 'скоро старт';
+      return game.ui.status(`В гонке ${message.players} · ${waiting}`);
+    }
+    game.ui.status(`Ищем напарника… ${Math.max(1, Math.round((message.waitedMs || 0) / 1000))} с`);
   });
   // Состояние комнаты приходит одним и тем же типом сообщения в любом состоянии — и в лобби,
   // и на экране результатов. Раньше обработчик этого не различал и на каждое обновление открывал
@@ -63,10 +85,16 @@ export function bindNetwork(game) {
     // Забег идёт (или идёт отсчёт) — экран принадлежит игре, а не лобби.
     if (message.state !== ROOM_STATE.LOBBY) return;
 
-    const findButton = document.querySelector('#coopFind');
-    if (findButton) {
+    // Подбор завершился комнатой — обе кнопки поиска возвращаются в исходное состояние. Гонка
+    // попадает сюда так же, как кооператив: её очередь и есть настоящее лобби.
+    for (const [id, label] of [
+      ['#coopFind', 'НАЙТИ НАПАРНИКА'],
+      ['#raceFind', 'НАЙТИ ГОНКУ']
+    ]) {
+      const findButton = document.querySelector(id);
+      if (!findButton) continue;
       findButton.dataset.searching = 'false';
-      findButton.querySelector('span').textContent = 'НАЙТИ НАПАРНИКА';
+      findButton.querySelector('span').textContent = label;
     }
 
     game.state.transition(APP_STATE.LOBBY, message);

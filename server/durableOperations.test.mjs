@@ -409,3 +409,23 @@ test('operations helper is enabled at boot so persisted recovery cannot remain p
   assert.match(service, /\[Install\][\s\S]*WantedBy=multi-user\.target/);
   assert.match(installer, /systemctl enable[^\n]*wobble-ops\.service/);
 });
+
+test('root helper preserves null duration until an operation becomes terminal', () => {
+  const ctx = tempState();
+  try {
+    const started = beginDurableOperation(request('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'backup.create'), {
+      journalPath: ctx.journalPath,
+      now: 13_000
+    });
+    assert.equal(started.ok, true);
+    let [record] = readOperationJournal(ctx.journalPath);
+    assert.equal(record.state, 'queued');
+    assert.equal(record.durationMs, null);
+    assert.equal(transitionDurableOperation(started.context, 'running', { now: 13_100 }), true);
+    [record] = readOperationJournal(ctx.journalPath);
+    assert.equal(record.state, 'running');
+    assert.equal(record.durationMs, null);
+  } finally {
+    ctx.cleanup();
+  }
+});

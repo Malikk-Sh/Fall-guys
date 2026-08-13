@@ -117,7 +117,7 @@ function normalizeOperationRecord(value) {
     return null;
   }
   const completedAt = Number(value?.completedAt);
-  const durationMs = Number(value?.durationMs);
+  const durationMs = value?.durationMs == null ? null : Number(value.durationMs);
   const reason = safeOperationReason(value?.reason);
   const transitions = Array.isArray(value?.transitions)
     ? value.transitions.map(normalizeTransition).filter(Boolean).slice(-12)
@@ -132,7 +132,8 @@ function normalizeOperationRecord(value) {
       OPERATION_TERMINAL_STATES.has(state) && Number.isSafeInteger(completedAt) && completedAt >= createdAt
         ? completedAt
         : null,
-    durationMs: Number.isFinite(durationMs) && durationMs >= 0 ? Math.round(durationMs) : null,
+    durationMs:
+      durationMs != null && Number.isFinite(durationMs) && durationMs >= 0 ? Math.round(durationMs) : null,
     reason,
     transitions
   };
@@ -1027,6 +1028,21 @@ async function startGracefulRestart(now, operationContext) {
     const safeToRollback =
       signal.reason !== 'operation-timeout' && (await confirmOldProcessNotDraining(oldPid));
     if (safeToRollback) {
+      const terminalized = transitionDurableOperation(operationContext, 'failed', {
+        reason: 'restart-signal-failed',
+        durationMs: signal.durationMs
+      });
+      if (!terminalized) {
+        marker = { ...marker, phase: 'signal-uncertain' };
+        writeRestartMarker(marker);
+        restartInFlight = false;
+        return {
+          ok: false,
+          reason: 'operation-state-uncertain',
+          durationMs: signal.durationMs,
+          maintenance: maintenanceEnabled()
+        };
+      }
       clearRestartMarker();
       if (!alreadyInMaintenance) setMaintenance(false);
       restartInFlight = false;

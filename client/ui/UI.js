@@ -691,16 +691,50 @@ export class UI {
   accountToken() {
     return this.account?.secret || null;
   }
+  // Текст ожидания в публичной комнате. Отдельным методом, потому что его перерисовывает таймер:
+  // момент старта приходит от сервера один раз, а показывать надо убывающий остаток.
+  fillHint(data) {
+    // Считаем по `online`, а не по длине списка: оборвавшийся игрок остаётся в комнате ещё
+    // тридцать секунд, и сервер набор по нему не засчитывает — клиент не должен обещать иного.
+    const connected = data.players.filter(player => player.online).length;
+    if (connected < (data.minPlayers || 2)) return `В гонке ${connected} — ждём соперников…`;
+    if (!data.fillDeadline) return `В гонке ${connected} — скоро старт.`;
+    const left = Math.max(0, Math.round((data.fillDeadline - Date.now()) / 1000));
+    return `В гонке ${connected} — старт через ${left} с. Можно ждать ещё игроков.`;
+  }
+
+  startFillCountdown(data) {
+    this.stopFillCountdown();
+    if (!data.fillDeadline) return;
+    this.fillTimer = setInterval(() => {
+      const hint = document.querySelector('#lobbyHint');
+      if (!hint) return this.stopFillCountdown();
+      hint.textContent = this.fillHint(data);
+      if (data.fillDeadline - Date.now() <= 0) this.stopFillCountdown();
+    }, 1000);
+  }
+
+  stopFillCountdown() {
+    if (!this.fillTimer) return;
+    clearInterval(this.fillTimer);
+    this.fillTimer = null;
+  }
+
   lobby(data, selfId) {
     this.show('lobby');
     $('#roomCode').textContent = data.code;
     $('#lobbyCourse').textContent = courseName(data.seed);
     $('#lobbyDifficulty').value = data.difficulty;
-    const host = data.host === selfId;
+    // Публичная комната подбора управляется сама: сложность в ней задана подбором, старт идёт по
+    // таймеру, готовность не спрашивается. Показывать в ней хозяйские органы управления значило бы
+    // предлагать кнопки, на которые сервер ответит отказом.
+    const matchmade = data.fillDeadline !== undefined && data.minPlayers !== null && !!data.minPlayers;
+    const host = data.host === selfId && !matchmade;
     $('#lobbyDifficultyWrap').classList.toggle('locked', !host);
     $('#lobbyDifficulty').disabled = !host;
     $('#start').classList.toggle('hidden', !host);
     $('#start').disabled = !data.players.length || !data.players.every(p => p.ready);
+    $('#ready').classList.toggle('hidden', matchmade);
     if (this.pendingRecentPartnerInviteName && data.mode === GAME_MODE.COOP) {
       this.recentPartnerInviteRoomCode = data.code;
       this.recentPartnerInviteName = this.pendingRecentPartnerInviteName;
@@ -714,11 +748,18 @@ export class UI {
       data.mode === GAME_MODE.COOP &&
       this.recentPartnerInviteRoomCode === data.code &&
       data.players.length === 1;
-    $('#lobbyHint').textContent = waitingRecentPartner
-      ? 'Комната для ' + this.recentPartnerInviteName + ' готова — отправьте её кнопкой «ССЫЛКА».'
-      : host
-        ? 'Все игроки должны быть готовы перед стартом.'
-        : 'Отметьтесь готовым — гонку запустит хост.';
+    // Ожидающему в подборе нужно не «отметьтесь готовым», а состав и момент старта: он ничего не
+    // нажимает и должен понимать, чего именно ждёт. Отсчёт держится здесь, на видимом экране, —
+    // строка статуса в меню к этому моменту уже скрыта вместе с самим меню.
+    if (matchmade) this.startFillCountdown(data);
+    else this.stopFillCountdown();
+    $('#lobbyHint').textContent = matchmade
+      ? this.fillHint(data)
+      : waitingRecentPartner
+        ? 'Комната для ' + this.recentPartnerInviteName + ' готова — отправьте её кнопкой «ССЫЛКА».'
+        : host
+          ? 'Все игроки должны быть готовы перед стартом.'
+          : 'Отметьтесь готовым — гонку запустит хост.';
     const list = $('#players');
     list.replaceChildren();
     for (const player of data.players) {

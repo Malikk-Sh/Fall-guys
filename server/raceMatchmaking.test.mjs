@@ -11,6 +11,7 @@ import WebSocket from 'ws';
 
 const require = createRequire(import.meta.url);
 const { server, rooms, resetRateLimits, shutdown: shutdownServer } = require('./index');
+const { ROOM_STATE } = require('../shared/protocol.js');
 
 const WAIT_MS = 10_000;
 
@@ -206,6 +207,96 @@ test('отыгравшая публичная комната перестаёт 
   assert.equal(room.matchmade, false, 'после забега комната больше не публичная');
   assert.equal(room.fillDeadline, null);
   assert.equal(matchmadeRooms().length, 0);
+});
+
+test('оборвавшийся не считается собравшимся: гонка не стартует в одиночку', async t => {
+  await listen();
+  const url = urlFor();
+  const first = await findRace(url);
+  await first.wait('matchmakingWaiting');
+  const second = await findRace(url);
+  await second.wait('matchmakingWaiting');
+  const [room] = matchmadeRooms();
+  assert.equal(room.players.size, 2);
+
+  // Второй обрывается. В комнате он остаётся ещё тридцать секунд — столько даётся на возврат.
+  const [, dropped] = [...room.players.values()];
+  dropped.disconnectedAt = Date.now();
+
+  // Срок набора истёк ровно в этот момент.
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  t.after(async () => {
+    await first.close();
+    await second.close();
+    await stop();
+  });
+
+  // Список игроков всё ещё двое, но на связи один — гонка обязана остаться в лобби.
+  assert.equal(room.players.size, 2);
+  assert.equal(room.state, ROOM_STATE.LOBBY, 'забег с одним живым участником попал бы в таблицу рекордов');
+});
+
+test('в публичную комнату нельзя войти по коду', async t => {
+  await listen();
+  const url = urlFor();
+  const searcher = await findRace(url);
+  const waiting = await searcher.wait('matchmakingWaiting');
+
+  const outsider = new Client(url);
+  await outsider.wait('hello');
+  outsider.send('join', { name: 'Outsider', code: waiting.roomCode });
+  const error = await outsider.wait('error');
+
+  t.after(async () => {
+    await searcher.close();
+    await outsider.close();
+    await stop();
+  });
+
+  assert.match(error.message, /Найти гонку/);
+  assert.equal(matchmadeRooms()[0].players.size, 1);
+});
+
+test('хост публичной комнаты не может запустить гонку сам', async t => {
+  await listen();
+  const url = urlFor();
+  const client = await findRace(url);
+  await client.wait('matchmakingWaiting');
+
+  // Первый вошедший — хост комнаты и уже отмечен готовым. Без запрета он уехал бы в гонку один.
+  client.send('start');
+  const error = await client.wait('error');
+
+  t.after(async () => {
+    await client.close();
+    await stop();
+  });
+
+  assert.match(error.message, /соберутся соперники/);
+  assert.equal(matchmadeRooms()[0].state, ROOM_STATE.LOBBY);
+});
+
+test('«любая сложность» подсаживает к тем, кто уже ждёт', async t => {
+  await listen();
+  const url = urlFor();
+  // Кто-то ждёт на «хаосе».
+  const picky = await findRace(url, 'chaos');
+  const pickyWait = await picky.wait('matchmakingWaiting');
+  // Пришедшему всё равно — он должен попасть к нему, а не завести третью комнату на 'normal'.
+  const any = await findRace(url, '');
+  const anyWait = await any.wait('matchmakingWaiting');
+
+  t.after(async () => {
+    await picky.close();
+    await any.close();
+    await stop();
+  });
+
+  assert.equal(anyWait.roomCode, pickyWait.roomCode);
+  assert.equal(matchmadeRooms().length, 1);
+  assert.equal(matchmadeRooms()[0].spec.difficulty, 'chaos');
 });
 
 test.after(() => shutdownServer('test', { exitProcess: false }));

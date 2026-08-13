@@ -1220,13 +1220,29 @@ function enqueueCoop(ws, message) {
 const MIN_RACE_PLAYERS = 2;
 const RACE_FILL_MS = 25_000;
 
-// Свободная публичная комната нужной сложности. Избегание уважается и здесь: игрок, которого
-// попросили больше не сводить с этим человеком, не должен встретить его через случайный подбор.
+// Сколько игроков в комнате НА СВЯЗИ.
+//
+// Размер room.players для этого не годится: отключившийся остаётся в списке ещё тридцать секунд —
+// столько ему даётся на переподключение. Для набора это означало бы, что гонка может стартовать с
+// одним живым участником, а поскольку обрыв случился в лобби, забег не пометился бы незачётным и
+// одиночный результат попал бы в таблицу проверенных рекордов.
+function connectedPlayers(room) {
+  let count = 0;
+  for (const player of room.players.values()) if (!player.disconnectedAt) count += 1;
+  return count;
+}
+
+// Свободная публичная комната. Избегание уважается и здесь: игрок, которого попросили больше не
+// сводить с этим человеком, не должен встретить его через случайный подбор.
+//
+// Пустая difficulty означает «любая» и подбирает комнату любой сложности. Это не то же самое, что
+// «обычная»: игрок, которому всё равно, должен попадать к тем, кто уже ждёт, а не заводить рядом
+// третью комнату — иначе выбор «любая» замедлял бы подбор вместо того, чтобы ускорять его.
 function openRaceRoomFor(ws, difficulty, safety = socialSafety) {
   for (const room of rooms.values()) {
     if (room.mode !== GAME_MODE.RACE || !room.matchmade) continue;
     if (room.state !== ROOM_STATE.LOBBY) continue;
-    if (room.spec.difficulty !== difficulty) continue;
+    if (difficulty && room.spec.difficulty !== difficulty) continue;
     if (room.players.size >= MAX_PLAYERS[GAME_MODE.RACE]) continue;
     let blocked = false;
     for (const player of room.players.values()) {
@@ -1268,39 +1284,88 @@ function createMatchmadeRaceRoom(difficulty, hostId) {
   return room;
 }
 
+// Единственная точка, где публичная гонка стартует.
+//
+// Оба пути — «комната заполнилась» и «истёк срок набора» — идут сюда, чтобы проверка мощности и
+// учёт состоявшегося подбора не разъезжались между ними. Раньше их было два, и телеметрия успеха
+// не велась ни в одном: воронка показывала бы входящих в очередь и ноль матчей.
+function startMatchmadeRace(room, reason) {
+  room.fillDeadline = null;
+
+  // Тот же предел, что и у ручного запуска. Без него набор нескольких комнат, истёкший
+  // одновременно, перешагивал бы лимит активных матчей ровно тогда, когда он и нужен.
+  if (capacityStatus().matchesFull) {
+    metrics.capacityRejected++;
+    // Не отменяем набор, а откладываем: игроки уже собрались, и разгонять их из-за чужой нагрузки
+    // хуже, чем попросить подождать ещё немного.
+    room.fillDeadline = Date.now() + RACE_FILL_MS;
+    emitLobby(room);
+    return false;
+  }
+
+  const now = Date.now();
+  for (const player of room.players.values()) {
+    if (player.disconnectedAt) continue;
+    gameplay.count('match_found', dims(room, player));
+    if (player.queuedAt) gameplay.observe('matchmaking_wait_ms', now - player.queuedAt, dims(room, player));
+  }
+  trackEvent(productEvents, 'matchmakingMatched');
+  log('info', 'race_matchmaking_started', {
+    roomId: room.code,
+    players: connectedPlayers(room),
+    difficulty: room.spec.difficulty,
+    reason
+  });
+  beginCountdown(room);
+  return true;
+}
+
 function enqueueRace(ws, message) {
   if (operationalState.isDraining()) {
     send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
     return false;
   }
   leave(ws);
-  const difficulty = safeDifficulty(message.difficulty);
+  // Пустая строка — осознанный выбор «любая», а не отсутствие выбора. Приводить её к 'normal' сразу
+  // значило бы молча подменять запрос игрока: он просил любую комнату, а получил бы только обычные.
+  const requested = message.difficulty ? safeDifficulty(message.difficulty) : '';
   const now = Date.now();
-  gameplay.count('queue_enter', { mode: GAME_MODE.RACE, course: difficulty, device: ws.device });
+  gameplay.count('queue_enter', {
+    mode: GAME_MODE.RACE,
+    course: requested || 'any',
+    device: ws.device
+  });
 
-  const existing = openRaceRoomFor(ws, difficulty);
-  const room = existing || createMatchmadeRaceRoom(difficulty, ws.id);
+  const existing = openRaceRoomFor(ws, requested);
+  // Сложность выбирается только когда комнату действительно надо создать.
+  const room = existing || createMatchmadeRaceRoom(safeDifficulty(requested), ws.id);
   addPlayer(room, ws, message.name, message.playerId);
   // Готовность в публичной комнате не спрашивают: игрок уже сказал «найти гонку», и второй раз
   // подтверждать то же самое — лишний клик перед стартом, которого он и так ждёт.
   const player = room.players.get(ws.id);
-  if (player) player.ready = true;
+  if (player) {
+    player.ready = true;
+    // Момент входа в очередь — по нему считается время ожидания, когда матч состоится.
+    player.queuedAt = now;
+  }
 
   if (!existing) {
     trackEvent(productEvents, 'matchmakingStarted');
     incidentForSocket(ws, { kind: 'matchmaking', code: 'queued', phase: 'matchmaking' });
   }
 
+  const connected = connectedPlayers(room);
+
   // Комната заполнилась — ждать больше некого.
-  if (room.players.size >= MAX_PLAYERS[GAME_MODE.RACE]) {
+  if (connected >= MAX_PLAYERS[GAME_MODE.RACE]) {
     room.fillDeadline = null;
-    log('info', 'race_matchmaking_full', { roomId: room.code, difficulty });
-    return beginCountdown(room);
+    log('info', 'race_matchmaking_full', { roomId: room.code, difficulty: room.spec.difficulty });
+    return startMatchmadeRace(room, 'full');
   }
 
   // Минимум собран — заводим срок набора, если он ещё не заведён. Повторный вход НЕ продлевает
   // его: иначе поток входящих отодвигал бы старт бесконечно, и первый пришедший ждал бы дольше всех.
-  if (room.players.size >= MIN_RACE_PLAYERS && !room.fillDeadline) {
+  if (connected >= MIN_RACE_PLAYERS && !room.fillDeadline) {
     room.fillDeadline = now + RACE_FILL_MS;
   }
 
@@ -1309,7 +1374,7 @@ function enqueueRace(ws, message) {
     type: S2C.MATCHMAKING_WAITING,
     waitedMs: 0,
     roomCode: room.code,
-    players: room.players.size,
+    players: connected,
     minPlayers: MIN_RACE_PLAYERS,
     startsAt: room.fillDeadline
   });
@@ -2106,6 +2171,16 @@ wss.on('connection', (ws, req) => {
       if (room.state !== ROOM_STATE.LOBBY) {
         return sendError(ws, ERROR_CODES.MATCH_ALREADY_STARTED, 'Игра в этой комнате уже началась.');
       }
+      // Публичная комната набирается подбором, а не по коду. Код у неё есть и виден в лобби, так
+      // что запрет — не про угадывание: пришедший по ссылке обошёл бы и подбор по сложности, и
+      // список избеганий, а главное — остался бы неготовым, но всё равно поехал бы по таймеру.
+      if (room.matchmade) {
+        return sendError(
+          ws,
+          ERROR_CODES.ROOM_NOT_FOUND,
+          'Это комната случайного подбора. Нажмите «Найти гонку».'
+        );
+      }
       if (room.players.size >= MAX_PLAYERS[room.mode]) {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
@@ -2158,6 +2233,12 @@ wss.on('connection', (ws, req) => {
       if (room.host !== ws.id) {
         return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Настройки меняет только хост.');
       }
+      // В публичной комнате сложность выбрана подбором, и менять её на ходу нельзя: остальные
+      // пришли именно на неё. Заодно это снимает противоречие — смена настроек сбрасывает
+      // готовность всем, а набор стартует по таймеру и о готовности не спрашивает.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Настройки случайной гонки задаёт подбор.');
+      }
       if (message.difficulty !== undefined) {
         if (room.mode === GAME_MODE.COOP) {
           room.chapterId = COOP_CHAPTER_IDS.includes(message.difficulty)
@@ -2196,6 +2277,12 @@ wss.on('connection', (ws, req) => {
       }
       if (operationalState.isDraining()) {
         return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      // Публичная комната стартует сама и только по своим правилам. Первый вошедший становится в
+      // ней хостом — и без этого запрета мог бы нажать «начать» сразу после поиска и уехать в
+      // гонку в одиночку, обойдя весь набор.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.NOT_READY, 'Гонка начнётся сама, когда соберутся соперники.');
       }
       if (capacityStatus().matchesFull) {
         metrics.capacityRejected++;
@@ -2487,12 +2574,10 @@ const snapshotTimer = setInterval(() => {
     // последнего игрока и не забыть снять при роспуске, а этот цикл и так обходит все комнаты.
     if (room.state === ROOM_STATE.LOBBY && room.fillDeadline && now >= room.fillDeadline) {
       room.fillDeadline = null;
-      // Пока ждали, кто-то мог уйти. Набирать заново честнее, чем запускать гонку в одиночку:
-      // срок появится снова, когда подойдёт следующий игрок.
-      if (room.players.size >= MIN_RACE_PLAYERS) {
-        log('info', 'race_matchmaking_started', { roomId: room.code, players: room.players.size });
-        beginCountdown(room);
-      }
+      // Пока ждали, кто-то мог отвалиться. Считаем только тех, кто на связи: оборвавшийся ещё
+      // тридцать секунд числится в комнате, и по размеру списка гонка стартовала бы в одиночку.
+      // Набирать заново честнее — срок появится снова, когда подойдёт следующий игрок.
+      if (connectedPlayers(room) >= MIN_RACE_PLAYERS) startMatchmadeRace(room, 'deadline');
       continue;
     }
 

@@ -2055,7 +2055,7 @@ async function loadOperations() {
 }
 
 async function monitorAcceptedRestart() {
-  const deadline = Date.now() + 195_000;
+  const deadline = Date.now() + 225_000;
   let sawTransition = false;
   while (Date.now() < deadline) {
     let status;

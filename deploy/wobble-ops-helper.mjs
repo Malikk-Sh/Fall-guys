@@ -47,6 +47,7 @@ export const ACTIONS = Object.freeze({
   'maintenance.enable': Object.freeze({ kind: 'maintenance', enabled: true }),
   'maintenance.disable': Object.freeze({ kind: 'maintenance', enabled: false }),
   'nginx.reload': Object.freeze({ kind: 'nginx-reload', timeoutMs: 20_000 }),
+  'wobble.start': Object.freeze({ kind: 'wobble-start' }),
   'wobble.restart': Object.freeze({ kind: 'graceful-restart', deferred: true })
 });
 
@@ -461,6 +462,25 @@ export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now =
   return true;
 }
 
+async function startWobbleService() {
+  if (restartInFlight) return { ok: false, reason: 'operation-busy' };
+  const startedAt = Date.now();
+  const reset = await runCommand(SYSTEMCTL, ['reset-failed', 'wobble.service'], { timeoutMs: 5000 });
+  if (!reset.ok) {
+    return {
+      ok: false,
+      reason: reset.reason || 'operation-failed',
+      durationMs: Date.now() - startedAt
+    };
+  }
+  const start = await runCommand(SYSTEMCTL, ['start', 'wobble.service'], { timeoutMs: 20_000 });
+  return {
+    ok: start.ok,
+    reason: start.ok ? null : start.reason || 'operation-failed',
+    durationMs: Date.now() - startedAt
+  };
+}
+
 async function startGracefulRestart(now) {
   if (restartInFlight) return { ok: false, reason: 'operation-busy' };
   if (now < restartCooldownUntil) {
@@ -551,6 +571,14 @@ export async function executeRequest(request, now = Date.now()) {
   if (busy) return { ok: false, reason: 'operation-busy' };
 
   if (spec.kind === 'graceful-restart') return startGracefulRestart(now);
+  if (spec.kind === 'wobble-start') {
+    busy = true;
+    try {
+      return await startWobbleService();
+    } finally {
+      busy = false;
+    }
+  }
   if (spec.kind === 'maintenance') {
     // Restart owns the maintenance flag until the new PID has passed readiness. Blocking both
     // transitions prevents a manual enable during restart from being mistaken for the helper's

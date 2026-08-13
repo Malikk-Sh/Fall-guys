@@ -22,7 +22,10 @@ const enabled = process.env.ADMIN_PANEL_ENABLED === '1';
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
   throw new Error('CONTROL_PORT must be a valid TCP port');
 }
-if (databaseFile !== ':memory:' && !fs.existsSync(databaseFile)) {
+if (databaseFile === ':memory:') {
+  throw new Error('Wobble Control requires a shared persistent LEADERBOARD_DB');
+}
+if (!fs.existsSync(databaseFile)) {
   throw new Error(`Refusing to create the gameplay database from control plane: ${databaseFile}`);
 }
 

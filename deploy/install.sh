@@ -320,7 +320,10 @@ backup_root="$(
   printf '%s' "${BACKUP_DIR:-/var/lib/wobble/backups}"
 )"
 
-if [ "$database_file" != ":memory:" ] && [ -f "$database_file" ] &&
+[ "$database_file" != ":memory:" ] ||
+  fail "Wobble Control требует общий persistent LEADERBOARD_DB; :memory: нельзя разделить между процессами"
+
+if [ -f "$database_file" ] &&
   sudo -u "$APP_USER" /usr/bin/node "$APP_DIR/server/backupCli.mjs" legacy-check "$database_file" \
     >/dev/null 2>&1; then
   legacy_dir="${backup_root%/}/pre-migration"
@@ -335,7 +338,7 @@ else
 fi
 
 fresh_database=0
-if [ "$database_file" != ":memory:" ] && [ ! -f "$database_file" ]; then
+if [ ! -f "$database_file" ]; then
   fresh_database=1
   say "Первичная инициализация persistent DB"
   # На совершенно новой установке старой админ-панели ещё нет. Коротко запускаем gameplay,
@@ -355,20 +358,18 @@ if [ "$database_file" != ":memory:" ] && [ ! -f "$database_file" ]; then
 fi
 
 say "Независимый Wobble Control"
-# Control Plane должен подняться даже если новый gameplay process сломан. Его единственная
-# обязательная dependency здесь — существующая persistent DB (или намеренно :memory: в dev).
-# Не ждём /health/live: иначе неудачный deploy снова лишил бы оператора панели диагностики.
-if [ "$database_file" != ":memory:" ]; then
-  database_ready=0
-  for _ in $(seq 1 20); do
-    if [ -f "$database_file" ]; then
-      database_ready=1
-      break
-    fi
-    sleep 1
-  done
-  [ "$database_ready" -eq 1 ] || fail "persistent DB не появилась перед стартом Wobble Control"
-fi
+# Control Plane должен подняться даже если новый gameplay process сломан. Его обязательная
+# dependency — уже существующая shared persistent DB. Не ждём /health/live нового build: иначе
+# неудачный deploy снова лишил бы оператора панели диагностики.
+database_ready=0
+for _ in $(seq 1 20); do
+  if [ -f "$database_file" ]; then
+    database_ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$database_ready" -eq 1 ] || fail "persistent DB не появилась перед стартом Wobble Control"
 
 systemctl restart wobble-control
 control_ready=0

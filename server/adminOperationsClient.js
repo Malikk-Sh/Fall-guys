@@ -58,6 +58,15 @@ const OPERATION_DEFINITIONS = Object.freeze({
       'Не перезапускает Wobble, не меняет конфигурацию и не трогает Xray/VPN. Активные соединения Nginx сохраняются.',
     tone: 'safe'
   }),
+  'wobble.start': Object.freeze({
+    id: 'wobble.start',
+    title: 'Запустить / восстановить сервер игры',
+    description:
+      'Сбрасывает failed/start-limit состояние systemd и запускает wobble.service, если игровой процесс полностью остановлен.',
+    impact:
+      'Не перезапускает Nginx, Control Plane или VPN/Xray. Если maintenance включён, новые подключения останутся закрыты до его отдельного отключения.',
+    tone: 'safe'
+  }),
   'wobble.restart': Object.freeze({
     id: 'wobble.restart',
     title: 'Плавно перезапустить сервер игры',

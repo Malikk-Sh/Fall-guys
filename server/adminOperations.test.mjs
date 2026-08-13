@@ -79,6 +79,7 @@ test('web client and root helper share the same closed operation allowlist', () 
   assert.equal(validOperation('backup.create'), 'backup.create');
   assert.equal(validOperation('maintenance.enable'), 'maintenance.enable');
   assert.equal(validOperation('nginx.reload'), 'nginx.reload');
+  assert.equal(validOperation('wobble.start'), 'wobble.start');
   assert.equal(validOperation('unknown.operation'), null);
 
   const allowedUnits = new Set([
@@ -94,6 +95,7 @@ test('web client and root helper share the same closed operation allowlist', () 
   }
 
   assert.equal(ACTIONS['nginx.reload'].kind, 'nginx-reload');
+  assert.equal(ACTIONS['wobble.start'].kind, 'wobble-start');
   assert.equal(ACTIONS['wobble.restart'].kind, 'graceful-restart');
   assert.equal(ACTIONS['wobble.restart'].deferred, true);
   assert.deepEqual(

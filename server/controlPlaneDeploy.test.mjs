@@ -34,6 +34,12 @@ test('Nginx keeps lowercase admin routes on Control Plane and rejects case varia
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:3001;/);
 });
 
+test('Control Plane requires the shared persistent production database', () => {
+  const control = fs.readFileSync(new URL('./controlPlane.js', import.meta.url), 'utf8');
+  assert.match(control, /databaseFile === ':memory:'[\s\S]*requires a shared persistent LEADERBOARD_DB/);
+  assert.match(install, /Wobble Control требует общий persistent LEADERBOARD_DB/);
+});
+
 test('Control Plane systemd unit stays independent from gameplay lifecycle', () => {
   assert.doesNotMatch(unit, /^(Requires|PartOf)=wobble\.service$/m);
   assert.match(unit, /^ExecStart=\/usr\/bin\/node server\/controlPlane\.js$/m);

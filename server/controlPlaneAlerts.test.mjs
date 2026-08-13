@@ -220,7 +220,10 @@ test('source failure never invents a recovery for an already active alert', asyn
     await alerts.evaluate({ now });
     now += 60_000;
     await alerts.evaluate({ now });
-    assert.equal(alerts.status({ now }).active[0].rule, 'nginx-unavailable');
+    assert.equal(
+      alerts.status({ now }).active.some(item => item.rule === 'nginx-unavailable'),
+      true
+    );
 
     fail = true;
     now += 60_000;
@@ -228,7 +231,8 @@ test('source failure never invents a recovery for an already active alert', asyn
     now += 60_000;
     await alerts.evaluate({ now });
     const status = alerts.status({ now });
-    assert.equal(status.active[0].rule, 'nginx-unavailable');
+    assert.equal(status.active.some(item => item.rule === 'nginx-unavailable'), true);
+    assert.equal(status.active.some(item => item.rule === 'monitoring-degraded'), true);
     assert.equal(status.sources.infrastructure, false);
   } finally {
     ctx.cleanup();

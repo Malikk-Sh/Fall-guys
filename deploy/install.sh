@@ -286,6 +286,8 @@ fi
 say "Служба и резервные копии"
 cp "$APP_DIR/deploy/wobble.service" /etc/systemd/system/wobble.service
 cp "$APP_DIR/deploy/wobble-control.service" /etc/systemd/system/wobble-control.service
+cp "$APP_DIR/deploy/wobble-telegram-alerts.service" /etc/systemd/system/wobble-telegram-alerts.service
+cp "$APP_DIR/deploy/wobble-telegram-alert-test.service" /etc/systemd/system/wobble-telegram-alert-test.service
 cp "$APP_DIR/deploy/wobble-backup.service" /etc/systemd/system/wobble-backup.service
 cp "$APP_DIR/deploy/wobble-backup.timer" /etc/systemd/system/wobble-backup.timer
 cp "$APP_DIR/deploy/wobble-backup-watch.service" /etc/systemd/system/wobble-backup-watch.service
@@ -294,6 +296,18 @@ cp "$APP_DIR/deploy/wobble-backup-verify.service" /etc/systemd/system/wobble-bac
 cp "$APP_DIR/deploy/wobble-smoke.service" /etc/systemd/system/wobble-smoke.service
 cp "$APP_DIR/deploy/wobble-ops.service" /etc/systemd/system/wobble-ops.service
 cp "$APP_DIR/deploy/wobble-ops.socket" /etc/systemd/system/wobble-ops.socket
+telegram_env=/etc/wobble-telegram.env
+if [ ! -f "$telegram_env" ]; then
+  install -m 0600 -o root -g root "$APP_DIR/deploy/wobble-telegram.env.example" "$telegram_env"
+  echo "создан $telegram_env — Telegram alerts выключены до явной настройки"
+else
+  chown root:root "$telegram_env"
+  chmod 600 "$telegram_env"
+fi
+telegram_alerts_enabled=0
+if grep -qE '^TELEGRAM_ALERTS_ENABLED=1[[:space:]]*$' "$telegram_env"; then
+  telegram_alerts_enabled=1
+fi
 # Важно: privileged helper не запускается из /opt/wobble, которым владеет service-user.
 # Иначе компрометация игрового процесса позволила бы заменить root-код перед запуском helper.
 install -d -m 0755 -o root -g root /usr/local/lib/wobble-ops
@@ -307,6 +321,12 @@ systemctl stop wobble-ops.service >/dev/null 2>&1 || true
 systemctl enable wobble >/dev/null
 systemctl enable wobble-control >/dev/null
 systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket wobble-ops.service >/dev/null
+if [ "$telegram_alerts_enabled" = "1" ]; then
+  systemctl enable wobble-telegram-alerts >/dev/null
+else
+  systemctl disable wobble-telegram-alerts >/dev/null 2>&1 || true
+  systemctl stop wobble-telegram-alerts >/dev/null 2>&1 || true
+fi
 systemctl restart wobble-ops.socket
 # Start the helper immediately so a persisted graceful-restart monitor is recovered even before
 # another admin request arrives. Restart=on-failure handles an unexpected helper crash afterwards.
@@ -386,6 +406,18 @@ for _ in $(seq 1 20); do
 done
 [ "$control_ready" -eq 1 ] ||
   fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
+
+if [ "$telegram_alerts_enabled" = "1" ]; then
+  say "Telegram Alert Delivery"
+  systemctl restart wobble-telegram-alerts >/dev/null 2>&1 || true
+  sleep 1
+  if systemctl is-active --quiet wobble-telegram-alerts; then
+    echo "Telegram notifier запущен"
+  else
+    warn "Telegram notifier не запущен; основной deploy продолжается независимо"
+    warn "проверьте /etc/wobble-telegram.env и journalctl -u wobble-telegram-alerts -n 50 --no-pager"
+  fi
+fi
 
 remove_shared_stream_include() {
   sed -i \
@@ -688,3 +720,8 @@ echo "Перезапуск:  systemctl restart wobble"
 echo "Backup:      systemctl start wobble-backup.service"
 echo "Restore:     sudo bash ${APP_DIR}/deploy/restore.sh /path/to/backup.db"
 echo "Обновление:  bash ${APP_DIR}/deploy/install.sh"
+if [ "$telegram_alerts_enabled" = "1" ]; then
+  echo "Telegram:     systemctl status wobble-telegram-alerts --no-pager"
+else
+  echo "Telegram:     выключен (/etc/wobble-telegram.env)"
+fi

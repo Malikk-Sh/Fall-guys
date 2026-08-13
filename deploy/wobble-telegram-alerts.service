@@ -1,0 +1,43 @@
+[Unit]
+Description=Wobble Control Telegram alert delivery
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=network-online.target wobble-control.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+WorkingDirectory=/opt/wobble
+ExecStart=/usr/bin/node server/telegramAlertDelivery.js
+EnvironmentFile=/etc/wobble-telegram.env
+Environment=TELEGRAM_ALERT_STATE=/var/lib/wobble-telegram-alerts/state.json
+StateDirectory=wobble-telegram-alerts
+StateDirectoryMode=0700
+
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wobble-telegram-alerts
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+PrivateDevices=true
+# AF_INET/AF_INET6 are the explicit egress boundary for fixed api.telegram.org plus loopback Control Plane.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

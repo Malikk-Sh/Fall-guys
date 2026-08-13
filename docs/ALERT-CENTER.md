@@ -29,7 +29,9 @@ Alert evaluator работает внутри независимого `wobble-c
 - обязательный local/offsite backup устарел или недоступен;
 - диск production DB занят на 85%+ (`warning`) или 95%+ (`critical`);
 - Reliability Center вернул `warning`/`critical`;
-- Durable Operation не меняла состояние больше пяти минут.
+- Durable Operation не меняла состояние больше пяти минут;
+- allowlisted Operations helper недоступен;
+- один из источников Alert Center (Infrastructure / Reliability / Operations) недоступен устойчиво.
 
 Во время активного `wobble.restart` evaluator **не создаёт ложный alert о временной недоступности игры**, но продолжает проверять диск, backup, TLS, Nginx и Reliability.
 
@@ -74,6 +76,7 @@ Owner/operator может нажать **«Отметить как увиден�
 
 Acknowledgement:
 
+- сбрасывается при escalation `warning → critical`, чтобы ухудшение снова стало непросмотренным;
 - не скрывает проблему;
 - не меняет источник health;
 - не запускает Operations;
@@ -88,6 +91,7 @@ Alerting — observability/workflow слой.
 
 - Ошибка одного source probe не должна завершать Control Plane.
 - Ошибка evaluator не меняет gameplay/API semantics.
+- Failed write не может оставить lifecycle transition только в RAM: Alert Center откатывает изменение и показывает state error.
 - Alert Center не получает root-доступ.
 - Он не вызывает `wobble-ops` actions автоматически.
 - Он не делает внешних webhook/Telegram запросов.

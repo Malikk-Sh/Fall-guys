@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const {
   ControlPlaneAlertCenter,
   infrastructureConditions,
+  monitoringCondition,
   operationConditions,
   reliabilityConditions
 } = require('./controlPlaneAlerts');
@@ -231,8 +232,14 @@ test('source failure never invents a recovery for an already active alert', asyn
     now += 60_000;
     await alerts.evaluate({ now });
     const status = alerts.status({ now });
-    assert.equal(status.active.some(item => item.rule === 'nginx-unavailable'), true);
-    assert.equal(status.active.some(item => item.rule === 'monitoring-degraded'), true);
+    assert.equal(
+      status.active.some(item => item.rule === 'nginx-unavailable'),
+      true
+    );
+    assert.equal(
+      status.active.some(item => item.rule === 'monitoring-degraded'),
+      true
+    );
     assert.equal(status.sources.infrastructure, false);
   } finally {
     ctx.cleanup();
@@ -268,4 +275,96 @@ test('failed acknowledgement persistence rolls back the in-memory acknowledgemen
   } finally {
     ctx.cleanup();
   }
+});
+
+test('warning acknowledgement is cleared when the same incident escalates to critical', async () => {
+  const ctx = tempState();
+  let now = 50_000;
+  let usedPercent = 90;
+  const alerts = center({
+    stateFile: ctx.file,
+    now: () => now,
+    infrastructure: {
+      snapshot: async () => healthyInfrastructure({ resources: { disk: { available: true, usedPercent } } })
+    }
+  });
+  try {
+    await alerts.evaluate({ now });
+    now += 60_000;
+    await alerts.evaluate({ now });
+    let alert = alerts.status({ now }).active.find(item => item.rule === 'disk-pressure');
+    assert.equal(alert.severity, 'warning');
+    assert.equal(
+      alerts.acknowledge(alert.id, { name: 'Operator', role: 'operator' }, { now: now + 1 }).ok,
+      true
+    );
+    assert.equal(alerts.status({ now: now + 2 }).counts.unacknowledged, 0);
+
+    usedPercent = 96;
+    now += 60_000;
+    await alerts.evaluate({ now });
+    alert = alerts.status({ now }).active.find(item => item.rule === 'disk-pressure');
+    assert.equal(alert.severity, 'critical');
+    assert.equal(alert.acknowledgedAt, null);
+    assert.equal(alert.acknowledgedBy, null);
+    assert.equal(alerts.status({ now }).counts.unacknowledged, 1);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('failed lifecycle persistence rolls back a resolution instead of hiding an active alert in RAM', async () => {
+  const ctx = tempState();
+  let now = 60_000;
+  let nginxActive = false;
+  const alerts = center({
+    stateFile: ctx.file,
+    now: () => now,
+    infrastructure: {
+      snapshot: async () =>
+        healthyInfrastructure({ services: { wobble: { active: true }, nginx: { active: nginxActive } } })
+    }
+  });
+  try {
+    await alerts.evaluate({ now });
+    now += 60_000;
+    await alerts.evaluate({ now });
+    assert.equal(
+      alerts.status({ now }).active.some(item => item.rule === 'nginx-unavailable'),
+      true
+    );
+
+    nginxActive = true;
+    now += 60_000;
+    await alerts.evaluate({ now });
+    fs.rmSync(ctx.dir, { recursive: true, force: true });
+    fs.writeFileSync(ctx.dir, 'block-parent-directory');
+    now += 60_000;
+    await alerts.evaluate({ now });
+    const status = alerts.status({ now });
+    assert.equal(status.storageHealthy, false);
+    assert.equal(
+      status.active.some(item => item.rule === 'nginx-unavailable'),
+      true
+    );
+    assert.equal(
+      status.history.some(item => item.rule === 'nginx-unavailable'),
+      false
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('monitoring and recovery tooling blind spots become debounced operator alerts', () => {
+  const monitoring = monitoringCondition({ infrastructure: true, reliability: false, operations: false });
+  assert.equal(monitoring.active, true);
+  assert.equal(monitoring.severity, 'warning');
+  assert.deepEqual(monitoring.context.unavailable, ['reliability', 'operations']);
+  const critical = monitoringCondition({ infrastructure: false, reliability: true, operations: true });
+  assert.equal(critical.severity, 'critical');
+
+  const operations = operationConditions({ available: false, activeOperation: null }, 1000);
+  assert.equal(operations.get('operations-unavailable').active, true);
+  assert.equal(operations.get('operations-unavailable').severity, 'warning');
 });

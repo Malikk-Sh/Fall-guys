@@ -76,6 +76,17 @@ const ALERT_RULES = Object.freeze({
     title: 'Системная операция выполняется слишком долго',
     description: 'Durable Operation не меняла состояние больше пяти минут.',
     recommendedPanel: 'operations'
+  }),
+  'operations-unavailable': Object.freeze({
+    title: 'Безопасные системные операции недоступны',
+    description:
+      'Control Plane не видит allowlisted root-helper socket и не сможет выполнить recovery action.',
+    recommendedPanel: 'operations'
+  }),
+  'monitoring-degraded': Object.freeze({
+    title: 'Один из источников мониторинга недоступен',
+    description: 'Alert Center временно не может подтвердить состояние всех своих локальных источников.',
+    recommendedPanel: 'infrastructure'
   })
 });
 
@@ -156,6 +167,15 @@ function safeContext(rule, value = {}) {
         Number.isFinite(Number(source.ageSeconds)) && Number(source.ageSeconds) >= 0
           ? Math.round(Number(source.ageSeconds))
           : null
+    };
+  }
+  if (rule === 'operations-unavailable') return { available: Boolean(source.available) };
+  if (rule === 'monitoring-degraded') {
+    const allowed = new Set(['infrastructure', 'reliability', 'operations']);
+    return {
+      unavailable: Array.isArray(source.unavailable)
+        ? [...new Set(source.unavailable.map(String).filter(item => allowed.has(item)))].slice(0, 3)
+        : []
     };
   }
   return {};
@@ -377,6 +397,10 @@ function reliabilityConditions(report) {
 
 function operationConditions(operations, now) {
   const result = new Map();
+  result.set(
+    'operations-unavailable',
+    condition(operations?.available === false, 'warning', { available: operations?.available })
+  );
   const current = operations?.activeOperation;
   if (!current) {
     result.set('operation-stuck', condition(false, 'critical'));
@@ -393,6 +417,16 @@ function operationConditions(operations, now) {
     })
   );
   return result;
+}
+
+function monitoringCondition(sources) {
+  const unavailable = Object.entries(sources || {})
+    .filter(([, ok]) => !ok)
+    .map(([name]) => name)
+    .filter(name => ['infrastructure', 'reliability', 'operations'].includes(name));
+  return condition(unavailable.length > 0, unavailable.includes('infrastructure') ? 'critical' : 'warning', {
+    unavailable
+  });
 }
 
 function publicRecord(record) {
@@ -446,15 +480,21 @@ class ControlPlaneAlertCenter {
     const resolved = this.alerts
       .filter(item => item.state === 'resolved')
       .sort((a, b) => (b.resolvedAt || b.lastSeenAt) - (a.resolvedAt || a.lastSeenAt));
-    this.alerts = [...active, ...resolved.slice(0, Math.max(0, HISTORY_LIMIT - active.length))].sort(
+    const candidate = [...active, ...resolved.slice(0, Math.max(0, HISTORY_LIMIT - active.length))].sort(
       (a, b) => a.openedAt - b.openedAt
     );
-    const ok = writeState(this.stateFile, this.alerts);
+    const ok = writeState(this.stateFile, candidate);
     this.storageHealthy = ok;
+    if (ok) this.alerts = candidate;
     return ok;
   }
 
   _apply(conditions, now) {
+    const before = this.alerts.map(item => ({
+      ...item,
+      acknowledgedBy: item.acknowledgedBy ? { ...item.acknowledgedBy } : null,
+      context: item.context ? JSON.parse(JSON.stringify(item.context)) : {}
+    }));
     let changed = false;
     for (const [rule, observed] of conditions) {
       if (!Object.hasOwn(ALERT_RULES, rule)) continue;
@@ -465,14 +505,21 @@ class ControlPlaneAlertCenter {
         streak.good = 0;
         if (current) {
           const context = safeContext(rule, observed.context);
+          const nextSeverity = SEVERITIES.has(observed.severity) ? observed.severity : current.severity;
+          const escalated = current.severity === 'warning' && nextSeverity === 'critical';
           if (
-            current.severity !== observed.severity ||
+            current.severity !== nextSeverity ||
             JSON.stringify(current.context) !== JSON.stringify(context) ||
             current.lastSeenAt !== now
           ) {
-            current.severity = SEVERITIES.has(observed.severity) ? observed.severity : current.severity;
+            current.severity = nextSeverity;
             current.context = context;
             current.lastSeenAt = Math.max(current.lastSeenAt, now);
+            if (escalated) {
+              // Acknowledging a warning must not silently acknowledge a later critical escalation.
+              current.acknowledgedAt = null;
+              current.acknowledgedBy = null;
+            }
             changed = true;
           }
         } else if (streak.bad >= this.triggerStreak) {
@@ -506,7 +553,11 @@ class ControlPlaneAlertCenter {
       }
       this.streaks.set(rule, streak);
     }
-    if (changed) this._persist();
+    if (changed && !this._persist()) {
+      // Never expose an active/resolved/ack lifecycle transition that exists only in RAM.
+      this.alerts = before;
+      return false;
+    }
     return changed;
   }
 
@@ -551,6 +602,7 @@ class ControlPlaneAlertCenter {
       if (operationsOk) {
         for (const [rule, value] of operationConditions(operations, at)) conditions.set(rule, value);
       }
+      conditions.set('monitoring-degraded', monitoringCondition(this.sources));
       this._apply(conditions, at);
       this.lastEvaluatedAt = at;
       return conditions.size > 0;
@@ -633,6 +685,7 @@ module.exports = {
   HISTORY_LIMIT,
   activeRestart,
   infrastructureConditions,
+  monitoringCondition,
   operationConditions,
   reliabilityConditions
 };

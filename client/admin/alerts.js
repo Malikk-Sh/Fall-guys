@@ -119,6 +119,12 @@
           : 'Reliability вернула ухудшенный статус';
       case 'operation-stuck':
         return `${context.action || 'operation'} · ${context.state || 'unknown'} · без изменения ${formatDurationSeconds(context.ageSeconds)}`;
+      case 'operations-unavailable':
+        return context.available ? 'Helper доступен' : 'Allowlisted root-helper socket недоступен';
+      case 'monitoring-degraded':
+        return context.unavailable?.length
+          ? `Недоступны: ${context.unavailable.join(' · ')}`
+          : 'Источник мониторинга недоступен';
       default:
         return '—';
     }
@@ -146,8 +152,17 @@
     const tab = $('#tabs [data-panel="alerts"]');
     if (!tab) return;
     const unacknowledged = Number(data?.counts?.unacknowledged || 0);
-    tab.textContent = unacknowledged > 0 ? `Оповещения · ${unacknowledged}` : 'Оповещения';
-    tab.title = unacknowledged > 0 ? `Непросмотренных: ${unacknowledged}` : 'Нет непросмотренных оповещений';
+    const storageError = data && data.storageHealthy === false;
+    tab.textContent = storageError
+      ? `Оповещения · ${unacknowledged > 0 ? `${unacknowledged} ` : ''}!`
+      : unacknowledged > 0
+        ? `Оповещения · ${unacknowledged}`
+        : 'Оповещения';
+    tab.title = storageError
+      ? 'Alert Center не может надёжно сохранить своё состояние'
+      : unacknowledged > 0
+        ? `Непросмотренных: ${unacknowledged}`
+        : 'Нет непросмотренных оповещений';
   }
 
   function appendEmpty(body, message, columns) {

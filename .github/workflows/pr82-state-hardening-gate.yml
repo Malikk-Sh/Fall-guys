@@ -29,7 +29,9 @@ jobs:
       - run: npm ci
 
       - name: Apply notifier state hardening
-        run: python scripts/pr82-state-hardening.py
+        run: |
+          python scripts/pr82-prepare-state-doc.py
+          python scripts/pr82-state-hardening.py
 
       - name: Format and lint
         run: |
@@ -55,7 +57,10 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f scripts/pr82-state-hardening.py .github/workflows/pr82-state-hardening-gate.yml
+          git rm -f \
+            scripts/pr82-prepare-state-doc.py \
+            scripts/pr82-state-hardening.py \
+            .github/workflows/pr82-state-hardening-gate.yml
           git add \
             server/telegramAlertDelivery.js \
             server/telegramAlertDelivery.test.mjs \

@@ -151,7 +151,7 @@ function installControlPlaneRoutes({
     if (!keysOnly(req.body, new Set())) {
       return res.status(400).json({ ok: false, error: 'invalid-payload' });
     }
-    const game = await gameClient.health().catch(() => null);
+    const game = await gameClient.status().catch(() => null);
     let operationsStatus = null;
     try {
       operationsStatus = operations?.status?.() || null;
@@ -168,14 +168,16 @@ function installControlPlaneRoutes({
       game: game
         ? {
             reachable: true,
-            ok: Boolean(game.ok),
+            ok: Boolean(game.ready),
+            ready: Boolean(game.ready),
             version: game.version || null,
             commit: game.commit || null,
             release: game.release || null,
             uptimeSeconds: Number(game.uptime || 0),
-            draining: Boolean(game.draining)
+            load: game.load || null,
+            capacity: game.capacity || null
           }
-        : { reachable: false, ok: false },
+        : { reachable: false, ok: false, ready: false },
       maintenance: Boolean(operationsStatus?.maintenance),
       operationsAvailable: Boolean(operationsStatus?.available)
     });

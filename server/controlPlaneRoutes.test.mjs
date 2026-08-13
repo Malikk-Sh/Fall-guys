@@ -17,7 +17,7 @@ async function start({ gameClient, operations } = {}) {
     app,
     adminAuth,
     gameClient: gameClient || {
-      health: async () => null,
+      status: async () => null,
       adminRequest: async () => ({
         statusCode: 503,
         payload: { ok: false, error: 'game-control-unavailable' }
@@ -100,7 +100,7 @@ test('game proxy synthesizes only the admin session cookie', async () => {
   let forwarded = null;
   const ctx = await start({
     gameClient: {
-      health: async () => ({ ok: true }),
+      status: async () => ({ reachable: true, ready: true, ok: true }),
       adminRequest: async (_path, options) => {
         forwarded = options;
         return { statusCode: 200, payload: { ok: true, overview: {} } };
@@ -130,7 +130,7 @@ test('unknown admin route is never forwarded', async () => {
   let upstreamCalls = 0;
   const ctx = await start({
     gameClient: {
-      health: async () => null,
+      status: async () => null,
       adminRequest: async () => {
         upstreamCalls += 1;
         return { statusCode: 200, payload: { ok: true } };

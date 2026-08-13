@@ -9,7 +9,7 @@ const { AdminOperationsClient } = require('./adminOperationsClient');
 const { buildIdentity } = require('./buildInfo');
 const { ControlPlaneGameClient } = require('./controlPlaneGameClient');
 const { ControlPlaneInfrastructure } = require('./controlPlaneInfrastructure');
-const { ServiceReliabilityReader } = require('./serviceReliabilityReader');
+const { createServiceReliabilityReader } = require('./serviceReliabilityReader');
 const { installControlPlaneRoutes } = require('./controlPlaneRoutes');
 
 const app = express();
@@ -32,7 +32,10 @@ const adminAuth = new AdminAuthService({ db, migrate: false });
 const gameClient = new ControlPlaneGameClient({ port: process.env.PORT || 3000 });
 const operations = new AdminOperationsClient();
 const infrastructure = new ControlPlaneInfrastructure({ gameClient });
-const reliability = new ServiceReliabilityReader({ db, liveHealth: () => gameClient.health() });
+const reliability = createServiceReliabilityReader({
+  db,
+  liveHealth: () => gameClient.status()
+});
 const build = buildIdentity();
 
 app.disable('x-powered-by');

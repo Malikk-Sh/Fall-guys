@@ -115,6 +115,31 @@ class ControlPlaneGameClient {
     });
   }
 
+  status() {
+    return this.#request({
+      path: '/health/ready',
+      method: 'GET',
+      body: null,
+      headers: { 'X-Wobble-Control-Request': crypto.randomUUID() },
+      maxResponseBytes: 256 * 1024
+    }).then(result => {
+      const payload = result.payload;
+      if (
+        !result.contactedUpstream ||
+        !payload ||
+        payload.service !== 'wobble-rush-3d' ||
+        !Number.isFinite(Number(result.statusCode))
+      ) {
+        return null;
+      }
+      return {
+        ...payload,
+        reachable: true,
+        ready: result.statusCode >= 200 && result.statusCode < 300 && payload.ok === true
+      };
+    });
+  }
+
   #request({ path, method, body, headers, maxResponseBytes = MAX_RESPONSE_BYTES }) {
     return new Promise(resolve => {
       let settled = false;

@@ -99,3 +99,55 @@ test('game admin path allowlist stays explicit', () => {
   assert.equal(GAME_ADMIN_PATHS.includes('/api/admin/login'), false);
   assert.equal(GAME_ADMIN_PATHS.includes('/api/admin/operations/run'), false);
 });
+
+test('game status treats a responding but unready process as reachable and not ready', async () => {
+  const { server, port } = await listen((req, res) => {
+    assert.equal(req.url, '/health/ready');
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        ok: false,
+        service: 'wobble-rush-3d',
+        version: '2.6.0',
+        commit: 'draining123',
+        uptime: 42,
+        load: { overloaded: true },
+        capacity: { socketsFull: false }
+      })
+    );
+  });
+  try {
+    const client = new ControlPlaneGameClient({ port });
+    const status = await client.status();
+    assert.equal(status.reachable, true);
+    assert.equal(status.ready, false);
+    assert.equal(status.commit, 'draining123');
+  } finally {
+    await close(server);
+  }
+});
+
+test('game status reports ready only from successful /health/ready', async () => {
+  const { server, port } = await listen((req, res) => {
+    assert.equal(req.url, '/health/ready');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        ok: true,
+        service: 'wobble-rush-3d',
+        version: '2.6.0',
+        commit: 'ready456',
+        uptime: 3
+      })
+    );
+  });
+  try {
+    const client = new ControlPlaneGameClient({ port });
+    const status = await client.status();
+    assert.equal(status.reachable, true);
+    assert.equal(status.ready, true);
+    assert.equal(status.commit, 'ready456');
+  } finally {
+    await close(server);
+  }
+});

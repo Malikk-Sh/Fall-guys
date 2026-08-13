@@ -13,9 +13,7 @@ const unit = fs.readFileSync(new URL('../deploy/wobble-control.service', import.
 test('existing-production cutover starts Control Plane before Nginx switch and gameplay restart', () => {
   const controlStart = install.indexOf('systemctl restart wobble-control');
   const nginxConfig = install.indexOf('say "Nginx"');
-  const gameplayAfterCutover = install.indexOf(
-    'say "Перезапуск gameplay после переключения Wobble Control"'
-  );
+  const gameplayAfterCutover = install.indexOf('say "Перезапуск gameplay после переключения Wobble Control"');
   assert.ok(controlStart >= 0, 'control service start missing');
   assert.ok(nginxConfig > controlStart, 'Nginx cutover must happen after Control Plane is healthy');
   assert.ok(

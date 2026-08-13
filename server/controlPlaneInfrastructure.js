@@ -30,8 +30,8 @@ class ControlPlaneInfrastructure {
     statfs = fs.statfsSync,
     system = os
   } = {}) {
-    if (!gameClient || typeof gameClient.health !== 'function') {
-      throw new Error('ControlPlaneInfrastructure requires gameClient.health()');
+    if (!gameClient || typeof gameClient.status !== 'function') {
+      throw new Error('ControlPlaneInfrastructure requires gameClient.status()');
     }
     this.gameClient = gameClient;
     this.env = env;
@@ -60,7 +60,7 @@ class ControlPlaneInfrastructure {
       this.probeTcp({ host: '127.0.0.1', port: gamePort }),
       this.probeTcp({ host: '127.0.0.1', port: controlPort }),
       this.probeTls({ host: '127.0.0.1', port: target.port || 443, servername: target.hostname, now }),
-      this.gameClient.health().catch(() => null)
+      this.gameClient.status().catch(() => null)
     ]);
 
     const totalMemory = Number(this.system.totalmem());
@@ -98,8 +98,9 @@ class ControlPlaneInfrastructure {
       https,
       backup,
       game: {
-        reachable: Boolean(gameHealth?.ok),
-        ok: Boolean(gameHealth?.ok),
+        reachable: Boolean(gameHealth?.reachable),
+        ok: Boolean(gameHealth?.ready),
+        ready: Boolean(gameHealth?.ready),
         version: gameHealth?.version || null,
         commit: gameHealth?.commit || null,
         release: gameHealth?.release || null,

@@ -333,7 +333,26 @@ if [ "$database_file" != ":memory:" ] && [ -f "$database_file" ] &&
 else
   systemctl start wobble-backup.service
 fi
-systemctl restart wobble
+
+fresh_database=0
+if [ "$database_file" != ":memory:" ] && [ ! -f "$database_file" ]; then
+  fresh_database=1
+  say "Первичная инициализация persistent DB"
+  # На совершенно новой установке старой админ-панели ещё нет. Коротко запускаем gameplay,
+  # чтобы единственный migration owner создал схему, затем уже поднимаем независимый Control Plane.
+  systemctl restart wobble
+  bootstrap_ready=0
+  for _ in $(seq 1 30); do
+    if [ -f "$database_file" ] &&
+      curl -fsS --max-time 2 http://127.0.0.1:3000/health/live >/dev/null 2>&1; then
+      bootstrap_ready=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$bootstrap_ready" -eq 1 ] ||
+    fail "Wobble не смог создать/migrate persistent DB на первой установке"
+fi
 
 say "Независимый Wobble Control"
 # Control Plane должен подняться даже если новый gameplay process сломан. Его единственная
@@ -503,6 +522,13 @@ fi
 if [ "$SHARED_HTTPS_443" = "1" ]; then
   ss -lntpH '( sport = :443 )' 2>/dev/null | grep -q nginx || fail "после reload Nginx не слушает внешний 443"
 fi
+
+# Для обычного upgrade это первый restart gameplay в deploy: к этому моменту /admin уже
+# обслуживает независимый :3001. Поэтому даже плохой новый build не забирает у оператора панель.
+# На fresh install gameplay уже был запущен выше только ради первичной migration; перезапускаем его
+# ещё раз после cutover, чтобы порядок и итоговое состояние были одинаковыми во всех режимах.
+say "Перезапуск gameplay после переключения Wobble Control"
+systemctl restart wobble
 
 if [ -n "$DOMAIN" ] && [ -d /etc/letsencrypt ]; then
   install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy

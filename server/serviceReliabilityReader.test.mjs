@@ -5,7 +5,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
-const { ServiceReliabilityReader } = require('./serviceReliabilityReader');
+const { ServiceReliabilityReader, createServiceReliabilityReader } = require('./serviceReliabilityReader');
 
 function database() {
   const db = openDatabase(':memory:');
@@ -84,6 +84,17 @@ test('reliability reader prefers live build without persisting it', async () => 
       .prepare('SELECT version, commit_sha FROM service_reliability_samples ORDER BY sampled_at DESC LIMIT 1')
       .get();
     assert.deepEqual({ ...latest }, { version: '2.6.0', commit_sha: 'stored123' });
+  } finally {
+    db.close();
+  }
+});
+
+test('safe reliability reader factory degrades when reliability schema is unavailable', () => {
+  const db = database();
+  try {
+    db.exec('DROP TABLE service_reliability_events; DROP TABLE service_reliability_samples;');
+    assert.equal(createServiceReliabilityReader({ db }), null);
+    assert.doesNotThrow(() => db.prepare('SELECT COUNT(*) AS count FROM admin_users').get());
   } finally {
     db.close();
   }

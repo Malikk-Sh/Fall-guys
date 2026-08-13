@@ -23,6 +23,8 @@ grep -Fq 'location ^~ /admin/' "$locations"
 grep -Fq 'location ^~ /api/admin/' "$locations"
 grep -Fq 'proxy_pass http://127.0.0.1:3001;' "$locations"
 grep -Fq 'location ~* ^/health/control$' "$locations"
+grep -Fq 'location ~* ^/api/admin(?:/|$)' "$locations"
+grep -Fq 'location ~* ^/admin(?:/|$)' "$locations"
 grep -Fq 'proxy_pass http://127.0.0.1:3000;' "$locations"
 
 grep -Fq "SAVED_SHARED_HTTPS_443='\${SHARED_HTTPS_443}'" "$install"

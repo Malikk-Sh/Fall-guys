@@ -262,4 +262,17 @@ function prepare(db) {
   };
 }
 
-module.exports = { ServiceReliabilityReader, PERIODS, periodSpec };
+function createServiceReliabilityReader(options) {
+  try {
+    return new ServiceReliabilityReader(options);
+  } catch {
+    return null;
+  }
+}
+
+module.exports = {
+  ServiceReliabilityReader,
+  createServiceReliabilityReader,
+  PERIODS,
+  periodSpec
+};

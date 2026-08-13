@@ -37,8 +37,6 @@ grep -Fq "SAVED_SHARED_443_FALLBACK='\${SHARED_443_FALLBACK}'" "$install"
 grep -Fq 'ufw delete allow "${HTTPS_PORT}/tcp"' "$install"
 grep -Fq 'shared HTTPS 443 + public WebSocket verified' "$install"
 
-# If nginx + the dynamic stream module are available (CI installs them), validate the actual
-# stream syntax after rendering placeholders. Use an unprivileged test port so CI needs no root.
 if command -v nginx >/dev/null 2>&1 && [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
   tmp="$(mktemp -d)"
   upstream_pid=""
@@ -110,9 +108,9 @@ NGINX
     exit 1
   }
 
-  headers="$(curl -sS -D - -o /dev/null --max-redirs 0 http://127.0.0.1:19843/admin)"
+  headers="$(curl -sS -D - -o /dev/null --max-redirs 0 http://127.0.0.1:19843/admin | tr -d '\r')"
   printf '%s\n' "$headers" | grep -Eq '^HTTP/[0-9.]+ 308 '
-  printf '%s\n' "$headers" | grep -Eiq '^Location: /admin/\r?$'
+  printf '%s\n' "$headers" | grep -Fqx 'Location: /admin/'
   ! printf '%s\n' "$headers" | grep -Eq 'Location: .*:19843|Location: .*:18443'
 
   admin_body="$(curl -fsS --max-time 2 http://127.0.0.1:19843/admin/)"

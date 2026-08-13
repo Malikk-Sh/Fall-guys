@@ -606,14 +606,19 @@ async function deliveryPass({
     if (reconcile(records, feedResult.feed, config.minSeverity, now) && !writeState(stateFile, records)) {
       return { ok: false, reason: 'state-unavailable' };
     }
-  } else if (!feedResult.ok) {
+    // Reconcile against a fresh authoritative lifecycle before any external send/retry. A stale or
+    // unavailable feed may hide a recovery, so delivering an old pending 'open' in that state could
+    // create a false current alert in Telegram.
+    return processDue(records, config, stateFile, { now, send });
+  }
+  if (!feedResult.ok) {
     safeLog('telegram_alert_feed_unavailable', { reason: feedResult.reason });
   } else {
     safeLog('telegram_alert_feed_degraded', {
       reason: feedResult.feed.storageHealthy ? 'evaluation-stale' : 'alert-state-unhealthy'
     });
   }
-  return processDue(records, config, stateFile, { now, send });
+  return { ok: true, deferred: true };
 }
 
 async function main() {

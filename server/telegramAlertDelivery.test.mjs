@@ -561,3 +561,68 @@ test('all durable-state failures are fatal to the notifier delivery loop', () =>
   assert.equal(isFatalStateFailure('feed-unavailable'), false);
   assert.equal(isFatalStateFailure('telegram-network'), false);
 });
+
+test('pending Telegram retry waits for a fresh healthy Alert Center feed before sending', async () => {
+  const ctx = tempState();
+  let sends = 0;
+  try {
+    await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: 30_000,
+      getFeed: async () => ({ ok: true, feed: feed({ active: [alert()] }) }),
+      send: async () => ({ ok: false, reason: 'telegram-network' })
+    });
+    const retryAt = loadState(ctx.file).records[0].pending.nextAttemptAt;
+
+    let result = await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: retryAt + 1,
+      getFeed: async () => ({ ok: false, reason: 'feed-unavailable' }),
+      send: async () => {
+        sends += 1;
+        return { ok: true };
+      }
+    });
+    assert.deepEqual(result, { ok: true, deferred: true });
+    assert.equal(sends, 0);
+
+    result = await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: retryAt + 2,
+      getFeed: async () => ({
+        ok: true,
+        feed: feed({ active: [alert({ lastSeenAt: retryAt + 2 })], stale: true })
+      }),
+      send: async () => {
+        sends += 1;
+        return { ok: true };
+      }
+    });
+    assert.deepEqual(result, { ok: true, deferred: true });
+    assert.equal(sends, 0);
+
+    result = await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: retryAt + 3,
+      getFeed: async () => ({
+        ok: true,
+        feed: feed({
+          resolved: [alert({ state: 'resolved', lastSeenAt: retryAt, resolvedAt: retryAt + 1 })]
+        })
+      }),
+      send: async text => {
+        sends += 1;
+        assert.match(text, /произошёл и уже восстановлен/);
+        return { ok: true };
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(sends, 1);
+  } finally {
+    ctx.cleanup();
+  }
+});

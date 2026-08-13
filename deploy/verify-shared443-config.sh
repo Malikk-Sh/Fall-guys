@@ -113,9 +113,9 @@ NGINX
     exit 1
   }
 
-  headers="$(curl -sS -D - -o /dev/null --max-redirs 0 http://127.0.0.1:19843/admin)"
+  headers="$(curl -sS -D - -o /dev/null --max-redirs 0 http://127.0.0.1:19843/admin | tr -d '\r')"
   printf '%s\n' "$headers" | grep -Eq '^HTTP/[0-9.]+ 308 '
-  printf '%s\n' "$headers" | grep -Eiq '^Location: /admin/\r?$'
+  printf '%s\n' "$headers" | grep -Fqx 'Location: /admin/'
   ! printf '%s\n' "$headers" | grep -Eq 'Location: .*:19843|Location: .*:18443'
 
   admin_body="$(curl -fsS --max-time 2 http://127.0.0.1:19843/admin/)"

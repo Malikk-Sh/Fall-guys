@@ -2093,7 +2093,7 @@ function renderOperations(payload) {
     appendText(
       row,
       'td',
-      Number.isFinite(Number(entry.durationMs))
+      entry.durationMs != null && Number.isFinite(Number(entry.durationMs))
         ? `${Math.max(0, Math.round(Number(entry.durationMs) / 1000))} с`
         : '—'
     );

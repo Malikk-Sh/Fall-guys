@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -253,7 +254,10 @@ export function transitionDurableOperation(context, nextState, detail = {}) {
   const current = records[index];
   if (current.state === nextState) return true;
   if (!OPERATION_TRANSITIONS[current.state]?.has(nextState)) return false;
-  const now = Number.isSafeInteger(Number(detail.now)) ? Number(detail.now) : Date.now();
+  const requestedNow = Number.isSafeInteger(Number(detail.now)) ? Number(detail.now) : Date.now();
+  // Wall-clock corrections must never make a persisted lifecycle move backwards. Keeping
+  // timestamps monotonic also lets reboot recovery close an old record instead of stranding it.
+  const now = Math.max(current.createdAt, current.updatedAt, requestedNow);
   const reason = safeOperationReason(detail.reason);
   const terminal = OPERATION_TERMINAL_STATES.has(nextState);
   const durationMs = terminal
@@ -292,7 +296,12 @@ export function recoverDurableOperations({
   const records = loaded.records;
   for (const record of records) {
     if (OPERATION_TERMINAL_STATES.has(record.state)) continue;
-    if (record.action === 'wobble.restart' && marker?.operationId === record.id) continue;
+    if (
+      record.action === 'wobble.restart' &&
+      (marker?.operationId === record.id || (marker && !marker.operationId))
+    ) {
+      continue;
+    }
     transitionDurableOperation(
       { id: record.id, action: record.action, startedAt: record.createdAt, journalPath },
       'failed',
@@ -447,6 +456,113 @@ export function clearRestartMarker(markerPath = RESTART_MARKER) {
   }
 }
 
+function restartOperationContext(operationId, startedAt, journalPath) {
+  return { id: operationId, action: 'wobble.restart', startedAt, journalPath };
+}
+
+function operationRecord(operationId, journalPath) {
+  const loaded = loadOperationJournal(journalPath);
+  if (!loaded.ok) return { ok: false, record: null };
+  return {
+    ok: true,
+    record: loaded.records.find(record => record.id === operationId) || null
+  };
+}
+
+export function ensureRestartOperation(
+  marker,
+  { journalPath = OPERATION_JOURNAL, markerPath = RESTART_MARKER, now = Date.now() } = {}
+) {
+  if (!marker) return { ok: false, reason: 'restart-marker-missing' };
+  const loaded = loadOperationJournal(journalPath);
+  if (!loaded.ok) return { ok: false, reason: 'operation-state-failed' };
+
+  const recoveryNow = Number.isSafeInteger(Number(now)) && Number(now) > 0 ? Number(now) : Date.now();
+  const startedAt = Math.min(marker.startedAt, recoveryNow);
+  let operationId = validRequestId(marker.operationId) ? marker.operationId : null;
+  let record = operationId ? loaded.records.find(item => item.id === operationId) || null : null;
+  const active = activeOperation(loaded.records);
+
+  if (record && record.action !== 'wobble.restart') {
+    return { ok: false, reason: 'operation-state-failed' };
+  }
+  if (!record && active) {
+    if (!operationId && active.action === 'wobble.restart') {
+      operationId = active.id;
+      record = active;
+    } else {
+      return { ok: false, reason: 'operation-busy', activeId: active.id };
+    }
+  }
+
+  if (!operationId) operationId = randomUUID();
+  if (marker.operationId !== operationId) {
+    const updatedMarker = { ...marker, operationId };
+    if (!writeRestartMarker(updatedMarker, markerPath)) {
+      return { ok: false, reason: 'operation-state-failed' };
+    }
+    marker = updatedMarker;
+  }
+
+  if (!record) {
+    const begun = beginDurableOperation(
+      { requestId: operationId, action: 'wobble.restart' },
+      { journalPath, now: startedAt }
+    );
+    if (!begun.ok) return begun;
+    record = operationRecord(operationId, journalPath).record;
+  }
+
+  if (record?.state === 'queued') {
+    if (
+      !transitionDurableOperation(restartOperationContext(operationId, startedAt, journalPath), 'running', {
+        now
+      })
+    ) {
+      return { ok: false, reason: 'operation-state-failed' };
+    }
+    record = operationRecord(operationId, journalPath).record;
+  }
+  if (record?.state === 'running') {
+    if (
+      !transitionDurableOperation(restartOperationContext(operationId, startedAt, journalPath), 'drain', {
+        now
+      })
+    ) {
+      return { ok: false, reason: 'operation-state-failed' };
+    }
+    record = operationRecord(operationId, journalPath).record;
+  }
+  if (!record || record.action !== 'wobble.restart') {
+    return { ok: false, reason: 'operation-state-failed' };
+  }
+  return { ok: true, marker, record, startedAt };
+}
+
+export function finalizeRestartOperation({
+  operationId,
+  state,
+  reason = null,
+  startedAt,
+  journalPath = OPERATION_JOURNAL,
+  markerPath = RESTART_MARKER,
+  clearMaintenance = false,
+  maintenancePath = MAINTENANCE_FLAG,
+  now = Date.now()
+} = {}) {
+  if (!validRequestId(operationId) || !OPERATION_TERMINAL_STATES.has(state)) return false;
+  const context = restartOperationContext(operationId, startedAt, journalPath);
+  if (!transitionDurableOperation(context, state, { now, reason })) return false;
+  // The durable terminal record is authoritative. Release the recovery marker only afterwards so
+  // a helper crash or journal I/O failure can never turn a completed restart into lost ownership.
+  if (!clearRestartMarker(markerPath)) return false;
+  if (clearMaintenance) {
+    const maintenance = setMaintenance(false, maintenancePath);
+    if (!maintenance.ok) return false;
+  }
+  return true;
+}
+
 async function runNginxReload(spec) {
   const startedAt = Date.now();
   const check = await runCommand(NGINX, ['-t'], {
@@ -575,10 +691,9 @@ async function advancePendingRestartSignal(marker, markerPath = RESTART_MARKER) 
 
     const safeToRollback = await confirmOldProcessNotDraining(marker.oldPid);
     if (safeToRollback) {
-      clearRestartMarker(markerPath);
-      if (marker.clearMaintenance) setMaintenance(false);
-      restartInFlight = false;
-      return { marker: null, rolledBack: true };
+      // The caller owns durable terminalization. Keep marker + maintenance until the failed
+      // lifecycle state is committed, otherwise a crash here would erase recovery ownership.
+      return { marker, rolledBack: true };
     }
 
     marker = { ...marker, phase: 'signal-uncertain' };
@@ -622,13 +737,20 @@ function scheduleRestartCompletion(
       if (persisted?.phase === 'signal-pending') {
         const advanced = await advancePendingRestartSignal(persisted, markerPath);
         if (advanced.rolledBack) {
-          clearInterval(timer);
-          if (operationId) {
-            transitionDurableOperation(
-              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
-              'failed',
-              { reason: 'restart-signal-failed' }
-            );
+          const finalized = finalizeRestartOperation({
+            operationId,
+            state: 'failed',
+            reason: 'restart-signal-failed',
+            startedAt,
+            journalPath,
+            markerPath,
+            clearMaintenance
+          });
+          if (finalized) {
+            clearInterval(timer);
+            restartInFlight = false;
+          } else {
+            console.error('could not persist restart rollback; marker and maintenance remain owned');
           }
           return;
         }
@@ -639,12 +761,16 @@ function scheduleRestartCompletion(
         if (candidatePid !== pid) {
           candidatePid = pid;
           readyStreak = 0;
-          if (operationId) {
-            transitionDurableOperation(
-              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
-              'verifying'
-            );
-          }
+        }
+        if (
+          operationId &&
+          !transitionDurableOperation(
+            { id: operationId, action: 'wobble.restart', startedAt, journalPath },
+            'verifying'
+          )
+        ) {
+          readyStreak = 0;
+          return;
         }
         const health = await readWobbleOperationalHealth();
         const confirmedPid = await wobbleMainPid();
@@ -654,17 +780,19 @@ function scheduleRestartCompletion(
           readyStreak = 0;
         }
         if (readyStreak >= READY_STREAK_REQUIRED) {
-          clearInterval(timer);
-          // Delete durable operation ownership first. A crash between these two steps can leave
-          // maintenance enabled (safe, operator can disable it), but can never reopen too early.
-          clearRestartMarker(markerPath);
-          if (clearMaintenance) setMaintenance(false);
-          if (operationId) {
-            transitionDurableOperation(
-              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
-              'succeeded'
-            );
+          const finalized = finalizeRestartOperation({
+            operationId,
+            state: 'succeeded',
+            startedAt,
+            journalPath,
+            markerPath,
+            clearMaintenance
+          });
+          if (!finalized) {
+            console.error('replacement is ready but durable restart completion is not persisted yet');
+            return;
           }
+          clearInterval(timer);
           restartInFlight = false;
           return;
         }
@@ -674,15 +802,22 @@ function scheduleRestartCompletion(
       }
 
       if (Date.now() - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
-        clearInterval(timer);
-        clearRestartMarker(markerPath);
-        if (operationId) {
-          transitionDurableOperation(
-            { id: operationId, action: 'wobble.restart', startedAt, journalPath },
-            'failed',
-            { reason: 'restart-readiness-timeout' }
+        const finalized = finalizeRestartOperation({
+          operationId,
+          state: 'failed',
+          reason: 'restart-readiness-timeout',
+          startedAt,
+          journalPath,
+          markerPath,
+          clearMaintenance: false
+        });
+        if (!finalized) {
+          console.error(
+            'restart timed out but durable failure is not persisted yet; maintenance remains enabled'
           );
+          return;
         }
+        clearInterval(timer);
         restartInFlight = false;
         // Безопасный отказ: если новый Wobble не подтвердил readiness своим PID, maintenance остаётся.
         // Это не даёт клиентам устроить reconnect-storm на неисправный или циклически падающий сервис.
@@ -705,37 +840,64 @@ export async function recoverRestartMonitor({
   let marker = readRestartMarker(markerPath);
   if (!marker) return false;
 
+  const ownership = ensureRestartOperation(marker, { journalPath, markerPath, now });
+  if (!ownership.ok) {
+    throw new Error(`cannot recover durable restart ownership: ${ownership.reason}`);
+  }
+  marker = ownership.marker;
+  const ownedRecord = ownership.record;
+  const startedAt = ownership.startedAt;
+
+  if (OPERATION_TERMINAL_STATES.has(ownedRecord.state)) {
+    const clearMaintenance =
+      marker.clearMaintenance &&
+      (ownedRecord.state === 'succeeded' || ownedRecord.reason === 'restart-signal-failed');
+    if (!clearRestartMarker(markerPath)) {
+      throw new Error('cannot release terminal restart marker');
+    }
+    if (clearMaintenance && !setMaintenance(false).ok) {
+      throw new Error('cannot release maintenance after terminal restart recovery');
+    }
+    return false;
+  }
+
   // Do not restart a monitor forever after a clock jump or a very old interrupted operation.
   // The maintenance flag is intentionally left in place so recovery remains fail-closed.
-  const startedAt = Math.min(marker.startedAt, now);
   if (now - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
-    clearRestartMarker(markerPath);
-    if (marker.operationId) {
-      transitionDurableOperation(
-        { id: marker.operationId, action: 'wobble.restart', startedAt, journalPath },
-        'failed',
-        { now, reason: 'restart-monitor-timeout' }
-      );
-    }
+    const finalized = finalizeRestartOperation({
+      operationId: marker.operationId,
+      state: 'failed',
+      reason: 'restart-monitor-timeout',
+      startedAt,
+      journalPath,
+      markerPath,
+      clearMaintenance: false,
+      now
+    });
+    if (!finalized) throw new Error('cannot persist stale restart recovery failure');
     console.error('stale wobble restart marker cleared; maintenance remains enabled');
     return false;
   }
 
   restartInFlight = true;
-  restartCooldownUntil = Math.max(restartCooldownUntil, marker.startedAt + RESTART_COOLDOWN_MS);
+  restartCooldownUntil = Math.max(restartCooldownUntil, startedAt + RESTART_COOLDOWN_MS);
   if (!maintenanceEnabled()) setMaintenance(true);
 
   if (marker.phase === 'signal-pending') {
     const advanced = await advanceSignal(marker, markerPath);
     if (advanced.rolledBack) {
-      if (marker.operationId) {
-        transitionDurableOperation(
-          { id: marker.operationId, action: 'wobble.restart', startedAt, journalPath },
-          'failed',
-          { now, reason: 'restart-signal-failed' }
-        );
-      }
+      const finalized = finalizeRestartOperation({
+        operationId: marker.operationId,
+        state: 'failed',
+        reason: 'restart-signal-failed',
+        startedAt,
+        journalPath,
+        markerPath,
+        clearMaintenance: marker.clearMaintenance,
+        now
+      });
       restartInFlight = false;
+      if (!finalized) throw new Error('cannot persist restart rollback');
       return false;
     }
     marker = advanced.marker || marker;

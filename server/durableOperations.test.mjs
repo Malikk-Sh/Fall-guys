@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import {
   beginDurableOperation,
   readOperationJournal,
+  finalizeRestartOperation,
   recoverDurableOperations,
   recoverRestartMonitor,
   transitionDurableOperation,
@@ -170,6 +171,8 @@ test('control-plane operations client exposes sanitized active state and newest-
     assert.equal(status.busy, true);
     assert.equal(status.activeOperation.id, '66666666-6666-4666-8666-666666666666');
     assert.equal(status.history[0].state, 'verifying');
+    assert.equal(status.history[0].completedAt, null);
+    assert.equal(status.history[0].durationMs, null);
     assert.equal(status.history[1].state, 'succeeded');
     assert.equal(Object.hasOwn(status.history[1], 'secret'), false);
     assert.deepEqual(status.history[1].transitions[0], { state: 'succeeded', at: 1500 });
@@ -267,4 +270,142 @@ test('restart recovery rollback closes the matching durable operation instead of
   } finally {
     ctx.cleanup();
   }
+});
+
+test('operation timestamps stay monotonic across wall-clock rollback', () => {
+  const ctx = tempState();
+  try {
+    const started = beginDurableOperation(request('99999999-9999-4999-8999-999999999999', 'backup.verify'), {
+      journalPath: ctx.journalPath,
+      now: 10_000
+    });
+    assert.equal(started.ok, true);
+    assert.equal(transitionDurableOperation(started.context, 'running', { now: 9_000 }), true);
+    assert.equal(transitionDurableOperation(started.context, 'succeeded', { now: 8_000 }), true);
+    const [record] = readOperationJournal(ctx.journalPath);
+    assert.equal(record.updatedAt, 10_000);
+    assert.equal(record.completedAt, 10_000);
+    assert.equal(record.durationMs, 0);
+    assert.deepEqual(
+      record.transitions.map(step => step.at),
+      [10_000, 10_000, 10_000]
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('legacy restart marker is imported into durable busy ownership before recovery work', async () => {
+  const ctx = tempState();
+  try {
+    assert.equal(
+      writeRestartMarker(
+        {
+          version: 1,
+          oldPid: 2468,
+          startedAt: 11_000,
+          clearMaintenance: false
+        },
+        ctx.markerPath
+      ),
+      true
+    );
+    let importedId = null;
+    const recovered = await recoverRestartMonitor({
+      markerPath: ctx.markerPath,
+      journalPath: ctx.journalPath,
+      now: 11_100,
+      advanceSignal: async marker => {
+        const persisted = JSON.parse(fs.readFileSync(ctx.markerPath, 'utf8'));
+        importedId = persisted.operationId;
+        assert.match(importedId, /^[0-9a-f-]{36}$/i);
+        const client = new AdminOperationsClient({
+          socketPath: path.join(ctx.dir, 'missing.sock'),
+          maintenanceFlag: path.join(ctx.dir, 'maintenance'),
+          journalPath: ctx.journalPath
+        });
+        const status = client.status();
+        assert.equal(status.busy, true);
+        assert.equal(status.activeOperation.id, importedId);
+        assert.equal(status.activeOperation.action, 'wobble.restart');
+        return { marker, rolledBack: true };
+      }
+    });
+    assert.equal(recovered, false);
+    const [record] = readOperationJournal(ctx.journalPath);
+    assert.equal(record.id, importedId);
+    assert.equal(record.state, 'failed');
+    assert.equal(record.reason, 'restart-signal-failed');
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('restart terminal state is durable before its recovery marker is released', () => {
+  const ctx = tempState();
+  try {
+    const started = beginDurableOperation(request('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'wobble.restart'), {
+      journalPath: ctx.journalPath,
+      now: 12_000
+    });
+    assert.equal(started.ok, true);
+    assert.equal(transitionDurableOperation(started.context, 'running', { now: 12_100 }), true);
+    assert.equal(transitionDurableOperation(started.context, 'drain', { now: 12_200 }), true);
+    assert.equal(transitionDurableOperation(started.context, 'verifying', { now: 12_300 }), true);
+    assert.equal(
+      writeRestartMarker(
+        {
+          version: 1,
+          oldPid: 1357,
+          startedAt: 12_000,
+          clearMaintenance: false,
+          phase: 'signal-delivered',
+          operationId: started.context.id
+        },
+        ctx.markerPath
+      ),
+      true
+    );
+
+    const journal = fs.readFileSync(ctx.journalPath, 'utf8');
+    fs.rmSync(ctx.journalPath);
+    assert.equal(
+      finalizeRestartOperation({
+        operationId: started.context.id,
+        state: 'succeeded',
+        startedAt: 12_000,
+        journalPath: ctx.journalPath,
+        markerPath: ctx.markerPath,
+        clearMaintenance: false,
+        now: 12_400
+      }),
+      false
+    );
+    assert.equal(fs.existsSync(ctx.markerPath), true);
+
+    fs.writeFileSync(ctx.journalPath, journal);
+    assert.equal(
+      finalizeRestartOperation({
+        operationId: started.context.id,
+        state: 'succeeded',
+        startedAt: 12_000,
+        journalPath: ctx.journalPath,
+        markerPath: ctx.markerPath,
+        clearMaintenance: false,
+        now: 12_400
+      }),
+      true
+    );
+    assert.equal(readOperationJournal(ctx.journalPath)[0].state, 'succeeded');
+    assert.equal(fs.existsSync(ctx.markerPath), false);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('operations helper is enabled at boot so persisted recovery cannot remain permanently idle', () => {
+  const service = fs.readFileSync(path.join(process.cwd(), 'deploy/wobble-ops.service'), 'utf8');
+  const installer = fs.readFileSync(path.join(process.cwd(), 'deploy/install.sh'), 'utf8');
+  assert.match(service, /\[Install\][\s\S]*WantedBy=multi-user\.target/);
+  assert.match(installer, /systemctl enable[^\n]*wobble-ops\.service/);
 });

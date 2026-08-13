@@ -302,6 +302,10 @@ function installControlPlaneRoutes({
     ]);
     if (!result?.ok) {
       const reason = safeReasons.has(result?.reason) ? result.reason : 'helper-error';
+      const operationId =
+        reason === 'operation-busy'
+          ? result?.activeOperationId || result?.operationId || null
+          : result?.operationId || result?.requestId || null;
       try {
         adminAuth.audit({
           actor,
@@ -310,7 +314,7 @@ function installControlPlaneRoutes({
           targetId: operation,
           detail: {
             reason,
-            operationId: result?.operationId || result?.requestId || null,
+            operationId,
             durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : null
           }
         });
@@ -321,7 +325,8 @@ function installControlPlaneRoutes({
       return res.status(httpStatus).json({
         ok: false,
         error: reason,
-        operationId: result?.operationId || result?.requestId || null,
+        operationId,
+        ...(reason === 'operation-busy' && operationId ? { activeOperationId: operationId } : {}),
         ...(reason === 'restart-cooldown' && Number.isFinite(Number(result?.retryAfterMs))
           ? { retryAfterMs: Math.max(0, Number(result.retryAfterMs)) }
           : {})

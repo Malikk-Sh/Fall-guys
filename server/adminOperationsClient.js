@@ -144,8 +144,14 @@ class AdminOperationsClient {
           updatedAt: Number.isSafeInteger(Number(item.updatedAt))
             ? Number(item.updatedAt)
             : Number(item.createdAt),
-          completedAt: Number.isSafeInteger(Number(item.completedAt)) ? Number(item.completedAt) : null,
-          durationMs: Number.isFinite(Number(item.durationMs)) ? Math.max(0, Number(item.durationMs)) : null,
+          completedAt:
+            item.completedAt != null && Number.isSafeInteger(Number(item.completedAt))
+              ? Number(item.completedAt)
+              : null,
+          durationMs:
+            item.durationMs != null && Number.isFinite(Number(item.durationMs))
+              ? Math.max(0, Number(item.durationMs))
+              : null,
           reason: /^[a-z0-9-]{1,80}$/.test(String(item.reason || '')) ? String(item.reason) : null,
           transitions: Array.isArray(item.transitions)
             ? item.transitions

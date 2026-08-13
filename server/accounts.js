@@ -134,6 +134,52 @@ class Accounts {
     return true;
   }
 
+  // Итог онлайн-гонки. Как и кооперативный прогресс, пишется только игровым сервером после матча:
+  // HTTP-клиенту метода объявить себя победителем не выдано.
+  //
+  // `finishers` — сколько человек ДОШЛО до ленты, а не сколько стартовало. Место среди дошедших —
+  // единственное честное основание для награды: тройка в гонке, где финишировали трое, и тройка
+  // среди шестнадцати — разные вещи, и первая пьедесталом не считается.
+  recordRaceFinish({ accountId, place, finishers, finishedAt = Date.now() }) {
+    const id = String(accountId || '');
+    if (!this.statements.byId.get(id)) return false;
+    if (!Number.isSafeInteger(place) || place < 1) return false;
+    if (!Number.isSafeInteger(finishers) || finishers < 1 || place > finishers) return false;
+
+    // Победа засчитывается только при живом сопернике, дошедшем до конца. Иначе «первое место»
+    // получал бы любой, кто добежал один, — и достижение означало бы «доиграл», а не «выиграл».
+    const won = place === 1 && finishers >= 2;
+    // Пьедестал требует, чтобы под ним было кого обойти.
+    const podium = place <= 3 && finishers >= 3;
+
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.statements.upsertRaceStats.run(id, podium ? 1 : 0, won ? 1 : 0, place, finishedAt);
+      const stats = this.statements.raceStats.get(id);
+      this.statements.unlockAchievement.run(id, 'race-first-finish', finishedAt);
+      if (podium) this.statements.unlockAchievement.run(id, 'race-podium', finishedAt);
+      if (won) this.statements.unlockAchievement.run(id, 'race-win', finishedAt);
+      if (Number(stats?.finishes || 0) >= 25) {
+        this.statements.unlockAchievement.run(id, 'race-veteran-25', finishedAt);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return true;
+  }
+
+  raceStats(accountId) {
+    const row = this.statements.raceStats.get(String(accountId || ''));
+    return {
+      finishes: Number(row?.finishes || 0),
+      podiums: Number(row?.podiums || 0),
+      wins: Number(row?.wins || 0),
+      bestPlace: row?.best_place == null ? null : Number(row.best_place)
+    };
+  }
+
   progress(accountId) {
     const id = String(accountId || '');
     const stats = this.statements.stats.get(id);
@@ -154,7 +200,10 @@ class Accounts {
       achievements: this.statements.achievements.all(id).map(row => ({
         id: row.achievement_id,
         unlockedAt: row.unlocked_at
-      }))
+      })),
+      // Гоночные счётчики. Клиент показывает по ним прогресс к следующей награде, поэтому они
+      // едут вместе с достижениями: иначе цель «25 финишей» отображалась бы без текущего числа.
+      race: this.raceStats(id)
     };
   }
 
@@ -341,6 +390,21 @@ function prepare(db) {
     unlockAchievement: db.prepare(`
       INSERT OR IGNORE INTO achievements (account_id, achievement_id, unlocked_at) VALUES (?, ?, ?)
     `),
+    // Одна строка на аккаунт, заводится первым же финишем. best_place берётся минимумом: MIN с
+    // NULL в SQLite возвращает не-NULL аргумент, поэтому первый финиш кладётся как есть.
+    upsertRaceStats: db.prepare(`
+      INSERT INTO account_race_stats (account_id, finishes, podiums, wins, best_place, updated_at)
+      VALUES (?1, 1, ?2, ?3, ?4, ?5)
+      ON CONFLICT(account_id) DO UPDATE SET
+        finishes = finishes + 1,
+        podiums = podiums + ?2,
+        wins = wins + ?3,
+        best_place = MIN(COALESCE(best_place, ?4), ?4),
+        updated_at = ?5
+    `),
+    raceStats: db.prepare(
+      'SELECT finishes, podiums, wins, best_place FROM account_race_stats WHERE account_id = ?'
+    ),
     achievements: db.prepare(
       'SELECT achievement_id, unlocked_at FROM achievements WHERE account_id = ? ORDER BY unlocked_at'
     ),

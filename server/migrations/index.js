@@ -13,6 +13,7 @@ const accountSupportSearch = require('./012_account_support_search');
 const playerSanctions = require('./013_player_sanctions');
 const playerIncidentDiagnostics = require('./014_player_incident_diagnostics');
 const serviceReliability = require('./015_service_reliability');
+const raceStats = require('./016_race_stats');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -29,7 +30,8 @@ const MIGRATIONS = Object.freeze([
   accountSupportSearch,
   playerSanctions,
   playerIncidentDiagnostics,
-  serviceReliability
+  serviceReliability,
+  raceStats
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

@@ -182,6 +182,12 @@ export function bindNetwork(game) {
   game.net.on('results', message => {
     game.receiveResults(message);
     syncCoopCampaignResult(message);
+    // Зачтённая гонка могла выдать награду. Сервер записал её в аккаунт уже после того, как клиент
+    // получил свой прогресс при входе, и в итогах матча её нет — они общие для всей комнаты.
+    // Перечитываем, чтобы награда была видна и надеваема сразу, а не после перезагрузки.
+    if (message.mode === GAME_MODE.RACE && message.trusted) {
+      game.account?.refreshRewards?.().catch(() => {});
+    }
   });
 
   // Сервер снял зачёт: кто-то оборвался или вышел. Говорим об этом сразу, а не на финише —

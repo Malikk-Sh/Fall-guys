@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ACHIEVEMENT_CATALOG } from '../shared/achievements.js';
 
 // Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
 // окно аккаунта, вводим имя, сохраняем.
@@ -74,7 +75,12 @@ test('два браузера видят server-owned косметику дру�
   await expect(host.locator('#profile')).toBeVisible();
   await expect(host.locator('#profileName')).toHaveText('Хост E2E');
   await expect(host.locator('#profileStatMatches')).toHaveText('0');
-  await expect(host.locator('#profileAchievements .profile-achievement')).toHaveCount(6);
+  // Число берётся из каталога, а не вписывается сюда руками: смысл проверки в том, что профиль
+  // показывает ВСЕ достижения, включая ещё не полученные, — а не в том, сколько их сегодня.
+  // С захардкоженным числом каждое добавление награды роняло бы этот тест на ровном месте.
+  await expect(host.locator('#profileAchievements .profile-achievement')).toHaveCount(
+    ACHIEVEMENT_CATALOG.length
+  );
   await expect(host.locator('#recentPartnerInvite')).toBeDisabled();
   await host.locator('#profileClose').click();
   const hostCosmetic = await equipServerCosmetic(host, `social-host-${testInfo.project.name}-${Date.now()}`);

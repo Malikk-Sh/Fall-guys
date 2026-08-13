@@ -1844,6 +1844,33 @@ function finishMatch(room) {
       }
       accounts.recordCoopPartners({ accountIds, chapterId: room.chapterId });
     }
+
+    // Итоги гонки по аккаунтам. Место берётся из уже посчитанной таблицы результатов, а не
+    // пересчитывается заново: разойдись они — игрок увидел бы на экране одно место, а награду
+    // получил бы за другое.
+    if (room.mode === GAME_MODE.RACE) {
+      // Считаем по АККАУНТАМ, а не по аватарам.
+      //
+      // Один аккаунт может занимать несколько слотов: авторизация запрещает второй раз назвать
+      // себя одним сокетом, но не запрещает войти в комнату со второй вкладки. По аватарам «живой
+      // соперник» и «пьедестал» тогда набирались бы из самого себя — две вкладки давали бы победу,
+      // три — пьедестал, и каждая добавляла бы финиш к счётчику завсегдатая. Порог, который можно
+      // выполнить в одиночку, не порог.
+      //
+      // Из нескольких аватаров одного аккаунта берётся лучший: доска уже отсортирована по времени,
+      // поэтому первое вхождение и есть лучшее.
+      const standings = room.results?.board || [];
+      const bestByAccount = new Map();
+      for (const entry of standings) {
+        const accountId = room.players.get(entry.id)?.accountId;
+        if (!accountId || bestByAccount.has(accountId)) continue;
+        bestByAccount.set(accountId, bestByAccount.size + 1);
+      }
+      const finishers = bestByAccount.size;
+      for (const [accountId, place] of bestByAccount) {
+        accounts.recordRaceFinish({ accountId, place, finishers });
+      }
+    }
   }
   broadcast(room, room.results);
   // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до

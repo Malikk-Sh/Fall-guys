@@ -19,6 +19,7 @@ export const C2S = Object.freeze({
   CREATE_ROOM: 'create',
   JOIN_ROOM: 'join',
   FIND_COOP: 'findCoop',
+  FIND_RACE: 'findRace',
   CANCEL_MATCHMAKING: 'cancelMatchmaking',
   LEAVE_ROOM: 'leave',
   PLAYER_READY: 'ready',
@@ -241,6 +242,15 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     chapterId: optional(str(16, 0)),
     protocolVersion: optional(num(0, 1000))
   },
+  // Подбор в гонку. Отличие от кооперативного — не в форме сообщения, а в том, что собирается
+  // не пара, а группа: сложность играет ту же роль, что глава, а вместо «нашлась пара» комната
+  // ждёт наполнения по таймеру. Пустая строка означает «любая сложность».
+  [C2S.FIND_RACE]: {
+    name: optional(str(32, 0)),
+    playerId: optional(str(64)),
+    difficulty: optional(str(16, 0)),
+    protocolVersion: optional(num(0, 1000))
+  },
   [C2S.CANCEL_MATCHMAKING]: {},
 
   [C2S.PLAYER_READY]: { ready: bool() },
@@ -311,6 +321,7 @@ export const RATE_LIMITS = Object.freeze({
   [C2S.CREATE_ROOM]: [5, 60_000],
   [C2S.JOIN_ROOM]: [20, 60_000],
   [C2S.FIND_COOP]: [10, 60_000],
+  [C2S.FIND_RACE]: [10, 60_000],
   [C2S.CANCEL_MATCHMAKING]: [10, 10_000],
   [C2S.PLAYER_READY]: [30, 10_000],
   [C2S.HOST_CONFIGURE]: [20, 10_000],

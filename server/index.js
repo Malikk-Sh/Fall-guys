@@ -823,6 +823,11 @@ const lobbyPayload = room => ({
   // Клиенту нужен именно момент, а не остаток: часы уже синхронизированы, а обратный отсчёт,
   // присланный числом, начал бы врать при первой же задержке пакета.
   resultsDeadline: room.state === ROOM_STATE.RESULTS ? room.resultsDeadline || null : null,
+  // Момент, когда публичная гонка стартует сама. null у приватных комнат и пока не собран минимум.
+  // Как и resultsDeadline — момент, а не остаток: часы синхронизированы, а присланный числом
+  // остаток начал бы врать при первой задержке пакета.
+  fillDeadline: room.matchmade ? room.fillDeadline || null : null,
+  minPlayers: room.matchmade ? MIN_RACE_PLAYERS : null,
   players: [...room.players.values()].map(publicPlayer)
 });
 
@@ -847,6 +852,14 @@ function resetLobby(room, { newSeed = false } = {}) {
   room.unranked = null;
   room.resultsDeadline = null;
   room.updatedAt = Date.now();
+  // Отыгравшая публичная комната перестаёт быть публичной.
+  //
+  // Иначе к вернувшимся в лобби подсаживался бы случайный новичок, его появление заводило бы срок
+  // набора, и людей, которые ещё решают, играть ли снова, утаскивало бы в новый забег без их
+  // согласия. Собравшаяся группа остаётся группой: повторный забег у неё уже есть — голосование
+  // за реванш.
+  room.matchmade = false;
+  room.fillDeadline = null;
   if (newSeed) room.spec = createCourseSpec(randomSeed(), room.spec.difficulty);
   for (const player of room.players.values())
     Object.assign(player, {
@@ -1191,6 +1204,115 @@ function enqueueCoop(ws, message) {
   incidentForSocket(ws, { kind: 'matchmaking', code: 'matched', phase: room.state });
   log('info', 'matchmaking_matched', { roomId: room.code, chapterId, waitedMs: now - partner.queuedAt });
   beginCountdown(room);
+}
+
+// Подбор в гонку.
+//
+// Устроен иначе, чем кооперативный, и не по прихоти. В кооперативе собирается ПАРА: как только
+// нашёлся второй, ждать больше нечего и матч начинается. В гонке собирается ГРУППА, и «достаточно»
+// определяется не количеством, а временем: ждать шестнадцатого — значит не начать никогда, а
+// стартовать вдвоём в ту же секунду — значит лишить гонку гонки.
+//
+// Поэтому здесь нет второго параллельного списка ожидающих. Публичная комната — она же очередь:
+// игрок попадает в настоящее лобби, видит, как подходят остальные, и матч начинается либо когда
+// комната заполнилась, либо по истечении срока набора. Заодно это переиспользует всё, что у комнат
+// уже есть: вход, выход, рассылку лобби, миграцию хоста, отсчёт и роспуск по TTL.
+const MIN_RACE_PLAYERS = 2;
+const RACE_FILL_MS = 25_000;
+
+// Свободная публичная комната нужной сложности. Избегание уважается и здесь: игрок, которого
+// попросили больше не сводить с этим человеком, не должен встретить его через случайный подбор.
+function openRaceRoomFor(ws, difficulty, safety = socialSafety) {
+  for (const room of rooms.values()) {
+    if (room.mode !== GAME_MODE.RACE || !room.matchmade) continue;
+    if (room.state !== ROOM_STATE.LOBBY) continue;
+    if (room.spec.difficulty !== difficulty) continue;
+    if (room.players.size >= MAX_PLAYERS[GAME_MODE.RACE]) continue;
+    let blocked = false;
+    for (const player of room.players.values()) {
+      if (safety.shouldAvoid(ws.accountId, player.accountId)) {
+        blocked = true;
+        break;
+      }
+    }
+    if (!blocked) return room;
+  }
+  return null;
+}
+
+function createMatchmadeRaceRoom(difficulty, hostId) {
+  const code = roomCode();
+  const room = {
+    code,
+    host: hostId,
+    state: ROOM_STATE.LOBBY,
+    mode: GAME_MODE.RACE,
+    chapterId: null,
+    matchId: null,
+    snapshotSequence: 0,
+    startedAt: null,
+    firstFinishAt: null,
+    spec: createCourseSpec(randomSeed(), difficulty),
+    players: new Map(),
+    nextJoinOrder: 0,
+    // Отличает публичную комнату от приватной: по коду в неё не войти, зато она сама себя
+    // запускает. Приватные комнаты этого поля не имеют и продолжают ждать хоста.
+    matchmade: true,
+    // Срок набора появляется не сразу, а когда собирается минимум: считать время в одиночестве
+    // незачем, а игрок, зашедший первым, иначе смотрел бы на истекающий отсчёт без соперников.
+    fillDeadline: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  rooms.set(code, room);
+  return room;
+}
+
+function enqueueRace(ws, message) {
+  if (operationalState.isDraining()) {
+    send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    return false;
+  }
+  leave(ws);
+  const difficulty = safeDifficulty(message.difficulty);
+  const now = Date.now();
+  gameplay.count('queue_enter', { mode: GAME_MODE.RACE, course: difficulty, device: ws.device });
+
+  const existing = openRaceRoomFor(ws, difficulty);
+  const room = existing || createMatchmadeRaceRoom(difficulty, ws.id);
+  addPlayer(room, ws, message.name, message.playerId);
+  // Готовность в публичной комнате не спрашивают: игрок уже сказал «найти гонку», и второй раз
+  // подтверждать то же самое — лишний клик перед стартом, которого он и так ждёт.
+  const player = room.players.get(ws.id);
+  if (player) player.ready = true;
+
+  if (!existing) {
+    trackEvent(productEvents, 'matchmakingStarted');
+    incidentForSocket(ws, { kind: 'matchmaking', code: 'queued', phase: 'matchmaking' });
+  }
+
+  // Комната заполнилась — ждать больше некого.
+  if (room.players.size >= MAX_PLAYERS[GAME_MODE.RACE]) {
+    room.fillDeadline = null;
+    log('info', 'race_matchmaking_full', { roomId: room.code, difficulty });
+    return beginCountdown(room);
+  }
+
+  // Минимум собран — заводим срок набора, если он ещё не заведён. Повторный вход НЕ продлевает
+  // его: иначе поток входящих отодвигал бы старт бесконечно, и первый пришедший ждал бы дольше всех.
+  if (room.players.size >= MIN_RACE_PLAYERS && !room.fillDeadline) {
+    room.fillDeadline = now + RACE_FILL_MS;
+  }
+
+  emitLobby(room);
+  return send(ws, {
+    type: S2C.MATCHMAKING_WAITING,
+    waitedMs: 0,
+    roomCode: room.code,
+    players: room.players.size,
+    minPlayers: MIN_RACE_PLAYERS,
+    startsAt: room.fillDeadline
+  });
 }
 
 function beginOperationalDrain() {
@@ -1846,7 +1968,8 @@ wss.on('connection', (ws, req) => {
     if (
       message.type === C2S.CREATE_ROOM ||
       message.type === C2S.JOIN_ROOM ||
-      message.type === C2S.FIND_COOP
+      message.type === C2S.FIND_COOP ||
+      message.type === C2S.FIND_RACE
     ) {
       if (
         message.protocolVersion !== undefined &&
@@ -1861,6 +1984,15 @@ wss.on('connection', (ws, req) => {
     }
 
     if (message.type === C2S.CANCEL_MATCHMAKING) {
+      // Гонка ждёт не в списке, а в настоящей комнате, поэтому отмена для неё — это выход.
+      // Отдельного состояния «в очереди» у неё нет, и заводить его только ради отмены незачем.
+      const raceRoom = rooms.get(ws.room);
+      if (raceRoom?.matchmade && raceRoom.state === ROOM_STATE.LOBBY) {
+        gameplay.count('queue_cancel', { mode: GAME_MODE.RACE, detail: 'button', device: ws.device });
+        incidentForSocket(ws, { kind: 'matchmaking', code: 'cancelled', phase: 'matchmaking' });
+        leave(ws);
+        return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, waitedMs: 0 });
+      }
       const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
       if (index !== -1) {
         coopMatchmaking.splice(index, 1);
@@ -1883,6 +2015,24 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
       }
       return enqueueCoop(ws, message);
+    }
+
+    if (message.type === C2S.FIND_RACE) {
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      // Проверка на MAX_ROOMS мягче, чем у кооператива: подбор в гонку чаще ВХОДИТ в уже открытую
+      // комнату, чем создаёт новую, и отказывать входящему из-за общего числа комнат значило бы
+      // закрывать дверь в помещение, где есть места.
+      if (loadStatus().overloaded) {
+        metrics.capacityRejected++;
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      }
+      if (rooms.size >= MAX_ROOMS && !openRaceRoomFor(ws, safeDifficulty(message.difficulty))) {
+        metrics.capacityRejected++;
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      }
+      return enqueueRace(ws, message);
     }
 
     // Свернувший вкладку игрок не должен оставаться кандидатом для случайного напарника. Это не
@@ -2327,6 +2477,22 @@ const snapshotTimer = setInterval(() => {
     // при роспуске, а этот цикл и так обходит все комнаты каждый тик.
     if (room.state === ROOM_STATE.RESULTS && room.resultsDeadline && now >= room.resultsDeadline) {
       resolveResultsDecision(room, now);
+      continue;
+    }
+
+    // Истёк срок набора публичной гонки — стартуем тем составом, который собрался.
+    //
+    // Проверка живёт здесь по той же причине, что и голосование на результатах строкой выше:
+    // отдельный таймер на комнату пришлось бы заводить, снимать при старте, снимать при выходе
+    // последнего игрока и не забыть снять при роспуске, а этот цикл и так обходит все комнаты.
+    if (room.state === ROOM_STATE.LOBBY && room.fillDeadline && now >= room.fillDeadline) {
+      room.fillDeadline = null;
+      // Пока ждали, кто-то мог уйти. Набирать заново честнее, чем запускать гонку в одиночку:
+      // срок появится снова, когда подойдёт следующий игрок.
+      if (room.players.size >= MIN_RACE_PLAYERS) {
+        log('info', 'race_matchmaking_started', { roomId: room.code, players: room.players.size });
+        beginCountdown(room);
+      }
       continue;
     }
 

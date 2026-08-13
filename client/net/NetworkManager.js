@@ -614,6 +614,15 @@ export class NetworkManager {
     });
   }
 
+  findRace({ name, playerId, difficulty = '' }) {
+    this.send(C2S.FIND_RACE, {
+      name,
+      playerId,
+      difficulty,
+      protocolVersion: PROTOCOL_VERSION
+    });
+  }
+
   cancelMatchmaking() {
     this.send(C2S.CANCEL_MATCHMAKING);
   }

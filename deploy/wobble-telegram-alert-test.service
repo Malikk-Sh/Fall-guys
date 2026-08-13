@@ -1,0 +1,28 @@
+[Unit]
+Description=Wobble Control Telegram alert delivery test
+Documentation=https://github.com/Malikk-Sh/Fall-guys
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+WorkingDirectory=/opt/wobble
+ExecStart=/usr/bin/node server/telegramAlertTest.js
+EnvironmentFile=/etc/wobble-telegram.env
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+UMask=0077

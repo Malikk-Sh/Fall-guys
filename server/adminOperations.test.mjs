@@ -229,6 +229,7 @@ test('client keeps the IPC connection alive until a slow allowlisted operation r
   const socketPath = path.join(dir, 'ops.sock');
   const helper = createServer({
     requestTimeoutMs: 10,
+    journalPath: path.join(dir, 'operations.json'),
     execute: async () => {
       await new Promise(resolve => setTimeout(resolve, 50));
       return { ok: true, durationMs: 50 };

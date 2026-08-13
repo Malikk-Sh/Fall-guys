@@ -233,6 +233,9 @@ function installControlPlaneRoutes({
         ok: true,
         available: Boolean(status.available),
         maintenance: Boolean(status.maintenance),
+        busy: Boolean(status.busy),
+        activeOperation: status.activeOperation || null,
+        history: status.history || [],
         operations: status.operations || []
       });
     } catch {
@@ -290,7 +293,9 @@ function installControlPlaneRoutes({
       'helper-response-too-large',
       'helper-response-mismatch',
       'operation-busy',
+      'operation-state-failed',
       'operation-timeout',
+      'operation-readiness-timeout',
       'operation-failed',
       'restart-cooldown'
     ]);
@@ -304,6 +309,7 @@ function installControlPlaneRoutes({
           targetId: operation,
           detail: {
             reason,
+            operationId: result?.operationId || result?.requestId || null,
             durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : null
           }
         });
@@ -328,6 +334,7 @@ function installControlPlaneRoutes({
         targetType: 'operation',
         targetId: operation,
         detail: {
+          operationId: result?.operationId || result?.requestId || null,
           durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
         }
       });
@@ -337,6 +344,7 @@ function installControlPlaneRoutes({
     return res.json({
       ok: true,
       operation,
+      operationId: result?.operationId || result?.requestId || null,
       accepted,
       durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
     });

@@ -37,6 +37,7 @@ IPAddressDeny=any
 IPAddressAllow=127.0.0.1/32
 RestrictNamespaces=true
 LockPersonality=true
-# nginx -t открывает configured error_log, поэтому даём helper ровно этот writable каталог.
-ReadWritePaths=/var/log/nginx
+# nginx -t открывает configured error_log. Durable operation journal живёт отдельно в
+# root-owned persistent каталоге и переживает restart helper/Control Plane и reboot VPS.
+ReadWritePaths=/var/log/nginx /var/lib/wobble-ops
 UMask=0077

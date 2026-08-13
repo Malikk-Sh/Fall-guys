@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -24,6 +25,19 @@ const WOBBLE_HEALTH_PATH = '/health/ops';
 
 export const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
 export const RESTART_MARKER = '/run/wobble-ops/restart.json';
+export const OPERATION_JOURNAL = '/var/lib/wobble-ops/operations.json';
+const OPERATION_JOURNAL_VERSION = 1;
+const OPERATION_HISTORY_LIMIT = 40;
+const OPERATION_STATES = new Set(['queued', 'running', 'drain', 'verifying', 'succeeded', 'failed']);
+const OPERATION_TERMINAL_STATES = new Set(['succeeded', 'failed']);
+const OPERATION_TRANSITIONS = Object.freeze({
+  queued: new Set(['running', 'failed']),
+  running: new Set(['drain', 'verifying', 'succeeded', 'failed']),
+  drain: new Set(['verifying', 'failed']),
+  verifying: new Set(['succeeded', 'failed']),
+  succeeded: new Set(),
+  failed: new Set()
+});
 
 export const ACTIONS = Object.freeze({
   'backup.create': Object.freeze({
@@ -69,6 +83,173 @@ export function validateRequest(value) {
   const action = String(value.action || '').trim();
   if (!Object.hasOwn(ACTIONS, action)) return null;
   return { requestId: value.requestId, action };
+}
+
+function safeOperationReason(value) {
+  const reason = String(value || '').trim();
+  return /^[a-z0-9-]{1,80}$/.test(reason) ? reason : null;
+}
+
+function normalizeTransition(value) {
+  const state = String(value?.state || '');
+  const at = Number(value?.at);
+  if (!OPERATION_STATES.has(state) || !Number.isSafeInteger(at) || at <= 0) return null;
+  const reason = safeOperationReason(value?.reason);
+  return { state, at, ...(reason ? { reason } : {}) };
+}
+
+function normalizeOperationRecord(value) {
+  const id = String(value?.id || '');
+  const action = String(value?.action || '');
+  const state = String(value?.state || '');
+  const createdAt = Number(value?.createdAt);
+  const updatedAt = Number(value?.updatedAt);
+  if (
+    !validRequestId(id) ||
+    !Object.hasOwn(ACTIONS, action) ||
+    !OPERATION_STATES.has(state) ||
+    !Number.isSafeInteger(createdAt) ||
+    createdAt <= 0 ||
+    !Number.isSafeInteger(updatedAt) ||
+    updatedAt < createdAt
+  ) {
+    return null;
+  }
+  const completedAt = Number(value?.completedAt);
+  const durationMs = Number(value?.durationMs);
+  const reason = safeOperationReason(value?.reason);
+  const transitions = Array.isArray(value?.transitions)
+    ? value.transitions.map(normalizeTransition).filter(Boolean).slice(-12)
+    : [];
+  return {
+    id,
+    action,
+    state,
+    createdAt,
+    updatedAt,
+    completedAt:
+      OPERATION_TERMINAL_STATES.has(state) && Number.isSafeInteger(completedAt) && completedAt >= createdAt
+        ? completedAt
+        : null,
+    durationMs: Number.isFinite(durationMs) && durationMs >= 0 ? Math.round(durationMs) : null,
+    reason,
+    transitions
+  };
+}
+
+export function readOperationJournal(journalPath = OPERATION_JOURNAL) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(journalPath, 'utf8'));
+    if (parsed?.version !== OPERATION_JOURNAL_VERSION || !Array.isArray(parsed.operations)) return [];
+    return parsed.operations.map(normalizeOperationRecord).filter(Boolean).slice(-OPERATION_HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeOperationJournal(records, journalPath = OPERATION_JOURNAL) {
+  const directory = path.dirname(journalPath);
+  const temporaryPath = `${journalPath}.tmp-${process.pid}`;
+  try {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o755 });
+    const operations = records.map(normalizeOperationRecord).filter(Boolean).slice(-OPERATION_HISTORY_LIMIT);
+    fs.writeFileSync(
+      temporaryPath,
+      `${JSON.stringify({ version: OPERATION_JOURNAL_VERSION, operations })}\n`,
+      { encoding: 'utf8', mode: 0o600 }
+    );
+    fs.renameSync(temporaryPath, journalPath);
+    // Journal contains only allowlisted action IDs, state, timestamps and safe reason codes.
+    // It is intentionally readable by the unprivileged Control Plane, but only root can replace it.
+    fs.chmodSync(journalPath, 0o644);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(temporaryPath, { force: true });
+    } catch {
+      // Best effort cleanup only.
+    }
+    return false;
+  }
+}
+
+function activeOperation(records) {
+  return [...records].reverse().find(record => !OPERATION_TERMINAL_STATES.has(record.state)) || null;
+}
+
+export function beginDurableOperation(request, { journalPath = OPERATION_JOURNAL, now = Date.now() } = {}) {
+  const records = readOperationJournal(journalPath);
+  const active = activeOperation(records);
+  if (active) return { ok: false, reason: 'operation-busy', activeId: active.id };
+  const record = {
+    id: request.requestId,
+    action: request.action,
+    state: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+    durationMs: null,
+    reason: null,
+    transitions: [{ state: 'queued', at: now }]
+  };
+  if (!writeOperationJournal([...records, record], journalPath)) {
+    return { ok: false, reason: 'operation-state-failed' };
+  }
+  return {
+    ok: true,
+    context: { id: record.id, action: record.action, startedAt: now, journalPath }
+  };
+}
+
+export function transitionDurableOperation(context, nextState, detail = {}) {
+  if (!context?.id || !context?.action || !context?.journalPath || !OPERATION_STATES.has(nextState))
+    return false;
+  const records = readOperationJournal(context.journalPath);
+  const index = records.findIndex(record => record.id === context.id && record.action === context.action);
+  if (index < 0) return false;
+  const current = records[index];
+  if (current.state === nextState) return true;
+  if (!OPERATION_TRANSITIONS[current.state]?.has(nextState)) return false;
+  const now = Number.isSafeInteger(Number(detail.now)) ? Number(detail.now) : Date.now();
+  const reason = safeOperationReason(detail.reason);
+  const terminal = OPERATION_TERMINAL_STATES.has(nextState);
+  const durationMs = terminal
+    ? Number.isFinite(Number(detail.durationMs))
+      ? Math.max(0, Math.round(Number(detail.durationMs)))
+      : Math.max(0, now - current.createdAt)
+    : null;
+  records[index] = {
+    ...current,
+    state: nextState,
+    updatedAt: now,
+    completedAt: terminal ? now : null,
+    durationMs,
+    reason: terminal ? reason : null,
+    transitions: [
+      ...(current.transitions || []),
+      { state: nextState, at: now, ...(terminal && reason ? { reason } : {}) }
+    ].slice(-12)
+  };
+  return writeOperationJournal(records, context.journalPath);
+}
+
+export function recoverDurableOperations({
+  journalPath = OPERATION_JOURNAL,
+  markerPath = RESTART_MARKER,
+  now = Date.now()
+} = {}) {
+  const marker = readRestartMarker(markerPath);
+  const records = readOperationJournal(journalPath);
+  for (const record of records) {
+    if (OPERATION_TERMINAL_STATES.has(record.state)) continue;
+    if (record.action === 'wobble.restart' && marker?.operationId === record.id) continue;
+    transitionDurableOperation(
+      { id: record.id, action: record.action, startedAt: record.createdAt, journalPath },
+      'failed',
+      { now, reason: record.action === 'wobble.restart' ? 'restart-state-lost' : 'helper-restarted' }
+    );
+  }
+  return readOperationJournal(journalPath);
 }
 
 function runCommand(command, args, { timeoutMs = 45_000, captureStdout = false } = {}) {
@@ -166,12 +347,14 @@ function normalizeRestartMarker(value) {
   ) {
     return null;
   }
+  const operationId = validRequestId(value?.operationId) ? String(value.operationId) : null;
   return {
     version: RESTART_MARKER_VERSION,
     oldPid,
     startedAt,
     clearMaintenance: value.clearMaintenance,
-    phase
+    phase,
+    ...(operationId ? { operationId } : {})
   };
 }
 
@@ -366,7 +549,13 @@ async function advancePendingRestartSignal(marker, markerPath = RESTART_MARKER) 
 
 function scheduleRestartCompletion(
   oldPid,
-  { clearMaintenance, startedAt = Date.now(), markerPath = RESTART_MARKER }
+  {
+    clearMaintenance,
+    startedAt = Date.now(),
+    markerPath = RESTART_MARKER,
+    operationId = null,
+    journalPath = OPERATION_JOURNAL
+  }
 ) {
   let checking = false;
   let candidatePid = 0;
@@ -384,6 +573,13 @@ function scheduleRestartCompletion(
         const advanced = await advancePendingRestartSignal(persisted, markerPath);
         if (advanced.rolledBack) {
           clearInterval(timer);
+          if (operationId) {
+            transitionDurableOperation(
+              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
+              'failed',
+              { reason: 'restart-signal-failed' }
+            );
+          }
           return;
         }
       }
@@ -393,6 +589,12 @@ function scheduleRestartCompletion(
         if (candidatePid !== pid) {
           candidatePid = pid;
           readyStreak = 0;
+          if (operationId) {
+            transitionDurableOperation(
+              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
+              'verifying'
+            );
+          }
         }
         const health = await readWobbleOperationalHealth();
         const confirmedPid = await wobbleMainPid();
@@ -407,6 +609,12 @@ function scheduleRestartCompletion(
           // maintenance enabled (safe, operator can disable it), but can never reopen too early.
           clearRestartMarker(markerPath);
           if (clearMaintenance) setMaintenance(false);
+          if (operationId) {
+            transitionDurableOperation(
+              { id: operationId, action: 'wobble.restart', startedAt, journalPath },
+              'succeeded'
+            );
+          }
           restartInFlight = false;
           return;
         }
@@ -418,6 +626,13 @@ function scheduleRestartCompletion(
       if (Date.now() - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
         clearInterval(timer);
         clearRestartMarker(markerPath);
+        if (operationId) {
+          transitionDurableOperation(
+            { id: operationId, action: 'wobble.restart', startedAt, journalPath },
+            'failed',
+            { reason: 'restart-readiness-timeout' }
+          );
+        }
         restartInFlight = false;
         // Безопасный отказ: если новый Wobble не подтвердил readiness своим PID, maintenance остаётся.
         // Это не даёт клиентам устроить reconnect-storm на неисправный или циклически падающий сервис.
@@ -430,7 +645,11 @@ function scheduleRestartCompletion(
   timer.unref?.();
 }
 
-export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now = Date.now() } = {}) {
+export async function recoverRestartMonitor({
+  markerPath = RESTART_MARKER,
+  journalPath = OPERATION_JOURNAL,
+  now = Date.now()
+} = {}) {
   if (restartInFlight) return true;
   let marker = readRestartMarker(markerPath);
   if (!marker) return false;
@@ -440,6 +659,13 @@ export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now =
   const startedAt = Math.min(marker.startedAt, now);
   if (now - startedAt >= RESTART_MONITOR_TIMEOUT_MS) {
     clearRestartMarker(markerPath);
+    if (marker.operationId) {
+      transitionDurableOperation(
+        { id: marker.operationId, action: 'wobble.restart', startedAt, journalPath },
+        'failed',
+        { now, reason: 'restart-monitor-timeout' }
+      );
+    }
     console.error('stale wobble restart marker cleared; maintenance remains enabled');
     return false;
   }
@@ -457,14 +683,34 @@ export async function recoverRestartMonitor({ markerPath = RESTART_MARKER, now =
   scheduleRestartCompletion(marker.oldPid, {
     clearMaintenance: marker.clearMaintenance,
     startedAt,
-    markerPath
+    markerPath,
+    operationId: marker.operationId || null,
+    journalPath
   });
   return true;
 }
 
-async function startWobbleService() {
+async function waitForWobbleReady({ timeoutMs = 20_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let streak = 0;
+  while (Date.now() < deadline) {
+    const health = await readWobbleOperationalHealth();
+    const pid = await wobbleMainPid();
+    if (health?.pid === pid && pid > 0 && health.draining === false) {
+      streak += 1;
+      if (streak >= 2) return true;
+    } else {
+      streak = 0;
+    }
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
+async function startWobbleService(operationContext) {
   if (restartInFlight) return { ok: false, reason: 'operation-busy' };
   const startedAt = Date.now();
+  transitionDurableOperation(operationContext, 'running');
   const reset = await runCommand(SYSTEMCTL, ['reset-failed', 'wobble.service'], { timeoutMs: 5000 });
   if (!reset.ok) {
     return {
@@ -474,14 +720,23 @@ async function startWobbleService() {
     };
   }
   const start = await runCommand(SYSTEMCTL, ['start', 'wobble.service'], { timeoutMs: 20_000 });
+  if (!start.ok) {
+    return {
+      ok: false,
+      reason: start.reason || 'operation-failed',
+      durationMs: Date.now() - startedAt
+    };
+  }
+  transitionDurableOperation(operationContext, 'verifying');
+  const ready = await waitForWobbleReady();
   return {
-    ok: start.ok,
-    reason: start.ok ? null : start.reason || 'operation-failed',
+    ok: ready,
+    reason: ready ? null : 'operation-readiness-timeout',
     durationMs: Date.now() - startedAt
   };
 }
 
-async function startGracefulRestart(now) {
+async function startGracefulRestart(now, operationContext) {
   if (restartInFlight) return { ok: false, reason: 'operation-busy' };
   if (now < restartCooldownUntil) {
     return { ok: false, reason: 'restart-cooldown', retryAfterMs: restartCooldownUntil - now };
@@ -503,6 +758,7 @@ async function startGracefulRestart(now) {
     restartInFlight = false;
     return maintenance;
   }
+  transitionDurableOperation(operationContext, 'running');
 
   // Durable ownership is written synchronously before SIGUSR2. If wobble-ops.service is restarted
   // by systemd or deploy/install.sh after this point, the next helper process reconstructs the
@@ -512,13 +768,15 @@ async function startGracefulRestart(now) {
     oldPid,
     startedAt: now,
     clearMaintenance: !alreadyInMaintenance,
-    phase: 'signal-pending'
+    phase: 'signal-pending',
+    operationId: operationContext?.id || null
   };
   if (!writeRestartMarker(marker)) {
     restartInFlight = false;
     if (!alreadyInMaintenance) setMaintenance(false);
     return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
   }
+  transitionDurableOperation(operationContext, 'drain');
 
   const signal = await sendGracefulRestartSignal();
   if (signal.ok) {
@@ -546,8 +804,17 @@ async function startGracefulRestart(now) {
       restartCooldownUntil = now + RESTART_COOLDOWN_MS;
       scheduleRestartCompletion(oldPid, {
         clearMaintenance: !alreadyInMaintenance,
-        startedAt: now
+        startedAt: now,
+        operationId: operationContext?.id || null,
+        journalPath: operationContext?.journalPath || OPERATION_JOURNAL
       });
+      return {
+        ok: true,
+        accepted: true,
+        deferred: true,
+        warning: signal.reason || 'signal-uncertain',
+        maintenance: maintenanceEnabled()
+      };
     }
     return {
       ok: false,
@@ -560,21 +827,23 @@ async function startGracefulRestart(now) {
   restartCooldownUntil = now + RESTART_COOLDOWN_MS;
   scheduleRestartCompletion(oldPid, {
     clearMaintenance: !alreadyInMaintenance,
-    startedAt: now
+    startedAt: now,
+    operationId: operationContext?.id || null,
+    journalPath: operationContext?.journalPath || OPERATION_JOURNAL
   });
   return { ok: true, accepted: true, deferred: true, maintenance: true };
 }
 
-export async function executeRequest(request, now = Date.now()) {
+export async function executeRequest(request, now = Date.now(), operationContext = null) {
   const spec = ACTIONS[request.action];
   if (!spec) return { ok: false, reason: 'unknown-operation' };
   if (busy) return { ok: false, reason: 'operation-busy' };
 
-  if (spec.kind === 'graceful-restart') return startGracefulRestart(now);
+  if (spec.kind === 'graceful-restart') return startGracefulRestart(now, operationContext);
   if (spec.kind === 'wobble-start') {
     busy = true;
     try {
-      return await startWobbleService();
+      return await startWobbleService(operationContext);
     } finally {
       busy = false;
     }
@@ -584,11 +853,13 @@ export async function executeRequest(request, now = Date.now()) {
     // transitions prevents a manual enable during restart from being mistaken for the helper's
     // temporary flag and removed by the completion monitor.
     if (restartInFlight) return { ok: false, reason: 'operation-busy' };
+    transitionDurableOperation(operationContext, 'running');
     return setMaintenance(spec.enabled);
   }
 
   busy = true;
   try {
+    transitionDurableOperation(operationContext, 'running');
     if (spec.kind === 'nginx-reload') return await runNginxReload(spec);
     return await runSystemctl(spec);
   } finally {
@@ -604,7 +875,11 @@ function send(socket, payload) {
   }
 }
 
-export function createServer({ execute = executeRequest, requestTimeoutMs = REQUEST_READ_TIMEOUT_MS } = {}) {
+export function createServer({
+  execute = executeRequest,
+  requestTimeoutMs = REQUEST_READ_TIMEOUT_MS,
+  journalPath = OPERATION_JOURNAL
+} = {}) {
   return net.createServer(socket => {
     socket.setEncoding('utf8');
     // The short timeout protects only the tiny unauthenticated local request frame. Once a valid
@@ -642,11 +917,34 @@ export function createServer({ execute = executeRequest, requestTimeoutMs = REQU
         return;
       }
 
+      const begun = beginDurableOperation(request, { journalPath });
+      if (!begun.ok) {
+        send(socket, {
+          ok: false,
+          reason: begun.reason,
+          requestId: request.requestId,
+          action: request.action,
+          ...(begun.activeId ? { activeOperationId: begun.activeId } : {})
+        });
+        return;
+      }
+
       // A backup can legitimately take far longer than the 5-second request-read guard. Keeping
       // that guard active here would report a false failure while systemd continues the job.
       socket.setTimeout(0);
-      const result = await execute(request);
-      send(socket, { ...result, requestId: request.requestId, action: request.action });
+      const result = await execute(request, Date.now(), begun.context);
+      if (!(result?.accepted && result?.deferred)) {
+        transitionDurableOperation(begun.context, result?.ok ? 'succeeded' : 'failed', {
+          reason: result?.ok ? null : result?.reason,
+          durationMs: result?.durationMs
+        });
+      }
+      send(socket, {
+        ...result,
+        operationId: begun.context.id,
+        requestId: request.requestId,
+        action: request.action
+      });
     });
     socket.once('error', () => socket.destroy());
   });
@@ -658,6 +956,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     console.error('wobble-ops helper must be started by systemd socket activation');
     process.exit(1);
   }
+  recoverDurableOperations();
   await recoverRestartMonitor();
   const server = createServer();
   server.listen({ fd });

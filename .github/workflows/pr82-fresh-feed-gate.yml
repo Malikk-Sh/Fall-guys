@@ -1,0 +1,64 @@
+name: PR82 fresh-feed Telegram delivery gate
+
+on:
+  push:
+    branches: [feat/telegram-alert-delivery]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr82-fresh-feed
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/telegram-alert-delivery
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Apply fresh-feed delivery hardening
+        run: python scripts/pr82-fresh-feed-hardening.py
+
+      - name: Format and lint
+        run: |
+          npx prettier --write \
+            server/telegramAlertDelivery.js \
+            server/telegramAlertDelivery.test.mjs \
+            docs/TELEGRAM-ALERT-DELIVERY.md \
+            .github/workflows/pr82-fresh-feed-gate.yml
+          npm run format:check
+          npm run check
+          git diff --check
+
+      - name: Focused notifier regressions
+        run: |
+          node --test \
+            server/telegramAlertDelivery.test.mjs \
+            server/telegramAlertTest.test.mjs \
+            server/telegramAlertProduction.test.mjs \
+            server/controlPlaneAlerts.test.mjs \
+            server/controlPlaneDeploy.test.mjs
+
+      - name: Persist checked hardening and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f scripts/pr82-fresh-feed-hardening.py .github/workflows/pr82-fresh-feed-gate.yml
+          git add \
+            server/telegramAlertDelivery.js \
+            server/telegramAlertDelivery.test.mjs \
+            docs/TELEGRAM-ALERT-DELIVERY.md
+          git commit -m 'Require fresh Alert Center state before Telegram delivery'
+          git push origin HEAD:feat/telegram-alert-delivery

@@ -75,13 +75,20 @@ export function readCosmetics(
     if (typeof stored[slot] === 'string' && unlocked.has(stored[slot])) equipped[slot] = stored[slot];
   }
 
-  // Для server-owned слотов authoritative loadout имеет приоритет над localStorage. Trail пока
-  // исключение: sunrise-trail — локальная daily-награда, пока daily streak не перенесён на сервер.
+  // Для server-owned слотов authoritative loadout имеет приоритет над localStorage.
+  //
+  // Trail раньше был исключён целиком: в нём лежала одна локальная daily-награда, и спрашивать о
+  // ней сервер было не у кого. Теперь в слоте есть и серверные следы — за гонку, — и полное
+  // исключение означало бы, что владелец такого следа видит его снятым после перезахода, хотя
+  // сервер и остальные игроки продолжают его показывать. Поэтому исключение сузилось с целого
+  // слота до конкретных локальных наград: серверное берётся с сервера, локальное остаётся местным.
   if (inventory?.equipped) {
-    for (const slot of ['body', 'visor', 'antenna', 'finish']) {
+    for (const slot of ['body', 'visor', 'antenna', 'trail', 'finish']) {
       const id = inventory.equipped[slot];
       if (typeof id === 'string' && unlocked.has(id)) equipped[slot] = id;
-      else if (slot !== 'body') equipped[slot] = null;
+      else if (slot === 'body') continue;
+      // Локальную награду сервер не знает и не может ни подтвердить, ни снять.
+      else if (!COSMETIC_BY_ID[equipped[slot]]?.localGoal) equipped[slot] = null;
     }
   }
   return equipped;
@@ -124,6 +131,8 @@ export function nextCosmeticGoal(progress = null, profile = null, inventory = se
   const chapters = progress?.chapters || [];
   const localChapters = profile?.coop?.chapterStats || {};
   const stats = progress?.stats || {};
+  // Гоночные счётчики приходят в прогрессе аккаунта; у неавторизованного их просто нет.
+  const race = progress?.race || {};
   const goals = [
     {
       id: 'sky-hero',
@@ -147,7 +156,24 @@ export function nextCosmeticGoal(progress = null, profile = null, inventory = se
       current: Math.max(Number(stats.coopRevives || 0), Number(profile?.coop?.totalRevives || 0)),
       target: 25
     },
-    { id: 'sunrise-trail', label: 'Серия daily', current: Number(profile?.daily?.bestStreak || 0), target: 7 }
+    {
+      id: 'sunrise-trail',
+      label: 'Серия daily',
+      current: Number(profile?.daily?.bestStreak || 0),
+      target: 7
+    },
+    // Гоночные цели. Без них список заканчивался на кооперативных, и игрок, забравший их все,
+    // видел «ВСЕ ИГРОВЫЕ НАГРАДЫ ПОЛУЧЕНЫ» при том, что половина каталога оставалась закрытой.
+    { id: 'racer-body', label: 'Финиши в гонке', current: Number(race.finishes || 0), target: 1 },
+    { id: 'podium-trail', label: 'Пьедесталы', current: Number(race.podiums || 0), target: 1 },
+    { id: 'champion-visor', label: 'Победы в гонке', current: Number(race.wins || 0), target: 1 },
+    { id: 'veteran-antenna', label: 'Финиши в гонке', current: Number(race.finishes || 0), target: 25 },
+    {
+      id: 'streak-trail',
+      label: 'Серия daily',
+      current: Number(profile?.daily?.bestStreak || 0),
+      target: 30
+    }
   ];
   return goals.find(goal => !unlocked.has(goal.id)) || null;
 }

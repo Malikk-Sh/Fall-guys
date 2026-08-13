@@ -103,3 +103,21 @@ test('в каждом слоте есть из чего выбрать', () => {
     assert.ok(count >= 2, `в слоте ${slot} всего ${count} предмет(а) — выбирать не из чего`);
   }
 });
+
+test('несколько аватаров одного аккаунта не делают из себя соперников', () => {
+  const { accounts, id } = freshAccounts();
+  // Два слота одного аккаунта дошли до ленты. Живого соперника при этом не было.
+  accounts.recordRaceFinish({ accountId: id, place: 1, finishers: 1 });
+
+  const ids = unlocked(accounts, id);
+  assert.ok(!ids.has('race-win'), 'победа над собой не победа');
+  assert.ok(!ids.has('race-podium'));
+  assert.equal(accounts.raceStats(id).finishes, 1, 'один матч — один финиш, сколько бы ни было вкладок');
+});
+
+test('гоночные счётчики едут в прогрессе аккаунта', () => {
+  const { accounts, id } = freshAccounts();
+  assert.deepEqual(accounts.progress(id).race, { finishes: 0, podiums: 0, wins: 0, bestPlace: null });
+  accounts.recordRaceFinish({ accountId: id, place: 1, finishers: 4 });
+  assert.deepEqual(accounts.progress(id).race, { finishes: 1, podiums: 1, wins: 1, bestPlace: 1 });
+});

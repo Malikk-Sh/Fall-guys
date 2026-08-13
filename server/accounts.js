@@ -200,7 +200,10 @@ class Accounts {
       achievements: this.statements.achievements.all(id).map(row => ({
         id: row.achievement_id,
         unlockedAt: row.unlocked_at
-      }))
+      })),
+      // Гоночные счётчики. Клиент показывает по ним прогресс к следующей награде, поэтому они
+      // едут вместе с достижениями: иначе цель «25 финишей» отображалась бы без текущего числа.
+      race: this.raceStats(id)
     };
   }
 

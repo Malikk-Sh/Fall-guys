@@ -501,6 +501,25 @@ export class AccountFlow {
       this.game.ui.preview(this.game.previewSpec, this.recordFor('solo', this.game.previewSpec));
   }
 
+  // Перечитать награды после матча, который их мог выдать.
+  //
+  // Прогресс и инвентарь приезжают один раз, при входе. Достижение за гонку выдаётся сервером
+  // ПОСЛЕ этого, а в итогах матча его нет — они одинаковые для всей комнаты и ничего личного нести
+  // не могут. Без этого обновления игрок выигрывал гонку, получал награду в базе и не видел её до
+  // перезагрузки страницы: самый важный момент — первый — выглядел бы как «ничего не дали».
+  async refreshRewards() {
+    if (!this.online) return null;
+    const revision = this.profileRevision;
+    const session = await sessionAccount().catch(() => null);
+    // Ответ, начатый под другим аккаунтом, не должен дорисовывать чужие награды.
+    if (!session || session.missing || revision !== this.profileRevision) return null;
+    setServerInventory(session.inventory || null);
+    this.game.ui.setAccount({ ...this.game.ui.account, inventory: session.inventory }, { online: true });
+    this.game.ui.setAccountProgress(session.progress || null);
+    this.game.ui.onCosmeticChange?.();
+    return session;
+  }
+
   async refreshProfile() {
     const revision = this.profileRevision;
     const [profile, avoidedPlayers] = await Promise.all([

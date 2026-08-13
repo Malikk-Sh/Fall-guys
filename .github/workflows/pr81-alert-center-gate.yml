@@ -85,7 +85,7 @@ jobs:
             deploy/wobble-control.service \
             docs/ALERT-CENTER.md \
             package.json
-          git rm \
+          git rm -f \
             .github/workflows/pr81-alert-center-gate.yml \
             scripts/pr81-integrate-alert-center.py \
             scripts/pr81-repair-patcher.py

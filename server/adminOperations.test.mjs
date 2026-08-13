@@ -347,14 +347,17 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.match(helper, /--kill-whom=main', '--signal=SIGUSR2', 'wobble\.service'/);
   assert.match(helper, /restart timed out; maintenance remains enabled/);
 
-  const startHandlerAt = index.indexOf('if (message.type === C2S.START_MATCH)');
+  // Якорь — по ключу таблицы обработчиков, а не по тексту `if`: цепочка `if` разобрана в таблицу,
+  // а проверяемое здесь важно само по себе — внутри запуска матча слив идёт раньше проверки
+  // мощности, а счётчик отказа — после неё. Порядок этих трёх вещей и есть предмет теста.
+  const startHandlerAt = index.indexOf('[C2S.START_MATCH]:');
   const startDrainAt = index.indexOf('if (operationalState.isDraining())', startHandlerAt);
   const capacityAt = index.indexOf('if (capacityStatus().matchesFull)', startHandlerAt);
   const capacityMetricAt = index.indexOf('metrics.capacityRejected++', startHandlerAt);
   assert.ok(startHandlerAt >= 0 && startDrainAt > startHandlerAt && startDrainAt < capacityAt);
   assert.ok(capacityAt < capacityMetricAt);
 
-  const findHandlerAt = index.indexOf('if (message.type === C2S.FIND_COOP)');
+  const findHandlerAt = index.indexOf('[C2S.FIND_COOP]:');
   const findDrainAt = index.indexOf('if (operationalState.isDraining())', findHandlerAt);
   const findCapacityAt = index.indexOf(
     'if (loadStatus().overloaded || rooms.size >= MAX_ROOMS)',
@@ -364,7 +367,7 @@ test('operational restart is serialized and clears maintenance only after stable
   assert.ok(findHandlerAt >= 0 && findDrainAt > findHandlerAt && findDrainAt < findCapacityAt);
   assert.ok(findCapacityAt < findCapacityMetricAt);
 
-  const rematchHandlerAt = index.indexOf('if (message.type === C2S.REMATCH_VOTE)');
+  const rematchHandlerAt = index.indexOf('[C2S.REMATCH_VOTE]:');
   const rematchHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', rematchHandlerAt);
   const rematchMutationAt = index.indexOf("player.resultChoice = 'rematch';", rematchHandlerAt);
   assert.ok(
@@ -373,7 +376,7 @@ test('operational restart is serialized and clears maintenance only after stable
       rematchHandlerDrainAt < rematchMutationAt
   );
 
-  const nextHandlerAt = index.indexOf('if (message.type === C2S.NEXT_CHAPTER_VOTE)');
+  const nextHandlerAt = index.indexOf('[C2S.NEXT_CHAPTER_VOTE]:');
   const nextHandlerDrainAt = index.indexOf('if (operationalState.isDraining())', nextHandlerAt);
   const nextChoiceMutationAt = index.indexOf("player.resultChoice = 'next';", nextHandlerAt);
   const nextVoteMetricAt = index.indexOf("gameplay.count('next_chapter_vote'", nextHandlerAt);

@@ -81,7 +81,7 @@ test('reliability reader prefers live build without persisting it', async () => 
     const latest = db
       .prepare('SELECT version, commit_sha FROM service_reliability_samples ORDER BY sampled_at DESC LIMIT 1')
       .get();
-    assert.deepEqual(latest, { version: '2.6.0', commit_sha: 'stored123' });
+    assert.deepEqual({ ...latest }, { version: '2.6.0', commit_sha: 'stored123' });
   } finally {
     db.close();
   }

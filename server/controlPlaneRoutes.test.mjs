@@ -16,23 +16,19 @@ async function start({ gameClient, operations } = {}) {
   installControlPlaneRoutes({
     app,
     adminAuth,
-    gameClient:
-      gameClient ||
-      ({
-        health: async () => null,
-        adminRequest: async () => ({
-          statusCode: 503,
-          payload: { ok: false, error: 'game-control-unavailable' }
-        })
-      }),
+    gameClient: gameClient || {
+      health: async () => null,
+      adminRequest: async () => ({
+        statusCode: 503,
+        payload: { ok: false, error: 'game-control-unavailable' }
+      })
+    },
     infrastructure: { snapshot: async () => ({ services: {}, network: {}, resources: {} }) },
     reliability: { report: async () => ({ status: 'healthy', summary: {} }) },
-    operations:
-      operations ||
-      ({
-        status: () => ({ available: true, maintenance: false, operations: [] }),
-        run: async () => ({ ok: false, reason: 'operation-failed' })
-      }),
+    operations: operations || {
+      status: () => ({ available: true, maintenance: false, operations: [] }),
+      run: async () => ({ ok: false, reason: 'operation-failed' })
+    },
     build: { version: 'test', commit: 'abc' },
     enabled: true,
     secureCookies: false
@@ -95,6 +91,36 @@ test('game-dependent admin route fails explicitly while local session stays usab
 
     const sessionResponse = await post(ctx, '/api/admin/session', session);
     assert.equal(sessionResponse.status, 200);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('game proxy synthesizes only the admin session cookie', async () => {
+  let forwarded = null;
+  const ctx = await start({
+    gameClient: {
+      health: async () => ({ ok: true }),
+      adminRequest: async (_path, options) => {
+        forwarded = options;
+        return { statusCode: 200, payload: { ok: true, overview: {} } };
+      }
+    }
+  });
+  try {
+    const session = await login(ctx);
+    const response = await fetch(`${ctx.origin}/api/admin/dashboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: `${session.cookie}; account_session=must-not-forward`,
+        'X-Wobble-Admin-CSRF': session.csrf
+      },
+      body: '{}'
+    });
+    assert.equal(response.status, 200);
+    assert.match(forwarded.cookie, /^wobble_admin_session=/);
+    assert.equal(forwarded.cookie.includes('account_session'), false);
   } finally {
     await ctx.close();
   }

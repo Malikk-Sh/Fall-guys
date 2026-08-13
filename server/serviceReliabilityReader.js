@@ -55,7 +55,12 @@ function statusRank(value) {
 }
 
 class ServiceReliabilityReader {
-  constructor({ db, liveHealth = null, retentionDays = DEFAULT_RETENTION_DAYS, now = () => Date.now() } = {}) {
+  constructor({
+    db,
+    liveHealth = null,
+    retentionDays = DEFAULT_RETENTION_DAYS,
+    now = () => Date.now()
+  } = {}) {
     if (!db) throw new Error('ServiceReliabilityReader requires an open database');
     this.db = db;
     this.liveHealth = typeof liveHealth === 'function' ? liveHealth : null;

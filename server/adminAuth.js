@@ -176,11 +176,11 @@ function parseAuditDetail(value) {
 }
 
 class AdminAuthService {
-  constructor({ db, sessionTtlMs = ADMIN_SESSION_TTL_MS } = {}) {
+  constructor({ db, sessionTtlMs = ADMIN_SESSION_TTL_MS, migrate = true } = {}) {
     if (!db) throw new Error('AdminAuthService requires an open database');
     this.db = db;
     this.sessionTtlMs = sessionTtlMs;
-    migrateDatabase(db);
+    if (migrate) migrateDatabase(db);
     this.statements = prepare(db);
   }
 

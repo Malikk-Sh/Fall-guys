@@ -3,13 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const { backupHealthStatus } = require('./backupStatus');
-const {
-  readSystemdUnit,
-  tcpProbe,
-  tlsProbe,
-  publicTarget,
-  diskStatus
-} = require('./adminInfrastructure');
+const { readSystemdUnit, tcpProbe, tlsProbe, publicTarget, diskStatus } = require('./adminInfrastructure');
 
 const CONTROL_UNITS = Object.freeze([
   ['wobble', 'Wobble Rush', 'wobble.service'],
@@ -54,21 +48,20 @@ class ControlPlaneInfrastructure {
     const controlPort = safePositiveInt(this.env.CONTROL_PORT, 3001);
     const databaseFile = this.env.LEADERBOARD_DB || '/var/lib/wobble/leaderboard.db';
 
-    const [unitEntries, http80, publicHttpsTcp, gameTcp, controlTcp, https, gameHealth] =
-      await Promise.all([
-        Promise.all(
-          CONTROL_UNITS.map(async ([id, label, unit]) => [
-            id,
-            { id, label, unit, ...(await this.systemdUnit(unit)) }
-          ])
-        ),
-        this.probeTcp({ host: '127.0.0.1', port: 80 }),
-        this.probeTcp({ host: '127.0.0.1', port: target.port || 443 }),
-        this.probeTcp({ host: '127.0.0.1', port: gamePort }),
-        this.probeTcp({ host: '127.0.0.1', port: controlPort }),
-        this.probeTls({ host: '127.0.0.1', port: target.port || 443, servername: target.hostname, now }),
-        this.gameClient.health().catch(() => null)
-      ]);
+    const [unitEntries, http80, publicHttpsTcp, gameTcp, controlTcp, https, gameHealth] = await Promise.all([
+      Promise.all(
+        CONTROL_UNITS.map(async ([id, label, unit]) => [
+          id,
+          { id, label, unit, ...(await this.systemdUnit(unit)) }
+        ])
+      ),
+      this.probeTcp({ host: '127.0.0.1', port: 80 }),
+      this.probeTcp({ host: '127.0.0.1', port: target.port || 443 }),
+      this.probeTcp({ host: '127.0.0.1', port: gamePort }),
+      this.probeTcp({ host: '127.0.0.1', port: controlPort }),
+      this.probeTls({ host: '127.0.0.1', port: target.port || 443, servername: target.hostname, now }),
+      this.gameClient.health().catch(() => null)
+    ]);
 
     const totalMemory = Number(this.system.totalmem());
     const freeMemory = Number(this.system.freemem());

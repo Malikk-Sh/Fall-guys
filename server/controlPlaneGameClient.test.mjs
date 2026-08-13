@@ -4,11 +4,7 @@ import { createRequire } from 'node:module';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const {
-  ControlPlaneGameClient,
-  GAME_ADMIN_PATHS,
-  MAX_REQUEST_BYTES
-} = require('./controlPlaneGameClient');
+const { ControlPlaneGameClient, GAME_ADMIN_PATHS, MAX_REQUEST_BYTES } = require('./controlPlaneGameClient');
 
 async function listen(handler) {
   const server = http.createServer(handler);

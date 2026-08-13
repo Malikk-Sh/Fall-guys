@@ -359,7 +359,7 @@ function installControlPlaneRoutes({
       if (!resolved) return undefined;
       const upstream = await gameClient.adminRequest(path, {
         body: req.body,
-        cookie: req.headers.cookie || '',
+        cookie: `${ADMIN_SESSION_COOKIE}=${encodeURIComponent(resolved.token)}`,
         csrf: req.headers['x-wobble-admin-csrf'] || ''
       });
       return res.status(upstream.statusCode).json(upstream.payload);

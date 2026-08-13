@@ -28,7 +28,7 @@ if (databaseFile !== ':memory:' && !fs.existsSync(databaseFile)) {
 
 const db = openDatabase(databaseFile);
 db.exec('PRAGMA busy_timeout = 3000');
-const adminAuth = new AdminAuthService({ db });
+const adminAuth = new AdminAuthService({ db, migrate: false });
 const gameClient = new ControlPlaneGameClient({ port: process.env.PORT || 3000 });
 const operations = new AdminOperationsClient();
 const infrastructure = new ControlPlaneInfrastructure({ gameClient });

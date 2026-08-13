@@ -14,13 +14,15 @@ function database() {
 }
 
 function insertSample(db, at, commit = 'abc123') {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO service_reliability_samples
       (sampled_at, version, commit_sha, release_tag, event_loop_p95_ms, rss_mb, heap_used_mb,
        socket_count, active_matches, matchmaking_waiting, resume_succeeded, resume_failed,
        handler_errors, socket_send_failures, capacity_rejected, snapshots_skipped_for_load)
     VALUES (?, '2.6.0', ?, 'v2.6.0', 25, 120, 60, 4, 1, 0, 5, 1, 0, 0, 0, 0)
-  `).run(at, commit);
+  `
+  ).run(at, commit);
 }
 
 test('reliability reader keeps historical rows and performs no retention writes', async () => {

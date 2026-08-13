@@ -20,6 +20,7 @@ const TELEGRAM_HOST = 'api.telegram.org';
 const TELEGRAM_PORT = 443;
 const SEVERITY_RANK = Object.freeze({ warning: 1, critical: 2 });
 const EVENT_KINDS = new Set(['opened', 'escalated', 'recovered', 'recovered-summary', 'escalated-recovered']);
+const FATAL_STATE_REASONS = new Set(['state-corrupt', 'state-unavailable', 'state-uncertain']);
 
 function safeTime(value) {
   const number = Number(value);
@@ -159,14 +160,18 @@ function normalizeRecord(value) {
 function loadState(file = DEFAULT_STATE_FILE) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (parsed?.version !== STATE_VERSION || !Array.isArray(parsed.alerts)) {
+    if (
+      parsed?.version !== STATE_VERSION ||
+      !Array.isArray(parsed.alerts) ||
+      parsed.alerts.length > MAX_RECORDS
+    ) {
       return { ok: false, records: [] };
     }
     const records = parsed.alerts.map(normalizeRecord);
     if (records.some(item => !item)) return { ok: false, records: [] };
     const ids = new Set(records.map(item => item.id));
     if (ids.size !== records.length) return { ok: false, records: [] };
-    return { ok: true, records: records.slice(-MAX_RECORDS) };
+    return { ok: true, records };
   } catch (error) {
     if (error?.code === 'ENOENT') return { ok: true, records: [] };
     return { ok: false, records: [] };
@@ -290,7 +295,16 @@ function reconcile(records, feed, minSeverity, now) {
   }
 
   for (const alert of feed.resolved) {
+    const existing = records.find(item => item.id === alert.id);
     const record = ensureRecord(records, alert);
+    if (!existing) {
+      // A bounded resolved history is context, not a replay queue. Baseline old incidents as complete
+      // so enabling Telegram cannot flood the operator with recoveries from before the notifier ran.
+      record.resolvedSent = true;
+      record.pending = null;
+      changed = true;
+      continue;
+    }
     const escalatedPastDelivery =
       record.sentSeverity && SEVERITY_RANK[alert.severity] > SEVERITY_RANK[record.sentSeverity];
     if (record.pending?.kind === 'opened' || record.pending?.kind === 'escalated') {
@@ -317,6 +331,11 @@ function reconcile(records, feed, minSeverity, now) {
       changed = schedule(record, 'recovered', record.sentSeverity, now) || changed;
     } else if (!record.sentSeverity && qualifies(alert.severity, minSeverity) && !record.resolvedSent) {
       changed = schedule(record, 'recovered-summary', alert.severity, now) || changed;
+    } else if (!record.sentSeverity && !record.resolvedSent) {
+      // The incident never met this notifier's severity policy. Mark it complete once resolved so it
+      // remains safely evictable instead of consuming the protected retry/dedup budget forever.
+      record.resolvedSent = true;
+      changed = true;
     }
   }
 
@@ -336,6 +355,9 @@ function reconcile(records, feed, minSeverity, now) {
       changed = true;
     } else if (record.sentSeverity && !record.resolvedSent) {
       changed = schedule(record, 'recovered', record.sentSeverity, now) || changed;
+    } else if (!record.sentSeverity && !record.resolvedSent) {
+      record.resolvedSent = true;
+      changed = true;
     }
   }
   return changed;
@@ -502,6 +524,10 @@ async function sendTelegram(text, config, { request = https } = {}) {
   return { ok: false, reason: 'telegram-rejected' };
 }
 
+function isFatalStateFailure(reason) {
+  return FATAL_STATE_REASONS.has(String(reason || ''));
+}
+
 function safeLog(event, fields = {}) {
   const safe = { event };
   for (const [key, value] of Object.entries(fields)) {
@@ -620,7 +646,15 @@ async function main() {
   while (!stopping) {
     try {
       const result = await deliveryPass({ config, stateFile });
-      if (!result.ok) safeLog('telegram_alert_pass_failed', { reason: result.reason });
+      if (!result.ok) {
+        safeLog('telegram_alert_pass_failed', { reason: result.reason });
+        if (isFatalStateFailure(result.reason)) {
+          // Dedup/backoff state is authoritative for external delivery. Continuing without it risks
+          // Telegram spam, especially after a send succeeded but its acknowledgement could not persist.
+          process.exitCode = 78;
+          return;
+        }
+      }
     } catch {
       safeLog('telegram_alert_pass_failed', { reason: 'unexpected-error' });
     }
@@ -644,6 +678,7 @@ module.exports = {
   deliveryPass,
   fetchFeed,
   formatMessage,
+  isFatalStateFailure,
   loadState,
   normalizeFeed,
   processDue,

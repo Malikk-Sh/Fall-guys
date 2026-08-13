@@ -14,6 +14,7 @@ const {
   TELEGRAM_HOST,
   TELEGRAM_PORT,
   deliveryPass,
+  isFatalStateFailure,
   loadState,
   retryDelayMs,
   telegramRequestOptions,
@@ -479,4 +480,84 @@ test('critical escalation that resolves before notifier observes it is still rep
   } finally {
     ctx.cleanup();
   }
+});
+
+test('first startup baselines old resolved history instead of replaying historical Telegram recoveries', async () => {
+  const ctx = tempState();
+  let sends = 0;
+  try {
+    const result = await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: 80_000,
+      getFeed: async () => ({
+        ok: true,
+        feed: feed({
+          resolved: [alert({ state: 'resolved', lastSeenAt: 60_000, resolvedAt: 65_000 })]
+        })
+      }),
+      send: async () => {
+        sends += 1;
+        return { ok: true };
+      }
+    });
+    assert.equal(result.ok, true);
+    assert.equal(sends, 0);
+    const record = loadState(ctx.file).records[0];
+    assert.equal(record.resolvedSent, true);
+    assert.equal(record.pending, null);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('below-threshold warning becomes completed and evictable after resolution', async () => {
+  const ctx = tempState();
+  let sends = 0;
+  try {
+    await deliveryPass({
+      config: config('critical'),
+      stateFile: ctx.file,
+      now: 30_000,
+      getFeed: async () => ({ ok: true, feed: feed({ active: [alert({ severity: 'warning' })] }) }),
+      send: async () => {
+        sends += 1;
+        return { ok: true };
+      }
+    });
+    // Below-threshold active incidents need no durable delivery record at all.
+    assert.equal(loadState(ctx.file).records.length, 0);
+
+    await deliveryPass({
+      config: config('critical'),
+      stateFile: ctx.file,
+      now: 70_000,
+      getFeed: async () => ({
+        ok: true,
+        feed: feed({
+          resolved: [
+            alert({ severity: 'warning', state: 'resolved', lastSeenAt: 60_000, resolvedAt: 65_000 })
+          ]
+        })
+      }),
+      send: async () => {
+        sends += 1;
+        return { ok: true };
+      }
+    });
+    const record = loadState(ctx.file).records[0];
+    assert.equal(record.resolvedSent, true);
+    assert.equal(record.pending, null);
+    assert.equal(sends, 0);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('all durable-state failures are fatal to the notifier delivery loop', () => {
+  assert.equal(isFatalStateFailure('state-corrupt'), true);
+  assert.equal(isFatalStateFailure('state-unavailable'), true);
+  assert.equal(isFatalStateFailure('state-uncertain'), true);
+  assert.equal(isFatalStateFailure('feed-unavailable'), false);
+  assert.equal(isFatalStateFailure('telegram-network'), false);
 });

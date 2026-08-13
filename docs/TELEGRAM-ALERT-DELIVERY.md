@@ -77,9 +77,12 @@ The notifier owns durable state in:
 
 State is written atomically (`temp -> fsync -> rename -> fsync directory`) and contains only alert IDs, safe severity/state timestamps and retry metadata.
 
-For each alert UUID the notifier tracks the highest severity successfully delivered and whether recovery was delivered. A process restart therefore cannot resend the same successful notification.
+For each alert UUID the notifier tracks the highest severity successfully delivered and whether recovery was delivered. A process restart therefore cannot resend the same successful notification. Existing resolved Alert Center history is baselined as complete on first sight rather than replayed when Telegram is enabled.
 
-Failed delivery uses bounded exponential backoff. Telegram `429` `retry_after` is honored within a safe bounded range. Configuration/auth failures also back off rather than generating a hot loop.
+Any corruption/unavailability/uncertainty of the notifier's own durable state stops delivery fail-closed. This is intentional: continuing after Telegram accepted a message but its local dedup acknowledgement could not be persisted could otherwise create a resend loop.
+
+Failed delivery uses bounded exponential backoff.
+Telegram `429` `retry_after` is honored within a safe bounded range. Configuration/auth failures also back off rather than generating a hot loop.
 
 The queue is bounded and delivery work per polling pass is capped, preventing a remote outage from turning recovery into a request storm.
 

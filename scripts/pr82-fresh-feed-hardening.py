@@ -116,8 +116,8 @@ test('pending Telegram retry waits for a fresh healthy Alert Center feed before 
 
 docs = Path('docs/TELEGRAM-ALERT-DELIVERY.md')
 text = docs.read_text()
-needle = "Failed delivery uses bounded exponential backoff. Telegram `429` `retry_after` is honored within a safe bounded range."
+needle = "Failed delivery uses bounded exponential backoff.\nTelegram `429` `retry_after` is honored within a safe bounded range."
 replacement = "Failed delivery uses bounded exponential backoff. Telegram `429` `retry_after` is honored within a safe bounded range. Pending delivery/retry is attempted only after a fresh healthy Alert Center feed has first reconciled the incident lifecycle; stale/unavailable feed state therefore cannot trigger a stale external notification."
 if text.count(needle) != 1:
-    raise SystemExit(f'docs: expected one retry sentence, found {text.count(needle)}')
+    raise SystemExit(f'docs: expected one retry paragraph, found {text.count(needle)}')
 docs.write_text(text.replace(needle, replacement, 1))

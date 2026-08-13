@@ -22,10 +22,15 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply journal and recovery hardening
-        run: python scripts/pr79-journal-hardening.py
+        run: |
+          python scripts/pr79-journal-hardening.py
+          sed -i "s/await advancePendingRestartSignal(marker, markerPath)/await advanceSignal(marker, markerPath)/" server/adminOperations.test.mjs
       - name: Format and lint
         run: |
-          npx prettier --write deploy/wobble-ops-helper.mjs server/durableOperations.test.mjs
+          npx prettier --write \
+            deploy/wobble-ops-helper.mjs \
+            server/durableOperations.test.mjs \
+            server/adminOperations.test.mjs
           npm run format:check
           npm run check
           git diff --check
@@ -41,11 +46,15 @@ jobs:
           grep -Fq "fs.fsyncSync(fileDescriptor)" deploy/wobble-ops-helper.mjs
           grep -Fq "fs.fsyncSync(directoryDescriptor)" deploy/wobble-ops-helper.mjs
           grep -Fq "reason: 'restart-signal-failed'" deploy/wobble-ops-helper.mjs
+          grep -Fq "await advanceSignal(marker, markerPath)" server/adminOperations.test.mjs
       - name: Persist checked hardening and remove temporary gate
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add deploy/wobble-ops-helper.mjs server/durableOperations.test.mjs
+          git add \
+            deploy/wobble-ops-helper.mjs \
+            server/durableOperations.test.mjs \
+            server/adminOperations.test.mjs
           git rm .github/workflows/pr79-journal-hardening-gate.yml scripts/pr79-journal-hardening.py
           git commit -m 'Harden durable journal corruption and restart recovery'
           git push origin HEAD:fix/durable-operations-review

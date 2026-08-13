@@ -1,0 +1,149 @@
+name: PR78 batched review gate
+
+on:
+  push:
+    branches:
+      - fix/resilient-control-plane-review
+
+permissions:
+  contents: write
+
+jobs:
+  focused:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/resilient-control-plane-review
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Apply all Codex review fixes as one batch
+        run: |
+          python scripts/pr78-review-fixes.py
+          python scripts/pr78-review-tests.py
+
+      - name: Canonical formatting and lint
+        run: |
+          npx prettier --write \
+            package.json \
+            server/controlPlane.js \
+            server/controlPlaneGameClient.js \
+            server/controlPlaneGameClient.test.mjs \
+            server/controlPlaneInfrastructure.js \
+            server/controlPlaneRoutes.js \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.js \
+            server/serviceReliabilityReader.test.mjs \
+            server/controlPlaneDeploy.test.mjs
+          npm run format:check
+          npm run check
+          bash -n deploy/install.sh deploy/verify-shared443-config.sh
+          bash deploy/verify-shared443-config.sh
+
+      - name: Focused regression tests
+        run: |
+          node --test \
+            server/controlPlaneGameClient.test.mjs \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            server/adminControlPlane.test.mjs \
+            server/adminInfrastructure.test.mjs \
+            server/adminOperations.test.mjs \
+            server/reliability.test.mjs
+
+      - name: Prove missing Reliability schema does not take down Control Plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          db="$tmp_dir/control.db"
+          log="$tmp_dir/control.log"
+          control_pid=''
+          cleanup() {
+            if [ -n "$control_pid" ]; then kill "$control_pid" >/dev/null 2>&1 || true; fi
+            if [ -n "$control_pid" ]; then wait "$control_pid" >/dev/null 2>&1 || true; fi
+            rm -rf "$tmp_dir"
+          }
+          trap cleanup EXIT
+
+          access_code="$(DB="$db" node <<'NODE'
+          const { openDatabase } = require('./server/db');
+          const { migrateDatabase } = require('./server/migrations');
+          const { AdminAuthService } = require('./server/adminAuth');
+          const db = openDatabase(process.env.DB);
+          migrateDatabase(db);
+          const admin = new AdminAuthService({ db, migrate: false });
+          const created = admin.createUser({ name: 'SchemaGate', role: 'owner' });
+          db.exec('DROP TABLE service_reliability_events; DROP TABLE service_reliability_samples;');
+          db.close();
+          process.stdout.write(created.accessCode);
+          NODE
+          )"
+
+          LEADERBOARD_DB="$db" PORT=3290 CONTROL_PORT=3291 ADMIN_PANEL_ENABLED=1 NODE_ENV=test \
+            node server/controlPlane.js >"$log" 2>&1 &
+          control_pid=$!
+          ready=0
+          for _ in {1..50}; do
+            if curl -fsS --max-time 1 http://127.0.0.1:3291/health/control >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" -ne 1 ]; then cat "$log"; exit 1; fi
+
+          status="$(curl -sS --max-time 2 -o "$tmp_dir/login.json" -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            --data "{\"accessCode\":\"$access_code\"}" \
+            http://127.0.0.1:3291/api/admin/login)"
+          [ "$status" = '200' ] || { cat "$tmp_dir/login.json"; cat "$log"; exit 1; }
+
+      - name: Static production review assertions
+        run: |
+          grep -Fq 'say "Перезапуск gameplay после переключения Wobble Control"' deploy/install.sh
+          grep -Fq 'location ~* ^/api/admin(?:/|$)' deploy/nginx-locations.conf
+          grep -Fq 'location ~* ^/admin(?:/|$)' deploy/nginx-locations.conf
+          grep -Fq "path: '/health/ready'" server/controlPlaneGameClient.js
+          grep -Fq 'createServiceReliabilityReader' server/controlPlane.js
+          node - <<'NODE'
+          const test = require('./package.json').scripts.test;
+          for (const file of [
+            'server/controlPlaneGameClient.test.mjs',
+            'server/controlPlaneRoutes.test.mjs',
+            'server/serviceReliabilityReader.test.mjs',
+            'server/controlPlaneDeploy.test.mjs'
+          ]) {
+            if (!test.includes(file)) throw new Error(`${file} is not in npm test`);
+          }
+          NODE
+
+      - name: Persist checked batch and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            package.json \
+            deploy/install.sh \
+            deploy/nginx-locations.conf \
+            deploy/verify-shared443-config.sh \
+            server/controlPlane.js \
+            server/controlPlaneGameClient.js \
+            server/controlPlaneGameClient.test.mjs \
+            server/controlPlaneInfrastructure.js \
+            server/controlPlaneRoutes.js \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.js \
+            server/serviceReliabilityReader.test.mjs \
+            server/controlPlaneDeploy.test.mjs
+          git rm .github/workflows/pr78-review-gate.yml scripts/pr78-review-fixes.py scripts/pr78-review-tests.py
+          git commit -m 'Address resilient control plane review findings'
+          git push origin HEAD:fix/resilient-control-plane-review

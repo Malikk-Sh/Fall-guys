@@ -27,7 +27,6 @@ jobs:
         run: |
           npx prettier --write \
             deploy/wobble-ops-helper.mjs \
-            deploy/wobble-ops.service \
             server/adminOperationsClient.js \
             server/controlPlaneRoutes.js \
             server/adminOperations.test.mjs \

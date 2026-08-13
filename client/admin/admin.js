@@ -2007,6 +2007,8 @@ function operationErrorLabel(reason) {
     'helper-error': 'Не удалось связаться с безопасным helper.',
     'operation-busy': 'Сейчас уже выполняется другая системная операция. Подождите немного.',
     'operation-state-failed': 'Не удалось надёжно сохранить состояние операции. Действие не запущено.',
+    'operation-state-uncertain':
+      'Действие могло завершиться, но финальный durable state не удалось сохранить. Не повторяйте его вслепую — сначала проверьте «Сервер» и историю.',
     'operation-timeout': 'Системная операция превысила допустимое время.',
     'operation-readiness-timeout': 'Сервис запущен, но не подтвердил готовность вовремя.',
     'operation-failed': 'Системная проверка завершилась ошибкой.',
@@ -2207,7 +2209,11 @@ async function runOperation(operation) {
     setStatus(`${spec.title}: готово.`, 'good');
   } catch (error) {
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
-    if (state.operations) renderOperations(state.operations);
+    try {
+      await loadOperations({ monitor: false });
+    } catch {
+      if (state.operations) renderOperations(state.operations);
+    }
     setStatus(`${spec.title}: ${operationErrorLabel(error.payload?.error || error.message)}`, 'bad');
   }
 }

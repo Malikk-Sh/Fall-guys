@@ -176,3 +176,37 @@ test('control-plane operations client exposes sanitized active state and newest-
     ctx.cleanup();
   }
 });
+
+test('helper execution exception is persisted as failed rather than leaving an active operation', async t => {
+  const { createServer } = await import('../deploy/wobble-ops-helper.mjs');
+  const ctx = tempState();
+  const socketPath = path.join(ctx.dir, 'ops.sock');
+  const server = createServer({
+    journalPath: ctx.journalPath,
+    execute: async () => {
+      throw new Error('synthetic helper failure');
+    }
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, resolve);
+  });
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    ctx.cleanup();
+  });
+
+  const client = new AdminOperationsClient({
+    socketPath,
+    maintenanceFlag: path.join(ctx.dir, 'maintenance'),
+    journalPath: ctx.journalPath,
+    timeoutMs: 1000
+  });
+  const result = await client.run('backup.verify');
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'operation-failed');
+  const records = readOperationJournal(ctx.journalPath);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].state, 'failed');
+  assert.equal(records[0].reason, 'operation-failed');
+});

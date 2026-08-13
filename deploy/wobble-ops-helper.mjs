@@ -710,7 +710,9 @@ async function waitForWobbleReady({ timeoutMs = 20_000 } = {}) {
 async function startWobbleService(operationContext) {
   if (restartInFlight) return { ok: false, reason: 'operation-busy' };
   const startedAt = Date.now();
-  transitionDurableOperation(operationContext, 'running');
+  if (!transitionDurableOperation(operationContext, 'running')) {
+    return { ok: false, reason: 'operation-state-failed', durationMs: 0 };
+  }
   const reset = await runCommand(SYSTEMCTL, ['reset-failed', 'wobble.service'], { timeoutMs: 5000 });
   if (!reset.ok) {
     return {
@@ -758,7 +760,11 @@ async function startGracefulRestart(now, operationContext) {
     restartInFlight = false;
     return maintenance;
   }
-  transitionDurableOperation(operationContext, 'running');
+  if (!transitionDurableOperation(operationContext, 'running')) {
+    if (!alreadyInMaintenance) setMaintenance(false);
+    restartInFlight = false;
+    return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
+  }
 
   // Durable ownership is written synchronously before SIGUSR2. If wobble-ops.service is restarted
   // by systemd or deploy/install.sh after this point, the next helper process reconstructs the
@@ -776,7 +782,12 @@ async function startGracefulRestart(now, operationContext) {
     if (!alreadyInMaintenance) setMaintenance(false);
     return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
   }
-  transitionDurableOperation(operationContext, 'drain');
+  if (!transitionDurableOperation(operationContext, 'drain')) {
+    clearRestartMarker();
+    if (!alreadyInMaintenance) setMaintenance(false);
+    restartInFlight = false;
+    return { ok: false, reason: 'operation-state-failed', maintenance: maintenanceEnabled() };
+  }
 
   const signal = await sendGracefulRestartSignal();
   if (signal.ok) {
@@ -853,13 +864,17 @@ export async function executeRequest(request, now = Date.now(), operationContext
     // transitions prevents a manual enable during restart from being mistaken for the helper's
     // temporary flag and removed by the completion monitor.
     if (restartInFlight) return { ok: false, reason: 'operation-busy' };
-    transitionDurableOperation(operationContext, 'running');
+    if (!transitionDurableOperation(operationContext, 'running')) {
+      return { ok: false, reason: 'operation-state-failed' };
+    }
     return setMaintenance(spec.enabled);
   }
 
   busy = true;
   try {
-    transitionDurableOperation(operationContext, 'running');
+    if (!transitionDurableOperation(operationContext, 'running')) {
+      return { ok: false, reason: 'operation-state-failed' };
+    }
     if (spec.kind === 'nginx-reload') return await runNginxReload(spec);
     return await runSystemctl(spec);
   } finally {
@@ -931,13 +946,38 @@ export function createServer({
 
       // A backup can legitimately take far longer than the 5-second request-read guard. Keeping
       // that guard active here would report a false failure while systemd continues the job.
+      // The IPC boundary owns queued -> running. No privileged executor is called unless this
+      // durable transition was committed first; injected/test executors follow the same contract.
+      if (!transitionDurableOperation(begun.context, 'running')) {
+        send(socket, {
+          ok: false,
+          reason: 'operation-state-failed',
+          operationId: begun.context.id,
+          requestId: request.requestId,
+          action: request.action
+        });
+        return;
+      }
+
       socket.setTimeout(0);
-      const result = await execute(request, Date.now(), begun.context);
+      let result;
+      try {
+        result = await execute(request, Date.now(), begun.context);
+      } catch {
+        result = { ok: false, reason: 'operation-failed' };
+      }
       if (!(result?.accepted && result?.deferred)) {
-        transitionDurableOperation(begun.context, result?.ok ? 'succeeded' : 'failed', {
+        const finalized = transitionDurableOperation(begun.context, result?.ok ? 'succeeded' : 'failed', {
           reason: result?.ok ? null : result?.reason,
           durationMs: result?.durationMs
         });
+        if (!finalized) {
+          result = {
+            ok: false,
+            reason: 'operation-state-uncertain',
+            durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : null
+          };
+        }
       }
       send(socket, {
         ...result,

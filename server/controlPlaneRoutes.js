@@ -294,6 +294,7 @@ function installControlPlaneRoutes({
       'helper-response-mismatch',
       'operation-busy',
       'operation-state-failed',
+      'operation-state-uncertain',
       'operation-timeout',
       'operation-readiness-timeout',
       'operation-failed',
@@ -320,6 +321,7 @@ function installControlPlaneRoutes({
       return res.status(httpStatus).json({
         ok: false,
         error: reason,
+        operationId: result?.operationId || result?.requestId || null,
         ...(reason === 'restart-cooldown' && Number.isFinite(Number(result?.retryAfterMs))
           ? { retryAfterMs: Math.max(0, Number(result.retryAfterMs)) }
           : {})

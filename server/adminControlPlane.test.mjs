@@ -23,6 +23,12 @@ test('admin access code is one-time visible, sessions are hashed and role capabi
   assert.ok(login);
   assert.equal(login.user.role, 'owner');
   assert.equal(hasCapability(login.user.role, 'ops.execute'), true);
+  assert.equal(hasCapability('owner', 'alerts.read'), true);
+  assert.equal(hasCapability('owner', 'alerts.ack'), true);
+  assert.equal(hasCapability('operator', 'alerts.read'), true);
+  assert.equal(hasCapability('operator', 'alerts.ack'), true);
+  assert.equal(hasCapability('moderator', 'alerts.read'), false);
+  assert.equal(hasCapability('viewer', 'alerts.ack'), false);
   assert.equal(auth.verifyCsrf(login, login.csrf), true);
   assert.equal(auth.verifyCsrf(login, 'wrong'), false);
   assert.equal(db.prepare('SELECT token_hash FROM admin_sessions').get().token_hash.includes('WAS.'), false);

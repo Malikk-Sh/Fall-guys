@@ -95,7 +95,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   'ops.operation.requested': 'Запрошена системная операция',
   'ops.operation.completed': 'Системная операция завершена',
   'ops.operation.accepted': 'Принят запрос на перезапуск Wobble',
-  'ops.operation.failed': 'Системная операция завершилась ошибкой'
+  'ops.operation.failed': 'Системная операция завершилась ошибкой',
+  'alert.acknowledged': 'Оператор увидел production-оповещение'
 });
 
 function setStatus(text, tone = '') {

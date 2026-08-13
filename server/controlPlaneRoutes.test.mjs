@@ -8,10 +8,10 @@ const { openDatabase } = require('./db');
 const { AdminAuthService } = require('./adminAuth');
 const { installControlPlaneRoutes } = require('./controlPlaneRoutes');
 
-async function start({ gameClient, operations } = {}) {
+async function start({ gameClient, operations, alerts, role = 'owner' } = {}) {
   const db = openDatabase(':memory:');
   const adminAuth = new AdminAuthService({ db });
-  const created = adminAuth.createUser({ name: 'Owner', role: 'owner' });
+  const created = adminAuth.createUser({ name: role === 'owner' ? 'Owner' : 'Admin', role });
   const app = express();
   installControlPlaneRoutes({
     app,
@@ -28,6 +28,19 @@ async function start({ gameClient, operations } = {}) {
     operations: operations || {
       status: () => ({ available: true, maintenance: false, operations: [] }),
       run: async () => ({ ok: false, reason: 'operation-failed' })
+    },
+    alerts: alerts || {
+      status: () => ({
+        generatedAt: Date.now(),
+        lastEvaluatedAt: Date.now(),
+        evaluationStale: false,
+        storageHealthy: true,
+        sources: { infrastructure: true, reliability: true, operations: true },
+        counts: { active: 0, critical: 0, warning: 0, unacknowledged: 0 },
+        active: [],
+        history: []
+      }),
+      acknowledge: () => ({ ok: false, reason: 'alert-not-active' })
     },
     build: { version: 'test', commit: 'abc' },
     enabled: true,
@@ -224,6 +237,104 @@ test('busy operation response correlates to the active durable operation, not th
     assert.equal(payload.operationId, activeId);
     assert.equal(payload.activeOperationId, activeId);
     assert.notEqual(payload.operationId, rejectedId);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Alert Center stays local, owner/operator can acknowledge, and acknowledgement is audited', async () => {
+  const alertId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  let acknowledgedBy = null;
+  const alert = {
+    id: alertId,
+    rule: 'disk-pressure',
+    severity: 'warning',
+    state: 'active',
+    openedAt: 1000,
+    lastSeenAt: 2000,
+    resolvedAt: null,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
+    context: { usedPercent: 90 },
+    title: 'Мало свободного места на диске',
+    description: 'Disk pressure',
+    recommendedPanel: 'infrastructure'
+  };
+  const ctx = await start({
+    role: 'operator',
+    alerts: {
+      status: () => ({
+        generatedAt: 2000,
+        lastEvaluatedAt: 2000,
+        evaluationStale: false,
+        storageHealthy: true,
+        sources: { infrastructure: true, reliability: true, operations: true },
+        counts: { active: 1, critical: 0, warning: 1, unacknowledged: 1 },
+        active: [alert],
+        history: []
+      }),
+      acknowledge: (id, actor) => {
+        assert.equal(id, alertId);
+        acknowledgedBy = actor;
+        return {
+          ok: true,
+          alert: { ...alert, acknowledgedAt: 3000, acknowledgedBy: { name: actor.name, role: actor.role } }
+        };
+      }
+    }
+  });
+  try {
+    const session = await login(ctx);
+    const status = await post(ctx, '/api/admin/alerts/status', session);
+    assert.equal(status.status, 200);
+    assert.equal((await status.json()).alerts.counts.active, 1);
+
+    const ack = await post(ctx, '/api/admin/alerts/acknowledge', session, { alertId });
+    assert.equal(ack.status, 200);
+    assert.equal((await ack.json()).alert.id, alertId);
+    assert.equal(acknowledgedBy.role, 'operator');
+    const audit = ctx.db
+      .prepare(
+        "SELECT action, target_id FROM admin_audit_events WHERE action = 'alert.acknowledged' ORDER BY created_at DESC LIMIT 1"
+      )
+      .get();
+    assert.equal(audit.action, 'alert.acknowledged');
+    assert.equal(audit.target_id, alertId);
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('roles without alerts.read cannot use Alert Center routes', async () => {
+  const ctx = await start({ role: 'viewer' });
+  try {
+    const session = await login(ctx);
+    const status = await post(ctx, '/api/admin/alerts/status', session);
+    assert.equal(status.status, 403);
+    assert.equal((await status.json()).error, 'admin-forbidden');
+  } finally {
+    await ctx.close();
+  }
+});
+
+test('Alert Center acknowledgement validates payload and active-state conflicts', async () => {
+  const ctx = await start({
+    alerts: {
+      status: () => ({ counts: {}, active: [], history: [] }),
+      acknowledge: id =>
+        id === 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+          ? { ok: false, reason: 'alert-not-active' }
+          : { ok: false, reason: 'invalid-alert-id' }
+    }
+  });
+  try {
+    const session = await login(ctx);
+    const invalid = await post(ctx, '/api/admin/alerts/acknowledge', session, { alertId: 'bad' });
+    assert.equal(invalid.status, 400);
+    const inactive = await post(ctx, '/api/admin/alerts/acknowledge', session, {
+      alertId: 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    });
+    assert.equal(inactive.status, 409);
   } finally {
     await ctx.close();
   }

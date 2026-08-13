@@ -1,0 +1,77 @@
+name: PR79 durable operations gate
+
+on:
+  push:
+    branches:
+      - feat/durable-operations
+
+permissions:
+  contents: write
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/durable-operations
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply durable operations batch
+        run: python scripts/pr79-durable-operations.py
+      - name: Canonical formatting and lint
+        run: |
+          npx prettier --write \
+            deploy/wobble-ops-helper.mjs \
+            deploy/wobble-ops.service \
+            server/adminOperationsClient.js \
+            server/controlPlaneRoutes.js \
+            server/adminOperations.test.mjs \
+            server/durableOperations.test.mjs \
+            client/admin/admin.js \
+            client/admin/index.html \
+            docs/DURABLE-OPERATIONS.md \
+            package.json
+          npm run format:check
+          npm run check
+          bash -n deploy/install.sh
+          git diff --check
+      - name: Focused durable operations regression tests
+        run: |
+          node --test \
+            server/durableOperations.test.mjs \
+            server/adminOperations.test.mjs \
+            server/controlPlaneRoutes.test.mjs \
+            server/controlPlaneDeploy.test.mjs
+      - name: Verify production durability boundary
+        run: |
+          grep -Fq 'ReadWritePaths=/var/log/nginx /var/lib/wobble-ops' deploy/wobble-ops.service
+          grep -Fq 'install -d -m 0755 -o root -g root /var/lib/wobble-ops' deploy/install.sh
+          grep -Fq "export const OPERATION_JOURNAL = '/var/lib/wobble-ops/operations.json'" deploy/wobble-ops-helper.mjs
+          grep -Fq "operationId: operationContext?.id || null" deploy/wobble-ops-helper.mjs
+          grep -Fq 'recoverDurableOperations();' deploy/wobble-ops-helper.mjs
+          grep -Fq 'operations-history-body' client/admin/index.html
+          grep -Fq 'server/durableOperations.test.mjs' package.json
+      - name: Persist checked batch and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            deploy/install.sh \
+            deploy/wobble-ops-helper.mjs \
+            deploy/wobble-ops.service \
+            server/adminOperationsClient.js \
+            server/controlPlaneRoutes.js \
+            server/adminOperations.test.mjs \
+            server/durableOperations.test.mjs \
+            client/admin/admin.js \
+            client/admin/index.html \
+            docs/DURABLE-OPERATIONS.md \
+            package.json
+          git rm .github/workflows/pr79-durable-operations-gate.yml scripts/pr79-durable-operations.py
+          git commit -m 'Add durable privileged operation lifecycle and history'
+          git push origin HEAD:feat/durable-operations

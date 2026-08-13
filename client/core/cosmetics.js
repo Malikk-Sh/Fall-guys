@@ -42,7 +42,8 @@ function locallyUnlocked(item, progress, profile) {
     (item.id === 'sky-hero' && Number(localChapters.ch10?.runs || 0) > 0) ||
     (item.id === 'clear-visor' && localFlawless >= 5) ||
     (item.id === 'rescue-antenna' && Number(profile?.coop?.totalRevives || 0) >= 25) ||
-    (item.localGoal === 'daily-7' && Number(profile?.daily?.bestStreak || 0) >= 7)
+    (item.localGoal === 'daily-7' && Number(profile?.daily?.bestStreak || 0) >= 7) ||
+    (item.localGoal === 'daily-30' && Number(profile?.daily?.bestStreak || 0) >= 30)
   );
 }
 

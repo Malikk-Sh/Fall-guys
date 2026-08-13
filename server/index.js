@@ -1844,6 +1844,23 @@ function finishMatch(room) {
       }
       accounts.recordCoopPartners({ accountIds, chapterId: room.chapterId });
     }
+
+    // Итоги гонки по аккаунтам. Место берётся из уже посчитанной таблицы результатов, а не
+    // пересчитывается заново: разойдись они — игрок увидел бы на экране одно место, а награду
+    // получил бы за другое.
+    if (room.mode === GAME_MODE.RACE) {
+      const standings = room.results?.board || [];
+      const finishers = standings.length;
+      for (let index = 0; index < standings.length; index += 1) {
+        const player = room.players.get(standings[index].id);
+        if (!player?.accountId) continue;
+        accounts.recordRaceFinish({
+          accountId: player.accountId,
+          place: index + 1,
+          finishers
+        });
+      }
+    }
   }
   broadcast(room, room.results);
   // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до

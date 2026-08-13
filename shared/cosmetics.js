@@ -64,6 +64,58 @@ export const COSMETIC_CATALOG = Object.freeze([
     detail: 'Пройдите все 10 глав',
     achievement: 'coop-campaign-complete',
     glyph: '♛'
+  },
+
+  // Награды за гонку. До них в двух слотах из пяти лежало по одному предмету — то есть выбора там
+  // не было вовсе, был выключатель. Теперь у каждого слота есть хотя бы пара вариантов, и все
+  // новые висят на гоночных достижениях: играющий в главный режим наконец что-то за него получает.
+  {
+    id: 'racer-body',
+    slot: 'body',
+    name: 'ГОНОЧНЫЙ КОРПУС',
+    detail: 'Финишируйте в онлайн-гонке',
+    achievement: 'race-first-finish',
+    colors: { body: 0x43c5ff, accent: 0xffd94b }
+  },
+  {
+    id: 'champion-visor',
+    slot: 'visor',
+    name: 'ВИЗОР ЧЕМПИОНА',
+    detail: 'Выиграйте онлайн-гонку',
+    achievement: 'race-win',
+    color: 0xffd94b
+  },
+  {
+    id: 'veteran-antenna',
+    slot: 'antenna',
+    name: 'АНТЕННА ЗАВСЕГДАТАЯ',
+    detail: '25 финишей в гонке',
+    achievement: 'race-veteran-25',
+    color: 0x9b6cff
+  },
+  {
+    id: 'podium-trail',
+    slot: 'trail',
+    name: 'СЛЕД ПЬЕДЕСТАЛА',
+    detail: 'Тройка в гонке от трёх соперников',
+    achievement: 'race-podium',
+    color: 0x58ebb8
+  },
+  {
+    id: 'streak-trail',
+    slot: 'trail',
+    name: 'СЛЕД ПОСТОЯНСТВА',
+    detail: 'Серия daily 30 дней',
+    localGoal: 'daily-30',
+    color: 0x7d82ff
+  },
+  {
+    id: 'champion-finish',
+    slot: 'finish',
+    name: 'ФИНИШ ЧЕМПИОНА',
+    detail: 'Выиграйте онлайн-гонку',
+    achievement: 'race-win',
+    glyph: '✦'
   }
 ]);
 

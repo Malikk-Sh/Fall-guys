@@ -1,0 +1,66 @@
+name: PR82 final Telegram delivery gate
+
+on:
+  push:
+    branches: [feat/telegram-alert-delivery]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr82-final-gate
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/telegram-alert-delivery
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Format, lint and shell syntax
+        run: |
+          npx prettier --write \
+            server/telegramAlertProduction.test.mjs \
+            .github/workflows/pr82-final-gate.yml
+          npm run format:check
+          npm run check
+          git diff --check
+          bash -n deploy/install.sh deploy/smoke.sh deploy/verify-shared443-config.sh
+
+      - name: Focused Telegram and Control Plane regressions
+        run: |
+          node --test \
+            server/telegramAlertDelivery.test.mjs \
+            server/telegramAlertTest.test.mjs \
+            server/telegramAlertProduction.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            server/controlPlaneAlerts.test.mjs \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.test.mjs \
+            server/durableOperations.test.mjs
+
+      - name: Verify production Nginx boundary
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nginx libnginx-mod-stream
+          bash deploy/verify-shared443-config.sh
+
+      - name: Persist canonical formatting and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/pr82-final-gate.yml
+          git add server/telegramAlertProduction.test.mjs
+          git commit -m 'Harden Telegram internal delivery boundary'
+          git push origin HEAD:feat/telegram-alert-delivery

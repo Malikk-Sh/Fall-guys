@@ -1,0 +1,107 @@
+name: PR78 final review fix gate
+
+on:
+  push:
+    branches:
+      - fix/resilient-control-plane-review
+
+permissions:
+  contents: write
+
+jobs:
+  focused:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/resilient-control-plane-review
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Apply final Codex review fixes as one batch
+        run: python scripts/pr78-final-review-fixes.py
+
+      - name: Canonical formatting and lint
+        run: |
+          npx prettier --write \
+            client/admin/admin.js \
+            deploy/wobble-ops-helper.mjs \
+            server/adminOperationsClient.js \
+            server/adminOperations.test.mjs \
+            server/controlPlane.js \
+            server/controlPlaneDeploy.test.mjs
+          npm run format:check
+          npm run check
+          bash -n deploy/install.sh
+
+      - name: Focused operations and control-plane tests
+        run: |
+          node --test \
+            server/adminOperations.test.mjs \
+            server/controlPlaneGameClient.test.mjs \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            server/adminControlPlane.test.mjs
+
+      - name: Verify recovery and timeout contracts
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const client = fs.readFileSync('server/adminOperationsClient.js', 'utf8');
+          const helper = fs.readFileSync('deploy/wobble-ops-helper.mjs', 'utf8');
+          const admin = fs.readFileSync('client/admin/admin.js', 'utf8');
+          if (!client.includes("'wobble.start'")) throw new Error('client recovery action missing');
+          if (!helper.includes("'wobble.start': Object.freeze({ kind: 'wobble-start' })")) {
+            throw new Error('helper recovery action missing');
+          }
+          const resetAt = helper.indexOf("['reset-failed', 'wobble.service']");
+          const startAt = helper.indexOf("['start', 'wobble.service']");
+          if (resetAt < 0 || startAt <= resetAt) throw new Error('recovery must reset failed state before start');
+          const helperTimeout = Number(helper.match(/RESTART_MONITOR_TIMEOUT_MS = ([0-9_]+)/)?.[1].replaceAll('_', ''));
+          const uiTimeout = Number(admin.match(/const deadline = Date\.now\(\) \+ ([0-9_]+);/)?.[1].replaceAll('_', ''));
+          if (!(uiTimeout > helperTimeout)) {
+            throw new Error(`UI restart timeout ${uiTimeout} must exceed helper timeout ${helperTimeout}`);
+          }
+          NODE
+
+      - name: Verify persistent DB rejection is explicit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if LEADERBOARD_DB=:memory: CONTROL_PORT=3391 ADMIN_PANEL_ENABLED=1 NODE_ENV=test \
+            node server/controlPlane.js >control-memory.log 2>&1; then
+            cat control-memory.log
+            echo 'control plane unexpectedly accepted :memory:' >&2
+            exit 1
+          fi
+          grep -Fq 'requires a shared persistent LEADERBOARD_DB' control-memory.log
+
+      - name: Static production assertions
+        run: |
+          grep -Fq 'Wobble Control требует общий persistent LEADERBOARD_DB' deploy/install.sh
+          grep -Fq "'wobble.start'" server/adminOperationsClient.js
+          grep -Fq "'wobble.start': Object.freeze({ kind: 'wobble-start' })" deploy/wobble-ops-helper.mjs
+          grep -Fq 'const deadline = Date.now() + 225_000;' client/admin/admin.js
+
+      - name: Persist checked batch and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            client/admin/admin.js \
+            deploy/install.sh \
+            deploy/wobble-ops-helper.mjs \
+            server/adminOperationsClient.js \
+            server/adminOperations.test.mjs \
+            server/controlPlane.js \
+            server/controlPlaneDeploy.test.mjs
+          git rm .github/workflows/pr78-final-review-gate.yml scripts/pr78-final-review-fixes.py
+          git commit -m 'Close final resilient control plane review gaps'
+          git push origin HEAD:fix/resilient-control-plane-review

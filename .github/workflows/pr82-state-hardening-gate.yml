@@ -32,6 +32,7 @@ jobs:
         run: |
           python scripts/pr82-prepare-state-doc.py
           python scripts/pr82-state-hardening.py
+          python scripts/pr82-fix-hardening-test.py
 
       - name: Format and lint
         run: |
@@ -60,6 +61,7 @@ jobs:
           git rm -f \
             scripts/pr82-prepare-state-doc.py \
             scripts/pr82-state-hardening.py \
+            scripts/pr82-fix-hardening-test.py \
             .github/workflows/pr82-state-hardening-gate.yml
           git add \
             server/telegramAlertDelivery.js \

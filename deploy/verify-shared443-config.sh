@@ -4,9 +4,10 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 site="$ROOT/deploy/nginx-shared443-site.conf"
 stream="$ROOT/deploy/nginx-shared443-stream.conf"
+locations="$ROOT/deploy/nginx-locations.conf"
 install="$ROOT/deploy/install.sh"
 
-for file in "$site" "$stream" "$install"; do
+for file in "$site" "$stream" "$locations" "$install"; do
   test -s "$file"
 done
 
@@ -17,6 +18,15 @@ grep -Fq 'listen 127.0.0.1:8443 ssl;' "$site"
 grep -Fq 'ssl_preread on;' "$stream"
 grep -Fq 'server_name_placeholder  127.0.0.1:8443;' "$stream"
 grep -Fq 'default                  fallback_placeholder;' "$stream"
+
+grep -Fq 'location ^~ /admin/' "$locations"
+grep -Fq 'location ^~ /api/admin/' "$locations"
+grep -Fq 'proxy_pass http://127.0.0.1:3001;' "$locations"
+grep -Fq 'location ~* ^/health/control$' "$locations"
+grep -Fq 'location ~* ^/api/admin(?:/|$)' "$locations"
+grep -Fq 'location ~* ^/admin(?:/|$)' "$locations"
+grep -Fq 'proxy_pass http://127.0.0.1:3000;' "$locations"
+
 grep -Fq "SAVED_SHARED_HTTPS_443='\${SHARED_HTTPS_443}'" "$install"
 grep -Fq "SAVED_SHARED_443_FALLBACK='\${SHARED_443_FALLBACK}'" "$install"
 grep -Fq 'ufw delete allow "${HTTPS_PORT}/tcp"' "$install"

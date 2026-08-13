@@ -412,8 +412,64 @@ function courseLabel(value) {
   return text === '—' ? 'Не указано' : text;
 }
 
+async function renderUnavailableOverview() {
+  const status = await api('/api/admin/control/status', {});
+  const control = status.control || {};
+  const game = status.game || {};
+  $('#overview-cards').replaceChildren(
+    statCard(
+      'Wobble Control',
+      control.ok ? 'РАБОТАЕТ' : 'НЕДОСТУПЕН',
+      control.build
+        ? `${control.build.version || 'unknown'} · ${control.build.commit || 'unknown'}`
+        : 'независимый control plane',
+      control.ok ? 'good' : 'bad'
+    ),
+    statCard(
+      'Сервер игры',
+      game.reachable ? 'ВОССТАНАВЛИВАЕТСЯ' : 'НЕДОСТУПЕН',
+      'Админ-панель продолжает работать независимо от gameplay process.',
+      'bad'
+    ),
+    statCard(
+      'Maintenance',
+      status.maintenance ? 'ВКЛЮЧЁН' : 'ВЫКЛЮЧЕН',
+      status.maintenance ? 'новые WebSocket временно закрыты' : 'Nginx не блокирует новые WebSocket',
+      status.maintenance ? 'warn' : 'good'
+    ),
+    statCard(
+      'Безопасные операции',
+      status.operationsAvailable ? 'ДОСТУПНЫ' : 'НЕДОСТУПНЫ',
+      'root-helper живёт отдельно от игрового процесса',
+      status.operationsAvailable ? 'good' : 'bad'
+    )
+  );
+  fillDetails('#production-details', [
+    ['Control Plane', control.ok ? 'работает' : 'недоступен'],
+    ['Версия Control Plane', control.build?.version || '—'],
+    ['Сборка Control Plane', control.build?.commit || '—'],
+    ['Сервер игры', game.reachable ? 'процесс доступен, но dashboard ещё не готов' : 'процесс недоступен'],
+    ['Игровой commit', game.commit || '—'],
+    ['Игровой uptime', game.reachable ? formatDuration(game.uptimeSeconds) : '—']
+  ]);
+  fillDetails('#load-details', [
+    ['Игровые live-метрики', 'временно недоступны'],
+    ['Что делать', 'откройте «Сервер», «Надёжность» или «Операции» для диагностики']
+  ]);
+  return {
+    statusText: 'Игровой процесс сейчас недоступен, но Wobble Control продолжает работать.',
+    tone: 'bad'
+  };
+}
+
 async function loadOverview() {
-  const payload = await api('/api/admin/dashboard');
+  let payload;
+  try {
+    payload = await api('/api/admin/dashboard');
+  } catch (error) {
+    if (error.payload?.error === 'game-control-unavailable') return renderUnavailableOverview();
+    throw error;
+  }
   const data = payload.overview;
   const health = data.health || {};
   const backup = health.backup || {};
@@ -1753,6 +1809,8 @@ function infrastructureTone(infra) {
   if (!infra) return 'bad';
   if (
     !infra.services?.wobble?.active ||
+    !infra.services?.control?.active ||
+    !infra.network?.controlLocal?.reachable ||
     !infra.services?.nginx?.active ||
     !infra.network?.https443?.reachable ||
     !infra.https?.reachable ||
@@ -1779,6 +1837,7 @@ function renderInfrastructure(payload) {
   summary.replaceChildren();
 
   const wobbleOk = Boolean(infra.services?.wobble?.active && infra.network?.nodeLocal?.reachable);
+  const controlOk = Boolean(infra.services?.control?.active && infra.network?.controlLocal?.reachable);
   const nginxOk = Boolean(infra.services?.nginx?.active && infra.network?.https443?.reachable);
   const certDays = infra.https?.daysRemaining;
   const certOk = Boolean(infra.https?.reachable && infra.https?.trusted && !infra.https?.expired);
@@ -1793,6 +1852,12 @@ function renderInfrastructure(payload) {
       wobbleOk ? 'РАБОТАЕТ' : 'ТРЕБУЕТ ПРОВЕРКИ',
       'wobble.service + локальный Node-порт',
       wobbleOk ? 'good' : 'bad'
+    ),
+    statCard(
+      'Control Plane',
+      controlOk ? 'РАБОТАЕТ' : 'ТРЕБУЕТ ПРОВЕРКИ',
+      'wobble-control.service + локальный порт',
+      controlOk ? 'good' : 'bad'
     ),
     statCard(
       'Nginx / HTTPS',
@@ -1868,8 +1933,12 @@ function renderInfrastructure(payload) {
     ['HTTP :80', availability(infra.network?.http80?.reachable)],
     ['Shared HTTPS :443', availability(infra.network?.https443?.reachable)],
     [
-      `Node 127.0.0.1:${infra.network?.nodeLocal?.port || 3000}`,
+      `Game Node 127.0.0.1:${infra.network?.nodeLocal?.port || 3000}`,
       availability(infra.network?.nodeLocal?.reachable)
+    ],
+    [
+      `Control 127.0.0.1:${infra.network?.controlLocal?.port || 3001}`,
+      availability(infra.network?.controlLocal?.reachable)
     ],
     ['TLS через SNI Wobble', availability(infra.https?.reachable)]
   ]);
@@ -1985,6 +2054,49 @@ async function loadOperations() {
   renderOperations(payload);
 }
 
+async function monitorAcceptedRestart() {
+  const deadline = Date.now() + 195_000;
+  let sawTransition = false;
+  while (Date.now() < deadline) {
+    let status;
+    try {
+      status = await api('/api/admin/control/status', {});
+    } catch (error) {
+      if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+      if (state.currentPanel === 'operations') {
+        setStatus('Control Plane временно не смог обновить статус restart. Повторяю проверку…', 'warn');
+      }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      continue;
+    }
+    const game = status.game || {};
+    if (status.maintenance || !game.reachable) sawTransition = true;
+    if (state.currentPanel === 'operations') {
+      if (!game.reachable) setStatus('Старый игровой процесс остановлен; жду новый Wobble…', 'warn');
+      else if (status.maintenance)
+        setStatus('Wobble перезапускается; новые подключения пока закрыты maintenance…', 'warn');
+      else setStatus('Проверяю готовность нового игрового процесса…', 'warn');
+    }
+    if (
+      game.reachable &&
+      game.ok &&
+      !status.maintenance &&
+      (sawTransition || Number(game.uptimeSeconds || 0) <= 30)
+    ) {
+      await loadOperations();
+      setStatus('Новый Wobble запущен и принимает подключения. Control Plane не прерывался.', 'good');
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  if (state.operations) renderOperations(state.operations);
+  setStatus(
+    'Control Plane работает, но restart не подтвердил готовность нового Wobble вовремя. Проверьте «Сервер» и «Надёжность».',
+    'warn'
+  );
+  return false;
+}
+
 async function runOperation(operation) {
   const spec = state.operations?.operations?.find(item => item.id === operation);
   if (!spec || !state.operations?.available) return;
@@ -2014,8 +2126,8 @@ async function runOperation(operation) {
       confirmation: operation
     });
     if (operation === 'wobble.restart' && result.accepted) {
-      setStatus('Перезапуск Wobble принят. Страница обновится после запуска сервера…', 'warn');
-      setTimeout(() => window.location.reload(), 4500);
+      setStatus('Перезапуск Wobble принят. Панель останется открытой и проследит за запуском.', 'warn');
+      await monitorAcceptedRestart();
       return;
     }
     await loadOperations();
@@ -2086,6 +2198,13 @@ async function refreshCurrent() {
     if (error.status === 401 && sessionGeneration === state.sessionGeneration)
       return showLogin('Сессия администратора завершена. Войдите снова.');
     if (revision !== state.refreshRevision || panel !== state.currentPanel) return;
+    if (error.payload?.error === 'game-control-unavailable') {
+      setStatus(
+        'Игровой процесс сейчас недоступен. Wobble Control остаётся онлайн; используйте «Сервер», «Надёжность» или «Операции».',
+        'bad'
+      );
+      return;
+    }
     setStatus(`Ошибка: ${error.message}`, 'bad');
   } finally {
     if (revision === state.refreshRevision) {

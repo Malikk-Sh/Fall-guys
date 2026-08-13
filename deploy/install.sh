@@ -285,6 +285,7 @@ fi
 
 say "Служба и резервные копии"
 cp "$APP_DIR/deploy/wobble.service" /etc/systemd/system/wobble.service
+cp "$APP_DIR/deploy/wobble-control.service" /etc/systemd/system/wobble-control.service
 cp "$APP_DIR/deploy/wobble-backup.service" /etc/systemd/system/wobble-backup.service
 cp "$APP_DIR/deploy/wobble-backup.timer" /etc/systemd/system/wobble-backup.timer
 cp "$APP_DIR/deploy/wobble-backup-watch.service" /etc/systemd/system/wobble-backup-watch.service
@@ -300,6 +301,7 @@ install -m 0755 -o root -g root "$APP_DIR/deploy/wobble-ops-helper.mjs" /usr/loc
 systemctl daemon-reload
 systemctl stop wobble-ops.service >/dev/null 2>&1 || true
 systemctl enable wobble >/dev/null
+systemctl enable wobble-control >/dev/null
 systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket >/dev/null
 systemctl restart wobble-ops.socket
 # Start the helper immediately so a persisted graceful-restart monitor is recovered even before
@@ -332,6 +334,34 @@ else
   systemctl start wobble-backup.service
 fi
 systemctl restart wobble
+
+say "Независимый Wobble Control"
+# Control Plane должен подняться даже если новый gameplay process сломан. Его единственная
+# обязательная dependency здесь — существующая persistent DB (или намеренно :memory: в dev).
+# Не ждём /health/live: иначе неудачный deploy снова лишил бы оператора панели диагностики.
+if [ "$database_file" != ":memory:" ]; then
+  database_ready=0
+  for _ in $(seq 1 20); do
+    if [ -f "$database_file" ]; then
+      database_ready=1
+      break
+    fi
+    sleep 1
+  done
+  [ "$database_ready" -eq 1 ] || fail "persistent DB не появилась перед стартом Wobble Control"
+fi
+
+systemctl restart wobble-control
+control_ready=0
+for _ in $(seq 1 20); do
+  if curl -fsS --max-time 2 http://127.0.0.1:3001/health/control >/dev/null 2>&1; then
+    control_ready=1
+    break
+  fi
+  sleep 1
+done
+[ "$control_ready" -eq 1 ] ||
+  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 remove_shared_stream_include() {
   sed -i \
@@ -496,6 +526,7 @@ else
   [ "$HTTPS_PORT" = "443" ] || ufw allow "${HTTPS_PORT}/tcp" >/dev/null 2>&1 || true
 fi
 ufw delete allow 3000/tcp >/dev/null 2>&1 || true
+ufw delete allow 3001/tcp >/dev/null 2>&1 || true
 
 if LC_ALL=C ufw status 2>/dev/null | head -1 | grep -q "Status: active"; then
   ufw status | head -n 14
@@ -512,6 +543,8 @@ say "Проверка"
 sleep 2
 curl -fsS --max-time 5 http://127.0.0.1:3000/health/live >/dev/null ||
   fail "сервер не отвечает — смотрите journalctl -u wobble -n 50 --no-pager"
+curl -fsS --max-time 5 http://127.0.0.1:3001/health/control >/dev/null ||
+  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 say "Проверенная резервная копия после запуска"
 systemctl start wobble-backup.service

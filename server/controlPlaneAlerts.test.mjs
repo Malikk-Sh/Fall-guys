@@ -234,3 +234,34 @@ test('source failure never invents a recovery for an already active alert', asyn
     ctx.cleanup();
   }
 });
+
+test('failed acknowledgement persistence rolls back the in-memory acknowledgement', async () => {
+  const ctx = tempState();
+  let now = 40_000;
+  const alerts = center({
+    stateFile: ctx.file,
+    now: () => now,
+    infrastructure: {
+      snapshot: async () =>
+        healthyInfrastructure({ resources: { disk: { available: true, usedPercent: 90 } } })
+    }
+  });
+  try {
+    await alerts.evaluate({ now });
+    now += 60_000;
+    await alerts.evaluate({ now });
+    const before = alerts.status({ now }).active[0];
+    assert.equal(before.acknowledgedAt, null);
+
+    fs.rmSync(ctx.dir, { recursive: true, force: true });
+    fs.writeFileSync(ctx.dir, 'block-parent-directory');
+    const result = alerts.acknowledge(before.id, { name: 'Owner', role: 'owner' }, { now: now + 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'alert-state-unavailable');
+    const after = alerts.status({ now: now + 2 }).active[0];
+    assert.equal(after.acknowledgedAt, null);
+    assert.equal(after.acknowledgedBy, null);
+  } finally {
+    ctx.cleanup();
+  }
+});

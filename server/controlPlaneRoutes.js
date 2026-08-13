@@ -40,6 +40,7 @@ function installControlPlaneRoutes({
   infrastructure,
   reliability,
   operations,
+  alerts,
   build,
   enabled = false,
   loginRateLimitKey = req => req.socket.remoteAddress || 'local-proxy',
@@ -216,6 +217,59 @@ function installControlPlaneRoutes({
     } catch {
       return res.status(503).json({ ok: false, error: 'reliability-unavailable' });
     }
+  });
+
+  app.post('/api/admin/alerts/status', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'alerts.read');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set())) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!alerts || typeof alerts.status !== 'function') {
+      return res.status(503).json({ ok: false, error: 'alerts-unavailable' });
+    }
+    try {
+      return res.json({ ok: true, alerts: alerts.status() });
+    } catch {
+      return res.status(503).json({ ok: false, error: 'alerts-unavailable' });
+    }
+  });
+
+  app.post('/api/admin/alerts/acknowledge', json, (req, res) => {
+    const resolved = requireAdmin(req, res, 'alerts.ack');
+    if (!resolved) return undefined;
+    if (!keysOnly(req.body, new Set(['alertId']))) {
+      return res.status(400).json({ ok: false, error: 'invalid-payload' });
+    }
+    if (!alerts || typeof alerts.acknowledge !== 'function') {
+      return res.status(503).json({ ok: false, error: 'alerts-unavailable' });
+    }
+    let result;
+    try {
+      result = alerts.acknowledge(req.body?.alertId, resolved.session.user);
+    } catch {
+      result = { ok: false, reason: 'alert-state-unavailable' };
+    }
+    if (!result?.ok) {
+      const reason = String(result?.reason || 'alert-state-unavailable');
+      const status = reason === 'invalid-alert-id' ? 400 : reason === 'alert-not-active' ? 409 : 503;
+      const error = ['invalid-alert-id', 'alert-not-active', 'alert-state-unavailable'].includes(reason)
+        ? reason
+        : 'alert-state-unavailable';
+      return res.status(status).json({ ok: false, error });
+    }
+    try {
+      adminAuth.audit({
+        actor: resolved.session.user,
+        action: 'alert.acknowledged',
+        targetType: 'alert',
+        targetId: result.alert.id,
+        detail: { rule: result.alert.rule, severity: result.alert.severity }
+      });
+    } catch {
+      // The durable acknowledgement already succeeded. Audit failure must not create a false retry.
+    }
+    return res.json({ ok: true, alert: result.alert });
   });
 
   app.post('/api/admin/operations/status', json, (req, res) => {

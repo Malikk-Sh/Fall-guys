@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const STATE_VERSION = 1;
-const DEFAULT_STATE_FILE = '/var/lib/wobble/control-alerts.json';
+const DEFAULT_STATE_FILE = '/var/lib/wobble-control/alerts.json';
 const DEFAULT_INTERVAL_MS = 60 * 1000;
 const DEFAULT_TRIGGER_STREAK = 2;
 const DEFAULT_RESOLVE_STREAK = 2;
@@ -141,7 +141,10 @@ function safeContext(rule, value = {}) {
   if (rule === 'reliability-degraded') {
     return {
       reasons: Array.isArray(source.reasons)
-        ? [...new Set(source.reasons.map(String).filter(reason => RELIABILITY_REASONS.has(reason)))].slice(0, 12)
+        ? [...new Set(source.reasons.map(String).filter(reason => RELIABILITY_REASONS.has(reason)))].slice(
+            0,
+            12
+          )
         : []
     };
   }
@@ -159,8 +162,12 @@ function safeContext(rule, value = {}) {
 }
 
 function normalizeActor(value) {
-  const name = String(value?.name || '').trim().slice(0, 80);
-  const role = String(value?.role || '').trim().slice(0, 40);
+  const name = String(value?.name || '')
+    .trim()
+    .slice(0, 80);
+  const role = String(value?.role || '')
+    .trim()
+    .slice(0, 40);
   return name ? { name, role: role || null } : null;
 }
 
@@ -192,8 +199,7 @@ function normalizeRecord(value) {
     openedAt,
     lastSeenAt,
     resolvedAt: state === 'resolved' && resolvedAt != null && resolvedAt >= openedAt ? resolvedAt : null,
-    acknowledgedAt:
-      acknowledgedAt != null && acknowledgedAt >= openedAt ? acknowledgedAt : null,
+    acknowledgedAt: acknowledgedAt != null && acknowledgedAt >= openedAt ? acknowledgedAt : null,
     acknowledgedBy: normalizeActor(value?.acknowledgedBy),
     context: safeContext(rule, value?.context)
   };
@@ -226,7 +232,11 @@ function writeState(file, alerts) {
     const normalized = alerts.map(normalizeRecord);
     if (normalized.some(item => !item)) return false;
     fd = fs.openSync(temporary, 'w', 0o600);
-    fs.writeFileSync(fd, `${JSON.stringify({ version: STATE_VERSION, alerts: normalized.slice(-HISTORY_LIMIT) })}\n`, 'utf8');
+    fs.writeFileSync(
+      fd,
+      `${JSON.stringify({ version: STATE_VERSION, alerts: normalized.slice(-HISTORY_LIMIT) })}\n`,
+      'utf8'
+    );
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
@@ -267,7 +277,9 @@ function condition(active, severity, context = {}) {
 function activeRestart(operations) {
   const current = operations?.activeOperation;
   return Boolean(
-    current && current.action === 'wobble.restart' && !TERMINAL_OPERATION_STATES.has(String(current.state || ''))
+    current &&
+    current.action === 'wobble.restart' &&
+    !TERMINAL_OPERATION_STATES.has(String(current.state || ''))
   );
 }
 
@@ -516,8 +528,7 @@ class ControlPlaneAlertCenter {
         this.infrastructure.snapshot({ now: at }),
         this.reliability?.report ? this.reliability.report({ period: '1h', now: at }) : Promise.resolve(null)
       ]);
-      const infrastructure =
-        infrastructureResult.status === 'fulfilled' ? infrastructureResult.value : null;
+      const infrastructure = infrastructureResult.status === 'fulfilled' ? infrastructureResult.value : null;
       const reliability = reliabilityResult.status === 'fulfilled' ? reliabilityResult.value : null;
       this.sources = {
         infrastructure: Boolean(infrastructure),
@@ -527,7 +538,10 @@ class ControlPlaneAlertCenter {
 
       const conditions = new Map();
       if (infrastructure) {
-        for (const [rule, value] of infrastructureConditions(infrastructure, operationsOk ? operations : null)) {
+        for (const [rule, value] of infrastructureConditions(
+          infrastructure,
+          operationsOk ? operations : null
+        )) {
           conditions.set(rule, value);
         }
       }
@@ -581,9 +595,16 @@ class ControlPlaneAlertCenter {
     if (at == null) return { ok: false, reason: 'invalid-time' };
     const alert = this.alerts.find(item => item.id === alertId && item.state === 'active');
     if (!alert) return { ok: false, reason: 'alert-not-active' };
+    const previousAt = alert.acknowledgedAt;
+    const previousBy = alert.acknowledgedBy;
     alert.acknowledgedAt = Math.max(alert.openedAt, at);
     alert.acknowledgedBy = normalizeActor(actor);
-    if (!this._persist()) return { ok: false, reason: 'alert-state-unavailable' };
+    if (!this._persist()) {
+      // A failed durable write must not leave an acknowledgement visible only in RAM.
+      alert.acknowledgedAt = previousAt;
+      alert.acknowledgedBy = previousBy;
+      return { ok: false, reason: 'alert-state-unavailable' };
+    }
     return { ok: true, alert: publicRecord(alert) };
   }
 

@@ -8,6 +8,7 @@ const { AdminAuthService } = require('./adminAuth');
 const { AdminOperationsClient } = require('./adminOperationsClient');
 const { buildIdentity } = require('./buildInfo');
 const { ControlPlaneGameClient } = require('./controlPlaneGameClient');
+const { ControlPlaneAlertCenter } = require('./controlPlaneAlerts');
 const { ControlPlaneInfrastructure } = require('./controlPlaneInfrastructure');
 const { createServiceReliabilityReader } = require('./serviceReliabilityReader');
 const { installControlPlaneRoutes } = require('./controlPlaneRoutes');
@@ -39,6 +40,7 @@ const reliability = createServiceReliabilityReader({
   db,
   liveHealth: () => gameClient.status()
 });
+const alerts = new ControlPlaneAlertCenter({ infrastructure, reliability, operations });
 const build = buildIdentity();
 
 app.disable('x-powered-by');
@@ -92,6 +94,7 @@ installControlPlaneRoutes({
   infrastructure,
   reliability,
   operations,
+  alerts,
   build,
   enabled,
   secureCookies: process.env.ADMIN_COOKIE_SECURE
@@ -100,6 +103,7 @@ installControlPlaneRoutes({
 });
 
 const server = app.listen(port, host, () => {
+  alerts.start();
   console.log(
     JSON.stringify({
       event: 'control_plane_started',
@@ -116,6 +120,7 @@ let closing = false;
 function shutdown(signal) {
   if (closing) return;
   closing = true;
+  alerts.stop();
   const timer = setTimeout(() => process.exit(1), 5000);
   timer.unref?.();
   server.close(() => {

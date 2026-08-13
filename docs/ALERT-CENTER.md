@@ -52,10 +52,10 @@ resolve after = 2 последовательных здоровых наблюд
 Состояние хранится отдельно от gameplay SQLite:
 
 ```text
-/var/lib/wobble/control-alerts.json
+/var/lib/wobble-control/alerts.json
 ```
 
-Файл пишет только `wobble-control.service`. Запись атомарная (`temp → fsync → rename → fsync directory`) и bounded до 100 alert incidents.
+Каталог создаётся systemd через `StateDirectory=wobble-control`; файл пишет только `wobble-control.service`. Запись атомарная (`temp → fsync → rename → fsync directory`) и bounded до 100 alert incidents.
 
 В state нет credential/token/recovery/player data. Записываются только:
 

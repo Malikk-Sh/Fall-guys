@@ -14,6 +14,9 @@ WorkingDirectory=/opt/wobble
 ExecStart=/usr/bin/node server/controlPlane.js
 EnvironmentFile=/etc/wobble.env
 Environment=CONTROL_PORT=3001
+Environment=CONTROL_ALERT_STATE=/var/lib/wobble-control/alerts.json
+StateDirectory=wobble-control
+StateDirectoryMode=0750
 
 Restart=always
 RestartSec=3
@@ -27,6 +30,7 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 # The process reads the gameplay SQLite database and creates low-frequency admin session/audit writes.
+# Alert state lives in the systemd-owned StateDirectory above; no second gameplay DB writer is added.
 # It must never write application code or arbitrary system paths.
 ReadWritePaths=/var/lib/wobble
 ProtectKernelTunables=true

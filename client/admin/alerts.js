@@ -110,9 +110,13 @@
       case 'backup-stale':
         return `local: ${context.available ? 'есть' : 'нет'} · возраст: ${formatDurationSeconds(context.ageSeconds)}${context.offsiteRequired ? ` · offsite: ${context.offsiteAvailable && !context.offsiteStale ? 'в норме' : 'проблема'}` : ''}`;
       case 'disk-pressure':
-        return context.usedPercent == null ? 'Нет данных о заполнении диска' : `Диск занят на ${context.usedPercent}%`;
+        return context.usedPercent == null
+          ? 'Нет данных о заполнении диска'
+          : `Диск занят на ${context.usedPercent}%`;
       case 'reliability-degraded':
-        return context.reasons?.length ? context.reasons.join(' · ') : 'Reliability вернула ухудшенный статус';
+        return context.reasons?.length
+          ? context.reasons.join(' · ')
+          : 'Reliability вернула ухудшенный статус';
       case 'operation-stuck':
         return `${context.action || 'operation'} · ${context.state || 'unknown'} · без изменения ${formatDurationSeconds(context.ageSeconds)}`;
       default:
@@ -192,7 +196,9 @@
       statCard(
         'Evaluator',
         data.evaluationStale ? 'УСТАРЕЛ' : data.storageHealthy ? 'РАБОТАЕТ' : 'STATE ERROR',
-        data.lastEvaluatedAt ? `Последняя проверка: ${formatTime(data.lastEvaluatedAt)}` : 'Проверка ещё не завершалась',
+        data.lastEvaluatedAt
+          ? `Последняя проверка: ${formatTime(data.lastEvaluatedAt)}`
+          : 'Проверка ещё не завершалась',
         freshnessTone
       )
     );
@@ -282,7 +288,10 @@
     try {
       await sharedApi('/api/admin/alerts/acknowledge', { alertId });
       await loadAlerts({ silent: true });
-      setStatus('Оповещение отмечено как увиденное. Оно останется активным до восстановления health.', 'good');
+      setStatus(
+        'Оповещение отмечено как увиденное. Оно останется активным до восстановления health.',
+        'good'
+      );
     } catch (error) {
       if (error.status === 401) {
         sharedShowLogin('Сессия администратора завершена. Войдите снова.');

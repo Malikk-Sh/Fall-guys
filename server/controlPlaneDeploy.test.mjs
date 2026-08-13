@@ -51,8 +51,19 @@ test('standard npm test includes every new Control Plane regression file', () =>
     'server/controlPlaneGameClient.test.mjs',
     'server/controlPlaneRoutes.test.mjs',
     'server/serviceReliabilityReader.test.mjs',
+    'server/controlPlaneAlerts.test.mjs',
     'server/controlPlaneDeploy.test.mjs'
   ]) {
     assert.ok(pkg.scripts.test.includes(file), `${file} missing from npm test`);
   }
+});
+
+test('Control Plane owns a separate persistent Alert Center state directory and lifecycle', () => {
+  const control = fs.readFileSync(new URL('./controlPlane.js', import.meta.url), 'utf8');
+  assert.match(unit, /^StateDirectory=wobble-control$/m);
+  assert.match(unit, /^StateDirectoryMode=0750$/m);
+  assert.match(unit, /^Environment=CONTROL_ALERT_STATE=\/var\/lib\/wobble-control\/alerts\.json$/m);
+  assert.match(control, /new ControlPlaneAlertCenter\(\{ infrastructure, reliability, operations \}\)/);
+  assert.match(control, /alerts\.start\(\);/);
+  assert.match(control, /alerts\.stop\(\);/);
 });

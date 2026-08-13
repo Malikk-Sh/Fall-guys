@@ -1,0 +1,89 @@
+name: PR82 Telegram delivery preflight
+
+on:
+  push:
+    branches: [feat/telegram-alert-delivery]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr82-telegram-preflight
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/telegram-alert-delivery
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Apply production integration
+        run: python scripts/pr82-telegram-finalize.py
+
+      - name: Canonical formatting and lint
+        run: |
+          npx prettier --write \
+            server/alertDeliveryFeed.js \
+            server/controlPlane.js \
+            server/telegramAlertDelivery.js \
+            server/telegramAlertDelivery.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            deploy/wobble-telegram.env.example \
+            docs/TELEGRAM-ALERT-DELIVERY.md \
+            package.json \
+            .github/workflows/pr82-telegram-preflight.yml
+          npm run format:check
+          npm run check
+          git diff --check
+          bash -n deploy/install.sh
+
+      - name: Focused Telegram and Control Plane regressions
+        run: |
+          node --test \
+            server/telegramAlertDelivery.test.mjs \
+            server/controlPlaneAlerts.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            server/controlPlaneRoutes.test.mjs \
+            server/serviceReliabilityReader.test.mjs \
+            server/durableOperations.test.mjs
+
+      - name: Verify secret and egress boundaries
+        run: |
+          grep -q '^DynamicUser=yes$' deploy/wobble-telegram-alerts.service
+          grep -q '^RestartPreventExitStatus=78$' deploy/wobble-telegram-alerts.service
+          grep -q '^EnvironmentFile=/etc/wobble-telegram.env$' deploy/wobble-telegram-alerts.service
+          grep -q '^TELEGRAM_ALERTS_ENABLED=0$' deploy/wobble-telegram.env.example
+          grep -q "const TELEGRAM_HOST = 'api.telegram.org';" server/telegramAlertDelivery.js
+          grep -q "const CONTROL_HOST = '127.0.0.1';" server/telegramAlertDelivery.js
+          ! grep -q 'TELEGRAM_BOT_TOKEN=' deploy/install.sh
+          ! grep -q 'wobble-ops.sock' deploy/wobble-telegram-alerts.service
+
+      - name: Persist checked implementation and remove temporary gate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f scripts/pr82-telegram-finalize.py .github/workflows/pr82-telegram-preflight.yml
+          git add \
+            server/alertDeliveryFeed.js \
+            server/controlPlane.js \
+            server/telegramAlertDelivery.js \
+            server/telegramAlertDelivery.test.mjs \
+            server/controlPlaneDeploy.test.mjs \
+            deploy/install.sh \
+            deploy/wobble-telegram-alerts.service \
+            deploy/wobble-telegram.env.example \
+            docs/TELEGRAM-ALERT-DELIVERY.md \
+            package.json
+          git commit -m 'Add isolated Telegram Alert Center delivery'
+          git push origin HEAD:feat/telegram-alert-delivery

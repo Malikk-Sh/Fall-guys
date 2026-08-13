@@ -22,7 +22,9 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply fail-closed hardening
-        run: python scripts/pr79-hardening.py
+        run: |
+          python scripts/pr79-hardening.py
+          python scripts/pr79-hardening-followup.py
       - name: Format and lint
         run: |
           npx prettier --write \
@@ -44,6 +46,7 @@ jobs:
           grep -Fq "reason: 'operation-state-failed'" deploy/wobble-ops-helper.mjs
           grep -Fq "reason: 'operation-state-uncertain'" deploy/wobble-ops-helper.mjs
           grep -Fq "operation-state-uncertain" server/controlPlaneRoutes.js
+          grep -Fq "The IPC boundary owns queued -> running" deploy/wobble-ops-helper.mjs
       - name: Persist checked hardening and remove temporary gate
         run: |
           git config user.name 'github-actions[bot]'
@@ -53,6 +56,9 @@ jobs:
             server/controlPlaneRoutes.js \
             server/durableOperations.test.mjs \
             client/admin/admin.js
-          git rm .github/workflows/pr79-hardening-gate.yml scripts/pr79-hardening.py
+          git rm \
+            .github/workflows/pr79-hardening-gate.yml \
+            scripts/pr79-hardening.py \
+            scripts/pr79-hardening-followup.py
           git commit -m 'Harden durable operations fail closed'
           git push origin HEAD:feat/durable-operations

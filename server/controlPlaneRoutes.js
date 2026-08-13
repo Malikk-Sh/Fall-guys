@@ -233,6 +233,9 @@ function installControlPlaneRoutes({
         ok: true,
         available: Boolean(status.available),
         maintenance: Boolean(status.maintenance),
+        busy: Boolean(status.busy),
+        activeOperation: status.activeOperation || null,
+        history: status.history || [],
         operations: status.operations || []
       });
     } catch {
@@ -290,12 +293,19 @@ function installControlPlaneRoutes({
       'helper-response-too-large',
       'helper-response-mismatch',
       'operation-busy',
+      'operation-state-failed',
+      'operation-state-uncertain',
       'operation-timeout',
+      'operation-readiness-timeout',
       'operation-failed',
       'restart-cooldown'
     ]);
     if (!result?.ok) {
       const reason = safeReasons.has(result?.reason) ? result.reason : 'helper-error';
+      const operationId =
+        reason === 'operation-busy'
+          ? result?.activeOperationId || result?.operationId || null
+          : result?.operationId || result?.requestId || null;
       try {
         adminAuth.audit({
           actor,
@@ -304,6 +314,7 @@ function installControlPlaneRoutes({
           targetId: operation,
           detail: {
             reason,
+            operationId,
             durationMs: Number.isFinite(Number(result?.durationMs)) ? Number(result.durationMs) : null
           }
         });
@@ -314,6 +325,8 @@ function installControlPlaneRoutes({
       return res.status(httpStatus).json({
         ok: false,
         error: reason,
+        operationId,
+        ...(reason === 'operation-busy' && operationId ? { activeOperationId: operationId } : {}),
         ...(reason === 'restart-cooldown' && Number.isFinite(Number(result?.retryAfterMs))
           ? { retryAfterMs: Math.max(0, Number(result.retryAfterMs)) }
           : {})
@@ -328,6 +341,7 @@ function installControlPlaneRoutes({
         targetType: 'operation',
         targetId: operation,
         detail: {
+          operationId: result?.operationId || result?.requestId || null,
           durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
         }
       });
@@ -337,6 +351,7 @@ function installControlPlaneRoutes({
     return res.json({
       ok: true,
       operation,
+      operationId: result?.operationId || result?.requestId || null,
       accepted,
       durationMs: Number.isFinite(Number(result.durationMs)) ? Number(result.durationMs) : null
     });

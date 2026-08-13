@@ -5,8 +5,11 @@ const fs = require('fs');
 const net = require('net');
 
 const DEFAULT_SOCKET_PATH = '/run/wobble-ops.sock';
+const DEFAULT_JOURNAL_PATH = '/var/lib/wobble-ops/operations.json';
 const MAINTENANCE_FLAG = '/run/wobble-ops/maintenance';
 const MAX_RESPONSE_BYTES = 16 * 1024;
+const OPERATION_STATES = new Set(['queued', 'running', 'drain', 'verifying', 'succeeded', 'failed']);
+const TERMINAL_OPERATION_STATES = new Set(['succeeded', 'failed']);
 
 const OPERATION_DEFINITIONS = Object.freeze({
   'backup.create': Object.freeze({
@@ -91,10 +94,12 @@ class AdminOperationsClient {
   constructor({
     socketPath = process.env.ADMIN_OPS_SOCKET || DEFAULT_SOCKET_PATH,
     maintenanceFlag = MAINTENANCE_FLAG,
+    journalPath = process.env.ADMIN_OPS_JOURNAL || DEFAULT_JOURNAL_PATH,
     timeoutMs = 135_000
   } = {}) {
     this.socketPath = socketPath;
     this.maintenanceFlag = maintenanceFlag;
+    this.journalPath = journalPath;
     this.timeoutMs = timeoutMs;
   }
 
@@ -114,11 +119,65 @@ class AdminOperationsClient {
     }
   }
 
+  history(limit = 20) {
+    const boundedLimit = Math.max(1, Math.min(40, Number.parseInt(limit, 10) || 20));
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.journalPath, 'utf8'));
+      if (parsed?.version !== 1 || !Array.isArray(parsed.operations)) return [];
+      return parsed.operations
+        .filter(item => {
+          const id = String(item?.id || '');
+          return (
+            /^[0-9a-f-]{36}$/i.test(id) &&
+            Object.hasOwn(OPERATION_DEFINITIONS, String(item?.action || '')) &&
+            OPERATION_STATES.has(String(item?.state || '')) &&
+            Number.isSafeInteger(Number(item?.createdAt))
+          );
+        })
+        .slice(-boundedLimit)
+        .reverse()
+        .map(item => ({
+          id: String(item.id),
+          action: String(item.action),
+          state: String(item.state),
+          createdAt: Number(item.createdAt),
+          updatedAt: Number.isSafeInteger(Number(item.updatedAt))
+            ? Number(item.updatedAt)
+            : Number(item.createdAt),
+          completedAt:
+            item.completedAt != null && Number.isSafeInteger(Number(item.completedAt))
+              ? Number(item.completedAt)
+              : null,
+          durationMs:
+            item.durationMs != null && Number.isFinite(Number(item.durationMs))
+              ? Math.max(0, Number(item.durationMs))
+              : null,
+          reason: /^[a-z0-9-]{1,80}$/.test(String(item.reason || '')) ? String(item.reason) : null,
+          transitions: Array.isArray(item.transitions)
+            ? item.transitions
+                .filter(
+                  step =>
+                    OPERATION_STATES.has(String(step?.state || '')) && Number.isSafeInteger(Number(step?.at))
+                )
+                .slice(-12)
+                .map(step => ({ state: String(step.state), at: Number(step.at) }))
+            : []
+        }));
+    } catch {
+      return [];
+    }
+  }
+
   status() {
     const maintenance = this.maintenanceEnabled();
+    const history = this.history();
+    const activeOperation = history.find(item => !TERMINAL_OPERATION_STATES.has(item.state)) || null;
     return {
       available: this.available(),
       maintenance,
+      busy: Boolean(activeOperation),
+      activeOperation,
+      history,
       operations: publicOperations().filter(item =>
         maintenance ? item.id !== 'maintenance.enable' : item.id !== 'maintenance.disable'
       )
@@ -196,6 +255,7 @@ class AdminOperationsClient {
 
 module.exports = {
   AdminOperationsClient,
+  DEFAULT_JOURNAL_PATH,
   DEFAULT_SOCKET_PATH,
   MAINTENANCE_FLAG,
   OPERATION_DEFINITIONS,

@@ -24,7 +24,8 @@ const state = {
   moderationLoadRevision: 0,
   operations: null,
   operationConfirmation: null,
-  operationConfirmationTimer: null
+  operationConfirmationTimer: null,
+  operationMonitorId: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -51,6 +52,24 @@ const REASON_LABELS = Object.freeze({
   'exploit-cheat': 'Читы / эксплуатация ошибки',
   offensiveName: 'Оскорбительное имя',
   other: 'Нарушение правил'
+});
+const OPERATION_STATE_LABELS = Object.freeze({
+  queued: 'В очереди',
+  running: 'Выполняется',
+  drain: 'Завершение матчей',
+  verifying: 'Проверка готовности',
+  succeeded: 'Успешно',
+  failed: 'Ошибка'
+});
+const OPERATION_TITLE_FALLBACKS = Object.freeze({
+  'backup.create': 'Создать резервную копию',
+  'backup.verify': 'Проверить последнюю копию',
+  'smoke.run': 'Проверить работу Wobble',
+  'maintenance.enable': 'Включить режим обслуживания',
+  'maintenance.disable': 'Выключить режим обслуживания',
+  'nginx.reload': 'Безопасно перечитать Nginx',
+  'wobble.start': 'Запустить / восстановить сервер игры',
+  'wobble.restart': 'Плавно перезапустить сервер игры'
 });
 const ROLE_LABELS = Object.freeze({
   owner: 'Владелец',
@@ -1987,7 +2006,11 @@ function operationErrorLabel(reason) {
     'helper-timeout': 'Операция выполнялась слишком долго и панель перестала её ждать.',
     'helper-error': 'Не удалось связаться с безопасным helper.',
     'operation-busy': 'Сейчас уже выполняется другая системная операция. Подождите немного.',
+    'operation-state-failed': 'Не удалось надёжно сохранить состояние операции. Действие не запущено.',
+    'operation-state-uncertain':
+      'Действие могло завершиться, но финальный durable state не удалось сохранить. Не повторяйте его вслепую — сначала проверьте «Сервер» и историю.',
     'operation-timeout': 'Системная операция превысила допустимое время.',
+    'operation-readiness-timeout': 'Сервис запущен, но не подтвердил готовность вовремя.',
     'operation-failed': 'Системная проверка завершилась ошибкой.',
     'restart-cooldown': 'Wobble недавно уже перезапускался. Подождите перед повтором.'
   };
@@ -1997,7 +2020,7 @@ function operationErrorLabel(reason) {
 function renderOperations(payload) {
   state.operations = payload;
   const status = $('#operations-status');
-  status.replaceChildren(
+  const statusCards = [
     statCard(
       'Безопасные операции',
       payload.available ? 'ДОСТУПНЫ' : 'НЕДОСТУПНЫ',
@@ -2006,7 +2029,19 @@ function renderOperations(payload) {
         : 'после обновления VPS установщик должен включить wobble-ops.socket',
       payload.available ? 'good' : 'bad'
     )
-  );
+  ];
+  if (payload.activeOperation) {
+    const active = payload.activeOperation;
+    statusCards.push(
+      statCard(
+        'Текущая операция',
+        OPERATION_STATE_LABELS[active.state] || active.state,
+        OPERATION_TITLE_FALLBACKS[active.action] || active.action,
+        active.state === 'failed' ? 'bad' : 'warn'
+      )
+    );
+  }
+  status.replaceChildren(...statusCards);
 
   const root = $('#operations-list');
   root.replaceChildren();
@@ -2034,7 +2069,7 @@ function renderOperations(payload) {
     button.type = 'button';
     button.dataset.operation = operation.id;
     button.className = operation.tone === 'danger' ? 'primary confirm' : 'primary';
-    button.disabled = !payload.available;
+    button.disabled = !payload.available || Boolean(payload.busy);
     button.textContent = confirming ? 'Подтвердить действие' : operation.title;
     card.append(button);
     if (confirming) {
@@ -2047,54 +2082,94 @@ function renderOperations(payload) {
     }
     root.append(card);
   }
+
+  const historyBody = $('#operations-history-body');
+  historyBody.replaceChildren();
+  for (const entry of payload.history || []) {
+    const row = document.createElement('tr');
+    appendText(row, 'td', new Date(entry.createdAt).toLocaleString('ru-RU'));
+    appendText(row, 'td', OPERATION_TITLE_FALLBACKS[entry.action] || entry.action);
+    appendText(row, 'td', OPERATION_STATE_LABELS[entry.state] || entry.state);
+    appendText(
+      row,
+      'td',
+      entry.durationMs != null && Number.isFinite(Number(entry.durationMs))
+        ? `${Math.max(0, Math.round(Number(entry.durationMs) / 1000))} с`
+        : '—'
+    );
+    appendText(
+      row,
+      'td',
+      entry.reason ? operationErrorLabel(entry.reason) : entry.state === 'succeeded' ? 'Готово' : '—'
+    );
+    historyBody.append(row);
+  }
+  if (!(payload.history || []).length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 5;
+    cell.className = 'muted';
+    cell.textContent = 'Операции ещё не запускались.';
+    row.append(cell);
+    historyBody.append(row);
+  }
 }
 
-async function loadOperations() {
+async function loadOperations({ monitor = true } = {}) {
   const payload = await api('/api/admin/operations/status', {});
   renderOperations(payload);
+  if (monitor && payload.activeOperation && state.operationMonitorId !== payload.activeOperation.id) {
+    void monitorDurableOperation(
+      payload.activeOperation.id,
+      OPERATION_TITLE_FALLBACKS[payload.activeOperation.action] || payload.activeOperation.action
+    );
+  }
+  return payload;
 }
 
-async function monitorAcceptedRestart() {
-  const deadline = Date.now() + 225_000;
-  let sawTransition = false;
-  while (Date.now() < deadline) {
-    let status;
-    try {
-      status = await api('/api/admin/control/status', {});
-    } catch (error) {
-      if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+async function monitorDurableOperation(operationId, title) {
+  if (!operationId || state.operationMonitorId === operationId) return false;
+  state.operationMonitorId = operationId;
+  const deadline = Date.now() + 240_000;
+  try {
+    while (Date.now() < deadline) {
+      let payload;
+      try {
+        payload = await loadOperations({ monitor: false });
+      } catch (error) {
+        if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
+        if (state.currentPanel === 'operations') {
+          setStatus('Control Plane временно не смог прочитать durable state. Повторяю проверку…', 'warn');
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        continue;
+      }
+      const entry = (payload.history || []).find(item => item.id === operationId);
+      if (!entry) {
+        setStatus(`${title}: запись операции пока не найдена в durable history.`, 'warn');
+        return false;
+      }
+      if (entry.state === 'succeeded') {
+        setStatus(`${title}: успешно завершено.`, 'good');
+        return true;
+      }
+      if (entry.state === 'failed') {
+        setStatus(`${title}: ${operationErrorLabel(entry.reason || 'operation-failed')}`, 'bad');
+        return false;
+      }
       if (state.currentPanel === 'operations') {
-        setStatus('Control Plane временно не смог обновить статус restart. Повторяю проверку…', 'warn');
+        setStatus(`${title}: ${OPERATION_STATE_LABELS[entry.state] || entry.state}…`, 'warn');
       }
       await new Promise(resolve => setTimeout(resolve, 2000));
-      continue;
     }
-    const game = status.game || {};
-    if (status.maintenance || !game.reachable) sawTransition = true;
-    if (state.currentPanel === 'operations') {
-      if (!game.reachable) setStatus('Старый игровой процесс остановлен; жду новый Wobble…', 'warn');
-      else if (status.maintenance)
-        setStatus('Wobble перезапускается; новые подключения пока закрыты maintenance…', 'warn');
-      else setStatus('Проверяю готовность нового игрового процесса…', 'warn');
-    }
-    if (
-      game.reachable &&
-      game.ok &&
-      !status.maintenance &&
-      (sawTransition || Number(game.uptimeSeconds || 0) <= 30)
-    ) {
-      await loadOperations();
-      setStatus('Новый Wobble запущен и принимает подключения. Control Plane не прерывался.', 'good');
-      return true;
-    }
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    setStatus(
+      `${title}: операция всё ещё не получила финальный durable state. Обновите «Операции» позже.`,
+      'warn'
+    );
+    return false;
+  } finally {
+    if (state.operationMonitorId === operationId) state.operationMonitorId = null;
   }
-  if (state.operations) renderOperations(state.operations);
-  setStatus(
-    'Control Plane работает, но restart не подтвердил готовность нового Wobble вовремя. Проверьте «Сервер» и «Надёжность».',
-    'warn'
-  );
-  return false;
 }
 
 async function runOperation(operation) {
@@ -2125,16 +2200,20 @@ async function runOperation(operation) {
       operation,
       confirmation: operation
     });
-    if (operation === 'wobble.restart' && result.accepted) {
-      setStatus('Перезапуск Wobble принят. Панель останется открытой и проследит за запуском.', 'warn');
-      await monitorAcceptedRestart();
+    await loadOperations({ monitor: false });
+    if (result.operationId) {
+      setStatus(`${spec.title}: запрос принят, слежу за durable state…`, 'warn');
+      await monitorDurableOperation(result.operationId, spec.title);
       return;
     }
-    await loadOperations();
     setStatus(`${spec.title}: готово.`, 'good');
   } catch (error) {
     if (error.status === 401) return showLogin('Сессия администратора завершена. Войдите снова.');
-    if (state.operations) renderOperations(state.operations);
+    try {
+      await loadOperations({ monitor: false });
+    } catch {
+      if (state.operations) renderOperations(state.operations);
+    }
     setStatus(`${spec.title}: ${operationErrorLabel(error.payload?.error || error.message)}`, 'bad');
   }
 }

@@ -623,6 +623,32 @@
           </details>
           <div id="operations-status" class="cards"></div>
           <div id="operations-list" class="grid-two"></div>
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <p class="eyebrow">DURABLE OPERATIONS</p>
+                <h2>История системных операций</h2>
+                <p class="section-help">
+                  Состояние хранится на VPS отдельно от браузера. Перезагрузка страницы, Control Plane или
+                  безопасного helper не стирает текущую операцию и её этапы.
+                </p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Время</th>
+                    <th>Операция</th>
+                    <th>Этап</th>
+                    <th>Длительность</th>
+                    <th>Результат</th>
+                  </tr>
+                </thead>
+                <tbody id="operations-history-body"></tbody>
+              </table>
+            </div>
+          </article>
         </section>
 
         <section id="panel-audit" class="panel" hidden>

@@ -298,11 +298,15 @@ cp "$APP_DIR/deploy/wobble-ops.socket" /etc/systemd/system/wobble-ops.socket
 # Иначе компрометация игрового процесса позволила бы заменить root-код перед запуском helper.
 install -d -m 0755 -o root -g root /usr/local/lib/wobble-ops
 install -m 0755 -o root -g root "$APP_DIR/deploy/wobble-ops-helper.mjs" /usr/local/lib/wobble-ops/helper.mjs
+# Состояние операций не должно жить в /run: history и незавершённый lifecycle должны переживать
+# restart helper/Control Plane и reboot. Каталог writable только для root-helper; journal 0644
+# содержит лишь allowlisted action/state/timestamps/reason codes и безопасно читается Control Plane.
+install -d -m 0755 -o root -g root /var/lib/wobble-ops
 systemctl daemon-reload
 systemctl stop wobble-ops.service >/dev/null 2>&1 || true
 systemctl enable wobble >/dev/null
 systemctl enable wobble-control >/dev/null
-systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket >/dev/null
+systemctl enable wobble-backup.timer wobble-backup-watch.timer wobble-ops.socket wobble-ops.service >/dev/null
 systemctl restart wobble-ops.socket
 # Start the helper immediately so a persisted graceful-restart monitor is recovered even before
 # another admin request arrives. Restart=on-failure handles an unexpected helper crash afterwards.

@@ -194,3 +194,37 @@ test('missing admin session is 401 rather than gameplay availability error', asy
     await ctx.close();
   }
 });
+
+test('busy operation response correlates to the active durable operation, not the rejected request', async () => {
+  const activeId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const rejectedId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const ctx = await start({
+    operations: {
+      status: () => ({
+        available: true,
+        maintenance: false,
+        operations: [{ id: 'backup.create', title: 'Backup' }]
+      }),
+      run: async () => ({
+        ok: false,
+        reason: 'operation-busy',
+        requestId: rejectedId,
+        activeOperationId: activeId
+      })
+    }
+  });
+  try {
+    const session = await login(ctx);
+    const response = await post(ctx, '/api/admin/operations/run', session, {
+      operation: 'backup.create',
+      confirmation: 'backup.create'
+    });
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.equal(payload.operationId, activeId);
+    assert.equal(payload.activeOperationId, activeId);
+    assert.notEqual(payload.operationId, rejectedId);
+  } finally {
+    await ctx.close();
+  }
+});

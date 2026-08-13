@@ -6,6 +6,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 const install = fs.readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
+const nginxLocations = fs.readFileSync(new URL('../deploy/nginx-locations.conf', import.meta.url), 'utf8');
 const unit = fs.readFileSync(
   new URL('../deploy/wobble-telegram-alert-test.service', import.meta.url),
   'utf8'
@@ -27,6 +28,11 @@ test('installer installs but never enables the Telegram one-shot verification un
     /cp "\$APP_DIR\/deploy\/wobble-telegram-alert-test\.service" \/etc\/systemd\/system\/wobble-telegram-alert-test\.service/
   );
   assert.doesNotMatch(install, /systemctl enable wobble-telegram-alert-test/);
+});
+
+test('all internal Control Plane feeds are explicitly denied at the public Nginx boundary', () => {
+  assert.match(nginxLocations, /location ~\* \^\/internal\(\?:\/\|\$\) \{\s*return 404;\s*\}/);
+  assert.doesNotMatch(nginxLocations, /location \^~ \/internal/);
 });
 
 test('standard npm test includes all Telegram delivery regressions', () => {

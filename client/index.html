@@ -31,11 +31,26 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "/vendor/three.module.js",
+          "three": "/vendor/three.module.min.js",
           "three/addons/": "/vendor/addons/"
         }
       }
     </script>
+
+    <!--
+      Предзагрузка самого тяжёлого.
+
+      Модульная сборка без бандлера означает, что браузер узнаёт о следующем файле, только разобрав
+      предыдущий: движок обнаруживается лишь после разбора main.js, а его ядро — лишь после разбора
+      самого движка. Получается лестница из трёх последовательных обращений к сети, и на мобильной
+      связи она стоит трёх задержек подряд ещё до того, как начнётся собственно загрузка.
+
+      Эти три строки сообщают о файлах сразу, и они грузятся параллельно. Указывать здесь остальные
+      модули игры смысла нет: они мелкие, и их разбор укладывается в ожидание движка.
+    -->
+    <link rel="modulepreload" href="/vendor/three.module.min.js" />
+    <link rel="modulepreload" href="/vendor/three.core.min.js" />
+    <link rel="modulepreload" href="main.js" />
   </head>
   <body>
     <canvas id="game" aria-label="Игровая сцена Wobble Rush 3D"></canvas>

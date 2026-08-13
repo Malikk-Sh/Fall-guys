@@ -21,9 +21,7 @@ test('existing-production cutover starts Control Plane before Nginx switch and g
     'normal gameplay restart must happen only after admin routing cutover'
   );
 
-  const freshGuard = install.indexOf(
-    'if [ "$database_file" != ":memory:" ] && [ ! -f "$database_file" ]; then'
-  );
+  const freshGuard = install.indexOf('if [ ! -f "$database_file" ]; then');
   const freshBootstrap = install.indexOf('systemctl restart wobble', freshGuard);
   assert.ok(freshGuard >= 0 && freshBootstrap > freshGuard && freshBootstrap < controlStart);
 });

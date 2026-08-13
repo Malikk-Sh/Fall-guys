@@ -287,6 +287,7 @@ say "Служба и резервные копии"
 cp "$APP_DIR/deploy/wobble.service" /etc/systemd/system/wobble.service
 cp "$APP_DIR/deploy/wobble-control.service" /etc/systemd/system/wobble-control.service
 cp "$APP_DIR/deploy/wobble-telegram-alerts.service" /etc/systemd/system/wobble-telegram-alerts.service
+cp "$APP_DIR/deploy/wobble-telegram-alert-test.service" /etc/systemd/system/wobble-telegram-alert-test.service
 cp "$APP_DIR/deploy/wobble-backup.service" /etc/systemd/system/wobble-backup.service
 cp "$APP_DIR/deploy/wobble-backup.timer" /etc/systemd/system/wobble-backup.timer
 cp "$APP_DIR/deploy/wobble-backup-watch.service" /etc/systemd/system/wobble-backup-watch.service

@@ -6,7 +6,10 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 const install = fs.readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
-const unit = fs.readFileSync(new URL('../deploy/wobble-telegram-alert-test.service', import.meta.url), 'utf8');
+const unit = fs.readFileSync(
+  new URL('../deploy/wobble-telegram-alert-test.service', import.meta.url),
+  'utf8'
+);
 
 test('Telegram one-shot verification unit has the same isolated secret/egress boundary', () => {
   assert.match(unit, /^Type=oneshot$/m);

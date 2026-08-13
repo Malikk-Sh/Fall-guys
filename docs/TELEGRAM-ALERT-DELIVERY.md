@@ -116,6 +116,15 @@ TELEGRAM_ALERT_MIN_SEVERITY=critical
 
 After configuring the bot, set `TELEGRAM_ALERTS_ENABLED=1` and rerun `deploy/install.sh` (or enable/start only the notifier service manually).
 
+A real delivery can be verified without manufacturing a production incident:
+
+```bash
+systemctl start wobble-telegram-alert-test.service
+journalctl -u wobble-telegram-alert-test.service -n 20 --no-pager
+```
+
+The one-shot unit sends only the fixed text `Wobble Control: Telegram alerts настроены и доставка работает.` through the same validated secret/egress boundary. It cannot accept arbitrary message text, destination URL, player data or an Operations command and it does not touch notifier dedup state.
+
 The normal Wobble deploy must remain successful when Telegram is unconfigured or unavailable. External delivery is never a gameplay/control-plane readiness dependency.
 
 ## Failure isolation
@@ -143,4 +152,5 @@ Focused tests cover:
 - Telegram token never appears in delivery state/log event payloads;
 - systemd DynamicUser/state/environment boundaries;
 - installer leaves Telegram disabled by default and does not overwrite an existing secret file;
+- one-shot fixed delivery verification uses an isolated DynamicUser unit and never mutates notifier state;
 - standard `npm test` includes the notifier regressions.

@@ -19,7 +19,7 @@ const CONTROL_PATH = '/internal/alerts/delivery';
 const TELEGRAM_HOST = 'api.telegram.org';
 const TELEGRAM_PORT = 443;
 const SEVERITY_RANK = Object.freeze({ warning: 1, critical: 2 });
-const EVENT_KINDS = new Set(['opened', 'escalated', 'recovered', 'recovered-summary']);
+const EVENT_KINDS = new Set(['opened', 'escalated', 'recovered', 'recovered-summary', 'escalated-recovered']);
 
 function safeTime(value) {
   const number = Number(value);
@@ -87,7 +87,9 @@ function normalizeFeed(value) {
   const generatedAt = safeTime(value.generatedAt);
   if (generatedAt == null) return null;
   const active = Array.isArray(value.active) ? value.active.map(item => safeAlert(item, 'active')) : [];
-  const resolved = Array.isArray(value.resolved) ? value.resolved.map(item => safeAlert(item, 'resolved')) : [];
+  const resolved = Array.isArray(value.resolved)
+    ? value.resolved.map(item => safeAlert(item, 'resolved'))
+    : [];
   if (active.some(item => !item) || resolved.some(item => !item)) return null;
   return {
     version: 1,
@@ -181,6 +183,7 @@ function writeState(file, records) {
     const normalized = records.map(normalizeRecord);
     if (normalized.some(item => !item)) return false;
     const bounded = boundRecords(normalized);
+    if (!bounded) return false;
     fd = fs.openSync(temporary, 'w', 0o600);
     fs.writeFileSync(fd, `${JSON.stringify({ version: STATE_VERSION, alerts: bounded })}\n`, 'utf8');
     fs.fsyncSync(fd);
@@ -218,13 +221,16 @@ function writeState(file, records) {
 
 function boundRecords(records) {
   if (records.length <= MAX_RECORDS) return records;
-  const protectedIds = new Set(records.filter(item => item.pending || !item.resolvedSent).map(item => item.id));
+  const protectedRecords = records.filter(item => item.pending || !item.resolvedSent);
+  if (protectedRecords.length > MAX_RECORDS) return null;
+  const protectedIds = new Set(protectedRecords.map(item => item.id));
   const removable = records
     .filter(item => !protectedIds.has(item.id))
     .sort((a, b) => (a.resolvedAt || a.lastSeenAt) - (b.resolvedAt || b.lastSeenAt));
   const removeCount = Math.max(0, records.length - MAX_RECORDS);
   const removed = new Set(removable.slice(0, removeCount).map(item => item.id));
-  return records.filter(item => !removed.has(item.id)).slice(-MAX_RECORDS);
+  const bounded = records.filter(item => !removed.has(item.id));
+  return bounded.length <= MAX_RECORDS ? bounded : null;
 }
 
 function qualifies(severity, minSeverity) {
@@ -250,29 +256,27 @@ function ensureRecord(records, alert) {
   record.rule = alert.rule;
   record.lastSeenAt = Math.max(record.lastSeenAt, alert.lastSeenAt);
   record.latestSeverity =
-    SEVERITY_RANK[alert.severity] >= SEVERITY_RANK[record.latestSeverity] ? alert.severity : record.latestSeverity;
+    SEVERITY_RANK[alert.severity] >= SEVERITY_RANK[record.latestSeverity]
+      ? alert.severity
+      : record.latestSeverity;
   if (alert.resolvedAt != null) record.resolvedAt = Math.max(record.resolvedAt || 0, alert.resolvedAt);
   return record;
 }
 
 function schedule(record, kind, severity, now) {
   if (!EVENT_KINDS.has(kind) || !Object.hasOwn(SEVERITY_RANK, severity)) return false;
-  if (
-    record.pending &&
-    record.pending.kind === kind &&
-    record.pending.severity === severity &&
-    record.pending.nextAttemptAt <= now
-  ) {
+  if (record.pending?.kind === kind && record.pending?.severity === severity) {
+    // Preserve durable backoff. Re-observing the same incident must not pull retryAt back to now.
     return false;
   }
-  const attempts = record.pending?.kind === kind ? record.pending.attempts : 0;
-  record.pending = { kind, severity, attempts, nextAttemptAt: Math.min(record.pending?.nextAttemptAt || now, now) };
+  record.pending = { kind, severity, attempts: 0, nextAttemptAt: now };
   return true;
 }
 
 function reconcile(records, feed, minSeverity, now) {
   let changed = false;
   const activeIds = new Set();
+  const resolvedIds = new Set(feed.resolved.map(item => item.id));
   for (const alert of feed.active) {
     activeIds.add(alert.id);
     const record = ensureRecord(records, alert);
@@ -287,10 +291,17 @@ function reconcile(records, feed, minSeverity, now) {
 
   for (const alert of feed.resolved) {
     const record = ensureRecord(records, alert);
+    const escalatedPastDelivery =
+      record.sentSeverity && SEVERITY_RANK[alert.severity] > SEVERITY_RANK[record.sentSeverity];
     if (record.pending?.kind === 'opened' || record.pending?.kind === 'escalated') {
       if (qualifies(record.pending.severity, minSeverity)) {
         record.pending = {
-          kind: record.sentSeverity ? 'recovered' : 'recovered-summary',
+          kind:
+            record.sentSeverity && SEVERITY_RANK[record.pending.severity] > SEVERITY_RANK[record.sentSeverity]
+              ? 'escalated-recovered'
+              : record.sentSeverity
+                ? 'recovered'
+                : 'recovered-summary',
           severity: record.pending.severity,
           attempts: 0,
           nextAttemptAt: now
@@ -300,6 +311,8 @@ function reconcile(records, feed, minSeverity, now) {
         record.pending = null;
         changed = true;
       }
+    } else if (escalatedPastDelivery && qualifies(alert.severity, minSeverity) && !record.resolvedSent) {
+      changed = schedule(record, 'escalated-recovered', alert.severity, now) || changed;
     } else if (record.sentSeverity && !record.resolvedSent) {
       changed = schedule(record, 'recovered', record.sentSeverity, now) || changed;
     } else if (!record.sentSeverity && qualifies(alert.severity, minSeverity) && !record.resolvedSent) {
@@ -307,17 +320,29 @@ function reconcile(records, feed, minSeverity, now) {
     }
   }
 
-  // Records no longer present in the bounded feed are kept for deduplication but never inferred resolved.
+  // A healthy feed's active list is complete for the fixed Alert Center rule set. If an incident we
+  // previously saw active is no longer active and already fell out of the bounded resolved history,
+  // treat this poll time as the latest safe recovery observation rather than sending a stale open.
   for (const record of records) {
-    if (!activeIds.has(record.id) && record.resolvedAt == null && !feed.resolved.some(item => item.id === record.id)) {
-      continue;
+    if (record.resolvedAt != null || activeIds.has(record.id) || resolvedIds.has(record.id)) continue;
+    record.resolvedAt = Math.max(record.lastSeenAt, feed.generatedAt);
+    if (record.pending?.kind === 'opened' || record.pending?.kind === 'escalated') {
+      record.pending = {
+        kind: record.sentSeverity ? 'recovered' : 'recovered-summary',
+        severity: record.pending.severity,
+        attempts: 0,
+        nextAttemptAt: now
+      };
+      changed = true;
+    } else if (record.sentSeverity && !record.resolvedSent) {
+      changed = schedule(record, 'recovered', record.sentSeverity, now) || changed;
     }
   }
   return changed;
 }
 
 function retryDelayMs(attempts, retryAfterSeconds = null) {
-  if (Number.isFinite(Number(retryAfterSeconds))) {
+  if (retryAfterSeconds != null && Number.isFinite(Number(retryAfterSeconds))) {
     return Math.max(5_000, Math.min(60 * 60 * 1000, Math.round(Number(retryAfterSeconds) * 1000)));
   }
   const schedule = [15_000, 30_000, 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000];
@@ -325,7 +350,9 @@ function retryDelayMs(attempts, retryAfterSeconds = null) {
 }
 
 function panelLabel(value) {
-  return { infrastructure: 'Сервер', reliability: 'Надёжность', operations: 'Операции' }[value] || 'Оповещения';
+  return (
+    { infrastructure: 'Сервер', reliability: 'Надёжность', operations: 'Операции' }[value] || 'Оповещения'
+  );
 }
 
 function iso(value) {
@@ -350,9 +377,11 @@ function formatMessage(record) {
       `Раздел: ${panelLabel(meta.recommendedPanel)}`
     ].join('\n');
   }
-  if (pending.kind === 'recovered-summary') {
+  if (pending.kind === 'recovered-summary' || pending.kind === 'escalated-recovered') {
     return [
-      '🟢 Wobble: инцидент произошёл и уже восстановлен',
+      pending.kind === 'escalated-recovered'
+        ? '🟢 Wobble: критическое ухудшение уже восстановлено'
+        : '🟢 Wobble: инцидент произошёл и уже восстановлен',
       meta.title,
       `Инцидент: ${shortId}`,
       `Уровень: ${severity}`,
@@ -499,14 +528,18 @@ async function processDue(records, config, stateFile, { now = Date.now(), send =
     const result = await send(text, config);
     if (result.ok) {
       if (event.kind === 'opened' || event.kind === 'escalated') record.sentSeverity = event.severity;
-      if (event.kind === 'recovered-summary') {
+      if (event.kind === 'recovered-summary' || event.kind === 'escalated-recovered') {
         record.sentSeverity = event.severity;
         record.resolvedSent = true;
       }
       if (event.kind === 'recovered') record.resolvedSent = true;
       record.pending = null;
       if (!writeState(stateFile, records)) {
-        safeLog('telegram_alert_state_uncertain', { alertId: record.id, rule: record.rule, kind: event.kind });
+        safeLog('telegram_alert_state_uncertain', {
+          alertId: record.id,
+          rule: record.rule,
+          kind: event.kind
+        });
         return { ok: false, reason: 'state-uncertain' };
       }
       safeLog('telegram_alert_delivered', {
@@ -518,8 +551,7 @@ async function processDue(records, config, stateFile, { now = Date.now(), send =
       continue;
     }
     record.pending.attempts += 1;
-    record.pending.nextAttemptAt =
-      now + retryDelayMs(record.pending.attempts - 1, result.retryAfterSeconds);
+    record.pending.nextAttemptAt = now + retryDelayMs(record.pending.attempts - 1, result.retryAfterSeconds);
     if (!writeState(stateFile, records)) return { ok: false, reason: 'state-unavailable' };
     safeLog('telegram_alert_retry_scheduled', {
       alertId: record.id,
@@ -562,7 +594,7 @@ async function main() {
   const config = validateConfig();
   if (!config.ok) {
     safeLog('telegram_alert_config_invalid', { reason: config.reason });
-    process.exitCode = 1;
+    process.exitCode = 78;
     return;
   }
   if (!config.enabled) {
@@ -573,7 +605,7 @@ async function main() {
   const loaded = loadState(stateFile);
   if (!loaded.ok) {
     safeLog('telegram_alert_state_corrupt', { reason: 'state-corrupt' });
-    process.exitCode = 1;
+    process.exitCode = 78;
     return;
   }
   safeLog('telegram_alert_service_started', { minSeverity: config.minSeverity });

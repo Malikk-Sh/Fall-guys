@@ -15,6 +15,7 @@ StateDirectory=wobble-telegram-alerts
 StateDirectoryMode=0700
 
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=5s
 
 StandardOutput=journal

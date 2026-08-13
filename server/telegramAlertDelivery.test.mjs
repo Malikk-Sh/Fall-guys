@@ -388,3 +388,95 @@ test('corrupt notifier state fails closed and state never contains Telegram cred
     ctx.cleanup();
   }
 });
+
+test('corrupt durable notifier state blocks feed reads and Telegram sends', async () => {
+  const ctx = tempState();
+  let feedCalls = 0;
+  let sendCalls = 0;
+  try {
+    fs.writeFileSync(ctx.file, '{broken');
+    const result = await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: 30_000,
+      getFeed: async () => {
+        feedCalls += 1;
+        return { ok: true, feed: feed({ active: [alert()] }) };
+      },
+      send: async () => {
+        sendCalls += 1;
+        return { ok: true };
+      }
+    });
+    assert.deepEqual(result, { ok: false, reason: 'state-corrupt' });
+    assert.equal(feedCalls, 0);
+    assert.equal(sendCalls, 0);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('durable retry timestamp is not reset by observing the same still-active incident', async () => {
+  const ctx = tempState();
+  try {
+    await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: 30_000,
+      getFeed: async () => ({ ok: true, feed: feed({ active: [alert()] }) }),
+      send: async () => ({ ok: false, reason: 'telegram-network' })
+    });
+    const first = loadState(ctx.file).records[0].pending.nextAttemptAt;
+    assert.ok(first > 30_000);
+    await deliveryPass({
+      config: config(),
+      stateFile: ctx.file,
+      now: 31_000,
+      getFeed: async () => ({ ok: true, feed: feed({ active: [alert({ lastSeenAt: 31_000 })] }) }),
+      send: async () => {
+        throw new Error('backoff should prevent an early retry');
+      }
+    });
+    assert.equal(loadState(ctx.file).records[0].pending.nextAttemptAt, first);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('critical escalation that resolves before notifier observes it is still reported as recovered escalation', async () => {
+  const ctx = tempState();
+  const sent = [];
+  try {
+    await deliveryPass({
+      config: config('warning'),
+      stateFile: ctx.file,
+      now: 30_000,
+      getFeed: async () => ({ ok: true, feed: feed({ active: [alert({ severity: 'warning' })] }) }),
+      send: async text => {
+        sent.push(text);
+        return { ok: true };
+      }
+    });
+    await deliveryPass({
+      config: config('warning'),
+      stateFile: ctx.file,
+      now: 60_000,
+      getFeed: async () => ({
+        ok: true,
+        feed: feed({
+          resolved: [
+            alert({ severity: 'critical', state: 'resolved', lastSeenAt: 50_000, resolvedAt: 55_000 })
+          ]
+        })
+      }),
+      send: async text => {
+        sent.push(text);
+        return { ok: true };
+      }
+    });
+    assert.equal(sent.length, 2);
+    assert.match(sent[1], /критическое ухудшение уже восстановлено/);
+  } finally {
+    ctx.cleanup();
+  }
+});

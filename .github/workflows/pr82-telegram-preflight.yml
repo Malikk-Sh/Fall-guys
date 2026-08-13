@@ -39,7 +39,6 @@ jobs:
             server/telegramAlertDelivery.js \
             server/telegramAlertDelivery.test.mjs \
             server/controlPlaneDeploy.test.mjs \
-            deploy/wobble-telegram.env.example \
             docs/TELEGRAM-ALERT-DELIVERY.md \
             package.json \
             .github/workflows/pr82-telegram-preflight.yml

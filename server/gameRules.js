@@ -191,7 +191,7 @@ function leaderboard(room) {
   return [...room.players.values()]
     .filter(player => player.finished)
     .sort((a, b) => a.time - b.time)
-    .map(({ id, name, time, color, verificationReasons, unverifiedReason }) => {
+    .map(({ id, name, time, color, bot, verificationReasons, unverifiedReason }) => {
       const reasons = verificationReasons?.length
         ? [...verificationReasons]
         : unverifiedReason
@@ -202,6 +202,8 @@ function leaderboard(room) {
         name,
         time,
         color,
+        // Признак доезжает и до экрана итогов: увидеть, кого ты обогнал, важнее всего именно там.
+        bot: !!bot,
         verified: reasons.length === 0,
         verificationReason: reasons[0] || null,
         verificationReasons: reasons

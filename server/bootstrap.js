@@ -28,6 +28,21 @@ http.ServerResponse.prototype.setHeader = function authV2SetHeader(name, value) 
 };
 
 const core = require('./index');
+const { preloadBots } = require('./roomBots');
+
+// Модель бота тянет клиентские модули, а те импортируют зависимости по браузерным путям — их
+// разрешает client-loader, который до этого момента не зарегистрирован. Загружаем заранее и один
+// раз: если не выйдет, сервер работает как прежде, просто без ботов.
+preloadBots().catch(error => {
+  console.error(
+    JSON.stringify({
+      level: 'warn',
+      event: 'server_started',
+      ts: new Date().toISOString(),
+      message: `боты недоступны: ${String(error?.message || error).slice(0, 200)}`
+    })
+  );
+});
 const { AuthService } = require('./auth');
 const { GoogleIdentityVerifier } = require('./googleIdentity');
 const { installAuthRoutes } = require('./authRoutes');

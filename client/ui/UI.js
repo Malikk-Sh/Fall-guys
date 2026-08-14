@@ -776,6 +776,15 @@ export class UI {
     $('#lobbyDifficultyWrap').classList.toggle('locked', !host);
     $('#lobbyDifficulty').disabled = !host;
     $('#start').classList.toggle('hidden', !host);
+    // Ботов зовёт только хост приватной гоночной комнаты: в публичной состав определяет подбор,
+    // а в кооперативе ботов пока нет. Прячем кнопку там, где сервер всё равно откажет.
+    const canAddBots =
+      host &&
+      data.mode !== GAME_MODE.COOP &&
+      !matchmade &&
+      data.players.length < 16 &&
+      !data.players.some(p => p.bot);
+    $('#addBots').classList.toggle('hidden', !canAddBots);
     $('#start').disabled = !data.players.length || !data.players.every(p => p.ready);
     $('#ready').classList.toggle('hidden', matchmade);
     if (this.pendingRecentPartnerInviteName && data.mode === GAME_MODE.COOP) {

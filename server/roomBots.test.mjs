@@ -151,3 +151,21 @@ test('перегрузка сервера не заставляет бота о�
   clearBots(dense);
   clearBots(sparse);
 });
+
+test('список уровней раздаётся ботам по кругу, а не достаётся одному', () => {
+  const r = room();
+  spawnBots(r, { count: 3, skill: ['rookie', 'steady', 'sharp'] });
+  const levels = r.bots.list.map(entry => entry.bot.skill.id);
+  assert.deepEqual(levels, ['rookie', 'steady', 'sharp']);
+  clearBots(r);
+});
+
+test('один уровень на всех по-прежнему допустим', () => {
+  const r = room();
+  spawnBots(r, { count: 2, skill: 'sharp' });
+  assert.deepEqual(
+    r.bots.list.map(entry => entry.bot.skill.id),
+    ['sharp', 'sharp']
+  );
+  clearBots(r);
+});

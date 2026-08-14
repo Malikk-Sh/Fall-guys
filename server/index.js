@@ -48,7 +48,12 @@ const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { IncidentDiagnostics } = require('./incidentDiagnostics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
-const { spawnBots, stepBots, clearBots } = require('./roomBots');
+const { preloadBots, spawnBots, stepBots, clearBots } = require('./roomBots');
+
+// Модель бота загружается здесь, а не только в bootstrap: иначе любая точка входа, берущая
+// index.js напрямую, молча оставалась бы без ботов — и добор в подборе не срабатывал бы, ничего
+// об этом не сообщая. Вызов идемпотентен, ошибку разбирает bootstrap, где есть структурный лог.
+preloadBots().catch(() => {});
 
 // Засчитывать ли ботов соперниками при выдаче наград за гонку.
 //
@@ -1249,6 +1254,17 @@ function enqueueCoop(ws, message) {
 const MIN_RACE_PLAYERS = 2;
 const RACE_FILL_MS = 25_000;
 
+// Сколько участников должно оказаться на старте, если живых не набралось.
+//
+// Не шестнадцать: комната, где один человек и пятнадцать ботов, — это одиночная игра с
+// декорациями, а не гонка. Четверо дают ощущение соревнования и оставляют место тем, кто ещё
+// ищет: боты добираются до этого числа, а подошедший позже человек садится на свободный слот.
+const RACE_BOT_FIELD = 4;
+
+// Уровни ботов в доборе идут вперемешку. Одинаковые прибежали бы плотной группой и выглядели бы
+// одним соперником, размноженным трижды.
+const RACE_BOT_SKILLS = Object.freeze(['rookie', 'steady', 'sharp']);
+
 // Сколько игроков в комнате НА СВЯЗИ.
 //
 // Размер room.players для этого не годится: отключившийся остаётся в списке ещё тридцать секунд —
@@ -1258,6 +1274,14 @@ const RACE_FILL_MS = 25_000;
 function connectedPlayers(room) {
   let count = 0;
   for (const player of room.players.values()) if (!player.disconnectedAt) count += 1;
+  return count;
+}
+
+// Сколько ЖИВЫХ игроков на связи. Набор считается по ним: бот в комнате не повод перестать ждать
+// людей, иначе первый же добор закрывал бы дверь перед теми, кто уже искал гонку.
+function connectedHumans(room) {
+  let count = 0;
+  for (const player of room.players.values()) if (!player.disconnectedAt && !player.bot) count += 1;
   return count;
 }
 
@@ -1392,11 +1416,15 @@ function enqueueRace(ws, message) {
     return startMatchmadeRace(room, 'full');
   }
 
-  // Минимум собран — заводим срок набора, если он ещё не заведён. Повторный вход НЕ продлевает
-  // его: иначе поток входящих отодвигал бы старт бесконечно, и первый пришедший ждал бы дольше всех.
-  if (connected >= MIN_RACE_PLAYERS && !room.fillDeadline) {
-    room.fillDeadline = now + RACE_FILL_MS;
-  }
+  // Срок набора заводится с ПЕРВОГО вошедшего, а не со второго.
+  //
+  // Раньше он появлялся только когда соберутся двое, и одинокий игрок на пустом сервере ждал не
+  // двадцать пять секунд, а бесконечность: срок, который никогда не заведётся, не истечёт. Теперь
+  // ожидание всегда конечно — за это время либо подойдут люди, либо к нему выйдут боты.
+  //
+  // Повторный вход срок НЕ продлевает: иначе поток входящих отодвигал бы старт бесконечно, и
+  // первый пришедший ждал бы дольше всех.
+  if (!room.fillDeadline) room.fillDeadline = now + RACE_FILL_MS;
 
   emitLobby(room);
   return send(ws, {
@@ -2207,6 +2235,30 @@ wss.on('connection', (ws, req) => {
   // Действия внутри комнаты. Вызываются, когда комната и игрок уже найдены, опоздавшие пакеты
   // отброшены, а таблица состояний разрешила действие — поэтому room и player приходят готовыми.
   const ROOM_HANDLERS = Object.freeze({
+    // Хост приватной комнаты зовёт ботов.
+    [C2S.ADD_BOTS]: (message, room) => {
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Соперников добавляет только хост.');
+      }
+      // В публичной комнате состав определяет подбор: он и людей приведёт, и ботов позовёт сам.
+      // Разрешить здесь ручной вызов значило бы дать одному участнику решать за остальных.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'В случайной гонке соперников подбирает сервер.');
+      }
+      if (room.mode !== GAME_MODE.RACE) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Боты пока есть только в гонке.');
+      }
+      const free = MAX_PLAYERS[GAME_MODE.RACE] - room.players.size;
+      if (free <= 0) return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
+      const added = addRoomBots(room, {
+        count: Math.min(message.count, free),
+        skill: message.skill || RACE_BOT_SKILLS
+      });
+      if (!added) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Соперники сейчас недоступны.');
+      log('info', 'room_bots_added', { roomId: room.code, bots: added });
+      return undefined;
+    },
+
     [C2S.PLAYER_READY]: (message, room, player) => {
       player.ready = message.ready;
       return emitLobby(room);
@@ -2658,8 +2710,23 @@ const snapshotTimer = setInterval(() => {
       room.fillDeadline = null;
       // Пока ждали, кто-то мог отвалиться. Считаем только тех, кто на связи: оборвавшийся ещё
       // тридцать секунд числится в комнате, и по размеру списка гонка стартовала бы в одиночку.
-      // Набирать заново честнее — срок появится снова, когда подойдёт следующий игрок.
-      if (connectedPlayers(room) >= MIN_RACE_PLAYERS) startMatchmadeRace(room, 'deadline');
+      const humans = connectedHumans(room);
+      if (!humans) continue;
+      if (humans >= MIN_RACE_PLAYERS) {
+        startMatchmadeRace(room, 'deadline');
+        continue;
+      }
+      // Людей не хватило. Раньше на этом месте набор просто начинался заново, и на пустом сервере
+      // игрок мог ждать сколько угодно, ни разу не увидев гонки. Теперь к нему выходят боты:
+      // соперники ненастоящие, зато забег настоящий и начинается сейчас.
+      const added = addRoomBots(room, { count: RACE_BOT_FIELD - humans, skill: RACE_BOT_SKILLS });
+      if (!added) {
+        // Боты почему-то недоступны — ждём людей дальше, как раньше.
+        room.fillDeadline = now + RACE_FILL_MS;
+        continue;
+      }
+      log('info', 'race_bots_filled', { roomId: room.code, humans, bots: added });
+      startMatchmadeRace(room, 'bots');
       continue;
     }
 

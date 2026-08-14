@@ -63,6 +63,9 @@ export function bindMenu(game) {
     $('#ready').textContent = game.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
   });
   click('#start', () => game.net?.send('start'));
+  // Зовём троих: этого хватает, чтобы гонка ощущалась гонкой, и остаётся место живым игрокам,
+  // если хост позвал друзей. Уровни сервер раздаёт вперемешку.
+  click('#addBots', () => game.net?.send('addBots', { count: 3 }));
   $('#lobbyDifficulty').addEventListener('change', e =>
     game.net?.send('configure', { difficulty: e.target.value })
   );

@@ -62,7 +62,10 @@ const botsReady = () => runtime !== null;
 
 // Завести ботов в комнате. Возвращает, сколько их получилось: вызывающему не нужно знать, почему
 // их меньше, чем он просил, — правила потолка живут здесь.
+// skill принимает либо один уровень на всех, либо список — тогда уровни раздаются по кругу.
+// Одинаковые боты бегут плотной группой и выглядят одним соперником, размноженным трижды.
 function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
+  const skills = Array.isArray(skill) && skill.length ? skill : [skill];
   if (!runtime || !room || room.bots) return 0;
   const wanted = Math.max(0, Math.min(Math.floor(count), MAX_BOTS_PER_ROOM));
   if (!wanted) return 0;
@@ -72,7 +75,11 @@ function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
   const course = new runtime.Course(new runtime.THREE.Scene(), room.spec, { quality: 'low' });
   const list = [];
   for (let index = 0; index < wanted; index += 1) {
-    const bot = new runtime.RaceBot(course, { skill, seed: room.spec.seed, index });
+    const bot = new runtime.RaceBot(course, {
+      skill: skills[index % skills.length],
+      seed: room.spec.seed,
+      index
+    });
     const id = `bot:${index}`;
     list.push({ id, bot });
     room.players.set(id, {

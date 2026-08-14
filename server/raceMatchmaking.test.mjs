@@ -12,6 +12,11 @@ import WebSocket from 'ws';
 const require = createRequire(import.meta.url);
 const { server, rooms, resetRateLimits, shutdown: shutdownServer } = require('./index');
 const { ROOM_STATE } = require('../shared/protocol.js');
+const { preloadBots } = require('./roomBots');
+
+// Модель бота грузится асинхронно. Живой сервер успевает сделать это до первого игрока; тест
+// обязан дождаться явно, иначе проверка добора молча превращается в проверку его отсутствия.
+await preloadBots();
 
 const WAIT_MS = 10_000;
 
@@ -102,9 +107,14 @@ test('двое ищущих гонку попадают в одну комнат
     await first.close();
   });
 
-  // Первый ждёт один: срока старта ещё нет, считать его не с кем.
+  // Срок старта заводится уже первому вошедшему.
+  //
+  // Раньше он появлялся только со вторым, и это выглядело логично — считать нечего, пока не с кем
+  // соревноваться. На пустом сервере это означало бесконечность: срок, который не заведётся, не
+  // истечёт, и одинокий игрок не увидел бы гонки никогда. Теперь ожидание всегда конечно, а чем оно
+  // закончится — людьми или ботами, — решает следующий тест.
   assert.equal(firstWait.players, 1);
-  assert.equal(firstWait.startsAt, null);
+  assert.ok(firstWait.startsAt > Date.now(), 'ожидание обязано быть конечным даже для одиночки');
 
   const second = await findRace(url);
   const secondWait = await second.wait('matchmakingWaiting');
@@ -117,8 +127,8 @@ test('двое ищущих гонку попадают в одну комнат
   assert.equal(matchmadeRooms().length, 1);
   assert.equal(secondWait.roomCode, firstWait.roomCode);
   assert.equal(secondWait.players, 2);
-  // Минимум собран — срок набора появился.
-  assert.ok(secondWait.startsAt > Date.now(), 'срок старта должен быть в будущем');
+  // Срок, заведённый первым, вторым не сдвигается.
+  assert.equal(secondWait.startsAt, firstWait.startsAt, 'подошедший не отодвигает старт');
 });
 
 test('разные сложности не смешиваются', async t => {
@@ -161,8 +171,8 @@ test('третий игрок подсаживается к уже ждущей 
   assert.equal(matchmadeRooms().length, 1);
   assert.equal(thirdWait.roomCode, secondWait.roomCode);
   assert.equal(thirdWait.players, 3);
-  // Срок заведён вторым игроком и НЕ сдвинут третьим: иначе поток входящих отодвигал бы старт
-  // бесконечно, и первый пришедший ждал бы дольше всех.
+  // Срок заведён первым игроком и НЕ сдвигается следующими: иначе поток входящих отодвигал бы
+  // старт бесконечно, и первый пришедший ждал бы дольше всех.
   assert.equal(thirdWait.startsAt, secondWait.startsAt);
 });
 
@@ -233,9 +243,39 @@ test('оборвавшийся не считается собравшимся: �
     await stop();
   });
 
-  // Список игроков всё ещё двое, но на связи один — гонка обязана остаться в лобби.
-  assert.equal(room.players.size, 2);
-  assert.equal(room.state, ROOM_STATE.LOBBY, 'забег с одним живым участником попал бы в таблицу рекордов');
+  // Оборвавшийся числится в комнате ещё тридцать секунд, но собравшимся не считается: добор
+  // считает ЖИВЫХ. На связи один — значит недостающих соперников выдаёт не список, а боты.
+  const humans = [...room.players.values()].filter(player => !player.bot);
+  const bots = [...room.players.values()].filter(player => player.bot);
+  assert.equal(humans.length, 2, 'оборвавшийся остаётся в комнате до истечения окна возврата');
+  assert.ok(bots.length >= 1, 'к единственному живому должны выйти боты');
+
+  // Раньше здесь проверялось, что забег НЕ начинается. Тогда это было единственной защитой от
+  // одиночного результата в таблице рекордов; сейчас защита живёт в самой таблице — строка требует
+  // подтверждённой личности, — и запирать игрока в лобби больше незачем.
+  assert.notEqual(room.state, ROOM_STATE.LOBBY, 'с ботами забег начинается');
+});
+
+test('без единого живого игрока боты никого не запускают', async t => {
+  await listen();
+  const url = urlFor();
+  const client = await findRace(url);
+  await client.wait('matchmakingWaiting');
+  const [room] = matchmadeRooms();
+
+  // Единственный игрок оборвался, не дождавшись старта.
+  for (const player of room.players.values()) player.disconnectedAt = Date.now();
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  t.after(async () => {
+    await client.close();
+    await stop();
+  });
+
+  // Гонка ботов между собой не нужна никому: смотреть её некому.
+  assert.equal([...room.players.values()].filter(player => player.bot).length, 0);
+  assert.equal(room.state, ROOM_STATE.LOBBY);
 });
 
 test('в публичную комнату нельзя войти по коду', async t => {
@@ -297,6 +337,64 @@ test('«любая сложность» подсаживает к тем, кто
   assert.equal(anyWait.roomCode, pickyWait.roomCode);
   assert.equal(matchmadeRooms().length, 1);
   assert.equal(matchmadeRooms()[0].spec.difficulty, 'chaos');
+});
+
+test('одинокий игрок не ждёт вечно: к нему выходят боты', async t => {
+  await listen();
+  const url = urlFor();
+  const client = await findRace(url);
+  const waiting = await client.wait('matchmakingWaiting');
+
+  t.after(async () => {
+    await client.close();
+    await stop();
+  });
+
+  // Срок набора заводится с ПЕРВОГО вошедшего. Раньше он появлялся только когда соберутся двое, и
+  // на пустом сервере не наступал никогда: срок, который не заведётся, не истечёт.
+  assert.ok(waiting.startsAt > Date.now(), 'срок набора должен быть заведён сразу');
+
+  const [room] = matchmadeRooms();
+  // Промотаем ожидание: срок истёк, а людей так и не прибавилось.
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  const bots = [...room.players.values()].filter(player => player.bot);
+  assert.ok(bots.length >= 1, 'боты должны были выйти на старт');
+  assert.equal(
+    [...room.players.values()].filter(player => !player.bot).length,
+    1,
+    'живой игрок остаётся один'
+  );
+  // Гонка началась, а не ушла на новый круг ожидания.
+  assert.notEqual(room.state, ROOM_STATE.LOBBY, 'забег должен был начаться');
+  // Уровни ботов перемешаны: одинаковые бежали бы плотной группой.
+  assert.ok(new Set(bots.map(bot => bot.name)).size === bots.length, 'имена ботов не должны повторяться');
+});
+
+test('пришедшие люди отменяют добор: ботов звать незачем', async t => {
+  await listen();
+  const url = urlFor();
+  const first = await findRace(url);
+  await first.wait('matchmakingWaiting');
+  const second = await findRace(url);
+  await second.wait('matchmakingWaiting');
+
+  t.after(async () => {
+    await first.close();
+    await second.close();
+    await stop();
+  });
+
+  const [room] = matchmadeRooms();
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  assert.equal(
+    [...room.players.values()].filter(player => player.bot).length,
+    0,
+    'при двух живых боты не нужны'
+  );
 });
 
 test.after(() => shutdownServer('test', { exitProcess: false }));

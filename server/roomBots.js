@@ -1,0 +1,174 @@
+'use strict';
+
+// Боты как участники комнаты.
+//
+// Задача этого файла — сделать так, чтобы остальной сервер о ботах НЕ ЗНАЛ. Бот появляется в
+// room.players обычной записью игрока, только без сокета, и дальше рассылка, подсчёт финиша и
+// завершение матча работают с ним ровно теми же путями, что и с человеком:
+//
+//   broadcast   пропускает участника, которому некуда слать (canSend(null) — ложь);
+//   checkMatchEnd ждёт, пока все finished, и бот выставляет этот признак так же, как живой игрок;
+//   leaderboard  строится по finished и time, и бот попадает в него на общих основаниях.
+//
+// Единственное, чего сервер не делает сам, — не двигает бота. Живому игроку состояние присылает
+// его клиент; за бота шаг физики делает snapshot-цикл, вызывая stepBots.
+//
+// Почему модуль загружается через динамический import. Модель бота (raceBot.mjs) тянет за собой
+// клиентские модули — Player, Course, — а те написаны для браузера и импортируют зависимости по
+// абсолютным путям вида '/shared/...'. В Node это разрешает client-loader, и до его регистрации
+// импорт невозможен. Поэтому загрузка отложена и асинхронна, а до её завершения боты просто
+// недоступны: сервер при этом работает как раньше, без единого ветвления в игровом коде.
+
+const path = require('node:path');
+const { register } = require('node:module');
+const { pathToFileURL } = require('node:url');
+
+// Ботов в одной комнате не больше этого числа. Ограничение не про процессор — замер дал 0.28 мс на
+// тик при восьми ботах против бюджета 16.7, — а про смысл: комната, где живых меньше, чем ботов,
+// перестаёт быть многопользовательской игрой и становится одиночной с декорациями.
+const MAX_BOTS_PER_ROOM = 8;
+
+let runtime = null;
+let loading = null;
+let registered = false;
+
+// Регистрация загрузчика клиентских модулей. Идемпотентна: повторный вызов ничего не делает, иначе
+// загрузчики стопкой накладывались бы друг на друга.
+function enableClientModules() {
+  if (registered) return;
+  registered = true;
+  register('./client-loader.mjs', pathToFileURL(path.join(__dirname, '/')));
+}
+
+// Загрузить модель бота. Вызывается один раз при старте сервера; до её завершения spawnBots
+// возвращает 0 и комната просто остаётся без ботов.
+function preloadBots() {
+  if (runtime) return Promise.resolve(runtime);
+  if (loading) return loading;
+  enableClientModules();
+  loading = Promise.all([import('./raceBot.mjs'), import('../client/game/Course.js'), import('three')])
+    .then(([bots, course, three]) => {
+      runtime = { RaceBot: bots.RaceBot, FIXED_DT: bots.FIXED_DT, Course: course.Course, THREE: three };
+      return runtime;
+    })
+    .catch(error => {
+      loading = null;
+      throw error;
+    });
+  return loading;
+}
+
+const botsReady = () => runtime !== null;
+
+// Завести ботов в комнате. Возвращает, сколько их получилось: вызывающему не нужно знать, почему
+// их меньше, чем он просил, — правила потолка живут здесь.
+function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
+  if (!runtime || !room || room.bots) return 0;
+  const wanted = Math.max(0, Math.min(Math.floor(count), MAX_BOTS_PER_ROOM));
+  if (!wanted) return 0;
+
+  // Одна трасса на всю комнату. Отдельная копия каждому боту стоила бы около мегабайта: геометрия
+  // у всех одна и та же, и держать её в одном экземпляре — не оптимизация, а очевидность.
+  const course = new runtime.Course(new runtime.THREE.Scene(), room.spec, { quality: 'low' });
+  const list = [];
+  for (let index = 0; index < wanted; index += 1) {
+    const bot = new runtime.RaceBot(course, { skill, seed: room.spec.seed, index });
+    const id = `bot:${index}`;
+    list.push({ id, bot });
+    room.players.set(id, {
+      id,
+      name: bot.name,
+      // Бот всегда готов: спрашивать у него готовность не у кого, а неготовый участник не дал бы
+      // комнате стартовать.
+      ready: true,
+      finished: false,
+      time: null,
+      resultChoice: null,
+      color: 0,
+      // Аккаунта нет — и это не упущение. Именно поэтому бот не попадает в таблицу рекордов:
+      // правило «строка требует подтверждённой личности» уже написано и распространяется на него
+      // само собой, без отдельной проверки на ботов.
+      accountId: null,
+      anonymousId: null,
+      disconnectedAt: null,
+      away: false,
+      slot: room.players.size,
+      loadout: null,
+      // Признак, по которому клиент рисует пометку. Игрок должен знать, с кем соревнуется.
+      bot: true,
+      ws: null,
+      last: null,
+      checkpoint: 0
+    });
+  }
+  room.bots = { course, list };
+  return list.length;
+}
+
+// Шаг всех ботов комнаты. Вызывается из snapshot-цикла — того же, что рассылает состояние живым
+// игрокам, поэтому бот двигается ровно с той частотой, с какой его видят.
+//
+// onFinish вызывается один раз на бота, дошедшего до ленты: рассылка сообщения о финише и проверка
+// конца матча — дело сервера, а не этого модуля.
+function stepBots(room, { now = Date.now(), onFinish = () => {} } = {}) {
+  const bots = room?.bots;
+  if (!bots || !runtime) return;
+  // До старта бот стоит: отсчёт идёт и живым игрокам, и ему.
+  if (now < room.startedAt) return;
+
+  // Сколько шагов физики отработать. Цикл вызывается примерно раз в 66 мс, то есть на четыре шага
+  // по 1/60. Считаем от прошлого вызова, а не берём константу: при перегрузке сервер прореживает
+  // рассылку, и бот, шагающий фиксированное число раз, начал бы отставать от собственного времени.
+  const previous = bots.lastStepAt || room.startedAt;
+  const seconds = Math.min(0.5, Math.max(0, (now - previous) / 1000));
+  bots.lastStepAt = now;
+  const steps = Math.round(seconds / runtime.FIXED_DT);
+
+  for (const entry of bots.list) {
+    const player = room.players.get(entry.id);
+    if (!player || player.finished) continue;
+    for (let step = 0; step < steps; step += 1) entry.bot.step(runtime.FIXED_DT);
+    const snapshot = entry.bot.snapshot();
+    player.last = { ...snapshot, id: entry.id };
+    player.checkpoint = snapshot.checkpoint;
+    if (entry.bot.finished) {
+      player.finished = true;
+      player.time = Math.max(0, now - room.startedAt);
+      onFinish(player);
+    }
+  }
+}
+
+// Убрать ботов. Вызывается при роспуске комнаты и при возврате в лобби: бот живёт ровно один матч,
+// как и его место в протоколе.
+function clearBots(room) {
+  const bots = room?.bots;
+  if (!bots) return 0;
+  for (const entry of bots.list) {
+    room.players.delete(entry.id);
+    try {
+      entry.bot.dispose();
+    } catch {
+      // Освобождение графики не должно мешать закрыть комнату.
+    }
+  }
+  try {
+    bots.course.dispose();
+  } catch {
+    // То же самое: комната закрывается в любом случае.
+  }
+  room.bots = null;
+  return bots.list.length;
+}
+
+const isBot = player => !!player?.bot;
+
+module.exports = {
+  MAX_BOTS_PER_ROOM,
+  preloadBots,
+  botsReady,
+  spawnBots,
+  stepBots,
+  clearBots,
+  isBot
+};

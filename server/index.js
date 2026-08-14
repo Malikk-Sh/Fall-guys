@@ -48,6 +48,15 @@ const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { IncidentDiagnostics } = require('./incidentDiagnostics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
+const { spawnBots, stepBots, clearBots } = require('./roomBots');
+
+// Засчитывать ли ботов соперниками при выдаче наград за гонку.
+//
+// Решение продуктовое, а не техническое, поэтому вынесено отдельной константой: при true игрок,
+// обогнавший ботов, получает «победу» и «пьедестал» так же, как за обгон людей — включая
+// приватную комнату, где ботов позвал он сам. При false награды требуют живых соперников, а боты
+// остаются украшением гонки.
+const BOTS_COUNT_AS_OPPONENTS = true;
 const { accountAccessPolicy } = require('./accountAccessPolicy');
 const { socialCosmetics } = require('./socialCosmetics');
 const { backupHealthStatus } = require('./backupStatus');
@@ -780,7 +789,8 @@ const publicPlayer = ({
   disconnectedAt,
   slot,
   away,
-  loadout
+  loadout,
+  bot
 }) => ({
   id,
   name,
@@ -801,7 +811,10 @@ const publicPlayer = ({
   online: !disconnectedAt,
   // `online` и `away` — разные вещи. Первое означает «связь оборвалась», второе — «игра свёрнута,
   // человек рядом». Напарнику важно различать их: в первом случае ждать бессмысленно.
-  away: !!away
+  away: !!away,
+  // Игрок вправе знать, с кем соревнуется. Признак идёт в каждом пакете о составе комнаты, а не
+  // только в итогах: соперника видно с первой секунды, и с первой же секунды понятно, кто он.
+  bot: !!bot
 });
 
 const lobbyPayload = room => ({
@@ -844,6 +857,9 @@ function assignSlots(room) {
 }
 
 function resetLobby(room, { newSeed = false } = {}) {
+  // Бот живёт ровно один матч. Оставить его в лобби значит показать игрокам участника, который
+  // никогда не нажмёт «готов» и о котором нельзя сказать, дождётся он реванша или нет.
+  clearBots(room);
   setRoomState(room, ROOM_STATE.LOBBY);
   room.startedAt = null;
   room.matchId = null;
@@ -879,7 +895,14 @@ function resetLobby(room, { newSeed = false } = {}) {
 function dropPlayer(room, playerId) {
   room.players.delete(playerId);
   room.updatedAt = Date.now();
-  if (!room.players.size) {
+  // Комната закрывается, когда ушли ЛЮДИ, а не когда опустел список участников.
+  //
+  // Боты живут в том же списке, поэтому его размер после ухода последнего игрока до нуля уже не
+  // доходит: комната провисела бы с одними ботами до истечения TTL, занимая слот и продолжая
+  // гонять физику для пустой трибуны.
+  const humans = [...room.players.values()].filter(player => !player.bot);
+  if (!humans.length) {
+    clearBots(room);
     setRoomState(room, ROOM_STATE.CLOSING);
     rooms.delete(room.code);
     log('info', 'room_closed', { roomId: room.code });
@@ -887,9 +910,10 @@ function dropPlayer(room, playerId) {
   }
 
   // Миграция хоста детерминирована (ТЗ 3.6): сначала те, кто на связи, среди них — вошедший раньше.
+  // Бот хостом стать не может: он не нажмёт «начать» и не сменит настройки.
   if (room.host === playerId) {
     const previousHostId = room.host;
-    const candidates = [...room.players.values()].sort((a, b) => {
+    const candidates = humans.sort((a, b) => {
       if (!!a.disconnectedAt !== !!b.disconnectedAt) return a.disconnectedAt ? 1 : -1;
       return a.joinOrder - b.joinOrder;
     });
@@ -1866,12 +1890,22 @@ function finishMatch(room) {
       // поэтому первое вхождение и есть лучшее.
       const standings = room.results?.board || [];
       const bestByAccount = new Map();
+      // Боты считаются соперниками наравне с людьми: обогнать их — результат, и награда за него
+      // выдаётся. Переключается здесь одной строкой, если решение изменится.
+      let botFinishers = 0;
       for (const entry of standings) {
-        const accountId = room.players.get(entry.id)?.accountId;
+        const participant = room.players.get(entry.id);
+        if (participant?.bot) {
+          if (BOTS_COUNT_AS_OPPONENTS) botFinishers += 1;
+          continue;
+        }
+        const accountId = participant?.accountId;
         if (!accountId || bestByAccount.has(accountId)) continue;
         bestByAccount.set(accountId, bestByAccount.size + 1);
       }
-      const finishers = bestByAccount.size;
+      // Защита от самонаграждения остаётся прежней и касается только людей: несколько вкладок
+      // одного аккаунта по-прежнему считаются одним участником.
+      const finishers = bestByAccount.size + botFinishers;
       for (const [accountId, place] of bestByAccount) {
         accounts.recordRaceFinish({ accountId, place, finishers });
       }
@@ -2642,6 +2676,26 @@ const snapshotTimer = setInterval(() => {
       continue;
     }
 
+    // Бота двигает сервер: живому игроку состояние присылает его клиент, а за бота шаг физики
+    // делается здесь — в том же цикле, который рассылает состояние, поэтому бот двигается ровно с
+    // той частотой, с какой его видят.
+    if (room.bots) {
+      stepBots(room, {
+        now,
+        onFinish: player => {
+          if (!room.firstFinishAt) room.firstFinishAt = now;
+          broadcast(room, {
+            type: S2C.PLAYER_FINISHED,
+            matchId: room.matchId,
+            id: player.id,
+            time: player.time,
+            board: leaderboard(room)
+          });
+          checkMatchEnd(room);
+        }
+      });
+    }
+
     const players = [...room.players.values()]
       .filter(player => player.last)
       .map(player => ({
@@ -2732,7 +2786,13 @@ const heartbeatTimer = setInterval(() => {
     );
   }
   expireSessions(now);
-  for (const [code, room] of rooms) if (now - room.updatedAt > ROOM_TTL) rooms.delete(code);
+  for (const [code, room] of rooms) {
+    if (now - room.updatedAt <= ROOM_TTL) continue;
+    // Освобождаем графику ботов до того, как комната исчезнет: иначе их сцены остались бы жить
+    // ссылками из ничего.
+    clearBots(room);
+    rooms.delete(code);
+  }
   ipRoomOps.cleanup(now, { force: true });
   for (const [, limiter] of Object.values(httpLimits)) limiter.cleanup(now, { force: true });
 }, 15000);
@@ -2832,6 +2892,20 @@ if (require.main === module) {
 // Сброс счётчиков по адресу. Нужен тестам: они ходят с одного 127.0.0.1 и за минуту создают
 // комнат больше, чем позволено живому человеку. Без сброса набор разваливался непредсказуемо —
 // падал тот тест, который случайно пересёк границу окна.
+// Завести ботов в комнате. Экспортируется ради тестов и добора: правила потолка живут в roomBots.
+//
+// Состав комнаты после этого обязательно рассылается. Само по себе добавление меняет только карту
+// на сервере, и без рассылки соперники существуют, бегут и финишируют, но в лобби их не видно —
+// именно так это и выглядело при первой проверке в браузере.
+function addRoomBots(room, options) {
+  const added = spawnBots(room, options);
+  if (added) {
+    assignSlots(room);
+    emitLobby(room);
+  }
+  return added;
+}
+
 function resetRateLimits() {
   ipRoomOps.clear();
   ipConnections.clear();
@@ -2839,6 +2913,7 @@ function resetRateLimits() {
 }
 
 module.exports = {
+  addRoomBots,
   app,
   server,
   resetRateLimits,

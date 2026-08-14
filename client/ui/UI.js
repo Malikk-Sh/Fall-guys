@@ -34,6 +34,16 @@ function bestOf(...times) {
 }
 
 const $ = selector => document.querySelector(selector);
+
+// Пометка бота. Отдельной функцией, потому что рисуется в двух местах — в составе комнаты и в
+// итоговой таблице, — и расходиться этим двум пометкам нельзя.
+function botBadge() {
+  const badge = document.createElement('b');
+  badge.className = 'bot-badge';
+  badge.textContent = 'БОТ';
+  badge.title = 'Соперник под управлением компьютера';
+  return badge;
+}
 const selectAll = selector => [...document.querySelectorAll(selector)];
 const cssColor = (value, fallback = 0xff4f91) =>
   `#${Number(Number.isFinite(value) ? value : fallback)
@@ -816,6 +826,10 @@ export class UI {
       copy.className = 'player-copy';
       const name = document.createElement('span');
       name.textContent = `${player.id === data.host ? '♛ ' : ''}${player.name}${player.id === selfId ? ' (вы)' : ''}`;
+      // Соперника-бота видно с первой секунды, а не только в итогах. Выдавать бота за человека —
+      // обман, который игрок всё равно раскроет по поведению, и тогда он перестанет верить и
+      // таблице рекордов.
+      if (player.bot) name.append(botBadge());
       const cosmetics = document.createElement('small');
       cosmetics.className = 'player-cosmetics';
       cosmetics.textContent =
@@ -1345,6 +1359,7 @@ export class UI {
         .padStart(6, '0')}`;
       const name = document.createElement('span');
       name.textContent = `${player.name}${player.id === selfId ? ' (вы)' : ''}`;
+      if (player.bot) name.append(botBadge());
       const time = document.createElement('span');
       time.textContent = formatTime(player.time);
       row.append(rank, color, name, time);

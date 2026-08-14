@@ -2525,3 +2525,15 @@ body.large-ui .menu-card {
     width: 100%;
   }
 }
+
+/* Пометка бота рядом с именем. Заметная, но не кричащая: это уточнение, а не предупреждение. */
+.bot-badge {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #cfc6ef;
+  font-size: 0.62em;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}

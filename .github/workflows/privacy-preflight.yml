@@ -1,0 +1,42 @@
+name: Privacy policy preflight
+
+on:
+  push:
+    branches:
+      - feat/privacy-policy
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/privacy-policy
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply permanent privacy changes
+        run: python3 .github/scripts/apply_privacy_policy.py
+      - name: Format changed files
+        run: npx prettier --write client/index.html client/styles.css client/privacy/index.html server/privacyPage.test.mjs package.json
+      - name: Lint
+        run: npm run check
+      - name: Focused privacy test
+        run: node --test server/privacyPage.test.mjs
+      - name: Diff check
+        run: git diff --check
+      - name: Save verified batch and remove temporary gate
+        run: |
+          rm -f .github/workflows/privacy-preflight.yml .github/scripts/apply_privacy_policy.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add public privacy policy for account sign-in'
+          git push origin HEAD:feat/privacy-policy

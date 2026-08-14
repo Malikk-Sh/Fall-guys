@@ -121,3 +121,16 @@ test('гоночные счётчики едут в прогрессе акка�
   accounts.recordRaceFinish({ accountId: id, place: 1, finishers: 4 });
   assert.deepEqual(accounts.progress(id).race, { finishes: 1, podiums: 1, wins: 1, bestPlace: 1 });
 });
+
+test('место среди ботов считается по протоколу, а не по числу людей', () => {
+  const { accounts, id } = freshAccounts();
+  // Человек пришёл четвёртым после трёх ботов. Первая редакция записывала его первым из четырёх —
+  // то есть выдавала победу и пьедестал за проигранный забег.
+  accounts.recordRaceFinish({ accountId: id, place: 4, finishers: 4 });
+
+  const ids = unlocked(accounts, id);
+  assert.ok(ids.has('race-first-finish'), 'финиш засчитывается в любом случае');
+  assert.ok(!ids.has('race-win'), 'победы за четвёртое место быть не может');
+  assert.ok(!ids.has('race-podium'), 'пьедестала за четвёртое место быть не может');
+  assert.equal(accounts.raceStats(id).bestPlace, 4);
+});

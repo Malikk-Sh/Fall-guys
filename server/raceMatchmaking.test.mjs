@@ -372,6 +372,64 @@ test('одинокий игрок не ждёт вечно: к нему выхо
   assert.ok(new Set(bots.map(bot => bot.name)).size === bots.length, 'имена ботов не должны повторяться');
 });
 
+// Занять все слоты активных матчей. Комнаты-пустышки не участвуют ни в подборе, ни в рассылке:
+// участников в них нет, отсчёт заведомо не кончается, — их единственное дело быть посчитанными
+// в capacityStatus.
+function fillMatchCapacity() {
+  const busy = [];
+  for (let index = 0; index < 300; index += 1) {
+    const code = `BUSY${index}`;
+    const room = {
+      code,
+      mode: 'race',
+      state: ROOM_STATE.COUNTDOWN,
+      startedAt: Date.now() + 600_000,
+      updatedAt: Date.now(),
+      players: new Map(),
+      bots: null,
+      snapshotSequence: 0
+    };
+    rooms.set(code, room);
+    busy.push(code);
+  }
+  return () => {
+    for (const code of busy) rooms.delete(code);
+  };
+}
+
+test('комната с готовыми ботами стартует, как только освободится место', async t => {
+  // Отдельный случай, который легко пропустить. Если потолок активных матчей упёрся ровно в срок
+  // набора, боты уже вышли, а старт отложен. К следующему сроку добор возвращает ноль — не «ботов
+  // нет», а «они уже здесь», — и ветка отказа переназначала срок бесконечно: комната с готовым
+  // составом ждала бы вечно, даже когда нагрузка давно спала.
+  await listen();
+  const url = urlFor();
+  const client = await findRace(url);
+  await client.wait('matchmakingWaiting');
+  const release = fillMatchCapacity();
+
+  t.after(async () => {
+    release();
+    await client.close();
+    await stop();
+  });
+
+  const [room] = matchmadeRooms();
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  assert.ok(room.bots, 'боты должны были выйти ещё в первый срок');
+  assert.equal(room.state, ROOM_STATE.LOBBY, 'при полном сервере старт откладывается');
+  assert.ok(room.fillDeadline, 'отложенный старт обязан назначить новый срок');
+
+  // Место освободилось.
+  release();
+  room.fillDeadline = Date.now() - 1;
+  await new Promise(resolve => setTimeout(resolve, 300));
+
+  assert.notEqual(room.state, ROOM_STATE.LOBBY, 'освободилось место — забег обязан начаться');
+});
+
 test('пришедшие люди отменяют добор: ботов звать незачем', async t => {
   await listen();
   const url = urlFor();

@@ -17,25 +17,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RaceBot, BOT_SKILLS, BOT_SKILL_IDS, FIXED_DT } from './raceBot.mjs';
+import { RaceBot, BotField, BOT_SKILLS, BOT_SKILL_IDS, FIXED_DT } from './raceBot.mjs';
 import { createCourseSpec } from '/shared/courseSpec.js';
 import { Course } from '../client/game/Course.js';
 
 const SEEDS = [4101, 4102, 4103, 4104];
 const LIMIT_STEPS = 60 * 200;
 
-function race(skill, seed, difficulty = 'normal') {
+// Поле забега: трасса, часы и боты на ней. Шагает всегда оно, даже когда бот один, — часы трассы
+// принадлежат полю, и бот, двигающий трассу сам, сломал бы её для соседа.
+function field(seed, difficulty, make) {
   const spec = createCourseSpec(seed, difficulty);
   const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
-  const bot = new RaceBot(course, { skill, seed, index: 0 });
+  return new BotField(course, make(course));
+}
+
+function race(skill, seed, difficulty = 'normal') {
+  const run = field(seed, difficulty, course => [new RaceBot(course, { skill, seed, index: 0 })]);
+  const [bot] = run.bots;
   let steps = 0;
   while (!bot.finished && steps < LIMIT_STEPS) {
-    bot.step();
+    run.step();
     steps += 1;
   }
   const result = { finished: bot.finished, seconds: steps * FIXED_DT };
-  bot.dispose();
-  course.dispose();
+  run.dispose();
   return result;
 }
 
@@ -84,13 +90,88 @@ test('забег бота воспроизводится в точности', (
 test('разные боты одного матча ведут себя по-разному', () => {
   // Один сид трассы, разные номера — иначе все боты в комнате побегут одинаково и будут выглядеть
   // одним игроком, размноженным четырежды.
-  const spec = createCourseSpec(SEEDS[1], 'normal');
-  const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
-  const bots = [0, 1, 2].map(index => new RaceBot(course, { skill: 'steady', seed: SEEDS[1], index }));
-  for (let step = 0; step < 60 * 12; step += 1) for (const bot of bots) bot.step();
-  const positions = bots.map(bot => bot.position.z.toFixed(2));
+  const run = field(SEEDS[1], 'normal', course =>
+    [0, 1, 2].map(index => new RaceBot(course, { skill: 'steady', seed: SEEDS[1], index }))
+  );
+  for (let step = 0; step < 60 * 12; step += 1) run.step();
+  const positions = run.bots.map(bot => bot.position.z.toFixed(2));
   assert.equal(new Set(positions).size, positions.length, `боты идут строем: ${positions.join(', ')}`);
-  for (const bot of bots) bot.dispose();
+  run.dispose();
+});
+
+test('соседи по трассе не влияют на забег бота', () => {
+  // Трасса на комнату одна, и она ИЗМЕНЯЕМАЯ: движущаяся плита подхватывает стоящего на ней ровно
+  // на разницу со своим прошлым положением. Пока каждый бот двигал трассу сам, под своё время,
+  // второй отматывал плиту назад к своему моменту — и отмотка прилетала подхватом. Замер на этом
+  // же сиде давал расхождение до полутора единиц у второго бота и до восьми на «хаосе»: соперника
+  // сдёргивало с плиты на ровном месте.
+  //
+  // Проверять надо именно НЕ ПЕРВОГО бота: первый шагал по трассе, которую сам же и двигал, и
+  // всегда оставался прав. Ошибку получали те, кто шёл за ним.
+  const SEED = SEEDS[2];
+  const STEPS = 60 * 45;
+  const crowd = field(SEED, 'normal', course =>
+    [0, 1, 2, 3].map(index => new RaceBot(course, { skill: 'steady', seed: SEED, index }))
+  );
+  // Трасса без движущихся плит проверяла бы пустое место.
+  assert.ok(crowd.course.dynamic.length > 0, 'на трассе нет движущихся плит — проверять нечего');
+  for (let step = 0; step < STEPS; step += 1) crowd.step();
+
+  for (const index of [1, 2, 3]) {
+    const alone = field(SEED, 'normal', course => [
+      new RaceBot(course, { skill: 'steady', seed: SEED, index })
+    ]);
+    for (let step = 0; step < STEPS; step += 1) alone.step();
+    const solo = alone.bots[0].position;
+    const together = crowd.bots[index].position;
+    assert.equal(together.z.toFixed(4), solo.z.toFixed(4), `соседи увели бота ${index} по дистанции`);
+    assert.equal(together.y.toFixed(4), solo.y.toFixed(4), `соседи уронили бота ${index} с плиты`);
+    alone.dispose();
+  }
+  crowd.dispose();
+});
+
+test('после реванша бот бежит заново, а не стоит на ленте', () => {
+  const run = field(SEEDS[0], 'normal', course => [
+    new RaceBot(course, { skill: 'sharp', seed: SEEDS[0], index: 0 })
+  ]);
+  const [bot] = run.bots;
+  let steps = 0;
+  while (!bot.finished && steps < LIMIT_STEPS) {
+    run.step();
+    steps += 1;
+  }
+  assert.ok(bot.finished, 'первый забег не дошёл');
+
+  run.reset(1);
+  assert.equal(bot.finished, false, 'после сброса бот всё ещё на финише');
+  assert.ok(bot.position.z > 0, `бот не вернулся на старт: z=${bot.position.z}`);
+  let again = 0;
+  while (!bot.finished && again < LIMIT_STEPS) {
+    run.step();
+    again += 1;
+  }
+  assert.ok(bot.finished, 'второй забег не дошёл');
+  run.dispose();
+});
+
+test('номер забега сдвигает случайность бота, но не ломает воспроизводимость', () => {
+  // Случайность бота детерминирована сидом — без этого упавший тест не разобрать, а жалобу на бота
+  // не проверить. Плата за это в том, что реванш на той же трассе рискует стать посекундным
+  // повтором первого; номер забега сдвигает поток, оставляя каждый забег воспроизводимым.
+  const spec = createCourseSpec(SEEDS[0], 'normal');
+  const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
+  const bot = new RaceBot(course, { skill: 'rookie', seed: SEEDS[0], index: 0 });
+  const draw = () => [0, 1, 2, 3, 4].map(() => bot.random());
+
+  bot.reset(0);
+  const first = draw();
+  bot.reset(1);
+  const second = draw();
+  bot.reset(0);
+  assert.deepEqual(draw(), first, 'один и тот же забег обязан повторяться в точности');
+  assert.notDeepEqual(second, first, 'реванш обязан идти по другому потоку случайности');
+  bot.dispose();
   course.dispose();
 });
 

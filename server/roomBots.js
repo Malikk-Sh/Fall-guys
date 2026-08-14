@@ -48,7 +48,13 @@ function preloadBots() {
   enableClientModules();
   loading = Promise.all([import('./raceBot.mjs'), import('../client/game/Course.js'), import('three')])
     .then(([bots, course, three]) => {
-      runtime = { RaceBot: bots.RaceBot, FIXED_DT: bots.FIXED_DT, Course: course.Course, THREE: three };
+      runtime = {
+        RaceBot: bots.RaceBot,
+        BotField: bots.BotField,
+        FIXED_DT: bots.FIXED_DT,
+        Course: course.Course,
+        THREE: three
+      };
       return runtime;
     })
     .catch(error => {
@@ -71,15 +77,21 @@ function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
   if (!wanted) return 0;
 
   // Одна трасса на всю комнату. Отдельная копия каждому боту стоила бы около мегабайта: геометрия
-  // у всех одна и та же, и держать её в одном экземпляре — не оптимизация, а очевидность.
+  // у всех одна и та же, и держать её в одном экземпляре — не оптимизация, а очевидность. Общая
+  // трасса означает и общие часы — их держит поле (BotField), а не каждый бот сам по себе.
   const course = new runtime.Course(new runtime.THREE.Scene(), room.spec, { quality: 'low' });
+  const field = new runtime.BotField(course);
   const list = [];
+  // Бот встаёт в очередь входа после всех, кто уже в комнате: по этому порядку раздаются слоты, и
+  // сравнение с undefined давало бы в компараторе NaN — то есть «равно» для любой пары.
+  let joinOrder = Number.isFinite(room.nextJoinOrder) ? room.nextJoinOrder : room.players.size;
   for (let index = 0; index < wanted; index += 1) {
     const bot = new runtime.RaceBot(course, {
       skill: skills[index % skills.length],
       seed: room.spec.seed,
       index
     });
+    field.bots.push(bot);
     const id = `bot:${index}`;
     list.push({ id, bot });
     room.players.set(id, {
@@ -100,6 +112,7 @@ function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
       disconnectedAt: null,
       away: false,
       slot: room.players.size,
+      joinOrder: joinOrder++,
       loadout: null,
       // Признак, по которому клиент рисует пометку. Игрок должен знать, с кем соревнуется.
       bot: true,
@@ -108,8 +121,48 @@ function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
       checkpoint: 0
     });
   }
-  room.bots = { course, list };
+  if (Number.isFinite(room.nextJoinOrder)) room.nextJoinOrder = joinOrder;
+  // spec запоминается, чтобы отличить реванш на той же трассе от смены настроек: во втором случае
+  // геометрия под ботами уже не та, и переигрывать на ней нельзя.
+  room.bots = { field, course, list, spec: room.spec, run: 0 };
   return list.length;
+}
+
+// Перезапуск ботов на новый забег. Вызывается там же, где начинается отсчёт, — реванш, повторный
+// старт после смены настроек.
+//
+// Без этого реванш выглядел так: у людей забег начинался заново, а боты стояли на ленте с прошлого
+// раза и «финишировали» в первую же миллисекунду — их время сбрасывает комната, а внутреннее
+// состояние модели не сбрасывал никто.
+function resetBots(room) {
+  const bots = room?.bots;
+  if (!bots || !runtime) return 0;
+
+  // Сменилась трасса — прежняя геометрия боту не годится: он бежал бы по плитам, которых на новой
+  // трассе нет. Пересобираем тем же составом и с теми же уровнями.
+  if (bots.spec !== room.spec) {
+    const skills = bots.list.map(entry => entry.bot.skill.id);
+    const count = bots.list.length;
+    clearBots(room);
+    return spawnBots(room, { count, skill: skills });
+  }
+
+  bots.run += 1;
+  bots.lastStepAt = null;
+  bots.field.reset(bots.run);
+  for (const entry of bots.list) {
+    const player = room.players.get(entry.id);
+    if (!player) continue;
+    Object.assign(player, {
+      finished: false,
+      time: null,
+      last: null,
+      checkpoint: 0,
+      ready: true,
+      resultChoice: null
+    });
+  }
+  return bots.list.length;
 }
 
 // Шаг всех ботов комнаты. Вызывается из snapshot-цикла — того же, что рассылает состояние живым
@@ -131,10 +184,14 @@ function stepBots(room, { now = Date.now(), onFinish = () => {} } = {}) {
   bots.lastStepAt = now;
   const steps = Math.round(seconds / runtime.FIXED_DT);
 
+  // Шагает ПОЛЕ, а не каждый бот по очереди: трасса у них общая, и часы у неё должны быть одни.
+  // Иначе второй бот отматывал бы движущуюся плиту назад, к своему моменту времени, и эта отмотка
+  // прилетала бы подхватом первому — тот съезжал бы с плиты сам собой.
+  for (let step = 0; step < steps; step += 1) bots.field.step(runtime.FIXED_DT);
+
   for (const entry of bots.list) {
     const player = room.players.get(entry.id);
     if (!player || player.finished) continue;
-    for (let step = 0; step < steps; step += 1) entry.bot.step(runtime.FIXED_DT);
     const snapshot = entry.bot.snapshot();
     player.last = { ...snapshot, id: entry.id };
     player.checkpoint = snapshot.checkpoint;
@@ -151,18 +208,11 @@ function stepBots(room, { now = Date.now(), onFinish = () => {} } = {}) {
 function clearBots(room) {
   const bots = room?.bots;
   if (!bots) return 0;
-  for (const entry of bots.list) {
-    room.players.delete(entry.id);
-    try {
-      entry.bot.dispose();
-    } catch {
-      // Освобождение графики не должно мешать закрыть комнату.
-    }
-  }
+  for (const entry of bots.list) room.players.delete(entry.id);
   try {
-    bots.course.dispose();
+    bots.field.dispose();
   } catch {
-    // То же самое: комната закрывается в любом случае.
+    // Освобождение графики не должно мешать закрыть комнату.
   }
   room.bots = null;
   return bots.list.length;
@@ -175,6 +225,7 @@ module.exports = {
   preloadBots,
   botsReady,
   spawnBots,
+  resetBots,
   stepBots,
   clearBots,
   isBot

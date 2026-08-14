@@ -163,21 +163,72 @@ class BotInput {
   }
 }
 
+// Поле забега: одна трасса, одни часы, сколько угодно ботов.
+//
+// Существует ровно ради того, чтобы часы трассы были ОДНИ. Общая трасса — не только экономия
+// памяти, но и общее изменяемое состояние: Course.updateDynamic считает подхват движущейся плиты
+// как разницу с её прошлым положением. Пока каждый бот сам двигал трассу под своё время, второй
+// бот отматывал плиту назад к своему моменту, и эта отмотка прилетала подхватом всем, кто на плите
+// стоял: ботов срывало с движущихся плит на ровном месте. Одиночные тесты этого не видели — с одним
+// ботом отматывать нечего.
+//
+// Поэтому шаг устроен так: трасса сдвигается один раз, затем по ней шагают все.
+export class BotField {
+  constructor(course, bots = []) {
+    this.course = course;
+    this.bots = bots;
+    this.elapsed = 0;
+  }
+
+  step(dt = FIXED_DT) {
+    this.elapsed += dt;
+    this.course.update(dt, this.elapsed);
+    for (const bot of this.bots) bot.step(dt);
+  }
+
+  // Новый забег на той же трассе: часы с нуля, боты — с начала.
+  reset(run = 0) {
+    this.elapsed = 0;
+    for (const bot of this.bots) bot.reset(run);
+  }
+
+  dispose() {
+    for (const bot of this.bots) bot.dispose();
+    this.bots = [];
+    this.course.dispose();
+  }
+}
+
 export class RaceBot {
   // course приходит СНАРУЖИ и общий на комнату.
   //
   // Каждый бот со своей копией трассы стоил бы около мегабайта памяти и полутора десятков
   // миллисекунд на создание (замер: 8 ботов — 9 МБ и 130 мс). Геометрия у всех в комнате одна и
   // та же, и держать её в одном экземпляре не оптимизация, а очевидное следствие этого факта.
+  //
+  // Двигает трассу не бот, а поле (BotField): общих часов на всех ровно одни. Подробности — там же.
   constructor(course, { skill = 'steady', seed = 1, index = 0, name = null } = {}) {
     this.skill = BOT_SKILLS[skill] || BOT_SKILLS.steady;
     this.index = index;
     this.name = name || NAMES[(seed + index * 7) % NAMES.length];
     this.course = course;
-    this.random = seededRandom(seed * 2654435761 + index * 40503);
+    this.baseSeed = seed * 2654435761 + index * 40503;
     this.scene = new THREE.Scene();
-    this.player = new Player(this.scene, course, NO_EFFECTS);
     this.input = new BotInput();
+    this.player = null;
+    this.reset();
+  }
+
+  // Состояние ОДНОГО забега. Вынесено из конструктора ради реванша: комната после него остаётся та
+  // же, и боты в ней те же — с теми же именами и уровнем, — но бежать они обязаны заново, а не
+  // стоять на финишной ленте с прошлого раза.
+  //
+  // run сдвигает генератор: без него повторный забег на той же трассе повторялся бы посекундно,
+  // потому что случайность бота детерминирована сидом.
+  reset(run = 0) {
+    this.player?.dispose();
+    this.player = new Player(this.scene, this.course, NO_EFFECTS);
+    this.random = seededRandom(this.baseSeed + run * 0x9e3779b1);
     this.elapsed = 0;
     this.frame = 0;
 
@@ -243,7 +294,6 @@ export class RaceBot {
       this.input.moveX = 0;
       this.input.moveForward = 0;
       this.input.holding.jump = false;
-      this.course.update(dt, this.elapsed);
       player.step(dt, this.input, 0, this.elapsed);
       return;
     }
@@ -289,7 +339,6 @@ export class RaceBot {
     }
 
     const beforeY = player.position.y;
-    this.course.update(dt, this.elapsed);
     player.step(dt, this.input, 0, this.elapsed);
     // Упал и вернулся на чекпоинт — промах отработан и списан с бюджета, дальше бежим честно.
     if (Math.abs(player.position.y - beforeY) > 4) {

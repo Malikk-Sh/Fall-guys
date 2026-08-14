@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { preloadBots, spawnBots, stepBots, clearBots, MAX_BOTS_PER_ROOM } = require('./roomBots');
+const { preloadBots, spawnBots, resetBots, stepBots, clearBots, MAX_BOTS_PER_ROOM } = require('./roomBots');
 const { createCourseSpec } = require('./gameRules');
 
 await preloadBots();
@@ -109,6 +109,51 @@ test('дошедший бот сообщает о финише ровно оди
   assert.equal(player.finished, true);
   assert.ok(player.time > 0, 'время финиша должно быть положительным');
   clearBots(r);
+});
+
+test('перезапуск возвращает дошедшего бота на старт', () => {
+  const started = Date.now() - 100;
+  const r = room({ startedAt: started });
+  spawnBots(r, { count: 1, skill: 'sharp' });
+  let now = started;
+  for (let tick = 0; tick < 3000; tick += 1) {
+    now += 66;
+    stepBots(r, { now });
+  }
+  const [player] = [...r.players.values()];
+  assert.equal(player.finished, true, 'бот должен был дойти');
+
+  // Реванш: комната та же, забег новый.
+  r.startedAt = Date.now();
+  assert.equal(resetBots(r), 1);
+  assert.equal(player.finished, false, 'иначе бот «финиширует» на первом же тике нового забега');
+  assert.equal(player.time, null);
+  assert.equal(r.players.get('bot:0').ready, true);
+  clearBots(r);
+});
+
+test('смена трассы пересобирает ботов под новую', () => {
+  const r = room();
+  spawnBots(r, { count: 2, skill: ['rookie', 'sharp'] });
+  const before = r.bots.course;
+  // Хост сменил сложность: прежняя геометрия боту больше не годится — он бежал бы по плитам,
+  // которых на новой трассе нет.
+  r.spec = createCourseSpec(8888, 'chaos');
+  assert.equal(resetBots(r), 2);
+  assert.equal(r.bots.spec, r.spec);
+  assert.notEqual(r.bots.course, before, 'трасса ботов должна быть пересобрана');
+  assert.deepEqual(
+    r.bots.list.map(entry => entry.bot.skill.id),
+    ['rookie', 'sharp'],
+    'уровни соперников после смены настроек те же'
+  );
+  assert.equal(r.players.size, 2);
+  clearBots(r);
+});
+
+test('перезапуск без ботов безопасен', () => {
+  const r = room();
+  assert.equal(resetBots(r), 0);
 });
 
 test('уборка снимает ботов со счёта комнаты', () => {

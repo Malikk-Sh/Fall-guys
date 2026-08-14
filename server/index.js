@@ -1042,7 +1042,10 @@ function expireDisconnectedPlayers(now = Date.now()) {
   }
 }
 
-function addPlayer(room, ws, name, playerId = null) {
+// playerId из сообщения сюда больше не приходит. Клиент его по-прежнему присылает — старые версии
+// в ходу, и ломать им вход незачем, — но сервер поле игнорирует: личность игрока определяется
+// только подтверждённой identity сокета.
+function addPlayer(room, ws, name) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
   const authenticated = networkIdentity.accountForSocket(ws, accounts);
@@ -1050,11 +1053,13 @@ function addPlayer(room, ws, name, playerId = null) {
   room.players.set(ws.id, {
     id: ws.id,
     name: playerName,
-    // Хранится на игроке, но не попадает ни в один рассылаемый пакет: это ключ чужой строки в
-    // таблице рекордов, и знать его соседям по комнате незачем.
-    anonymousId:
-      authenticated?.id ||
-      (typeof playerId === 'string' && playerId.trim() ? playerId.trim().slice(0, 64) : null),
+    // Ключ строки в таблице рекордов. У гостя его нет вовсе — и это не пропуск, а решение: без
+    // подтверждённой личности запись некуда класть, кроме как под ключ, выбранный самим клиентом.
+    // Именно так и было раньше, и это позволяло занять чужую строку.
+    //
+    // Хранится на игроке, но не попадает ни в один рассылаемый пакет: знать чужой ключ соседям по
+    // комнате незачем.
+    anonymousId: authenticated?.id || null,
     // Серверный прогресс никогда не доверяет присланному playerId: только identity,
     // которая была подтверждена один раз и привязана к этому WebSocket.
     accountId: authenticated?.id || null,
@@ -1185,8 +1190,8 @@ function enqueueCoop(ws, message) {
   const [partner] = coopMatchmaking.splice(partnerIndex, 1);
   const chapterId = requested || partner.chapterId || COOP_CHAPTER_IDS[0];
   const room = createCoopRoom(chapterId, partner.ws.id);
-  addPlayer(room, partner.ws, partner.name, partner.playerId);
-  addPlayer(room, ws, message.name, message.playerId);
+  addPlayer(room, partner.ws, partner.name);
+  addPlayer(room, ws, message.name);
   for (const player of room.players.values()) player.ready = true;
   for (const player of room.players.values()) gameplay.count('match_found', dims(room, player));
   gameplay.observe(
@@ -1339,7 +1344,7 @@ function enqueueRace(ws, message) {
   const existing = openRaceRoomFor(ws, requested);
   // Сложность выбирается только когда комнату действительно надо создать.
   const room = existing || createMatchmadeRaceRoom(safeDifficulty(requested), ws.id);
-  addPlayer(room, ws, message.name, message.playerId);
+  addPlayer(room, ws, message.name);
   // Готовность в публичной комнате не спрашивают: игрок уже сказал «найти гонку», и второй раз
   // подтверждать то же самое — лишний клик перед стартом, которого он и так ждёт.
   const player = room.players.get(ws.id);
@@ -2134,7 +2139,7 @@ wss.on('connection', (ws, req) => {
       rooms.set(code, room);
       trackEvent(productEvents, 'roomCreated');
       log('info', 'room_created', { roomId: code, mode });
-      addPlayer(room, ws, message.name, message.playerId);
+      addPlayer(room, ws, message.name);
       incidentForSocket(ws, { kind: 'room', code: 'created' });
       return;
     },
@@ -2159,7 +2164,7 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       }
       trackEvent(productEvents, 'roomJoined');
-      addPlayer(room, ws, message.name, message.playerId);
+      addPlayer(room, ws, message.name);
       incidentForSocket(ws, { kind: 'room', code: 'joined' });
       return;
     }

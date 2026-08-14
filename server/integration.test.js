@@ -1144,14 +1144,84 @@ test('оставшийся один доигрывает кооп-главу и 
   assert.equal(results.unranked, 'left', 'глава, доигранная в одиночку, рекордом не считается');
 });
 
+// Зеркало предыдущего теста: тот же честный забег, но игроки не вошли в аккаунт.
+//
+// Это и есть граница гостевого режима, и проверять её нужно сквозным сценарием, а не модульно:
+// раньше гость попадал в таблицу именно потому, что путь от сокета до записи проходил через
+// присланный им же идентификатор, и ни один модульный тест этого стыка не видел.
+test('забег гостя не попадает в таблицу рекордов', async t => {
+  await listen();
+  const port = server.address().port;
+  const url = `ws://127.0.0.1:${port}/ws`;
+  const first = new TestClient(url);
+  const second = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([first.close(), second.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([first.wait('hello'), second.wait('hello')]);
+  // Идентификатор всё ещё присылается — старые клиенты так делают. Сервер обязан его проигнорировать.
+  first.send('create', { name: 'Гость-1', playerId: 'x'.repeat(32), mode: 'race', difficulty: 'easy' });
+  const created = await first.wait('lobby', m => m.players.length === 1);
+  second.send('join', { name: 'Гость-2', playerId: 'y'.repeat(32), code: created.code });
+  await first.wait('lobby', m => m.players.length === 2);
+  first.send('ready', { ready: true });
+  second.send('ready', { ready: true });
+  await first.wait('lobby', m => m.players.every(p => p.ready));
+  first.send('start');
+  const started = await first.wait('start');
+  await waitForStart(started.at);
+
+  await Promise.all([
+    runHonestly(first, started.spec, started.matchId),
+    runHonestly(second, started.spec, started.matchId, { step: HONEST_STEP * 0.9 })
+  ]);
+  const results = await first.wait('results', () => true, WAIT_MS);
+  // Забег честный и признан таковым — дело не в проверке движения, а именно в отсутствии аккаунта.
+  assert.ok(results.trusted, 'забег гостя всё равно должен проходить проверку движения');
+
+  const params = new URLSearchParams({
+    seed: started.spec.seed,
+    difficulty: started.spec.difficulty,
+    limit: '10'
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/leaderboard?${params}`);
+  const table = await response.json();
+  assert.equal(table.entries.length, 0, 'гость не занимает строку в таблице рекордов');
+
+  // Подставить чужой ключ тоже нельзя: раньше именно так неавторизованный сокет и выбирал, какой
+  // строкой таблицы стать.
+  const claimed = await fetch(
+    `http://127.0.0.1:${port}/leaderboard?${new URLSearchParams({
+      seed: started.spec.seed,
+      difficulty: started.spec.difficulty,
+      limit: '10',
+      playerId: 'x'.repeat(32)
+    })}`
+  ).then(r => r.json());
+  assert.equal(claimed.standing, null, 'присланный идентификатор не даёт места в рейтинге');
+});
+
 // Сквозная проверка таблицы рекордов: от honest-финиша в гонке до строки, которую увидит игрок в
 // лобби. По частям это покрыто модульными тестами, но между ними два стыка, где легко разойтись, —
-// анонимный идентификатор доходит от клиента до записи, а место и отставание считаются по той же
+// личность игрока доходит от авторизации до записи, а место и отставание считаются по той же
 // трассе, что и забег.
+//
+// Оба забега здесь идут от ВОШЕДШИХ игроков. Раньше сокеты были неавторизованными и присылали
+// идентификатор сами — тогда это и было единственным способом попасть в таблицу. Теперь так нельзя:
+// гостю строки не полагается, и зеркальный сценарий проверяется тестом ниже.
 test('честный забег попадает в таблицу рекордов вместе со своим местом', async t => {
   await listen();
   const port = server.address().port;
   const url = `ws://127.0.0.1:${port}/ws`;
+  const { AuthService } = require('./auth');
+  const { networkIdentity } = require('./networkIdentity');
+  const auth = new AuthService({ db: accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const hostAccount = accounts.create('Хост');
+  const guestAccount = accounts.create('Гость');
   const host = new TestClient(url);
   const guest = new TestClient(url);
 
@@ -1161,11 +1231,14 @@ test('честный забег попадает в таблицу рекорд�
   });
 
   await Promise.all([host.wait('hello'), guest.wait('hello')]);
+  host.send('auth', { ticket: auth.createSocketTicket(hostAccount.id).token });
+  guest.send('auth', { ticket: auth.createSocketTicket(guestAccount.id).token });
+  await Promise.all([host.wait('authenticated'), guest.wait('authenticated')]);
   // Лёгкая трасса — самая короткая: честный забег нельзя ускорить, он упирается в тот же предел
   // скорости, что и живой игрок, и каждый лишний сегмент добавляет к тесту по секунде.
-  host.send('create', { name: 'Хост', playerId: 'x'.repeat(32), mode: 'race', difficulty: 'easy' });
+  host.send('create', { name: 'Хост', mode: 'race', difficulty: 'easy' });
   const created = await host.wait('lobby', m => m.players.length === 1);
-  guest.send('join', { name: 'Гость', playerId: 'y'.repeat(32), code: created.code });
+  guest.send('join', { name: 'Гость', code: created.code });
   await host.wait('lobby', m => m.players.length === 2);
   host.send('ready', { ready: true });
   guest.send('ready', { ready: true });
@@ -1208,7 +1281,7 @@ test('честный забег попадает в таблицу рекорд�
     'идентификаторы игроков наружу не отдаются'
   );
 
-  const mine = await ask('x'.repeat(32));
+  const mine = await ask(hostAccount.id);
   assert.equal(mine.entries.filter(entry => entry.self).length, 1, 'своя строка ровно одна');
   assert.equal(mine.standing.total, 2);
   assert.ok(mine.standing.place === 1 || mine.standing.place === 2);
@@ -1218,7 +1291,7 @@ test('честный забег попадает в таблицу рекорд�
     'отставание есть у всех, кроме первого'
   );
 
-  const stranger = await ask('z'.repeat(32));
+  const stranger = await ask(accounts.create('Мимо').id);
   assert.equal(stranger.standing, null, 'у не пробегавшего трассу места нет');
 
   // Время забега попадает и в метрики — с отметкой, можно ли ему верить. Без этого измерения

@@ -97,8 +97,15 @@ test.describe('одиночная игра и меню', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#account')).toBeHidden();
 
-    // Переименование доходит до чипа в меню — самый частый путь через окно аккаунта.
+    // Гостю переименовывать нечего: имя живёт в аккаунте. Сначала окно должно честно сказать, кто
+    // он и чего лишён, и предложить перестать им быть — это и проверяем по дороге.
     await page.locator('#accountChip').click();
+    await expect(page.locator('#accountStateTitle')).toHaveText('ВЫ ИГРАЕТЕ ГОСТЕМ');
+    await expect(page.locator('#accountStateHint')).toContainText('таблице рекордов');
+    await page.locator('#accountSignInFallback').click();
+    await expect(page.locator('#accountStateTitle')).toContainText('ВЫ ВОШЛИ', { timeout: 20_000 });
+
+    // Переименование доходит до чипа в меню — самый частый путь через окно аккаунта.
     await page.locator('#accountRename').fill('Дымовой');
     await page.locator('#accountSave').click();
     await expect(page.locator('#accountName')).toHaveText('Дымовой', { timeout: 10_000 });

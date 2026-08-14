@@ -22,7 +22,15 @@ const { openDatabase } = require('./db');
 // 3 — competitive co-op получил собственный CoopMovementAudit по общей разметке глав: sustained
 // speed, support/height, checkpoint regions, минимумы участков и серверные исключения механик.
 // Старые co-op строки версии 2 были только server-timed и не могут считаться проверенными v3.
-const VERIFICATION_VERSION = 3;
+// Версия правил, по которым строка попала в таблицу. Повышение обесценивает всё, что записано
+// раньше: строки старых версий удаляются при старте.
+//
+// 4 — требование подтверждённой личности. До неё ключ строки мог прийти от клиента, и по самой
+// строке отличить честную от подставленной уже нельзя: в базе лежит одинаковая строка-ключ и там,
+// где это был id аккаунта, и там, где клиент назвал его сам. Раз отличить нельзя, оставить нельзя
+// тоже — иначе новое правило действовало бы только на будущие забеги, а таблица продолжала бы
+// показывать ровно то, ради исключения чего оно и вводится.
+const VERIFICATION_VERSION = 4;
 
 // Сколько записей хранить на трассу и сколько отдавать по умолчанию.
 //
@@ -118,9 +126,11 @@ class VerifiedLeaderboard {
     this.db = db || openDatabase(file);
     this.migrated = migrate(this.db);
     this.db.exec(SCHEMA);
-    this.staleCoopPruned = Number(
+    // Раньше чистка касалась только кооператива: тогда менялась проверка движения, а она в гонке и
+    // в коопе разная. Требование личности одинаково для обоих режимов, поэтому и чистка общая.
+    this.stalePruned = Number(
       this.db
-        .prepare("DELETE FROM leaderboard_entries WHERE mode = 'coop' AND verification_version < ?")
+        .prepare('DELETE FROM leaderboard_entries WHERE verification_version < ?')
         .run(this.verificationVersion).changes || 0
     );
     this.statements = prepare(this.db);
@@ -130,8 +140,10 @@ class VerifiedLeaderboard {
   // каждого игрока: один человек занимает в таблице ровно одну строку на трассу.
   record({ matchId, mode, courseKey, entries, achievedAt = Date.now() }) {
     if (!matchId || !mode || !courseKey || !Array.isArray(entries)) return false;
+    // Строка требует двух вещей: подтверждённого сервером забега и подтверждённой личности.
+    // Второе отсекает гостей — см. playerKey.
     const verified = entries.filter(
-      entry => entry?.verified && Number.isFinite(entry.time) && entry.time > 0
+      entry => entry?.verified && Number.isFinite(entry.time) && entry.time > 0 && playerKey(entry)
     );
     if (!verified.length) return false;
     if (this.statements.knownMatch.get(matchId)) return false;
@@ -144,7 +156,7 @@ class VerifiedLeaderboard {
         this.statements.upsert.run(
           level,
           course,
-          playerKey(entry, matchId),
+          playerKey(entry),
           String(entry.name || 'Wobbler').slice(0, 16),
           Number(entry.color) || 0xff4f91,
           Math.round(entry.time),
@@ -217,16 +229,23 @@ class VerifiedLeaderboard {
 
 // Ключ дедупликации. Постоянный анонимный идентификатор игрока, если клиент его прислал.
 //
-// Без идентификатора один человек мог занять хоть всю верхнюю часть таблицы: дедупликация шла по
-// matchId, то есть отсекала лишь повторную запись одного и того же матча, а не повторные забеги
-// одного и того же игрока.
+// Ключ строки в таблице. Он же — ответ на вопрос, кто вообще имеет право в ней быть.
 //
-// Запасной вариант — ключ, уникальный внутри матча. Он не склеивает забеги старого клиента между
-// собой, зато и не склеивает разных игроков в одну строку, что было бы хуже.
-function playerKey(entry, matchId) {
+// Раньше здесь был запасной вариант: без идентификатора строка всё равно записывалась под ключом,
+// уникальным внутри матча. У него оказалось два следствия, и оба плохие.
+//
+// Первое: игрок без аккаунта попадал в таблицу — и не одной строкой, а новой на каждый забег, ведь
+// ключ каждый раз получался другой. Дедупликация по игроку для него не работала в принципе.
+//
+// Второе, и главное: идентификатор приходил от КЛИЕНТА. Неавторизованный сокет присылал его сам и
+// тем самым выбирал, какую строку таблицы занять — в том числе чужую.
+//
+// Теперь правило одно и живёт здесь: в таблице рекордов есть только те, чью личность подтвердил
+// сервер. Гость играет во всё, но места в рейтинге у него нет — записывать его не под чем, и
+// выдумывать ключ вместо него значит либо засорять таблицу, либо отдавать её на выбор клиенту.
+function playerKey(entry) {
   const id = typeof entry.playerId === 'string' ? entry.playerId.trim() : '';
-  if (id) return id.slice(0, 64);
-  return `match:${matchId}:${entry.id || entry.name || 'anon'}`;
+  return id ? id.slice(0, 64) : '';
 }
 
 function prepare(db) {

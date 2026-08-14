@@ -288,8 +288,14 @@ export class UI {
   // игры, но рекорды никуда не уедут, и говорить об этом надо вслух.
   setAccount(account, { online = true } = {}) {
     this.account = account || null;
-    $('#accountName').textContent = account?.name || 'без аккаунта';
+    // «ГОСТЬ» вместо «без аккаунта»: первое — состояние, в котором можно осознанно находиться,
+    // второе звучит как неполадка. Разница не косметическая: гостевой режим полноценный, и
+    // называть его отсутствием чего-то — значит подталкивать чинить то, что не сломано.
+    $('#accountName').textContent = account?.name || 'ГОСТЬ';
     $('#accountChip').classList.toggle('offline', !online);
+    $('#accountChip').classList.toggle('account-chip-guest', !account);
+    $('#accountChip').querySelector('small').textContent = account ? 'сменить' : 'войти';
+    this.renderAccountState();
     this.renderAccountPanel();
     this.renderServerProfile();
     if (this.coopChapters) this.renderCoopCampaign(this.coopChapters);
@@ -308,8 +314,35 @@ export class UI {
     this.renderCosmetics();
   }
 
+  // Объяснение состояния личности. Оно же — единственное место, где игроку говорят, что именно он
+  // теряет, оставаясь гостем: не «войдите», а что за этим стоит.
+  renderAccountState() {
+    const title = document.querySelector('#accountStateTitle');
+    if (!title) return;
+    const detail = document.querySelector('#accountStateDetail');
+    const hint = document.querySelector('#accountStateHint');
+    if (this.account) {
+      title.textContent = `ВЫ ВОШЛИ · ${this.account.name || 'без имени'}`;
+      if (detail) {
+        detail.textContent =
+          'Прогресс, награды и рекорды хранятся на сервере и доступны с любого устройства.';
+      }
+      if (hint) hint.textContent = 'Время забегов попадает в общую таблицу рекордов.';
+      return;
+    }
+    title.textContent = 'ВЫ ИГРАЕТЕ ГОСТЕМ';
+    if (detail) {
+      detail.textContent =
+        'Играть можно во все режимы. Прогресс хранится только в этом браузере и пропадёт вместе с его данными.';
+    }
+    if (hint) {
+      hint.textContent = 'Место в таблице рекордов сохраняется только у вошедших игроков.';
+    }
+  }
+
   renderAccountPanel() {
     if ($('#account').classList.contains('hidden')) return;
+    this.renderAccountState();
     $('#accountRename').value = this.account?.name || '';
     const list = $('#accountList');
     list.replaceChildren();

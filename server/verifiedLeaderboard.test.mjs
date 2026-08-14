@@ -112,12 +112,12 @@ test('игрок занимает одну строку на трассу, и э
   board.close();
 });
 
-test('без идентификатора игроки не склеиваются в одну строку', () => {
-  // Старый клиент не присылает playerId. Раньше такие записи ложились каждая отдельной строкой —
-  // это и нужно сохранить: склеить двух разных людей в одну строку было бы хуже, чем не склеить
-  // два забега одного.
+test('без подтверждённой личности строки не появляется вовсе', () => {
+  // Раньше такая запись всё равно ложилась в таблицу — под ключом, уникальным внутри матча. Это
+  // давало гостю не одну строку, а новую на каждый забег, и вдобавок означало, что ключ выбирает
+  // клиент. Теперь у забега без личности места в рейтинге нет.
   const board = new VerifiedLeaderboard();
-  board.record({
+  const written = board.record({
     matchId: 'm1',
     mode: 'race',
     courseKey: '9:normal',
@@ -126,7 +126,30 @@ test('без идентификатора игроки не склеиваютс
       { id: 'b', name: 'Второй', time: 12_000, verified: true }
     ]
   });
-  assert.equal(board.get('race', '9:normal').length, 2);
+  assert.equal(written, false);
+  assert.equal(board.get('race', '9:normal').length, 0);
+  board.close();
+});
+
+test('гость не занимает место рядом с аккаунтом в одном забеге', () => {
+  // Смешанный матч — обычный случай: вошедший играет с гостем. В таблицу идёт только первый, и
+  // именно на своё место; гость не смещает его и не появляется сам.
+  const board = new VerifiedLeaderboard();
+  assert.equal(
+    board.record({
+      matchId: 'm1',
+      mode: 'race',
+      courseKey: '9:normal',
+      entries: [
+        { id: 'a', playerId: 'account-1', name: 'Вошедший', time: 12_000, verified: true },
+        { id: 'b', name: 'Гость', time: 10_000, verified: true }
+      ]
+    }),
+    true
+  );
+  const rows = board.get('race', '9:normal');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].name, 'Вошедший');
   board.close();
 });
 

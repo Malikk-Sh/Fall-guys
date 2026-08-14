@@ -315,16 +315,27 @@ test('рекорды со старой схемы переносятся, а н�
         verification_version, match_id)
      VALUES (77, 'chaos', 'старожил', 'Старожил', 255, 31000, 1000, 1, 'старый-матч')`
   ).run();
+  // Вторая строка — той же старой схемы, но уже действующей версии правил. Разделение намеренное:
+  // перенос схемы и обесценивание по версии — разные вещи, и проверять их надо порознь, иначе
+  // сломанный перенос выглядел бы как штатная чистка.
+  db.prepare(
+    `INSERT INTO leaderboard_entries
+       (course_seed, difficulty, player_id, display_name, color, time_ms, achieved_at,
+        verification_version, match_id)
+     VALUES (77, 'chaos', 'нынешний', 'Нынешний', 255, 33000, 1000, ?, 'свежий-матч')`
+  ).run(VERIFICATION_VERSION);
 
   const board = new VerifiedLeaderboard({ db });
   assert.equal(board.migrated, true, 'перенос действительно случился');
 
   const top = board.get('race', '77:chaos');
-  assert.equal(top.length, 1, 'запись на месте');
-  assert.equal(top[0].name, 'Старожил');
-  assert.equal(top[0].time, 31000);
-  assert.equal(top[0].verificationVersion, 1, 'версия проверки не подменяется задним числом');
-  assert.equal(board.standing('race', '77:chaos', 'старожил').place, 1, 'место считается по нему же');
+  assert.equal(top.length, 1, 'строка действующей версии пережила перенос');
+  assert.equal(top[0].name, 'Нынешний');
+  assert.equal(top[0].time, 33000);
+  assert.equal(board.standing('race', '77:chaos', 'нынешний').place, 1, 'место считается по ней же');
+  // Строка, записанная до требования личности, удалена: по ней уже не сказать, чей это был ключ.
+  assert.equal(board.stalePruned, 1);
+  assert.equal(board.standing('race', '77:chaos', 'старожил'), null);
 
   // Второй запуск на той же базе ничего не переносит и ничего не ломает.
   const again = new VerifiedLeaderboard({ db });
@@ -404,12 +415,10 @@ test('новая co-op verification version не повышает старые s
   });
   assert.equal(legacy.get('coop', 'ch1').length, 1, 'подготовка: legacy co-op строка существует');
   const current = new VerifiedLeaderboard({ db });
-  assert.equal(current.staleCoopPruned, 1);
-  assert.deepEqual(
-    current.get('coop', 'ch1'),
-    [],
-    'movement-unverified co-op v2 удалён из competitive board'
-  );
-  assert.equal(current.get('race', '1:easy').length, 1, 'race v2 не затронут co-op migration');
+  // Чистка общая для режимов: правило личности одинаково и в гонке, и в коопе, а отличить
+  // задним числом честную строку от записанной по клиентскому ключу нельзя ни в одной из них.
+  assert.equal(current.stalePruned, 2);
+  assert.deepEqual(current.get('coop', 'ch1'), [], 'старая co-op строка удалена');
+  assert.deepEqual(current.get('race', '1:easy'), [], 'старая строка гонки удалена вместе с ней');
   db.close();
 });

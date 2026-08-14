@@ -22,7 +22,15 @@ const { openDatabase } = require('./db');
 // 3 — competitive co-op получил собственный CoopMovementAudit по общей разметке глав: sustained
 // speed, support/height, checkpoint regions, минимумы участков и серверные исключения механик.
 // Старые co-op строки версии 2 были только server-timed и не могут считаться проверенными v3.
-const VERIFICATION_VERSION = 3;
+// Версия правил, по которым строка попала в таблицу. Повышение обесценивает всё, что записано
+// раньше: строки старых версий удаляются при старте.
+//
+// 4 — требование подтверждённой личности. До неё ключ строки мог прийти от клиента, и по самой
+// строке отличить честную от подставленной уже нельзя: в базе лежит одинаковая строка-ключ и там,
+// где это был id аккаунта, и там, где клиент назвал его сам. Раз отличить нельзя, оставить нельзя
+// тоже — иначе новое правило действовало бы только на будущие забеги, а таблица продолжала бы
+// показывать ровно то, ради исключения чего оно и вводится.
+const VERIFICATION_VERSION = 4;
 
 // Сколько записей хранить на трассу и сколько отдавать по умолчанию.
 //
@@ -118,9 +126,11 @@ class VerifiedLeaderboard {
     this.db = db || openDatabase(file);
     this.migrated = migrate(this.db);
     this.db.exec(SCHEMA);
-    this.staleCoopPruned = Number(
+    // Раньше чистка касалась только кооператива: тогда менялась проверка движения, а она в гонке и
+    // в коопе разная. Требование личности одинаково для обоих режимов, поэтому и чистка общая.
+    this.stalePruned = Number(
       this.db
-        .prepare("DELETE FROM leaderboard_entries WHERE mode = 'coop' AND verification_version < ?")
+        .prepare('DELETE FROM leaderboard_entries WHERE verification_version < ?')
         .run(this.verificationVersion).changes || 0
     );
     this.statements = prepare(this.db);

@@ -52,3 +52,35 @@ export function saveBest(key, time, { unranked = null } = {}) {
   }
   return { best: Math.round(time), improved: true, first: !best };
 }
+
+// Все локальные рекорды одним списком — для переноса в аккаунт при первом входе.
+//
+// Рекорды лежат отдельными ключами localStorage, по одному на трассу, поэтому собрать их можно
+// только перебором хранилища. Формат ключа разбирается здесь же: соло — сид и сложность, кооп —
+// идентификатор главы, и оба приводятся к тому виду courseKey, который ждёт сервер.
+export function listLocalRecords() {
+  const store = storage();
+  if (!store) return [];
+  const found = [];
+  for (let index = 0; index < store.length; index += 1) {
+    const key = store.key(index);
+    if (typeof key !== 'string') continue;
+    const time = readBest(key);
+    if (!time) continue;
+    if (key.startsWith(`${COOP_PREFIX}-`)) {
+      const chapterId = key.slice(COOP_PREFIX.length + 1);
+      if (chapterId) found.push({ mode: 'coop', courseKey: chapterId, time });
+      continue;
+    }
+    if (!key.startsWith(`${SOLO_PREFIX}-`)) continue;
+    // Соло-ключ: <префикс>-<сид>-<сложность>. Сложность — последний кусок, сид — всё между ними;
+    // разбирать с конца надёжнее, чем делить по дефису: сид тоже может его содержать.
+    const rest = key.slice(SOLO_PREFIX.length + 1);
+    const cut = rest.lastIndexOf('-');
+    if (cut <= 0) continue;
+    const seed = rest.slice(0, cut);
+    const difficulty = rest.slice(cut + 1);
+    if (seed && difficulty) found.push({ mode: 'solo', courseKey: `${seed}:${difficulty}`, time });
+  }
+  return found;
+}

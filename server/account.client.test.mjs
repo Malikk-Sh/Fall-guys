@@ -121,27 +121,29 @@ test('забытый аккаунт уходит, а текущим станов
   assert.equal(currentAccount(storage), null);
 });
 
-test('первый заход заводит аккаунт, обменивает recovery code на session и запоминает код', async () => {
+test('первый заход оставляет игрока гостем и НИЧЕГО не заводит на сервере', async () => {
+  // Раньше здесь молча создавался аккаунт: игрок получал запись в базе, код восстановления и имя
+  // «Wobbler», ни о чём не спросив и ничего об этом не узнав. Теперь первый заход — это гость.
   const storage = memoryStorage();
   const server = fakeServer({
     '/api/auth/session': missingSession,
-    '/account': () => ({
-      status: 201,
-      data: { ok: true, account: { id: 'new', name: 'Wobbler' }, secret: 'WOBBLE-CODE', records: [] }
-    }),
-    '/api/auth/recovery': body => {
-      assert.equal(body.secret, 'WOBBLE-CODE');
-      return recovered('new', 'Wobbler', body.secret);
+    '/account': () => {
+      throw new Error('аккаунт не должен заводиться сам');
     }
   });
 
   const result = await ensureAccount({ storage, fetchImpl: server.fetchImpl });
-  assert.equal(result.online, true);
-  assert.equal(result.account.id, 'new');
-  assert.equal(result.account.networkTicket, 'WST.new');
-  assert.equal(currentAccount(storage).secret, 'WOBBLE-CODE');
-  assert.equal(currentAccount(storage).networkTicket, undefined);
-  assert.ok(server.calls.every(call => call.credentials === 'same-origin'));
+  assert.equal(result.guest, true);
+  assert.equal(result.account, null);
+  assert.equal(result.online, false);
+  assert.deepEqual(result.records, []);
+  // Ни одного обращения к созданию аккаунта — проверяем по вызовам, а не только по результату.
+  assert.equal(
+    server.calls.filter(call => call.path === '/account').length,
+    0,
+    'создание аккаунта не должно вызываться'
+  );
+  assert.equal(currentAccount(storage), null, 'в браузере тоже ничего не запомнено');
 });
 
 test('следующий заход использует HttpOnly session без повторной отправки recovery code', async () => {
@@ -202,26 +204,28 @@ test('явно выбранный сохранённый аккаунт заме
   );
 });
 
-test('неизвестный серверу recovery code забывается и заводится новый аккаунт', async () => {
+test('неизвестный серверу recovery code забывается, а игрок становится гостем', async () => {
+  // Сервер не знает этого кода — значит аккаунта за ним нет. Раньше на его месте молча заводился
+  // новый: игрок терял прогресс и получал взамен пустой аккаунт, ничего не заметив. Забыть код
+  // по-прежнему правильно, а вот подсовывать замену — нет.
   const storage = memoryStorage();
   rememberAccount({ id: 'stale', name: 'Призрак', secret: 'СТАРЫЙ' }, storage);
   const server = fakeServer({
     '/api/auth/session': missingSession,
-    '/api/auth/recovery': body =>
-      body.secret === 'СТАРЫЙ'
-        ? { status: 404, data: { ok: false, error: 'unknown-code' } }
-        : recovered('fresh', 'Wobbler', body.secret),
-    '/account': () => ({
-      status: 201,
-      data: { ok: true, account: { id: 'fresh', name: 'Wobbler' }, secret: 'НОВЫЙ', records: [] }
-    })
+    '/api/auth/recovery': () => ({ status: 404, data: { ok: false, error: 'unknown-code' } }),
+    '/account': () => {
+      throw new Error('замена аккаунту не заводится сама');
+    }
   });
 
   const result = await ensureAccount({ storage, fetchImpl: server.fetchImpl });
-  assert.equal(result.account.id, 'fresh');
-  assert.deepEqual(
-    listAccounts(storage).map(a => a.id),
-    ['fresh']
+  assert.equal(result.guest, true);
+  assert.equal(result.account, null);
+  assert.deepEqual(listAccounts(storage), [], 'мёртвый аккаунт из списка убран');
+  assert.equal(
+    server.calls.filter(call => call.path === '/account').length,
+    0,
+    'создание аккаунта не должно вызываться'
   );
 });
 

@@ -4,9 +4,15 @@ import { ACHIEVEMENT_CATALOG } from '../shared/achievements.js';
 // Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
 // окно аккаунта, вводим имя, сохраняем.
 async function setPlayerName(page, name) {
-  // Ждём, пока аккаунт войдёт: до этого переименовывать нечего, и попытка молча ничего не сделает.
-  await expect(page.locator('#accountName')).not.toHaveText(/^(…|без аккаунта)$/, { timeout: 20_000 });
+  // Игрок приходит гостем — аккаунт больше не заводится сам. Заводим его явно, как это делает
+  // человек: открываем окно аккаунта и нажимаем кнопку входа. Без этого переименовывать нечего.
+  await expect(page.locator('#accountName')).not.toHaveText('…', { timeout: 20_000 });
   await page.locator('#accountChip').click();
+  await expect(page.locator('#account')).toBeVisible();
+  if ((await page.locator('#accountName').textContent())?.trim() === 'ГОСТЬ') {
+    await page.locator('#accountSignInFallback').click();
+    await expect(page.locator('#accountName')).not.toHaveText('ГОСТЬ', { timeout: 20_000 });
+  }
   await page.locator('#accountRename').fill(name);
   await page.locator('#accountSave').click();
   await expect(page.locator('#accountName')).toHaveText(name, { timeout: 10_000 });

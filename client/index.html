@@ -235,6 +235,24 @@
         <button id="accountClose" class="close-button" aria-label="Закрыть">×</button>
         <span class="eyebrow">АККАУНТ</span>
 
+        <!--
+          Состояние личности — первым, до всего остального.
+
+          Раньше панель начиналась с поля «имя игрока», и по ней нельзя было понять главное: есть
+          ли у тебя вообще аккаунт, что будет с прогрессом при очистке браузера и почему твоего
+          времени нет в таблице рекордов. Теперь ответ на это стоит выше настроек.
+        -->
+        <div class="account-section account-identity">
+          <b id="accountStateTitle">ВЫ ИГРАЕТЕ ГОСТЕМ</b>
+          <p id="accountStateDetail" class="account-state-detail">
+            Прогресс хранится только в этом браузере, а место в таблице рекордов не сохраняется.
+          </p>
+          <div id="accountSignIn" class="account-actions"></div>
+          <p id="accountStateHint" class="account-state-hint">
+            Вход переносит рекорды и открывает таблицу рекордов.
+          </p>
+        </div>
+
         <div class="account-section">
           <label class="field"
             ><span>Имя игрока</span><input id="accountRename" maxlength="16" autocomplete="nickname"

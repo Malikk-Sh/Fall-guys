@@ -31,6 +31,7 @@ import {
   submitRecord
 } from './account.js';
 import { setServerCosmeticEquipHandler, setServerInventory } from './cosmetics.js';
+import { listLocalRecords } from './records.js';
 
 const GOOGLE_SCRIPT = 'https://accounts.google.com/gsi/client';
 
@@ -587,6 +588,43 @@ export class AccountFlow {
     return this.records?.get(`${mode}:${key}`) ?? null;
   }
 
+  // Перенос гостевых рекордов в только что открытый аккаунт.
+  //
+  // Что переносится и почему именно это. Личные рекорды игрок и так объявляет сам: соло-забег
+  // сервер не судит вовсе, о чём прямо сказано в README, поэтому отправка накопленного не добавляет
+  // серверу ни капли нового доверия к клиенту — он принимает ровно то же, что принимал бы по ходу
+  // игры.
+  //
+  // Достижения НЕ переносятся, и это осознанно. Их выдаёт сервер за игру, которую он видел сам;
+  // принять их списком из localStorage значило бы завести путь, которым любой может выдать себе
+  // и награды, и открываемую ими косметику. Такой путь в этом проекте уже находили в гоночных
+  // наградах, и заводить его заново ради удобства переноса не стоит: достижения начнут копиться с
+  // первого же матча под аккаунтом.
+  async migrateGuestRecords() {
+    if (!this.online) return 0;
+    const local = listLocalRecords();
+    if (!local.length) return 0;
+    let moved = 0;
+    for (const record of local) {
+      try {
+        const saved = await submitRecord({
+          mode: record.mode,
+          courseKey: record.courseKey,
+          timeMs: Math.round(record.time)
+        });
+        // Сервер отдаёт лучшее из своего и присланного: аккаунт, у которого рекорд уже сильнее,
+        // не испортится гостевым временем с этого устройства.
+        if (saved?.best) {
+          this.records?.set(`${record.mode}:${record.courseKey}`, saved.best);
+          moved += 1;
+        }
+      } catch {
+        // Один не уехавший рекорд не повод бросать остальные и тем более пугать игрока.
+      }
+    }
+    return moved;
+  }
+
   async save(mode, spec, time) {
     const account = accountForRecords();
     if (!account || !Number.isFinite(time) || time <= 0) return;
@@ -618,11 +656,30 @@ export class AccountFlow {
   }
 
   async setupGoogle() {
+    if (!globalThis.document) return;
     const config = await authConfig();
-    if (!config?.googleClientId || !globalThis.document) return;
     const host =
-      document.querySelector('#account .account-actions') || document.querySelector('#accountStatus');
-    if (!host || document.querySelector('#googleSignIn')) return;
+      document.querySelector('#accountSignIn') ||
+      document.querySelector('#account .account-actions') ||
+      document.querySelector('#accountStatus');
+    if (!host) return;
+
+    // Google может быть не настроен — на своём сервере, в закрытом контуре, до получения client id.
+    // Оставлять в этом случае пустое место нельзя: блок входа — единственное, что предлагает гостю
+    // перестать быть гостем, и пустота там читается как «войти нельзя». Показываем запасной путь,
+    // который есть всегда, и называем его входом, а не «создать новый».
+    if (!config?.googleClientId) {
+      if (document.querySelector('#accountSignInFallback')) return;
+      const fallback = document.createElement('button');
+      fallback.id = 'accountSignInFallback';
+      fallback.type = 'button';
+      fallback.className = 'button button-primary';
+      fallback.textContent = 'СОЗДАТЬ АККАУНТ И СОХРАНИТЬ ПРОГРЕСС';
+      fallback.addEventListener('click', () => this.handleAction('create'));
+      host.append(fallback);
+      return;
+    }
+    if (document.querySelector('#googleSignIn')) return;
 
     const section = document.createElement('div');
     section.id = 'googleSignIn';
@@ -684,14 +741,25 @@ export class AccountFlow {
       };
       rememberAccount(account);
       this.apply(account, { records: entered.records, progress: entered.progress });
-      return ui.accountStatus(
+      return this.afterSignIn(
         entered.secret
-          ? 'Google подключён. Recovery code сохранён как резервный способ входа.'
-          : `Google ✓ · ${entered.name}`
+          ? 'Google подключён. Код восстановления сохранён как запасной способ входа.'
+          : `Вошли через Google · ${entered.name}.`
       );
     } catch {
       return ui.accountStatus('Google-вход сейчас недоступен.');
     }
+  }
+
+  // Один и тот же хвост у всех трёх путей входа: Google, код восстановления и создание аккаунта.
+  // Игрок в любом из них приходит из гостевого режима, и накопленное на устройстве должно уехать
+  // с ним, иначе вход выглядит как потеря прогресса — ровно то, из-за чего его и откладывают.
+  async afterSignIn(baseMessage) {
+    const moved = await this.migrateGuestRecords();
+    if (!moved) return this.game.ui.accountStatus(baseMessage);
+    return this.game.ui.accountStatus(
+      `${baseMessage} Перенесено рекордов: ${moved}. Достижения начнут копиться с этого забега — их выдаёт сервер за подтверждённую игру.`
+    );
   }
 
   async handleAction(action, value) {
@@ -707,7 +775,7 @@ export class AccountFlow {
         if (!created) return ui.accountStatus('Не вышло создать аккаунт — сервер не ответил.');
         rememberAccount(created);
         this.apply(created, { records: created.records, progress: created.progress });
-        return ui.accountStatus('Новый аккаунт готов. Загляните в «МОЙ КОД», чтобы не потерять его.');
+        return this.afterSignIn('Новый аккаунт готов. Загляните в «МОЙ КОД», чтобы не потерять его.');
       }
       if (action === 'login') {
         const entered = await loginAccount(value);
@@ -716,7 +784,7 @@ export class AccountFlow {
         const account = { ...entered, secret: value };
         rememberAccount(account);
         this.apply(account, { records: entered.records, progress: entered.progress });
-        return ui.accountStatus(`Вошли как ${entered.name}.`);
+        return this.afterSignIn(`Вошли как ${entered.name}.`);
       }
       if (action === 'rename') {
         const account = accountForRecords();

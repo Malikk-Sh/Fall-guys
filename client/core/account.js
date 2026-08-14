@@ -408,8 +408,14 @@ export async function ensureAccount(options = {}) {
     };
   }
 
-  const created = await quiet(() => createAccount(options.name, options));
-  if (!created) return { account: currentAccount(storage), records: [], online: false };
-  rememberAccount(created, storage);
-  return { account: created, records: created.records, progress: created.progress, online: true };
+  // Ничего не нашлось — значит человек здесь впервые, и он ГОСТЬ.
+  //
+  // Раньше на этом месте молча заводился серверный аккаунт. Игрок его не просил и о нём не знал:
+  // в углу появлялось имя «Wobbler», за которым стояла запись в базе и код восстановления, никогда
+  // никому не показанный. Понять, что у тебя есть аккаунт, что он один на это устройство и что при
+  // очистке браузера он исчезнет вместе с прогрессом, было неоткуда.
+  //
+  // Теперь состояние названо своим именем. Гость играет во всё, его прогресс лежит в браузере, и он
+  // видит прямое предложение войти — а не обнаруживает потерю, когда уже поздно.
+  return { account: null, records: [], progress: null, online: false, guest: true };
 }

@@ -466,6 +466,13 @@ export class Player {
     this.physics.copy(group.position);
 
     group.rotation.y = this.angleDamp(group.rotation.y, state.ry || 0, 12, dt);
+    // Скорость из снапшота переносится в вектор, а не только в анимацию.
+    //
+    // Удалённый игрок физику не считает, и раньше его velocity оставался нулевым — модель бежала,
+    // а «по приборам» стояла. Пока за таким смотрели со стороны, это ничего не меняло; с досмотром
+    // гонки он стал попадать под камеру, а та берёт из velocity и автодоворот, и упреждение, и
+    // угол обзора. Соперник ехал бы в кадре так, будто стоит на месте.
+    this.velocity.set(state.vx || 0, state.vy || 0, state.vz || 0);
     const speed = Math.hypot(state.vx || 0, state.vz || 0);
     this.character.animate(dt, {
       speed,

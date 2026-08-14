@@ -56,6 +56,54 @@ test('бегущими считаются все, кроме себя и уже 
   );
 });
 
+test('оборвавшийся перестаёт быть кандидатом, хотя его ещё видно', () => {
+  // Сервер тридцать секунд рассылает последнее состояние оборвавшегося, ожидая возвращения. В
+  // кадре он всё это время стоит на месте — и без проверки состава камера залипала бы на нём,
+  // пока остальные бегут.
+  const remotes = new Map([
+    ['dropped', { checkpoint: 4, position: { z: -70 } }],
+    ['running', { checkpoint: 2, position: { z: -30 } }]
+  ]);
+  const roster = [
+    { id: 'dropped', online: false, finished: false },
+    { id: 'running', online: true, finished: false }
+  ];
+  const racers = racersStillRunning(remotes, [], 'me', roster);
+  assert.deepEqual(
+    racers.map(item => item.id),
+    ['running']
+  );
+  // И прилипчивость не должна удержать камеру на пропавшем.
+  assert.equal(spectateTarget(racers, 'dropped'), 'running');
+});
+
+test('состав комнаты закрывает дыру, когда доски ещё нет', () => {
+  // Вернувшийся по resume не видел рассылки о своём финише, и доска у него пустая. Признак
+  // финиша при этом есть в составе комнаты — иначе камера выбрала бы стоящего на ленте.
+  const remotes = new Map([
+    ['done', { checkpoint: 5, position: { z: -103 } }],
+    ['running', { checkpoint: 1, position: { z: -20 } }]
+  ]);
+  const roster = [
+    { id: 'done', online: true, finished: true },
+    { id: 'running', online: true, finished: false }
+  ];
+  assert.deepEqual(
+    racersStillRunning(remotes, [], 'me', roster).map(item => item.id),
+    ['running']
+  );
+});
+
+test('неизвестный составу участник считается бегущим', () => {
+  // Состав мог не успеть доехать. Умолчание здесь «бежит»: пропустить соперника хуже, чем
+  // показать его лишнюю секунду.
+  const remotes = new Map([['fresh', { checkpoint: 0, position: { z: -5 } }]]);
+  assert.deepEqual(
+    racersStillRunning(remotes, [], 'me', [{ id: 'кто-то-другой', online: true }]).map(item => item.id),
+    ['fresh']
+  );
+});
+
 test('отсутствующая доска не превращает всех в дошедших', () => {
   // Доска приходит вместе с сообщением о финише. Первый же кадр досмотра может опередить её.
   const remotes = new Map([['other', { checkpoint: 1, position: { z: -12 } }]]);

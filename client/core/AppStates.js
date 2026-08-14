@@ -40,6 +40,7 @@ export function createAppStates() {
       enter(game) {
         game.running = true;
         game.input.enabled = true;
+        game.input.lookOnly = false;
       }
     },
     // Досмотр. Физика своего игрока не идёт — он уже на финишной ленте, — но ввод остаётся
@@ -49,6 +50,8 @@ export function createAppStates() {
       enter(game) {
         game.running = false;
         game.input.enabled = true;
+        // Джойстик и кнопки с экрана убраны — значит, их треть экрана возвращается обзору.
+        game.input.lookOnly = true;
       }
     },
     [APP_STATE.RESULTS]: {

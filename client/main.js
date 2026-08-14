@@ -74,6 +74,8 @@ class Game {
     this.spectateId = null;
     this.finishedPlace = null;
     this.finishedTime = null;
+    // Итоги открыты досрочно: гонка идёт, и выбор на карточке пока не имеет силы.
+    this.resultsPending = false;
     this.menuRandomSeed = randomSeed();
     this.quality = new Quality();
     this.perf = new Perf({ enabled: new URL(location.href).searchParams.has('perf') });
@@ -597,7 +599,7 @@ class Game {
 
   // Кто сейчас в кадре. null означает «смотреть не на кого» — камера остаётся на своём игроке.
   spectateActor() {
-    const racers = racersStillRunning(this.remotes, this.latestBoard, this.net?.id);
+    const racers = racersStillRunning(this.remotes, this.latestBoard, this.net?.id, this.room?.players);
     this.spectateId = spectateTarget(racers, this.spectateId);
     const actor = this.spectateId ? this.remotes.get(this.spectateId) : null;
     // Подпись обновляется только при смене соперника: перерисовывать её каждый кадр значило бы
@@ -612,8 +614,14 @@ class Game {
 
   // Карточка итогов гонки. Вызывается либо сразу по своему финишу, если гонка на этом кончилась,
   // либо когда матч завершился, либо когда игрок сам попросил не досматривать.
-  showRaceResults() {
+  //
+  // pending — итоги открыты досрочно, гонка ещё идёт. Разница не косметическая: реванш и возврат
+  // в лобби сервер принимает только на экране результатов КОМНАТЫ, а она до конца матча остаётся
+  // в игре. Показанные в этот момент кнопки не работали бы вовсе — на каждое нажатие приходил бы
+  // отказ WRONG_STATE.
+  showRaceResults({ pending = false } = {}) {
     this.endSpectate();
+    this.resultsPending = pending;
     this.state.transition(APP_STATE.RESULTS);
     this.music.setIntensity(0);
     // Своё время берётся из протокола, если локально его нет. Так бывает у вернувшегося по
@@ -623,7 +631,8 @@ class Game {
       time: this.finishedTime ?? own?.time ?? this.session.finalTime,
       board: this.latestBoard,
       selfId: this.net?.id,
-      unranked: this.session.unranked
+      unranked: this.session.unranked,
+      canChoose: !pending
     });
   }
 
@@ -633,8 +642,9 @@ class Game {
     if (message.unranked) this.markUnranked(message.unranked);
     this.latestBoard = message.board || this.latestBoard || [];
     if (this.mode !== 'coop') {
-      // Матч кончился — досматривать больше нечего, показываем итоги.
-      if (this.spectating) return this.showRaceResults();
+      // Матч кончился — досматривать больше нечего, показываем итоги. Открытые досрочно тоже
+      // перерисовываем: теперь комната на экране результатов, и выбор наконец имеет силу.
+      if (this.spectating || this.resultsPending) return this.showRaceResults();
       if (!document.querySelector('#finish').classList.contains('hidden'))
         this.ui.updateBoard(this.latestBoard, this.net.id);
       return;
@@ -695,7 +705,9 @@ class Game {
     if (!button) return;
     button.addEventListener('click', () => {
       this.sfx.uiClick();
-      if (this.spectating) this.showRaceResults();
+      // Гонка при этом продолжается, поэтому итоги открываются без кнопок выбора: до конца матча
+      // сервер их всё равно не примет.
+      if (this.spectating) this.showRaceResults({ pending: true });
     });
   }
 

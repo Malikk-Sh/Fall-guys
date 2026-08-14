@@ -1364,13 +1364,17 @@ export class UI {
     return Number(value) === 1 ? 'РАЗ' : 'РАЗА';
   }
 
-  finishMulti({ time, board, selfId, canRematch = true, unranked = null }) {
+  // canChoose = false — итоги открыты досрочно, гонка ещё идёт. Реванш и возврат в лобби сервер
+  // принимает только на экране результатов КОМНАТЫ; показанные раньше, они отвечали бы отказом.
+  finishMulti({ time, board, selfId, canRematch = true, unranked = null, canChoose = true }) {
     this.hud(false);
     this.show('finish');
     this.showUnranked(unranked);
     // После возврата в лобби перечитываем таблицу: только что завершённый матч мог сменить лидера.
     this.verifiedTopKey = null;
-    $('#finishEyebrow').textContent = 'ГОНКА ЗАВЕРШЕНА';
+    // Открытые досрочно итоги не должны объявлять гонку законченной: она идёт, и в таблице ниже
+    // пока не все.
+    $('#finishEyebrow').textContent = canChoose ? 'ГОНКА ЗАВЕРШЕНА' : 'ВЫ ФИНИШИРОВАЛИ';
     const own = board.findIndex(p => p.id === selfId),
       place = own < 0 ? board.length : own + 1;
     $('#finishTitle').textContent = place === 1 ? 'КОРОНА ВАША!' : `${ordinal(place)}-Е МЕСТО`;
@@ -1382,10 +1386,13 @@ export class UI {
     this.updateBoard(board, selfId);
     $('#again').classList.add('hidden');
     $('#newCourse').classList.add('hidden');
-    $('#rematch').classList.toggle('hidden', !canRematch);
+    $('#rematch').classList.toggle('hidden', !canRematch || !canChoose);
     $('#nextChapter').classList.add('hidden');
-    $('#returnLobby').classList.remove('hidden');
+    $('#returnLobby').classList.toggle('hidden', !canChoose);
     this.resetResultButtons();
+    // Вместо кнопок — объяснение, почему их пока нет. Пустое место на их месте выглядело бы
+    // поломкой карточки, а «выйти в меню» внизу остаётся: запирать досмотревшего нельзя.
+    if (!canChoose) $('#resultsTimer').textContent = 'Гонка ещё идёт — выбор появится, когда дойдут все';
   }
   updateBoard(board, selfId) {
     const list = $('#board');

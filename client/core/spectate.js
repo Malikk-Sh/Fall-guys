@@ -32,21 +32,38 @@ export function spectateTarget(racers, current = null) {
 }
 
 /**
- * Кто ещё бежит: из участников убираем себя, дошедших и тех, кого не видно в кадре гонки.
+ * Кто ещё бежит: из участников убираем себя, дошедших и потерявших связь.
  *
- * Признак «дошёл» берётся из протокола итогов, а не из снапшота: доска приходит с сервера при
- * каждом финише и перечисляет ровно тех, кто дошёл. Снапшот же — это интерполированное положение,
- * и делать по нему выводы о завершении забега значило бы гадать по картинке.
+ * Оба признака берутся из того, что прислал сервер, а не из снапшота. Снапшот — это
+ * интерполированное положение; делать по нему выводы о завершении забега значило бы гадать по
+ * картинке, а оборвавшийся вдобавок продолжает в нём присутствовать: сервер тридцать секунд
+ * рассылает его последнее известное состояние, ожидая возвращения.
+ *
+ * Источников два, и это не перестраховка — они дополняют друг друга:
+ *
+ *   доска приходит с каждым финишем и всегда свежая, но её нет у того, кто вернулся по resume:
+ *     его собственный финиш сервер уже принял, а рассылку он пропустил;
+ *   состав комнаты приходит при входе, выходе и обрыве связи — там есть и online, и finished,
+ *     но между двумя рассылками признак финиша успевает устареть.
+ *
+ * Ни один из них не «отменяет» финиш: дошедший не начинает бежать заново, поэтому объединение
+ * двух списков безопасно в любом порядке.
  *
  * @param {Iterable<[string, {checkpoint: number, position: {z: number}}]>} remotes
  * @param {Array<{id: string}>} board — таблица финишировавших.
  * @param {string|null} selfId
+ * @param {Array<{id: string, online?: boolean, finished?: boolean}>} roster — состав комнаты.
  */
-export function racersStillRunning(remotes, board = [], selfId = null) {
+export function racersStillRunning(remotes, board = [], selfId = null, roster = []) {
   const finished = new Set((board || []).map(entry => entry.id));
+  const known = new Map((roster || []).map(player => [player.id, player]));
   const racers = [];
   for (const [id, remote] of remotes) {
     if (id === selfId || finished.has(id)) continue;
+    const player = known.get(id);
+    // Отсутствие в составе — не повод исключать: состав мог не успеть доехать. А вот прямо
+    // сказанное «оборвался» или «дошёл» — повод.
+    if (player && (player.online === false || player.finished)) continue;
     racers.push({ id, checkpoint: remote.checkpoint || 0, z: remote.position?.z ?? 0 });
   }
   return racers;

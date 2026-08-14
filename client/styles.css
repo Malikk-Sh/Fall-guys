@@ -499,6 +499,27 @@ canvas {
   color: #9996c4;
   letter-spacing: 0.08em;
 }
+.legal-links {
+  display: flex;
+  justify-content: center;
+  margin-top: 9px;
+}
+.legal-links a {
+  padding: 4px 6px;
+  border-radius: 7px;
+  color: #a9a5cf;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+}
+.legal-links a:hover,
+.legal-links a:focus-visible {
+  color: #fff;
+  background: #ffffff0d;
+  outline: 2px solid #4ce0df88;
+  outline-offset: 2px;
+}
 .icon-button,
 .copy-button,
 .text-button,

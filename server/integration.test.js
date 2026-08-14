@@ -1259,6 +1259,16 @@ test('честный забег попадает в таблицу рекорд�
     `подготовка: оба забега должны пройти проверку (${results.unranked}, ${JSON.stringify(results.board.map(e => e.verificationReasons))})`
   );
 
+  // Сколько участников ещё на трассе — едет вместе с сообщением о финише.
+  //
+  // По этому числу дошедший решает, показать итоги сразу или дать досмотреть гонку. Сам клиент
+  // посчитать его не может: состав комнаты он знает по лобби, а кто уже дошёл и кто оборвался,
+  // достоверно известно только серверу.
+  const finishes = host.messages.filter(message => message.type === 'finish');
+  assert.equal(finishes.length, 2, 'финиш приходит на каждого участника');
+  assert.equal(finishes[0].racing, 1, 'после первого финиша соперник ещё бежит');
+  assert.equal(finishes[1].racing, 0, 'после последнего финиша бежать некому');
+
   const seed = started.spec.seed;
   const difficulty = started.spec.difficulty;
   const ask = async playerId => {

@@ -27,6 +27,7 @@ import { CoopSession } from './game/CoopSession.js';
 import { CoopController } from './game/CoopController.js';
 import { AccountFlow } from './core/AccountFlow.js';
 import { cosmeticLoadoutFromIds } from './core/cosmetics.js';
+import { racersStillRunning, spectateTarget } from './core/spectate.js';
 import { Settings } from './core/settings.js';
 import { SettingsPanel } from './ui/settingsPanel.js';
 
@@ -68,6 +69,11 @@ class Game {
     this.mode = 'preview';
     this.remotes = new Map();
     this.startToken = 0;
+    // Досмотр: свой забег кончился, гонка — нет. Управление снято, трасса на экране осталась.
+    this.spectating = false;
+    this.spectateId = null;
+    this.finishedPlace = null;
+    this.finishedTime = null;
     this.menuRandomSeed = randomSeed();
     this.quality = new Quality();
     this.perf = new Perf({ enabled: new URL(location.href).searchParams.has('perf') });
@@ -326,6 +332,7 @@ class Game {
     // Времена кадров меню ничего не говорят о трассе: там пустая сцена и один персонаж.
     this.perf.reset();
     this.running = false;
+    this.endSpectate();
     this.accumulator = 0;
     this.buildCourse(spec);
     // Состав комнаты мог прийти РАНЬШЕ, чем построен уровень: так бывает при возвращении в идущий
@@ -416,8 +423,15 @@ class Game {
     this.running = false;
     this.input.enabled = false;
     this.music.setIntensity(0);
-    if (this.mode === 'coop') this.ui.awaitPartnerFinish();
-    else this.ui.toast('Вы уже финишировали — ждём остальных.');
+    if (this.mode === 'coop') {
+      this.ui.awaitPartnerFinish();
+      return;
+    }
+    // Вернувшийся в уже пройденный им забег попадает туда же, куда попал бы, не обрываясь, —
+    // на досмотр. Раньше он получал всплывающую подсказку и оставался с ней наедине: карточка
+    // итогов по концу матча ему не показывалась вовсе, потому что показывать было некуда.
+    this.ui.toast('Вы уже финишировали — досматриваем гонку.');
+    this.beginSpectate();
   }
 
   localFinish() {
@@ -534,22 +548,83 @@ class Game {
       return;
     }
     this.session.confirmFinish(message.time);
-    this.state.transition(APP_STATE.RESULTS);
-    this.music.setIntensity(0);
     // В коопе свой финиш — ещё не конец главы: она засчитывается, только когда дошли оба.
     // Карточку показывает `results`, а до тех пор игрок ждёт напарника, а не смотрит на итоги.
     if (this.mode === 'coop') {
+      this.state.transition(APP_STATE.RESULTS);
+      this.music.setIntensity(0);
       this.ui.awaitPartnerFinish();
       return;
     }
     const raceTime = message.time ?? this.session.finalTime;
+    this.finishedTime = raceTime;
+    // Место в гонке определяется в момент финиша и больше не меняется: все, кто ещё бежит,
+    // придут позже и встанут ниже. Поэтому его можно показывать сразу, не дожидаясь конца матча.
+    const own = this.latestBoard.findIndex(entry => entry.id === this.net.id);
+    this.finishedPlace = own < 0 ? null : own + 1;
+    // Рекорд сохраняется по своему финишу, а не по концу матча: это личный результат, и он уже
+    // известен. Показ итогов может подождать, запись — нет.
+    if (!this.session.unranked) this.account.save('race', this.course?.spec, raceTime);
+
+    // Гонка продолжается без нас — досматриваем её.
+    //
+    // Раньше здесь сразу поднималась карточка итогов, и матч заканчивался для игрока в самый
+    // интересный момент: чем кончилась борьба позади, он узнавал готовой строкой в таблице.
+    // Число ещё бегущих приходит с сервера — сам клиент достоверно посчитать его не может.
+    if (message.racing > 0) return this.beginSpectate();
+    this.showRaceResults();
+  }
+
+  // Свой забег кончился, гонка идёт дальше.
+  //
+  // Состояние отдельное, а не «результаты с открытым HUD»: в нём физика своего игрока не
+  // считается, зато ввод продолжает жить — им поворачивают камеру, — а кадр смотрит на чужой забег.
+  beginSpectate() {
+    this.spectating = true;
+    this.spectateId = null;
+    this.spectateShownId = undefined;
+    this.state.transition(APP_STATE.SPECTATE);
+    this.ui.spectateBegin({ place: this.finishedPlace, time: this.finishedTime });
+  }
+
+  endSpectate() {
+    if (!this.spectating) return;
+    this.spectating = false;
+    this.spectateId = null;
+    this.spectateShownId = undefined;
+    this.ui.spectateEnd();
+  }
+
+  // Кто сейчас в кадре. null означает «смотреть не на кого» — камера остаётся на своём игроке.
+  spectateActor() {
+    const racers = racersStillRunning(this.remotes, this.latestBoard, this.net?.id);
+    this.spectateId = spectateTarget(racers, this.spectateId);
+    const actor = this.spectateId ? this.remotes.get(this.spectateId) : null;
+    // Подпись обновляется только при смене соперника: перерисовывать её каждый кадр значило бы
+    // шестьдесят раз в секунду пересобирать разметку ради неизменного текста.
+    if (this.spectateShownId !== this.spectateId) {
+      this.spectateShownId = this.spectateId;
+      const info = this.room?.players.find(item => item.id === this.spectateId);
+      this.ui.spectateWatching(info ? { name: info.name, bot: !!info.bot } : null);
+    }
+    return actor || null;
+  }
+
+  // Карточка итогов гонки. Вызывается либо сразу по своему финишу, если гонка на этом кончилась,
+  // либо когда матч завершился, либо когда игрок сам попросил не досматривать.
+  showRaceResults() {
+    this.endSpectate();
+    this.state.transition(APP_STATE.RESULTS);
+    this.music.setIntensity(0);
+    // Своё время берётся из протокола, если локально его нет. Так бывает у вернувшегося по
+    // resume: собственного финиша он не видел, но в таблице тот уже записан.
+    const own = this.latestBoard.find(entry => entry.id === this.net?.id);
     this.ui.finishMulti({
-      time: raceTime,
+      time: this.finishedTime ?? own?.time ?? this.session.finalTime,
       board: this.latestBoard,
-      selfId: this.net.id,
+      selfId: this.net?.id,
       unranked: this.session.unranked
     });
-    if (!this.session.unranked) this.account.save('race', this.course?.spec, raceTime);
   }
 
   // Итоги матча. В гонке карточка уже показана по своему финишу, здесь только доска обновляется;
@@ -558,6 +633,8 @@ class Game {
     if (message.unranked) this.markUnranked(message.unranked);
     this.latestBoard = message.board || this.latestBoard || [];
     if (this.mode !== 'coop') {
+      // Матч кончился — досматривать больше нечего, показываем итоги.
+      if (this.spectating) return this.showRaceResults();
       if (!document.querySelector('#finish').classList.contains('hidden'))
         this.ui.updateBoard(this.latestBoard, this.net.id);
       return;
@@ -609,6 +686,19 @@ class Game {
   // в HUD рядом с таймером, задеть её большим пальцем легко, и одно случайное касание не должно
   // стоить забега. Отдельное модальное окно решило бы то же самое, но посреди игры оно перекрывает
   // трассу — а игрок в этот момент бежит.
+  // «К ИТОГАМ» — для тех, кому досматривать чужой забег незачем.
+  //
+  // Без этой кнопки досмотр стал бы ловушкой: гонка кончается, когда дошли все, и один
+  // задумавшийся соперник держал бы остальных на трассе сколько угодно.
+  bindSpectateSkip() {
+    const button = document.querySelector('#spectateSkip');
+    if (!button) return;
+    button.addEventListener('click', () => {
+      this.sfx.uiClick();
+      if (this.spectating) this.showRaceResults();
+    });
+  }
+
   bindLeaveMatch() {
     const button = document.querySelector('#leaveMatch');
     if (!button) return;
@@ -642,6 +732,7 @@ class Game {
   goHome() {
     this.startToken++;
     this.running = false;
+    this.endSpectate();
     this.input.enabled = false;
     this.music.stop();
     this.audio.setMuffle(0);
@@ -729,8 +820,12 @@ class Game {
     // Препятствия обновляются ДО игрока: перенос движущейся платформой считается по её сдвигу
     // за этот шаг, и игрок должен увидеть уже новую позицию платформы.
     this.course?.update(dt, elapsed, this.mode === 'preview' ? null : this.sfx);
-    if (!this.running || !this.player || this.mode === 'preview') return;
+    if (!this.player || this.mode === 'preview') return;
+    if (!this.running && !this.spectating) return;
+    // На досмотре ввод продолжает обрабатываться — им поворачивают камеру, — но шага физики за
+    // ним больше не следует: свой забег кончился.
     this.input.update();
+    if (!this.running) return;
     if (this.mode === 'coop') {
       const actors = this.coopControl.actors();
       const tether = this.course?.spec?.mechanics?.tether;
@@ -817,25 +912,32 @@ class Game {
       }
       this.updateRemotes(frameDt);
 
+      // Кого показывает кадр. На досмотре это соперник, который ещё бежит; во всех остальных
+      // случаях — свой игрок. Одна переменная на камеру, тени, звук и HUD: разъедься они, зритель
+      // смотрел бы на одного, а полосу прогресса видел бы чужую.
+      const focus = (this.spectating && this.spectateActor()) || this.player;
+
       this.cameraController.update(
         frameDt,
-        this.player,
+        focus,
         this.input,
         this.course,
         this.coopControl.partnerPosition()
       );
-      this.updateShadow(this.player.visualPosition);
-      this.updateAudioScene();
+      this.updateShadow(focus.visualPosition);
+      this.updateAudioScene(focus);
       if (this.mode === 'coop') this.coopControl.updatePartnerMarker();
 
       const elapsed = this.session.elapsed(this.raceNow());
       this.ui.updateHud({
         time: elapsed,
-        checkpoint: this.player.checkpoint,
+        checkpoint: focus.checkpoint,
         total: this.course.spec.segmentCount,
-        progress: this.course.progress(this.player.position, this.player.checkpoint),
-        stage: this.course.stageAt(this.player.checkpoint),
-        place: this.mode === 'multi' ? this.placement() : null,
+        progress: this.course.progress(focus.position, focus.checkpoint),
+        stage: this.course.stageAt(focus.checkpoint),
+        // Своё место на досмотре уже определено и не меняется. Считать его заново по расстоянию
+        // до финиша нельзя: стоящий на ленте оказался бы первым в любой гонке.
+        place: this.mode === 'multi' ? (this.spectating ? this.finishedPlace : this.placement()) : null,
         link: this.net ? { quality: this.net.quality, latency: this.net.latency } : null
       });
     }
@@ -850,18 +952,20 @@ class Game {
     requestAnimationFrame(next => this.loop(next));
   }
 
-  updateAudioScene() {
+  // actor — тот, кого показывает кадр: обычно свой игрок, на досмотре — соперник.
+  updateAudioScene(actor = this.player) {
     if (!this.audio.ready) return;
     // Слушатель — это камера: панорама звуков напарника считается относительно направления взгляда.
     this.audio.setListener(this.camera.position, this.cameraController.yaw);
 
     // Приглушение при падении: чем ниже игрок провалился, тем сильнее срезаются верхние частоты.
-    const depth = Math.max(0, -this.player.position.y) / 8;
+    const depth = Math.max(0, -actor.position.y) / 8;
     this.audio.setMuffle(Math.min(1, depth));
 
-    // Музыка нарастает по мере прохождения трассы.
-    if (this.running) {
-      this.music.setIntensity(this.course.progress(this.player.position, this.player.checkpoint));
+    // Музыка нарастает по мере прохождения трассы — на досмотре по трассе того, за кем смотрят.
+    // Иначе она замирала бы на своём финише, и чужая борьба шла бы под тишину.
+    if (this.running || this.spectating) {
+      this.music.setIntensity(this.course.progress(actor.position, actor.checkpoint));
     }
 
     // Сигнал упавшего напарника слышен на любом расстоянии.

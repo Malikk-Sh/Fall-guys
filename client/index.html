@@ -454,6 +454,16 @@
     </div>
     <div id="coopPingBubble" class="coop-ping-bubble hidden" role="status"></div>
 
+    <!-- Досмотр гонки. Свой забег кончился, чужой — нет: карточка итогов подождёт, а игрок пока
+         смотрит, чем всё кончится. Кнопка рядом — для тех, кому это не нужно. -->
+    <div id="spectate" class="spectate hidden">
+      <div class="spectate-text">
+        <span class="eyebrow" id="spectateSelf">ВЫ ФИНИШИРОВАЛИ</span>
+        <strong id="spectateWatching" role="status" aria-live="polite">ЖДЁМ ОСТАЛЬНЫХ</strong>
+      </div>
+      <button id="spectateSkip" class="button button-secondary" type="button">К ИТОГАМ</button>
+    </div>
+
     <div id="countdown" class="countdown hidden"><span>3</span></div>
     <div id="checkpointBanner" class="checkpoint-banner hidden">
       <small>КОНТРОЛЬНАЯ ТОЧКА</small><strong>1 / 6</strong>

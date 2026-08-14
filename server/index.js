@@ -1285,6 +1285,20 @@ function connectedHumans(room) {
   return count;
 }
 
+// Сколько участников ещё на трассе — и людей, и ботов.
+//
+// Число уходит вместе с сообщением о финише и нужно ровно для одного: дошедший должен понимать,
+// кончилась гонка или продолжается без него. Считать это на клиенте нельзя — состав комнаты он
+// знает по лобби, а кто из соперников уже дошёл и кто оборвался, достоверно известно только здесь.
+function stillRacing(room) {
+  let count = 0;
+  for (const player of room.players.values()) {
+    if (player.finished || player.disconnectedAt) continue;
+    count += 1;
+  }
+  return count;
+}
+
 // Свободная публичная комната. Избегание уважается и здесь: игрок, которого попросили больше не
 // сводить с этим человеком, не должен встретить его через случайный подбор.
 //
@@ -2562,6 +2576,7 @@ wss.on('connection', (ws, req) => {
         id: player.id,
         time: player.time,
         board: leaderboard(room),
+        racing: stillRacing(room),
         unranked: room.unranked || player.verificationReasons[0] || null,
         trusted: !room.unranked && player.verificationReasons.length === 0
       });
@@ -2806,7 +2821,8 @@ const snapshotTimer = setInterval(() => {
             matchId: room.matchId,
             id: player.id,
             time: player.time,
-            board: leaderboard(room)
+            board: leaderboard(room),
+            racing: stillRacing(room)
           });
           checkMatchEnd(room);
         }

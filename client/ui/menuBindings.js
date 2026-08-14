@@ -166,6 +166,7 @@ export function bindMenu(game) {
   );
 
   game.bindLeaveMatch();
+  game.bindSpectateSkip();
 
   const refreshPreview = () => {
     const settings = game.ui.singleSettings();

@@ -172,10 +172,18 @@ test.describe('полный матч на двоих', () => {
     expect(guestDone, 'гость обязан дойти до финиша').toBe(true);
 
     // Экран результатов у обоих, и оба видят обоих: таблица собирается на сервере и рассылается.
-    await expect(host.locator('#finish')).toBeVisible();
-    await expect(guest.locator('#finish')).toBeVisible();
+    //
+    // Тот, кто дошёл первым, попадает сюда не сразу: своим финишем гонка для него не кончается, он
+    // остаётся досматривать её. Значит, эта же проверка стережёт и обратный путь — карточка обязана
+    // подняться сама, когда матч завершится. Раньше она появлялась по собственному финишу, и
+    // сломать переход было нечем.
+    await expect(host.locator('#finish')).toBeVisible({ timeout: 15_000 });
+    await expect(guest.locator('#finish')).toBeVisible({ timeout: 15_000 });
     await expect(host.locator('#board')).toContainText('Гость E2E');
     await expect(guest.locator('#board')).toContainText('Хост E2E');
+    // Баннер досмотра не должен пережить карточку итогов.
+    await expect(host.locator('#spectate')).toBeHidden();
+    await expect(guest.locator('#spectate')).toBeHidden();
 
     // Забег пройден честно, поэтому отметки «без зачёта» быть не должно: она означала бы, что
     // проверка движения сочла обычный бег подозрительным.

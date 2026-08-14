@@ -7,6 +7,7 @@ import {
   ordinal
 } from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
+import { voteTally } from '../core/voting.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
 import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
 import {
@@ -955,6 +956,9 @@ export class UI {
     }
     if (!on) $('#coopIntro').classList.add('hidden');
     if (!on || !coop) this.coopLesson(null);
+    // Баннер досмотра живёт поверх HUD и уходит вместе с ним: пережить его он не должен ни в
+    // одном из путей — ни через итоги, ни через выход в меню.
+    if (!on) this.spectateEnd();
   }
   updateHud({ time, checkpoint, total, progress, stage, place, link }) {
     $('#timer').textContent = formatTime(time);
@@ -1047,11 +1051,10 @@ export class UI {
   // закрывал результаты обоим. Теперь состояние RESULTS приходит сюда и меняет только то, что
   // действительно изменилось, — счёт голосов.
   updateResultRoom(data, selfId, serverNow = Date.now()) {
-    const active = data.players.filter(player => player.online);
-    const self = active.find(player => player.id === selfId);
-    const forNext = active.filter(player => player.choice === 'next').length;
-    const forRematch = active.filter(player => player.choice === 'rematch').length;
-    const forLobby = active.filter(player => player.choice === 'lobby').length;
+    // Голосуют только люди — и в знаменателе стоят тоже только они. Правило и его цена описаны
+    // в voteTally: бот в счёте означал ожидание голоса, которого не будет.
+    const votes = voteTally(data.players, selfId);
+    const self = votes.self;
 
     // Кнопки остаются нажимаемыми: выбор меняют, пока комната не решила. Отметка «✓» показывает
     // свой выбор, счётчик — чужой. Без второго игрок не понимает, ждут его или он ждёт.
@@ -1060,12 +1063,12 @@ export class UI {
     next.classList.toggle('hidden', data.mode !== GAME_MODE.COOP);
     next.textContent =
       (self?.choice === 'next' ? '✓ ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ' : 'ИГРАТЬ ДАЛЬШЕ ВМЕСТЕ') +
-      ` · ${forNext}/${active.length}`;
+      ` · ${votes.next}/${votes.total}`;
 
     const rematch = $('#rematch');
     rematch.disabled = false;
     rematch.textContent =
-      (self?.choice === 'rematch' ? '✓ ЕЩЁ РАЗ' : 'ЕЩЁ РАЗ') + ` · ${forRematch}/${active.length}`;
+      (self?.choice === 'rematch' ? '✓ ЕЩЁ РАЗ' : 'ЕЩЁ РАЗ') + ` · ${votes.rematch}/${votes.total}`;
 
     const back = $('#returnLobby');
     back.disabled = false;
@@ -1074,7 +1077,7 @@ export class UI {
         ? `✓ ${data.mode === GAME_MODE.COOP ? 'ВЫЙТИ' : 'В ЛОББИ'}`
         : data.mode === GAME_MODE.COOP
           ? 'ВЫЙТИ'
-          : 'В ЛОББИ') + ` · ${forLobby}/${active.length}`;
+          : 'В ЛОББИ') + ` · ${votes.lobby}/${votes.total}`;
 
     this.showResultsTimer(data.resultsDeadline, serverNow);
   }
@@ -1128,6 +1131,36 @@ export class UI {
   }
 
   // В коопе свой финиш — это ещё не конец: ждём напарника, а не показываем итоги.
+  // Начало досмотра: HUD остаётся на экране и с этой минуты рассказывает про чужой забег, а своё
+  // место и время переезжают в баннер — иначе игрок потерял бы собственный результат из виду.
+  //
+  // Экранные кнопки убираются: управлять больше нечем. Зона обзора при этом продолжает работать —
+  // она ловит касание по свободной части экрана, а не по кнопке.
+  spectateBegin({ place = null, time = null } = {}) {
+    this.elements.touch.classList.add('hidden');
+    const own = place ? `ВЫ ФИНИШИРОВАЛИ · ${ordinal(place)}-Е МЕСТО` : 'ВЫ ФИНИШИРОВАЛИ';
+    $('#spectateSelf').textContent = time ? `${own} · ${formatTime(time)}` : own;
+    this.spectateWatching(null);
+    $('#spectate').classList.remove('hidden');
+  }
+
+  // За кем смотрим. null — пока не за кем: все либо дошли, либо потеряли связь.
+  spectateWatching(target) {
+    const line = $('#spectateWatching');
+    if (!line) return;
+    line.replaceChildren();
+    if (!target?.name) {
+      line.append('ЖДЁМ ОСТАЛЬНЫХ');
+      return;
+    }
+    line.append(`СМОТРИМ ЗА: ${target.name}`);
+    if (target.bot) line.append(botBadge());
+  }
+
+  spectateEnd() {
+    $('#spectate')?.classList.add('hidden');
+  }
+
   awaitPartnerFinish() {
     // HUD остаётся: игрок продолжает смотреть на трассу и видеть, где напарник. Управление к этому
     // моменту уже отключено вызывающей стороной, поэтому экранные кнопки убираем.

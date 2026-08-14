@@ -3,6 +3,8 @@ export const APP_STATE = Object.freeze({
   LOBBY: 'lobby',
   COUNTDOWN: 'countdown',
   RACE: 'race',
+  // Свой забег кончился, гонка продолжается: игрок досматривает её со стороны.
+  SPECTATE: 'spectate',
   RESULTS: 'results'
 });
 
@@ -38,6 +40,18 @@ export function createAppStates() {
       enter(game) {
         game.running = true;
         game.input.enabled = true;
+        game.input.lookOnly = false;
+      }
+    },
+    // Досмотр. Физика своего игрока не идёт — он уже на финишной ленте, — но ввод остаётся
+    // включённым: единственное, что он теперь делает, это поворачивает камеру. Отключить его
+    // значило бы отобрать у зрителя возможность посмотреть по сторонам.
+    [APP_STATE.SPECTATE]: {
+      enter(game) {
+        game.running = false;
+        game.input.enabled = true;
+        // Джойстик и кнопки с экрана убраны — значит, их треть экрана возвращается обзору.
+        game.input.lookOnly = true;
       }
     },
     [APP_STATE.RESULTS]: {

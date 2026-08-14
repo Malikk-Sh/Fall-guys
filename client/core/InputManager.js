@@ -37,6 +37,10 @@ export class InputManager {
     // телефоне до тех пор, пока к нему не подключат клавиатуру.
     if (globalThis.document?.body) document.body.dataset.input = this.activeMethod;
     this.enabled = false;
+    // Управления нет, остался только обзор. Так игрок смотрит гонку после своего финиша: джойстик
+    // с кнопками с экрана убраны, и отведённая им треть обязана вернуться под обзор — иначе на
+    // телефоне она становится мёртвой зоной, где перетаскивание ничего не делает.
+    this.lookOnly = false;
 
     // Обратный указатель «код клавиши → действие». Пересобирается при смене раскладки: искать
     // действие перебором всех привязок на каждое нажатие незачем.
@@ -218,7 +222,7 @@ export class InputManager {
     this.canvas.addEventListener('contextmenu', e => e.preventDefault());
     this.canvas.addEventListener('pointerdown', e => {
       if (!this.enabled) return;
-      if (e.pointerType === 'touch' && this.inStickZone(e.clientX)) return;
+      if (e.pointerType === 'touch' && !this.lookOnly && this.inStickZone(e.clientX)) return;
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 2) return;
       lookId = e.pointerId;
       lastX = e.clientX;

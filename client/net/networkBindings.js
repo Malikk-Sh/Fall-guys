@@ -14,6 +14,10 @@ import { raceSpawnFor } from '/shared/raceGrid.js';
 import { APP_STATE } from '../core/AppStates.js';
 import { applyCollapseEvent } from '../game/CoopWorldSync.js';
 
+function validRaceSpawn(spawn) {
+  return !!spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.y) && Number.isFinite(spawn.z);
+}
+
 function syncCoopCampaignResult(message) {
   if (message.mode !== GAME_MODE.COOP || message.hasNextChapter !== false) return;
 
@@ -171,17 +175,21 @@ export function bindNetwork(game) {
     game.finishedTime = null;
     game.resultsPending = false;
 
-    // Сервер раздаёт стабильные номера слотов. Раньше клиент игнорировал их в обычной гонке и
-    // каждый Player создавался ровно в `spec.start`, поэтому все участники начинали внутри друг
-    // друга. Теперь checkpoint 0 авторитетно закреплён за тем же slot и на сервере, поэтому эта
-    // персональная точка остаётся стартом и точкой раннего респауна до первого checkpoint.
+    // Сервер раздаёт стабильные номера слотов на старте матча, но после ухода участника может
+    // уплотнить текущую карту slot'ов. Для resume исходная checkpoint-0 клетка поэтому приезжает
+    // отдельно в resumed.raceSpawn и имеет приоритет над пересчётом по изменившемуся составу.
     const slots = message.slots || {};
     const slot = slots[game.net.id];
     const participantCount = Object.keys(slots).length;
-    const gridStart =
+    const mappedGridStart =
       message.mode === GAME_MODE.RACE && Number.isFinite(slot) && participantCount > 1
         ? raceSpawnFor(message.spec, slot, participantCount)
         : null;
+    const resumedGridStart =
+      message.mode === GAME_MODE.RACE && validRaceSpawn(message.resumed?.raceSpawn)
+        ? message.resumed.raceSpawn
+        : null;
+    const gridStart = resumedGridStart || mappedGridStart;
     const spec = gridStart ? { ...message.spec, start: gridStart } : message.spec;
 
     await game.startRace(message.mode === GAME_MODE.COOP ? 'coop' : 'multi', spec, message.at, message.slots);

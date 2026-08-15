@@ -42,6 +42,9 @@
 - [`RELEASE-PROCESS.md`](RELEASE-PROCESS.md) — immutable tags, GitHub Release и exact-release deploy.
 - [`OPERATIONS-CONTROL.md`](OPERATIONS-CONTROL.md) — безопасная privileged-граница owner-only операций.
 - [`INFRASTRUCTURE-STATUS.md`](INFRASTRUCTURE-STATUS.md) — read-only диагностика VPS во вкладке «Сервер».
+- [`MONETIZATION.md`](MONETIZATION.md) — исследование рекламных площадок и провайдеров, приём
+  платежей в России для физлица и план подключения поверх готового `RewardService`. Это план, а не
+  описание работающей подсистемы.
 
 ## Приоритет источников
 

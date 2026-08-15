@@ -16,7 +16,12 @@ const ROLL_SPEED = 10.2;
 const LANDING_RETENTION_TIME = 0.34;
 const WALL_BOUNCE_SPEED = 8.8;
 const KNOCKDOWN_MIN_TIME = 1.05;
-const KNOCKDOWN_MAX_TIME = 1.65;
+export const KNOCKDOWN_MAX_TIME = 1.65;
+
+// Сколько игрок неуязвим для нового сбивания после того, как поднялся. Экспортируется, потому что
+// на это же окно опирается Course: препятствие, уже сбившее игрока, не должно бить его повторно,
+// пока держится иммунитет, — иначе удар применяется, а само сбивание отклоняется.
+export const KNOCKDOWN_IMMUNITY_TIME = 0.7;
 const GETUP_TIME = 0.24;
 
 // Окно, в течение которого прыжок сработает, если нажать его чуть раньше приземления.
@@ -145,7 +150,7 @@ export class Player {
       this.knockdownTimer = Math.max(0, this.knockdownTimer - dt);
       if (this.knockdownTimer === 0) {
         this.getupTimer = GETUP_TIME;
-        this.knockdownImmunityTimer = 0.7;
+        this.knockdownImmunityTimer = KNOCKDOWN_IMMUNITY_TIME;
       }
     } else {
       this.getupTimer = Math.max(0, this.getupTimer - dt);
@@ -492,6 +497,10 @@ export class Player {
     this.knockdownImmunityTimer = 0;
     this.getupTimer = 0;
     this.grounded = false;
+    // Наклон и смещение позы сбивания снимаются здесь же, вместе с таймерами: логический сброс их
+    // не касается, и возрождение оставляло игрока лежащим (см. Character.resetPose). Масштаб ниже
+    // выставляется уже намеренно — это приседание при появлении, а не остаток прежней позы.
+    this.character.resetPose();
     this.character.visual.scale.set(1.35, 0.72, 1.35);
     this.sfx?.respawn();
     this.haptics?.vibrate(0.6);

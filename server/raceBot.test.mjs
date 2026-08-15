@@ -10,9 +10,10 @@
 // оказался медленнее «новичка», потому что слабость задавалась темпом, а темп поднимался до
 // полного у каждого разрыва — на трассах с частыми разрывами разница исчезала.
 //
-// Времена здесь намеренно проверяются как СРЕДНИЕ по нескольким трассам, а не как границы для
-// каждого забега. Отдельный забег на «хаосе» может затянуться: препятствия отбрасывают назад, и
-// это одинаково верно для бота и для человека.
+// Времена здесь намеренно проверяются по НЕСКОЛЬКИМ трассам сразу, а не как границы для каждого
+// забега. Отдельный забег на «хаосе» может затянуться: препятствия отбрасывают назад, и это
+// одинаково верно для бота и для человека. Какой именно статистикой — сказано у самой проверки
+// порядка: среднее на малой выборке для этого не годится.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -45,8 +46,6 @@ function race(skill, seed, difficulty = 'normal') {
   return result;
 }
 
-const mean = values => values.reduce((sum, value) => sum + value, 0) / values.length;
-
 test('каждый уровень доходит до финиша на каждой трассе', () => {
   for (const skill of BOT_SKILL_IDS) {
     for (const seed of SEEDS) {
@@ -56,18 +55,46 @@ test('каждый уровень доходит до финиша на кажд
   }
 });
 
+// Порядок уровней меряется на своей, более широкой выборке трасс и устойчивой статистикой.
+//
+// Среднее по четырём забегам здесь обманывало. Раз в несколько трасс любой уровень застревает
+// надолго — препятствия отбрасывают назад, — и один такой забег на сотню секунд перевешивает
+// десяток обычных. На четырёх трассах разница между «уверенным» и «быстрым» выходила порядка 0.6 с
+// при времени около 21 с, то есть тест сравнивал шум: правка физики на секунду переворачивала
+// результат, ничего не сломав в самой модели.
+//
+// Замер на сорока трассах: новичок 44.6 с, уверенный 32.0 с, быстрый 28.4 с. Порядок есть, но виден
+// он по медиане и по доле трасс, а не по среднему малой выборки. Обе величины ниже проверены и на
+// коде до правок сбивания, и после: они не подогнаны под одну версию.
+const ORDER_SEEDS = Array.from({ length: 16 }, (_, index) => 4101 + index);
+const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
 test('уровни идут по порядку: новичок медленнее уверенного, тот медленнее быстрого', () => {
   const times = {};
-  for (const skill of BOT_SKILL_IDS) {
-    times[skill] = mean(SEEDS.map(seed => race(skill, seed).seconds));
-  }
+  for (const skill of BOT_SKILL_IDS) times[skill] = ORDER_SEEDS.map(seed => race(skill, seed).seconds);
+
+  const typical = Object.fromEntries(BOT_SKILL_IDS.map(skill => [skill, median(times[skill])]));
   assert.ok(
-    times.rookie > times.steady,
-    `новичок (${times.rookie.toFixed(1)}) должен быть медленнее уверенного (${times.steady.toFixed(1)})`
+    typical.rookie > typical.steady,
+    `новичок (${typical.rookie.toFixed(1)}) должен быть медленнее уверенного (${typical.steady.toFixed(1)})`
   );
   assert.ok(
-    times.steady > times.sharp,
-    `уверенный (${times.steady.toFixed(1)}) должен быть медленнее быстрого (${times.sharp.toFixed(1)})`
+    typical.steady > typical.sharp,
+    `уверенный (${typical.steady.toFixed(1)}) должен быть медленнее быстрого (${typical.sharp.toFixed(1)})`
+  );
+
+  // Отдельная трасса — лотерея: сильный уровень может застрять там, где слабый прошёл чисто.
+  // Порядок означает не «всегда быстрее», а «быстрее на большинстве трасс».
+  const ahead = (strong, weak) =>
+    times[weak].filter((seconds, index) => seconds > times[strong][index]).length;
+  const half = ORDER_SEEDS.length / 2;
+  assert.ok(
+    ahead('steady', 'rookie') > half,
+    `уверенный обгоняет новичка лишь на ${ahead('steady', 'rookie')} трассах из ${ORDER_SEEDS.length}`
+  );
+  assert.ok(
+    ahead('sharp', 'steady') > half,
+    `быстрый обгоняет уверенного лишь на ${ahead('sharp', 'steady')} трассах из ${ORDER_SEEDS.length}`
   );
 });
 

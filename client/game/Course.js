@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CourseBuilder } from './CourseBuilder.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
+import { KNOCKDOWN_IMMUNITY_TIME, KNOCKDOWN_MAX_TIME } from './Player.js';
 import { buildSegment } from './segments.js';
 import {
   COLORS,
@@ -13,6 +14,10 @@ import {
   courseSpec,
   seededRandom
 } from '../core/Config.js';
+
+// Ровно столько защита и длится: самое долгое сбивание плюс иммунитет после подъёма. Число
+// выведено из констант сбивания, а не вписано, чтобы правка длительности не открывала щель заново.
+const LIMP_HIT_COOLDOWN = KNOCKDOWN_MAX_TIME + KNOCKDOWN_IMMUNITY_TIME;
 
 const palette = [
   COLORS.purple,
@@ -349,10 +354,30 @@ export class Course extends CourseBuilder {
       // Пружина сюда не входит: она не бьёт, а помогает, и цель «без попаданий» не должна
       // запрещать пользоваться трамплином.
       knockback = this.spec.modifier?.knockback || 1,
-      limpHitCooldown = player.knockdownTimer > 0 ? 1.5 : 0;
+      // Препятствие, уже сбившее игрока, молчит, пока тот лежит И пока действует иммунитет после
+      // подъёма.
+      //
+      // Раньше здесь стояли фиксированные 1.5 секунды и проверялся только knockdownTimer. Само
+      // сбивание длится до 1.65 с, а следом идёт ещё 0.7 с иммунитета — то есть окно истекало
+      // раньше защиты. В эту щель та же балка успевала ударить снова: knockDown() отказывал по
+      // иммунитету, а импульс, эффекты и засчитанное попадание применялись, и персонажа
+      // подбрасывало стоя, «будучи неуязвимым».
+      //
+      // Неуязвимости при этом не появляется: окно отсчитывается от ПРОШЛОГО удара этого же
+      // препятствия, поэтому всё, чего игрок ещё не касался — и всё, что задело его давно, —
+      // работает как работало.
+      limpHitCooldown =
+        player.knockdownTimer > 0 || player.knockdownImmunityTimer > 0 ? LIMP_HIT_COOLDOWN : 0;
     for (const o of this.obstacles) {
       const key = o.mesh.uuid,
-        last = player.hitTimes.get(key) || 0;
+        struck = player.hitTimes.get(key),
+        last = struck ?? 0,
+        // Пауза до следующего удара ИМЕННО ЭТОГО препятствия. Пока игрок сбит или встаёт под
+        // иммунитетом, она растягивается на всю защиту — но только там, где отметка удара уже есть.
+        // Прежнее выражение подставляло вместо отсутствующей отметки ноль и сравнивало с ней то же
+        // окно, из-за чего в начале забега сбитого не мог задеть и ни разу не касавшийся его
+        // предмет. Отметки нет — удар первый, и ждать ему нечего.
+        cooldown = struck !== undefined ? limpHitCooldown : 0;
       if (o.type === 'spring') {
         const dx = pos.x - o.mesh.position.x,
           dz = pos.z - o.mesh.position.z;
@@ -380,7 +405,7 @@ export class Course extends CourseBuilder {
         if (
           dist < min &&
           Math.abs(pos.y - o.mesh.position.y) < 1.55 &&
-          now - last > Math.max(0.28, limpHitCooldown)
+          now - last > Math.max(0.28, cooldown)
         ) {
           const nx = dx / dist,
             nz = dz / dist;
@@ -410,7 +435,7 @@ export class Course extends CourseBuilder {
           Math.abs(along) < o.length / 2 + radius &&
           Math.abs(cross) < o.width / 2 + radius &&
           Math.abs(pos.y - o.center.y) < 1.05 &&
-          now - last > Math.max(0.32, limpHitCooldown)
+          now - last > Math.max(0.32, cooldown)
         ) {
           const side = Math.sign(cross) || 1,
             nx = sin * side,
@@ -438,7 +463,7 @@ export class Course extends CourseBuilder {
           Math.abs(dx) < o.w / 2 + radius &&
           Math.abs(dz) < o.d / 2 + radius &&
           Math.abs(pos.y - o.mesh.position.y) < 1.5 &&
-          now - last > Math.max(0.34, limpHitCooldown)
+          now - last > Math.max(0.34, cooldown)
         ) {
           const dir = Math.sign(dx) || Math.sign(Math.cos(now * o.speed + o.phase)) || 1;
           pos.x += dir * (o.w / 2 + radius - Math.abs(dx) + 0.05);

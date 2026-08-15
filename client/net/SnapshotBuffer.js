@@ -160,6 +160,26 @@ function interpolate(a, b, t) {
   };
 }
 
+// Достраивать высоту баллистикой можно только тому, кто действительно летит.
+//
+// На земле высота принадлежит платформе. В воздухе скорость уже известна, поэтому короткий
+// баллистический прогноз точнее зависания на последней полученной высоте.
+//
+// Сбитый с ног — третий случай, и раньше он попадал не в ту ветку. В снапшоте состояние одно, и
+// knockdown перекрывает 'ground' (см. Player.snapshot), поэтому ЛЕЖАЩИЙ игрок считался летящим: на
+// потолке экстраполяции в 250 мс это 0.5 × 22.5 × 0.25² ≈ 0.7 единицы вниз и рывок обратно на
+// следующем пакете. У себя сбитый при этом лежал ровно — проседал он только на ЧУЖИХ экранах, то
+// есть ровно там, ради чего сбивание вообще едет по сети.
+//
+// Отличить лежащего от сбитого в полёте (сшибли с моста — он падает и остаётся knockdown) по одному
+// названию состояния нельзя. Поэтому смотрим на вертикальную скорость: касаясь опоры, Player.step
+// обнуляет velocity.y, и лежащий отправляет ровно ноль, а падающий — нет. Обычный 'air' сюда не
+// попадает и работает как раньше.
+function fallsFreely(state) {
+  if (state.state === 'ground' || !Number.isFinite(state.vy)) return false;
+  return !(state.state === 'knockdown' && state.vy === 0);
+}
+
 function extrapolate(state, aheadMs) {
   const clamped = Math.max(0, Math.min(MAX_EXTRAPOLATION_MS, aheadMs)) / 1000;
   if (clamped <= 0) return { ...state };
@@ -167,12 +187,7 @@ function extrapolate(state, aheadMs) {
     ...state,
     x: state.x + (state.vx || 0) * clamped,
     z: state.z + (state.vz || 0) * clamped,
-    // На земле высота принадлежит платформе. В воздухе скорость уже известна, поэтому короткий
-    // баллистический прогноз точнее зависания на последней полученной высоте.
-    y:
-      state.state === 'ground' || !Number.isFinite(state.vy)
-        ? state.y
-        : state.y + (state.vy || 0) * clamped - 0.5 * 22.5 * clamped * clamped,
+    y: fallsFreely(state) ? state.y + (state.vy || 0) * clamped - 0.5 * 22.5 * clamped * clamped : state.y,
     extrapolated: true
   };
 }

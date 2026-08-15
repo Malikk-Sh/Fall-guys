@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { raceSpawnFor, RACE_GRID_COLUMNS } from '../shared/raceGrid.js';
 
+// Эти координаты совпадают с канонической стартовой точкой процедурной гонки.
 const spec = { start: { x: 0, y: 1.2, z: 7 } };
 
 test('одиночный участник сохраняет прежнюю стартовую точку', () => {

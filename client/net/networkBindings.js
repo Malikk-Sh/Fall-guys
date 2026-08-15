@@ -14,6 +14,35 @@ import { raceSpawnFor } from '/shared/raceGrid.js';
 import { APP_STATE } from '../core/AppStates.js';
 import { applyCollapseEvent } from '../game/CoopWorldSync.js';
 
+const RACE_SPAWN_STORAGE_KEY = 'wobble-race-spawn-v1';
+
+function validRaceSpawn(spawn) {
+  return !!spawn && Number.isFinite(spawn.x) && Number.isFinite(spawn.y) && Number.isFinite(spawn.z);
+}
+
+function storedRaceSpawn(matchId) {
+  if (!matchId) return null;
+  try {
+    const raw = globalThis.localStorage?.getItem(RACE_SPAWN_STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (saved?.matchId !== matchId || !validRaceSpawn(saved.spawn)) return null;
+    return saved.spawn;
+  } catch {
+    return null;
+  }
+}
+
+function rememberRaceSpawn(matchId, spawn) {
+  if (!matchId || !validRaceSpawn(spawn)) return;
+  try {
+    globalThis.localStorage?.setItem(RACE_SPAWN_STORAGE_KEY, JSON.stringify({ matchId, spawn }));
+  } catch {
+    // Хранилище может быть недоступно в приватном режиме. Тогда resume использует обычный
+    // серверный slot-map; сетевой авторитет от этого не меняется.
+  }
+}
+
 function syncCoopCampaignResult(message) {
   if (message.mode !== GAME_MODE.COOP || message.hasNextChapter !== false) return;
 
@@ -171,17 +200,25 @@ export function bindNetwork(game) {
     game.finishedTime = null;
     game.resultsPending = false;
 
-    // Сервер раздаёт стабильные номера слотов. Раньше клиент игнорировал их в обычной гонке и
-    // каждый Player создавался ровно в `spec.start`, поэтому все участники начинали внутри друг
-    // друга. Теперь checkpoint 0 авторитетно закреплён за тем же slot и на сервере, поэтому эта
-    // персональная точка остаётся стартом и точкой раннего респауна до первого checkpoint.
+    // Сервер раздаёт стабильные номера слотов на старте матча. Во время уже идущего забега состав
+    // комнаты может измениться и сервер переиндексирует оставшиеся slot'ы, поэтому resume не вправе
+    // пересчитывать checkpoint-0 по новой уменьшенной карте. Сохраняем исходную серверную клетку
+    // вместе с matchId и предпочитаем её при возврате; одна запись переживает перезагрузку вкладки
+    // и перезаписывается на следующем настоящем старте.
     const slots = message.slots || {};
     const slot = slots[game.net.id];
     const participantCount = Object.keys(slots).length;
-    const gridStart =
+    const mappedGridStart =
       message.mode === GAME_MODE.RACE && Number.isFinite(slot) && participantCount > 1
         ? raceSpawnFor(message.spec, slot, participantCount)
         : null;
+    const gridStart =
+      message.mode === GAME_MODE.RACE && message.resumed
+        ? storedRaceSpawn(message.matchId) || mappedGridStart
+        : mappedGridStart;
+    if (message.mode === GAME_MODE.RACE && !message.resumed && gridStart) {
+      rememberRaceSpawn(message.matchId, gridStart);
+    }
     const spec = gridStart ? { ...message.spec, start: gridStart } : message.spec;
 
     await game.startRace(message.mode === GAME_MODE.COOP ? 'coop' : 'multi', spec, message.at, message.slots);

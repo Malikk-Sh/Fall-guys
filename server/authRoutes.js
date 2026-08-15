@@ -286,6 +286,18 @@ function installAuthRoutes({
     return res.json({ ok: true, inventory: inventory.profile(session.accountId) });
   });
 
+  // Эмоция в одну из четырёх ячеек. Отдельный маршрут, а не расширение equip: у эмоций не слот, а
+  // позиция, и подмешивать её в тот же параметр значило бы принимать «слот» двух разных природ.
+  app.post('/api/cosmetics/emote', json, (req, res) => {
+    const session = requireSession(req, res);
+    if (!session) return undefined;
+    if (!inventory) return res.status(503).json({ ok: false, error: 'inventory-disabled' });
+    inventory.syncEntitlements(session.accountId);
+    const equipped = inventory.equipEmote(session.accountId, req.body?.position, req.body?.cosmeticId);
+    if (!equipped.ok) return res.status(400).json({ ok: false, error: equipped.reason });
+    return res.json({ ok: true, inventory: inventory.profile(session.accountId) });
+  });
+
   return { tokenFrom, sessionFrom, requireSession };
 }
 

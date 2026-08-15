@@ -2592,3 +2592,508 @@ body.large-ui .menu-card {
   letter-spacing: 0.08em;
   vertical-align: middle;
 }
+
+/* ==== Шкаф ==== */
+
+/* Раскладка одна для всех экранов.
+
+   На компьютере — сцена слева и решётка справа; на телефоне те же блоки складываются в колонку,
+   вкладки становятся горизонтальной лентой, а панель действий прилипает к нижнему краю. Разметка
+   при этом не дублируется: две разметки со временем разъезжаются, и починенное в одной остаётся
+   сломанным в другой. */
+.wardrobe-screen {
+  display: grid;
+  place-items: center;
+  padding: calc(10px + var(--safe-top)) calc(10px + var(--safe-right)) calc(10px + var(--safe-bottom))
+    calc(10px + var(--safe-left));
+  background: #1a0f3ccc;
+  backdrop-filter: blur(6px);
+  z-index: 26;
+}
+.wardrobe-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(1120px, 100%);
+  height: min(760px, 100%);
+  padding: 14px;
+  border-radius: 20px;
+  overflow: hidden;
+}
+.wardrobe-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+}
+.wardrobe-head small {
+  display: block;
+  color: #a9a4cd;
+  letter-spacing: 0.16em;
+  font-size: 9px;
+}
+.wardrobe-head h2 {
+  margin: 2px 0 0;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+}
+.wardrobe-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-top: 12px;
+}
+.wardrobe-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.wardrobe-preview {
+  /* Обязательный сброс: глобальное правило `canvas` делает любой холст в проекте
+     `position: fixed; inset: 0` — оно написано для игровой сцены, которая и должна занимать весь
+     экран. Без сброса превью растягивается на всё окно поверх вкладок и перехватывает нажатия,
+     причём выглядит это не как ошибка вёрстки, а как «кнопки не работают». */
+  position: relative;
+  inset: auto;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 320px;
+  border: 1px solid #ffffff1a;
+  border-radius: 16px;
+  background: radial-gradient(circle at 50% 32%, #4b35b7 0%, #1d1145 74%);
+  /* Превью вращают пальцем, и браузер не должен перехватывать это как прокрутку страницы. */
+  touch-action: none;
+  cursor: grab;
+}
+.wardrobe-stage-actions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px;
+}
+.wardrobe-stage-actions .button {
+  min-height: 40px;
+  padding: 0 12px;
+  font-size: 10px;
+}
+.wardrobe-emotes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+.wardrobe-emote-slot {
+  min-height: 46px;
+  border: 1px dashed #ffffff30;
+  border-radius: 12px;
+  color: #fff;
+  background: #ffffff0d;
+  font-size: 18px;
+  cursor: pointer;
+}
+.wardrobe-emote-slot.is-empty {
+  color: #8f89b8;
+  font-size: 11px;
+}
+.wardrobe-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wardrobe-collection {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 8px;
+  padding: 8px 10px;
+  border: 1px solid #ffffff14;
+  border-left: 3px solid var(--collection-color, #ffffff44);
+  border-radius: 10px;
+  background: #ffffff08;
+  cursor: pointer;
+}
+.wardrobe-collection b {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+.wardrobe-collection span {
+  color: #cfcaea;
+  font-size: 10px;
+}
+.wardrobe-collection-bar {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 3px;
+  background: #ffffff1a;
+}
+.wardrobe-collection-bar::before {
+  display: block;
+  width: var(--percent, 0%);
+  height: 100%;
+  border-radius: 3px;
+  background: var(--collection-color, #fff);
+  content: '';
+}
+.wardrobe-collection small {
+  grid-column: 1 / -1;
+  color: #a9a4cd;
+  font-size: 9px;
+}
+.wardrobe-collection.is-complete {
+  box-shadow: inset 0 0 0 1px var(--collection-color, #fff);
+}
+.wardrobe-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.wardrobe-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.wardrobe-tabs::-webkit-scrollbar {
+  display: none;
+}
+.wardrobe-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  /* Пальцу нужна цель, а не пиксель: 44 — минимум, ниже которого промахи становятся правилом. */
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid #ffffff1f;
+  border-radius: 999px;
+  color: #cfcaea;
+  background: #ffffff0a;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+.wardrobe-tab.active {
+  border-color: var(--yellow);
+  color: var(--ink);
+  background: var(--yellow);
+}
+.wardrobe-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.wardrobe-filters select,
+.wardrobe-chip {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid #ffffff1f;
+  border-radius: 10px;
+  color: #e6e3f7;
+  background: #241750;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+.wardrobe-chip.active {
+  border-color: var(--yellow);
+  color: var(--ink);
+  background: var(--yellow);
+}
+.wardrobe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.wardrobe-card {
+  position: relative;
+  min-height: 118px;
+  padding: 9px;
+  border: 1px solid #ffffff1a;
+  border-left: 3px solid var(--rarity-color, #ffffff44);
+  border-radius: 12px;
+  color: #efedfb;
+  background: #ffffff0a;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.wardrobe-card-swatch {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+  font-size: 17px;
+  font-style: normal;
+}
+.wardrobe-card strong {
+  display: block;
+  margin-top: 7px;
+  font-size: 10px;
+  line-height: 1.25;
+}
+.wardrobe-card-meta {
+  display: block;
+  margin-top: 3px;
+  color: var(--rarity-color, #a9a4cd);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+.wardrobe-card-state {
+  display: block;
+  margin-top: 4px;
+  color: #a9a4cd;
+  font-size: 9px;
+  line-height: 1.3;
+}
+.wardrobe-card-collection,
+.wardrobe-card-favorite,
+.wardrobe-card-new {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+.wardrobe-card-collection {
+  color: #8f89b8;
+}
+.wardrobe-card-favorite {
+  top: 24px;
+  color: var(--yellow);
+}
+.wardrobe-card-new {
+  top: 40px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--mint, #68f4d2);
+}
+/* Закрытый предмет остаётся видимым и его можно рассмотреть. Отличается он не только
+   приглушённостью: у него всегда написано требование, а кнопка «Надеть» выключена. */
+.wardrobe-card.is-locked {
+  opacity: 0.62;
+  border-left-style: dashed;
+}
+.wardrobe-card.is-equipped {
+  box-shadow: inset 0 0 0 1px var(--mint, #68f4d2);
+}
+.wardrobe-card.is-selected {
+  border-color: var(--yellow);
+  background: #ffffff18;
+}
+.wardrobe-empty {
+  grid-column: 1 / -1;
+  margin: 18px 0;
+  color: #a9a4cd;
+  text-align: center;
+  font-size: 11px;
+}
+.wardrobe-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  border: 1px solid #ffffff1a;
+  border-radius: 14px;
+  background: #1d1145cc;
+}
+.wardrobe-details-copy strong {
+  font-size: 13px;
+}
+.wardrobe-details-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+}
+.wardrobe-details-meta b {
+  color: var(--rarity-color, #fff);
+}
+.wardrobe-details-meta i {
+  color: #a9a4cd;
+  font-style: normal;
+}
+.wardrobe-details-collection {
+  display: block;
+  margin-top: 3px;
+  color: #8f89b8;
+  font-size: 9px;
+}
+.wardrobe-details-copy p {
+  margin: 5px 0 0;
+  color: #cfcaea;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.wardrobe-details-requirement {
+  display: block;
+  margin-top: 4px;
+  color: var(--mint, #68f4d2);
+  font-size: 9px;
+}
+.wardrobe-details-requirement.locked {
+  color: var(--yellow);
+}
+.wardrobe-details-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.wardrobe-details-actions .button {
+  min-height: 44px;
+  padding: 0 15px;
+  font-size: 10px;
+}
+.wardrobe-details-actions .button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.wardrobe-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 9px;
+}
+.wardrobe-open small {
+  color: #ffffffcc;
+  font-size: 9px;
+}
+
+.unlock-toast {
+  position: fixed;
+  right: calc(12px + var(--safe-right));
+  bottom: calc(12px + var(--safe-bottom));
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: min(280px, calc(100vw - 24px));
+  padding: 12px 14px;
+  border: 1px solid #ffffff22;
+  border-left: 4px solid var(--rarity-color, #fff);
+  border-radius: 14px;
+  background: #1d1145f2;
+}
+.unlock-toast b {
+  color: var(--yellow);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+}
+.unlock-toast strong {
+  font-size: 14px;
+}
+.unlock-toast small {
+  color: #a9a4cd;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+}
+.unlock-toast-actions {
+  display: flex;
+  gap: 7px;
+  margin-top: 7px;
+}
+.unlock-toast-actions .button {
+  flex: 1;
+  min-height: 40px;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .wardrobe-shell {
+    height: 100%;
+    padding: 11px;
+  }
+  .wardrobe-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+  .wardrobe-stage {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .wardrobe-preview {
+    max-height: 40vh;
+  }
+  /* На телефоне решётка держит две-три колонки и не растекается за край карточки. */
+  .wardrobe-grid {
+    grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+    overflow: visible;
+  }
+  /* Панель действий липнет к низу: «Надеть» должно быть под пальцем, а не в конце длинной ленты.
+     Она внутри шкафа, а не поверх игры, поэтому джойстику и кнопкам прыжка мешать ей нечем —
+     во время забега шкаф закрыт. */
+  .wardrobe-details {
+    position: sticky;
+    bottom: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wardrobe-details-actions {
+    justify-content: stretch;
+  }
+  .wardrobe-details-actions .button {
+    flex: 1;
+  }
+  .wardrobe-collections {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Уменьшенная анимация: автоповорот превью и появление карточки награды — украшения, и для тех,
+   кому движение мешает, они первыми и уходят. Само превью остаётся: его вращают пальцем. */
+@media (prefers-reduced-motion: reduce) {
+  .wardrobe-card,
+  .unlock-toast {
+    transition: none;
+  }
+}
+
+/* Кнопка и колесо эмоций. Правый верхний угол — единственная зона, свободная и от джойстика
+   (низ слева), и от прыжка с рывком (низ справа). */
+.emote-button {
+  top: calc(12px + var(--safe-top));
+  right: calc(12px + var(--safe-right) + 58px);
+  font-size: 20px;
+}
+.emote-wheel {
+  position: absolute;
+  top: calc(66px + var(--safe-top));
+  right: calc(12px + var(--safe-right));
+  z-index: 12;
+  display: grid;
+  grid-template-columns: repeat(2, 56px);
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #ffffff22;
+  border-radius: 14px;
+  background: #1d1145e8;
+}
+.emote-wheel-slot {
+  min-height: 52px;
+  border: 1px solid #ffffff22;
+  border-radius: 11px;
+  color: #fff;
+  background: #ffffff10;
+  font-size: 20px;
+  cursor: pointer;
+}
+.emote-wheel-slot:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

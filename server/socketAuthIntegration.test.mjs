@@ -5,6 +5,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const WebSocket = require('ws');
 const core = require('./index');
+const { PROTOCOL_VERSION } = require('../shared/protocol.js');
+
+// Клиент на версию старше текущей. Сервер принимает актуальную и предыдущую, и тесты проверяют
+// именно совместимость со «вчерашним» браузером. Раньше здесь стояло число 10, и после каждого
+// подъёма протокола эти девять тестов начинали падать по таймауту ожидания лобби — сообщение
+// отклонялось как VERSION_MISMATCH ещё до создания комнаты, и причина в отчёте не называлась.
+const PREVIOUS_PROTOCOL_VERSION = PROTOCOL_VERSION - 1;
 const { AuthService } = require('./auth');
 const { networkIdentity } = require('./networkIdentity');
 
@@ -70,7 +77,9 @@ test('real WebSocket AUTH consumes WST and room messages no longer carry credent
   // Simulate a support rename while this browser still has its old cached profile name.
   core.accounts.rename(account.id, 'Support Renamed');
   const lobbyReply = waitFor(first, 'lobby');
-  first.send(JSON.stringify({ type: 'create', name: 'Socket Integration', protocolVersion: 10 }));
+  first.send(
+    JSON.stringify({ type: 'create', name: 'Socket Integration', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   assert.ok(room);
@@ -101,7 +110,9 @@ test('late WebSocket AUTH synchronizes room identity and reconnect revocation', 
   });
 
   const lobbyReply = waitFor(client, 'lobby');
-  client.send(JSON.stringify({ type: 'create', name: 'Anonymous Old', protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({ type: 'create', name: 'Anonymous Old', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   assert.ok(room);
@@ -148,7 +159,9 @@ test('late WebSocket AUTH does not emit room-state while a match is already play
   });
 
   const lobbyReply = waitFor(client, 'lobby');
-  client.send(JSON.stringify({ type: 'create', name: 'Before Auth', protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({ type: 'create', name: 'Before Auth', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   assert.ok(room);
@@ -190,7 +203,13 @@ test('incident diagnostics follows authenticated socket lifecycle without storin
   client.send(JSON.stringify({ type: 'auth', ticket }));
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
-  client.send(JSON.stringify({ type: 'create', name: 'Ignored Cached Name', protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({
+      type: 'create',
+      name: 'Ignored Cached Name',
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
+    })
+  );
   await lobbyReply;
   await closeClient(client);
   await new Promise(resolve => setTimeout(resolve, 30));
@@ -231,7 +250,14 @@ test('incident storage failure does not change the gameplay protocol response', 
   };
 
   const errorReply = waitFor(client, 'error');
-  client.send(JSON.stringify({ type: 'join', code: 'ZZZZZZ', name: account.name, protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({
+      type: 'join',
+      code: 'ZZZZZZ',
+      name: account.name,
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
+    })
+  );
   const response = await errorReply;
   assert.equal(response.code, 'ROOM_NOT_FOUND');
 });
@@ -257,7 +283,13 @@ test('blocked late WebSocket AUTH cannot resume the anonymous room slot', async 
   });
 
   const lobbyReply = waitFor(first, 'lobby');
-  first.send(JSON.stringify({ type: 'create', name: 'Anonymous Before Block', protocolVersion: 10 }));
+  first.send(
+    JSON.stringify({
+      type: 'create',
+      name: 'Anonymous Before Block',
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
+    })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   const player = [...room.players.values()][0];
@@ -303,7 +335,9 @@ test('disconnect abandonment keeps original race context after room advances to 
   client.send(JSON.stringify({ type: 'auth', ticket }));
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
-  client.send(JSON.stringify({ type: 'create', name: account.name, protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PREVIOUS_PROTOCOL_VERSION })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   const player = room.players.values().next().value;
@@ -344,7 +378,9 @@ test('explicit LEAVE_ROOM during an active match records an immediate abandon in
   client.send(JSON.stringify({ type: 'auth', ticket }));
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
-  client.send(JSON.stringify({ type: 'create', name: account.name, protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PREVIOUS_PROTOCOL_VERSION })
+  );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
   assert.ok(room);
@@ -380,7 +416,14 @@ test('operational drain records restart as the terminal matchmaking event', asyn
   client.send(JSON.stringify({ type: 'auth', ticket }));
   await authReply;
   const waitingReply = waitFor(client, 'matchmakingWaiting');
-  client.send(JSON.stringify({ type: 'findCoop', name: account.name, chapterId: '', protocolVersion: 10 }));
+  client.send(
+    JSON.stringify({
+      type: 'findCoop',
+      name: account.name,
+      chapterId: '',
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
+    })
+  );
   await waitingReply;
 
   assert.equal(core.beginOperationalDrain(), true);

@@ -10,7 +10,7 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
@@ -37,6 +37,10 @@ export const C2S = Object.freeze({
   REMATCH_VOTE: 'rematch',
   NEXT_CHAPTER_VOTE: 'nextChapter',
   RETURN_TO_LOBBY: 'returnLobby',
+  // Эмоция. По сети едет ТОЛЬКО канонический ID — ни длительности, ни трансформаций, ни описания
+  // анимации: всё это клиент берёт из общего каталога сам. Иначе отправитель диктовал бы чужому
+  // клиенту, что и как рисовать, а это уже не косметика, а произвольный ввод в чужой рендер.
+  EMOTE: 'emote',
   PING: 'ping'
 });
 
@@ -68,6 +72,8 @@ export const S2C = Object.freeze({
   // потеряно». В первом случае он ждёт и переподключается молча, во втором незачем изображать
   // борьбу за соединение: комнаты уже не существует, надо честно сказать и вернуть в меню.
   SERVER_SHUTDOWN: 'shutdown',
+  // Эмоция другого игрока: сервер подтвердил владение, выбор и частоту и пересказал факт.
+  PLAYER_EMOTE: 'emote',
   PONG: 'pong',
   ERROR: 'error'
 });
@@ -138,7 +144,11 @@ export const ALLOWED_IN_STATE = Object.freeze({
   // работала как скрытое «завершить матч досрочно» — побочный эффект, которого никто не просил.
   [C2S.REMATCH_VOTE]: [ROOM_STATE.RESULTS],
   [C2S.NEXT_CHAPTER_VOTE]: [ROOM_STATE.RESULTS],
-  [C2S.RETURN_TO_LOBBY]: [ROOM_STATE.RESULTS]
+  [C2S.RETURN_TO_LOBBY]: [ROOM_STATE.RESULTS],
+  // Эмоции — социальное действие, а не игровое. Они уместны везде, где игроки видят друг друга:
+  // в лобби, на отсчёте, в забеге и на экране результатов. На физику они не влияют вовсе, поэтому
+  // запрещать их в каком-то из этих состояний было бы ограничением без причины.
+  [C2S.EMOTE]: [ROOM_STATE.LOBBY, ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING, ROOM_STATE.RESULTS]
 });
 
 // Режимы игры. Соревновательные форматы (турниры, выбывание) сюда сознательно не входят —
@@ -317,6 +327,9 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     clientTime: optional(num(0, Number.MAX_SAFE_INTEGER))
   },
   [C2S.LEAVE_ROOM]: {},
+  // Единственное поле. Всё остальное — длительность, поза, эффект — сервер и чужие клиенты берут
+  // из общего каталога по этому ID, а не из сообщения.
+  [C2S.EMOTE]: { emoteId: str(48) },
   [C2S.REMATCH_VOTE]: { matchId: str(32) },
   [C2S.NEXT_CHAPTER_VOTE]: { matchId: str(32) },
   [C2S.RETURN_TO_LOBBY]: { matchId: str(32) }
@@ -346,6 +359,9 @@ export const RATE_LIMITS = Object.freeze({
   // Пинги — человеческое действие: короткий burst допустим, постоянный спам нет.
   [C2S.COOP_PING]: [4, 5_000],
   [C2S.RESPAWN]: [5, 5_000],
+  // Примерно две эмоции в секунду с небольшим запасом на быстрый двойной тап. Эмоция ничего не
+  // меняет в мире, но её видят все в комнате, и поток из неё — это спам, а не игра.
+  [C2S.EMOTE]: [3, 1_500],
   [C2S.FINISH]: [5, 10_000],
   [C2S.REMATCH_VOTE]: [10, 10_000],
   [C2S.NEXT_CHAPTER_VOTE]: [10, 10_000],

@@ -2480,6 +2480,28 @@ wss.on('connection', (ws, req) => {
         at: Date.now()
       });
     },
+    // Эмоция.
+    //
+    // Клиент присылает только ID. Сервер проверяет всё остальное: участника комнаты (это уже
+    // сделано выше — до сюда доходят лишь `room`+`player`), канонический ID, слот, владение и то,
+    // что предмет действительно выбран в emote loadout. Ничего из присланного не пересказывается
+    // дальше, кроме самого ID: длительность, поза и эффект — дело каталога, а не отправителя.
+    //
+    // Эмоция не трогает authoritative state: ни позиции, ни скорости, ни чекпоинта. Это событие
+    // презентации, и в обработчике намеренно нет ни одной строки, которая меняла бы игрока.
+    [C2S.EMOTE]: (message, room, player) => {
+      // Гость эмоций не имеет: у него нет ни владения, ни выбранного набора. Это не отказ в
+      // обслуживании, а следствие того, что владение — свойство аккаунта.
+      if (!player.accountId) return;
+      if (!socialCosmetics.canPlayEmote(player.accountId, message.emoteId)) return;
+      gameplay.count('emote', dims(room, player, message.emoteId));
+      return broadcast(room, {
+        type: S2C.PLAYER_EMOTE,
+        id: player.id,
+        emoteId: message.emoteId,
+        at: Date.now()
+      });
+    },
     [C2S.RESPAWN]: (message, room, player) => {
       const now = Date.now();
       if (now - (player.lastRespawn || 0) < 450) return;

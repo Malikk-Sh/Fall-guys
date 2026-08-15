@@ -119,6 +119,9 @@ networkIdentity.configure(
 // В публичный профиль комнаты loadout попадает только из server inventory. index.js знает лишь
 // этот узкий resolver и не получает доступ ни к HttpOnly session, ни к ownership-операциям.
 socialCosmetics.configure(accountId => inventory.publicLoadout(accountId));
+// Эмоции проверяются на каждое сетевое событие, а не один раз при входе: выбранный набор игрок
+// меняет в шкафу, и разрешение, выданное авансом, пережило бы это изменение.
+socialCosmetics.configureEmotes((accountId, emoteId) => inventory.canPlayEmote(accountId, emoteId));
 
 const accountPayload = account => ({
   ok: true,

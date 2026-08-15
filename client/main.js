@@ -83,6 +83,10 @@ class Game {
     this.audio = new AudioEngine();
     this.sfx = new Sfx(this.audio);
     this.music = new Music(this.audio);
+    // Шкафу нужны те же процедурные сигналы и та же настройка уменьшенной анимации, что и
+    // остальной игре: отдельного звукового движка и отдельного переключателя у косметики нет.
+    this.ui.sfx = this.sfx;
+    this.ui.settings = this.settings;
 
     this.createRenderer();
     this.createScene();
@@ -463,6 +467,32 @@ class Game {
     }
   }
 
+  // Победный эффект того, кто финишировал. У удалённого игрока он же, но упрощённый: в комнате на
+  // шестнадцать человек шестнадцать полных финишей подряд — это не праздник, а просадка.
+  playFinishEffect(playerId) {
+    const actor = playerId === this.net?.id ? this.player : this.remotes.get(playerId);
+    actor?.character?.cosmetics?.playFinish();
+  }
+
+  // Эмоция.
+  //
+  // Локальный показ идёт сразу и не ждёт сервера: ответ нужен остальным, а не нажавшему. Если
+  // предмет не проигрался локально (не выбран, неизвестен), в сеть он не уходит вовсе.
+  playEmote(emoteId) {
+    if (!emoteId || !this.player) return false;
+    if (!this.player.character.playEmote(emoteId)) return false;
+    this.sfx?.emote?.();
+    this.net?.sendEmote(emoteId);
+    return true;
+  }
+
+  // Эмоция другого игрока. Сюда приходит уже проверенное сервером событие, но ID всё равно
+  // проходит через каталог: доверять форме сообщения и доверять его содержимому — разные вещи.
+  receiveEmote(message) {
+    if (!message?.id || message.id === this.net?.id) return;
+    this.remotes.get(message.id)?.character?.playEmote(message.emoteId);
+  }
+
   // Создание и удаление моделей удалённых игроков. Сами позиции берутся не отсюда, а из буфера
   // снапшотов в момент отрисовки — см. updateRemotes.
   syncRemoteRoster() {
@@ -544,6 +574,9 @@ class Game {
   receiveFinish(message) {
     this.latestBoard = message.board || [];
     if (message.unranked) this.markUnranked(message.unranked);
+    // Победная косметика — презентация ПОСЛЕ подтверждения сервера, а не вместо него. Эффект
+    // ничего не объявляет и не меняет: к этому моменту финиш уже засчитан, и решение принято.
+    this.playFinishEffect(message.id);
     if (message.id !== this.net.id) {
       if (!document.querySelector('#finish').classList.contains('hidden'))
         this.ui.updateBoard(this.latestBoard, this.net.id);

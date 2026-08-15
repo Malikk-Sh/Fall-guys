@@ -11,14 +11,15 @@ import { voteTally } from '../core/voting.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
 import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
 import {
-  COSMETICS,
   cosmeticLoadout,
   cosmeticLoadoutFromIds,
-  equipCosmetic,
   nextCosmeticGoal,
   readCosmetics,
+  readEmoteLoadout,
   unlockedCosmetics
 } from '../core/cosmetics.js';
+import { COSMETIC_BY_ID, COSMETIC_CATALOG, COSMETIC_SLOTS, SLOT_META } from '/shared/cosmetics.js';
+import { Wardrobe } from './wardrobe.js';
 import { GAME_MODE } from '/shared/protocol.js';
 import {
   ACHIEVEMENT_CATALOG,
@@ -26,6 +27,8 @@ import {
   CAMPAIGN_PROFILE_TITLE,
   DEFAULT_PROFILE_TITLE
 } from '/shared/achievements.js';
+
+const COSMETIC_CATALOG_SIZE = COSMETIC_CATALOG.length;
 
 // Лучшее из двух рекордов. Серверный и локальный могут разойтись: играли без связи, играли с
 // другого устройства, сбрасывали данные браузера. Показывать надо лучший — он и есть рекорд.
@@ -370,36 +373,103 @@ export class UI {
     this.renderCosmetics();
   }
 
+  // Панель аккаунта показывает не весь каталог, а надетое.
+  //
+  // Раньше здесь была решётка со всеми предметами. С четырнадцатью это работало, с семьюдесятью
+  // четырьмя — нет: панель превращалась в бесконечную ленту без фильтров и без превью. Полный
+  // разбор переехал в шкаф, а здесь остался ответ на вопрос «что на мне сейчас».
   renderCosmetics() {
     const grid = $('#cosmeticGrid');
     if (!grid) return;
     const profile = this.profileData || readProfile();
-    const unlocked = new Set(unlockedCosmetics(this.accountProgressData, profile).map(item => item.id));
     const equipped = readCosmetics(this.accountProgressData, profile);
+    const emotes = readEmoteLoadout(this.accountProgressData, profile);
     grid.replaceChildren();
-    for (const item of COSMETICS) {
-      const card = document.createElement('button');
-      card.type = 'button';
+
+    for (const slot of COSMETIC_SLOTS) {
+      const item = COSMETIC_BY_ID[equipped[slot]] || null;
+      const card = document.createElement('div');
       card.className = 'cosmetic-card';
-      const available = unlocked.has(item.id);
-      card.classList.toggle('cosmetic-card-locked', !available);
-      card.classList.toggle('cosmetic-card-equipped', equipped[item.slot] === item.id);
-      card.disabled = !available;
-      card.innerHTML = `<strong>${available ? '✦' : '🔒'} ${item.name}</strong><small>${
-        equipped[item.slot] === item.id ? 'НАДЕТО' : item.detail
-      }</small>`;
-      if (available)
-        card.addEventListener('click', () => {
-          equipCosmetic(item.id, this.accountProgressData, profile);
-          this.renderCosmetics();
-          this.onCosmeticChange?.();
-        });
+      card.dataset.slot = slot;
+      card.dataset.cosmeticId = item?.id || 'none';
+      card.classList.toggle('cosmetic-card-equipped', Boolean(item));
+      const title = document.createElement('strong');
+      title.textContent = `${SLOT_META[slot].icon} ${SLOT_META[slot].label}`;
+      const value = document.createElement('small');
+      value.textContent = item ? item.name : 'Пусто';
+      card.append(title, value);
       grid.append(card);
     }
+
+    const emoteCard = document.createElement('div');
+    emoteCard.className = 'cosmetic-card';
+    emoteCard.dataset.slot = 'emote';
+    const emoteTitle = document.createElement('strong');
+    emoteTitle.textContent = `${SLOT_META.emote.icon} ${SLOT_META.emote.label}`;
+    const emoteValue = document.createElement('small');
+    const chosen = emotes.filter(Boolean).length;
+    emoteValue.textContent = chosen ? `${chosen} из ${emotes.length}` : 'Не выбраны';
+    emoteCard.append(emoteTitle, emoteValue);
+    grid.append(emoteCard);
+
+    const unlocked = unlockedCosmetics(this.accountProgressData, profile);
+    const counter = $('#wardrobeOwnedCount');
+    if (counter) counter.textContent = `${unlocked.length} / ${COSMETIC_CATALOG_SIZE}`;
+
     const goal = nextCosmeticGoal(this.accountProgressData, profile);
     $('#cosmeticGoal').textContent = goal
       ? `СЛЕДУЮЩАЯ НАГРАДА · ${goal.label}: ${Math.min(goal.current, goal.target)}/${goal.target}`
       : 'ВСЕ ИГРОВЫЕ НАГРАДЫ ПОЛУЧЕНЫ';
+    if (this.wardrobe) {
+      this.wardrobe.setProgress(this.accountProgressData);
+      this.wardrobe.setProfile(profile);
+    }
+  }
+
+  // Шкаф создаётся лениво: до первого открытия он не нужен, а его превью — отдельный WebGL-контекст.
+  openWardrobe() {
+    if (!this.wardrobe) {
+      this.wardrobe = new Wardrobe({
+        onChange: () => {
+          this.renderCosmetics();
+          this.onCosmeticChange?.();
+        },
+        onEquipError: message => this.error(message),
+        sfx: this.sfx || null
+      });
+    }
+    this.wardrobe.setProgress(this.accountProgressData);
+    this.wardrobe.setProfile(this.profileData || readProfile());
+    // `reducedMotion` спрашивается при каждом открытии, а не запоминается при создании: настройку
+    // доступности меняют ровно тогда, когда она понадобилась, — посреди сессии.
+    this.wardrobe.setReducedMotion(Boolean(this.settings?.reducedMotion));
+    this.wardrobe.show();
+  }
+
+  closeWardrobe() {
+    this.wardrobe?.hide();
+  }
+
+  // Карточка «новый предмет». Логика — в шкафу; здесь только точка входа, чтобы AccountFlow не знал
+  // про его устройство.
+  announceUnlocks(ownedIds) {
+    if (!this.wardrobe) {
+      this.wardrobe = new Wardrobe({
+        onChange: () => {
+          this.renderCosmetics();
+          this.onCosmeticChange?.();
+        },
+        onEquipError: message => this.error(message),
+        sfx: this.sfx || null
+      });
+      this.wardrobe.setProgress(this.accountProgressData);
+      this.wardrobe.setProfile(this.profileData || readProfile());
+    }
+    return this.wardrobe.announceUnlocks(ownedIds);
+  }
+
+  get wardrobeOpen() {
+    return Boolean(this.wardrobe?.open);
   }
 
   setAccountList(accounts) {
@@ -820,7 +890,9 @@ export class UI {
       row.className = 'player-row';
       const loadout = cosmeticLoadoutFromIds(player.loadout);
       row.dataset.playerId = player.id;
-      for (const slot of ['body', 'visor', 'antenna', 'trail', 'finish']) {
+      // Список слотов берётся из каталога, а не переписывается здесь: пропущенный в этой строке
+      // слот означал бы, что новая часть образа просто не доезжает до состава комнаты.
+      for (const slot of COSMETIC_SLOTS) {
         row.dataset[`cosmetic${slot[0].toUpperCase()}${slot.slice(1)}`] = loadout[slot]?.id || 'none';
       }
 
@@ -945,6 +1017,9 @@ export class UI {
     this.racing = on;
     this.elements.hud.classList.toggle('hidden', !on);
     this.elements.touch.classList.toggle('hidden', !on || !touch);
+    // Эмоции показываются там, где их видят другие, — в сетевых режимах. В одиночном забеге
+    // кнопка была бы украшением, занимающим место рядом с камерой.
+    this.emoteControl?.setVisible(on && multiplayer);
     // В кооперативе места нет — есть общая цель, поэтому счётчик места скрыт.
     $('#placeBox').classList.toggle('hidden', !multiplayer || coop);
     $('#pingBox').classList.toggle('hidden', !multiplayer);

@@ -24,9 +24,7 @@ test('resume гонки сохраняет grid spawn до первого checkp
         spawn: { ...spec.start },
         position: { ...spec.start },
         respawn(position = null) {
-          this.position = position
-            ? { x: position.x, y: position.y, z: position.z }
-            : { ...this.spawn };
+          this.position = position ? { x: position.x, y: position.y, z: position.z } : { ...this.spawn };
         }
       };
     },
@@ -57,11 +55,7 @@ test('resume гонки сохраняет grid spawn до первого checkp
 
   const expectedSpawn = raceSpawnFor(originalSpec, slots.me, Object.keys(slots).length);
   assert.equal(game.started.mode, 'multi');
-  assert.deepEqual(
-    game.started.spec.start,
-    expectedSpawn,
-    'Player создаётся сразу в своей grid-клетке'
-  );
+  assert.deepEqual(game.started.spec.start, expectedSpawn, 'Player создаётся сразу в своей grid-клетке');
   assert.deepEqual(game.player.spawn, expectedSpawn, 'resume не должен терять checkpoint-0 spawn');
   assert.deepEqual(
     game.player.position,

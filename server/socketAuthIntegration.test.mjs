@@ -72,7 +72,11 @@ test('real WebSocket AUTH consumes WST and room messages no longer carry credent
   core.accounts.rename(account.id, 'Support Renamed');
   const lobbyReply = waitFor(first, 'lobby');
   first.send(
-    JSON.stringify({ type: 'create', name: 'Socket Integration', protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'create',
+      name: 'Socket Integration',
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -105,7 +109,11 @@ test('late WebSocket AUTH synchronizes room identity and reconnect revocation', 
 
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({ type: 'create', name: 'Anonymous Old', protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'create',
+      name: 'Anonymous Old',
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -154,7 +162,11 @@ test('late WebSocket AUTH does not emit room-state while a match is already play
 
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({ type: 'create', name: 'Before Auth', protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'create',
+      name: 'Before Auth',
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -245,7 +257,12 @@ test('incident storage failure does not change the gameplay protocol response', 
 
   const errorReply = waitFor(client, 'error');
   client.send(
-    JSON.stringify({ type: 'join', code: 'ZZZZZZ', name: account.name, protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'join',
+      code: 'ZZZZZZ',
+      name: account.name,
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const response = await errorReply;
   assert.equal(response.code, 'ROOM_NOT_FOUND');
@@ -325,7 +342,11 @@ test('disconnect abandonment keeps original race context after room advances to 
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'create',
+      name: account.name,
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -368,7 +389,11 @@ test('explicit LEAVE_ROOM during an active match records an immediate abandon in
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PROTOCOL_VERSION })
+    JSON.stringify({
+      type: 'create',
+      name: account.name,
+      protocolVersion: PROTOCOL_VERSION
+    })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);

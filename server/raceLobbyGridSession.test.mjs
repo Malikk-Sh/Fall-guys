@@ -156,7 +156,9 @@ test('во время countdown сервер публикует разные gri
   host.send('start');
   await host.wait('start');
 
-  const starts = [...room.players.values()].map(player => `${player.last.x.toFixed(3)}:${player.last.z.toFixed(3)}`);
+  const starts = [...room.players.values()].map(
+    player => `${player.last.x.toFixed(3)}:${player.last.z.toFixed(3)}`
+  );
   assert.equal(new Set(starts).size, room.players.size, starts.join(', '));
 
   for (const entry of room.bots.list) {

@@ -200,11 +200,16 @@ test('helper execution exception is persisted as failed rather than leaving an a
     ctx.cleanup();
   });
 
+  // Тест проверяет, что исключение хелпера сохраняется как failed, а не что клиент умеет
+  // отваливаться по таймауту. Прежняя секунда была не границей смысла, а страховкой от зависания —
+  // и на загруженном CI-раннере круг через unix-сокет успевал её превысить: вместо
+  // 'operation-failed' приходил 'helper-timeout'. Запас берём с большим отрывом; настоящее
+  // зависание всё равно поймает таймаут самого test runner.
   const client = new AdminOperationsClient({
     socketPath,
     maintenanceFlag: path.join(ctx.dir, 'maintenance'),
     journalPath: ctx.journalPath,
-    timeoutMs: 1000
+    timeoutMs: 30_000
   });
   const result = await client.run('backup.verify');
   assert.equal(result.ok, false);

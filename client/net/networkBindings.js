@@ -179,7 +179,7 @@ export function bindNetwork(game) {
     const slot = slots[game.net.id];
     const participantCount = Object.keys(slots).length;
     const gridStart =
-      message.mode === GAME_MODE.RACE && !message.resumed && Number.isFinite(slot) && participantCount > 1
+      message.mode === GAME_MODE.RACE && Number.isFinite(slot) && participantCount > 1
         ? raceSpawnFor(message.spec, slot, participantCount)
         : null;
     const spec = gridStart ? { ...message.spec, start: gridStart } : message.spec;

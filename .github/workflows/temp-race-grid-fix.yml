@@ -33,27 +33,15 @@ jobs:
 
           path = Path('server/index.js')
           text = path.read_text()
-          old = """      resumed: {
-                position: player.last || spawnFor(room.spec, player.checkpoint),
-                checkpoint: player.checkpoint || 0,
-                finished: !!player.finished,
-                downed: !!player.downed,
-                nextSequence: (player.lastSequence ?? -1) + 1
-              }
-          """
-          new = """      resumed: {
-                position: player.last || spawnFor(room.spec, player.checkpoint),
-                raceSpawn:
-                  room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,
-                checkpoint: player.checkpoint || 0,
-                finished: !!player.finished,
-                downed: !!player.downed,
-                nextSequence: (player.lastSequence ?? -1) + 1
-              }
-          """
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one resume payload block, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          needle = "      resumed: {\n        position: player.last || spawnFor(room.spec, player.checkpoint),\n"
+          addition = (
+              needle
+              + "        raceSpawn:\n"
+              + "          room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,\n"
+          )
+          if text.count(needle) != 1:
+              raise SystemExit(f'expected one resume payload prefix, found {text.count(needle)}')
+          path.write_text(text.replace(needle, addition, 1))
 
       - name: Format focused changes
         run: >-

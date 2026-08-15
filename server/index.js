@@ -1557,6 +1557,7 @@ function resume(ws, token) {
       // работало у финишировавшего: он снова оказывался на трассе, хотя уже ждал напарника.
       resumed: {
         position: player.last || spawnFor(room.spec, player.checkpoint),
+        raceSpawn: room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,
         checkpoint: player.checkpoint || 0,
         finished: !!player.finished,
         downed: !!player.downed,

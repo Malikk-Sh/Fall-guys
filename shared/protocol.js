@@ -260,7 +260,10 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.PLAYER_READY]: { ready: bool() },
   // 0 — убрать одного бота; 1..8 — добавить указанное количество. Только целые значения входят
   // в протокол: иначе 0.9 проходил бы числовой диапазон, округлялся в 0 и неожиданно удалял бота.
-  [C2S.ADD_BOTS]: { count: oneOf([0, 1, 2, 3, 4, 5, 6, 7, 8]), skill: optional(oneOf(['rookie', 'steady', 'sharp'])) },
+  [C2S.ADD_BOTS]: {
+    count: oneOf([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    skill: optional(oneOf(['rookie', 'steady', 'sharp']))
+  },
 
   [C2S.START_MATCH]: {},
 

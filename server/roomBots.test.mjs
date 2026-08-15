@@ -236,8 +236,7 @@ test('список уровней раздаётся ботам по кругу,
 
 test('последовательные +1 сохраняют тот же микс уровней', () => {
   const r = room();
-  for (let index = 0; index < 3; index += 1)
-    spawnBots(r, { count: 1, skill: ['rookie', 'steady', 'sharp'] });
+  for (let index = 0; index < 3; index += 1) spawnBots(r, { count: 1, skill: ['rookie', 'steady', 'sharp'] });
   assert.deepEqual(
     r.bots.list.map(entry => entry.bot.skill.id),
     ['rookie', 'steady', 'sharp']

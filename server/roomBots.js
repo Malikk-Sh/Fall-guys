@@ -22,6 +22,7 @@
 const path = require('node:path');
 const { register } = require('node:module');
 const { pathToFileURL } = require('node:url');
+const { raceSpawnFor } = require('../shared/raceGrid.js');
 
 // Ботов в одной комнате не больше этого числа. Ограничение не про процессор — замер дал 0.28 мс на
 // тик при восьми ботах против бюджета 16.7, — а про смысл: комната, где живых меньше, чем ботов,
@@ -66,34 +67,91 @@ function preloadBots() {
 
 const botsReady = () => runtime !== null;
 
-// Завести ботов в комнате. Возвращает, сколько их получилось: вызывающему не нужно знать, почему
-// их меньше, чем он просил, — правила потолка живут здесь.
-// skill принимает либо один уровень на всех, либо список — тогда уровни раздаются по кругу.
-// Одинаковые боты бегут плотной группой и выглядят одним соперником, размноженным трижды.
+function nextBotIndex(room) {
+  for (let index = 0; index < MAX_BOTS_PER_ROOM; index += 1) {
+    if (!room.players.has(`bot:${index}`)) return index;
+  }
+  return -1;
+}
+
+// Серверная модель бота должна начинать там же, где клиент рисует его слот. Без этого живые
+// игроки расходятся по решётке, а боты на первом snapshot всё равно схлопываются в центре.
+function placeBotsOnGrid(room) {
+  const bots = room?.bots;
+  if (!bots || !runtime) return;
+  const total = room.players.size;
+  for (const entry of bots.list) {
+    const player = room.players.get(entry.id);
+    if (!player) continue;
+    const start = raceSpawnFor(room.spec, player.slot, total);
+    entry.bot.player.teleport(new runtime.THREE.Vector3(start.x, start.y, start.z));
+  }
+}
+
+// Убрать одного бота — последний добавленный исчезает первым. Возвращаем -1, а не 1: текущий
+// вызывающий код проверяет только truthy/falsy и после любого изменения пересчитывает слоты и
+// рассылает лобби; знак при этом остаётся полезным для тестов и диагностики.
+function removeOneBot(room) {
+  const bots = room?.bots;
+  if (!bots?.list?.length) return 0;
+  const entry = bots.list.pop();
+  room.players.delete(entry.id);
+  const fieldIndex = bots.field.bots.indexOf(entry.bot);
+  if (fieldIndex >= 0) bots.field.bots.splice(fieldIndex, 1);
+  entry.bot.dispose();
+
+  if (!bots.list.length) {
+    // BotField уже не содержит удалённого бота, поэтому dispose освобождает только общую трассу.
+    bots.field.dispose();
+    room.bots = null;
+  } else {
+    placeBotsOnGrid(room);
+  }
+  return -1;
+}
+
+// Завести ботов в комнате. `count > 0` теперь означает размер ДОБАВЛЯЕМОЙ партии, а count === 0 —
+// убрать одного. Такой ноль сохраняет старый wire-type addBots и совместимость с прежними клиентами:
+// старое сообщение {count:3} по-прежнему добавляет троих, а новый интерфейс может слать +1/-1 без
+// второго почти идентичного обработчика протокола.
+// skill принимает либо один уровень на всех, либо список — тогда уровень выбирается по стабильному
+// индексу бота. Поэтому последовательные +1 дают тот же микс, что и добавление всей группы сразу.
 function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
   const skills = Array.isArray(skill) && skill.length ? skill : [skill];
-  if (!runtime || !room || room.bots) return 0;
-  const wanted = Math.max(0, Math.min(Math.floor(count), MAX_BOTS_PER_ROOM));
+  if (!room) return 0;
+  const requested = Math.floor(Number(count));
+  if (requested === 0) return removeOneBot(room);
+  if (!runtime || !Number.isFinite(requested) || requested < 0) return 0;
+
+  const existing = room.bots?.list?.length || 0;
+  const wanted = Math.max(0, Math.min(requested, MAX_BOTS_PER_ROOM - existing));
   if (!wanted) return 0;
 
   // Одна трасса на всю комнату. Отдельная копия каждому боту стоила бы около мегабайта: геометрия
   // у всех одна и та же, и держать её в одном экземпляре — не оптимизация, а очевидность. Общая
   // трасса означает и общие часы — их держит поле (BotField), а не каждый бот сам по себе.
-  const course = new runtime.Course(new runtime.THREE.Scene(), room.spec, { quality: 'low' });
-  const field = new runtime.BotField(course);
-  const list = [];
+  if (!room.bots) {
+    const course = new runtime.Course(new runtime.THREE.Scene(), room.spec, { quality: 'low' });
+    room.bots = { field: new runtime.BotField(course), course, list: [], spec: room.spec, run: 0 };
+  }
+  const bots = room.bots;
+
   // Бот встаёт в очередь входа после всех, кто уже в комнате: по этому порядку раздаются слоты, и
   // сравнение с undefined давало бы в компараторе NaN — то есть «равно» для любой пары.
   let joinOrder = Number.isFinite(room.nextJoinOrder) ? room.nextJoinOrder : room.players.size;
-  for (let index = 0; index < wanted; index += 1) {
-    const bot = new runtime.RaceBot(course, {
+  let added = 0;
+  for (; added < wanted; added += 1) {
+    const index = nextBotIndex(room);
+    if (index < 0) break;
+    const bot = new runtime.RaceBot(bots.course, {
       skill: skills[index % skills.length],
       seed: room.spec.seed,
       index
     });
-    field.bots.push(bot);
+    bots.field.bots.push(bot);
     const id = `bot:${index}`;
-    list.push({ id, bot });
+    const entry = { id, bot };
+    bots.list.push(entry);
     room.players.set(id, {
       id,
       name: bot.name,
@@ -122,10 +180,8 @@ function spawnBots(room, { count = 1, skill = 'steady' } = {}) {
     });
   }
   if (Number.isFinite(room.nextJoinOrder)) room.nextJoinOrder = joinOrder;
-  // spec запоминается, чтобы отличить реванш на той же трассе от смены настроек: во втором случае
-  // геометрия под ботами уже не та, и переигрывать на ней нельзя.
-  room.bots = { field, course, list, spec: room.spec, run: 0 };
-  return list.length;
+  placeBotsOnGrid(room);
+  return added;
 }
 
 // Перезапуск ботов на новый забег. Вызывается там же, где начинается отсчёт, — реванш, повторный
@@ -150,6 +206,7 @@ function resetBots(room) {
   bots.run += 1;
   bots.lastStepAt = null;
   bots.field.reset(bots.run);
+  placeBotsOnGrid(room);
   for (const entry of bots.list) {
     const player = room.players.get(entry.id);
     if (!player) continue;

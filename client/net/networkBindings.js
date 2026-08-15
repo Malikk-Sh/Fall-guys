@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
+import { raceSpawnFor } from '/shared/raceGrid.js';
 import { APP_STATE } from '../core/AppStates.js';
 import { applyCollapseEvent } from '../game/CoopWorldSync.js';
 
@@ -170,9 +171,24 @@ export function bindNetwork(game) {
     game.finishedTime = null;
     game.resultsPending = false;
 
+    // Сервер раздаёт стабильные номера слотов. Раньше клиент игнорировал их в обычной гонке и
+    // каждый Player создавался ровно в `spec.start`, поэтому все участники начинали внутри друг
+    // друга. Для локального клиента меняем только start его копии спеки: геометрия, seed,
+    // препятствия и checkpoint'ы остаются идентичными у всех.
+    const slots = message.slots || {};
+    const slot = slots[game.net.id];
+    const participantCount = Object.keys(slots).length;
+    const spec =
+      message.mode === GAME_MODE.RACE && Number.isFinite(slot) && participantCount > 1
+        ? {
+            ...message.spec,
+            start: raceSpawnFor(message.spec, slot, participantCount)
+          }
+        : message.spec;
+
     await game.startRace(
       message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
-      message.spec,
+      spec,
       message.at,
       message.slots
     );

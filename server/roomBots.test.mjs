@@ -58,11 +58,40 @@ test('потолок ботов на комнату соблюдается', () 
   clearBots(r);
 });
 
-test('повторный вызов не плодит ботов в той же комнате', () => {
+test('повторный вызов добавляет новую партию вместо фиксированного набора', () => {
   const r = room();
   assert.equal(spawnBots(r, { count: 2 }), 2);
-  assert.equal(spawnBots(r, { count: 2 }), 0, 'вторая партия не должна появиться');
+  assert.equal(spawnBots(r, { count: 2 }), 2);
+  assert.equal(r.players.size, 4);
+  assert.deepEqual([...r.players.keys()], ['bot:0', 'bot:1', 'bot:2', 'bot:3']);
+  clearBots(r);
+});
+
+test('count 0 убирает ровно одного последнего бота', () => {
+  const r = room();
+  spawnBots(r, { count: 3 });
+  assert.equal(spawnBots(r, { count: 0 }), -1);
   assert.equal(r.players.size, 2);
+  assert.equal(r.players.has('bot:2'), false);
+  assert.equal(r.bots.list.length, 2);
+  assert.equal(r.bots.field.bots.length, 2);
+  clearBots(r);
+});
+
+test('последний минус освобождает общую трассу и обнуляет room.bots', () => {
+  const r = room();
+  spawnBots(r, { count: 1 });
+  assert.equal(spawnBots(r, { count: 0 }), -1);
+  assert.equal(r.players.size, 0);
+  assert.equal(r.bots, null);
+  assert.equal(spawnBots(r, { count: 0 }), 0, 'из пустой комнаты удалять нечего');
+});
+
+test('боты занимают разные места стартовой решётки', () => {
+  const r = room();
+  spawnBots(r, { count: 4 });
+  const starts = r.bots.list.map(({ bot }) => `${bot.position.x.toFixed(3)}:${bot.position.z.toFixed(3)}`);
+  assert.equal(new Set(starts).size, 4, starts.join(', '));
   clearBots(r);
 });
 
@@ -202,6 +231,17 @@ test('список уровней раздаётся ботам по кругу,
   spawnBots(r, { count: 3, skill: ['rookie', 'steady', 'sharp'] });
   const levels = r.bots.list.map(entry => entry.bot.skill.id);
   assert.deepEqual(levels, ['rookie', 'steady', 'sharp']);
+  clearBots(r);
+});
+
+test('последовательные +1 сохраняют тот же микс уровней', () => {
+  const r = room();
+  for (let index = 0; index < 3; index += 1)
+    spawnBots(r, { count: 1, skill: ['rookie', 'steady', 'sharp'] });
+  assert.deepEqual(
+    r.bots.list.map(entry => entry.bot.skill.id),
+    ['rookie', 'steady', 'sharp']
+  );
   clearBots(r);
 });
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { CourseBuilder, PLAYER_FOOT } from './CourseBuilder.js';
+import { CourseBuilder } from './CourseBuilder.js';
+import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { buildSegment } from './segments.js';
 import {
   COLORS,
@@ -154,20 +155,21 @@ export class Course extends CourseBuilder {
   addSpinner(x, y, z, length, width, speed, phase) {
     const pivot = new THREE.Group();
     pivot.position.set(x, y, z);
+    const beamWidth = width * 1.18;
     const bar = new THREE.Mesh(
-      new THREE.BoxGeometry(length, 0.38, width),
+      new THREE.BoxGeometry(length, 0.48, beamWidth),
       this.material({ color: COLORS.yellow, roughness: 0.24 })
     );
     bar.castShadow = true;
     pivot.add(bar);
     // Ступица — чистая декорация, коллайдера у неё нет: столкновение считается по самой балке.
-    this.cylinder({ x, y: y + 0.18, z, r: 0.5, h: 0.75, color: COLORS.purpleDark });
+    this.cylinder({ x, y: y + 0.2, z, r: 0.62, h: 0.9, color: COLORS.purpleDark });
     this.group.add(pivot);
     this.obstacles.push({
       type: 'spinner',
       mesh: pivot,
       length,
-      width,
+      width: beamWidth,
       speed,
       phase,
       center: new THREE.Vector3(x, y, z),
@@ -175,20 +177,23 @@ export class Course extends CourseBuilder {
     });
   }
   addBumper(x, y, z, radius, color) {
-    // Подставка — декорация; отталкивание считается по верхнему цилиндру.
-    this.cylinder({ x, y: 0.58, z, r: radius * 1.12, h: 0.16, color: COLORS.yellow });
-    const mesh = this.cylinder({ x, y, z, r: radius, h: 1.55, color });
+    const visualRadius = radius * 1.16;
+    const hitRadius = radius * 1.08;
+    // Подставка — декорация; отталкивание считается по слегка меньшему hitRadius.
+    this.cylinder({ x, y: 0.58, z, r: visualRadius * 1.12, h: 0.16, color: COLORS.yellow });
+    const mesh = this.cylinder({ x, y, z, r: visualRadius, h: 1.55, color });
     const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(radius * 0.82, 0.095, 6, 16),
+      new THREE.TorusGeometry(visualRadius * 0.82, 0.095, 6, 16),
       this.material({ color: 0xffffff, roughness: 0.2 })
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.set(x, y + 0.2, z);
     ring.castShadow = true;
     this.group.add(ring);
-    this.obstacles.push({ type: 'bumper', mesh, radius, phase: this.rng() * 6.28 });
+    this.obstacles.push({ type: 'bumper', mesh, radius: hitRadius, phase: this.rng() * 6.28 });
   }
   addSpring(x, y, z, radius) {
+    radius *= 1.08;
     const pad = this.cylinder({ x, y, z, r: radius, h: 0.25, color: COLORS.yellow });
     const inner = this.cylinder({ x, y: y + 0.14, z, r: radius * 0.66, h: 0.05, color: COLORS.pink });
     this.obstacles.push({ type: 'spring', mesh: pad, radius, inner, phase: this.rng() * 6.28 });
@@ -340,10 +345,11 @@ export class Course extends CourseBuilder {
   // так что записанное в неё было бы немедленно затёрто.
   interact(player, now, effects, sfx = null) {
     const pos = player.position,
-      radius = 0.42,
+      radius = PLAYER_OBSTACLE_RADIUS,
       // Пружина сюда не входит: она не бьёт, а помогает, и цель «без попаданий» не должна
       // запрещать пользоваться трамплином.
-      knockback = this.spec.modifier?.knockback || 1;
+      knockback = this.spec.modifier?.knockback || 1,
+      limpHitCooldown = player.knockdownTimer > 0 ? 1.5 : 0;
     for (const o of this.obstacles) {
       const key = o.mesh.uuid,
         last = player.hitTimes.get(key) || 0;
@@ -371,7 +377,11 @@ export class Course extends CourseBuilder {
           dz = pos.z - o.mesh.position.z,
           dist = Math.hypot(dx, dz) || 0.01,
           min = o.radius + radius;
-        if (dist < min && Math.abs(pos.y - o.mesh.position.y) < 1.55 && now - last > 0.28) {
+        if (
+          dist < min &&
+          Math.abs(pos.y - o.mesh.position.y) < 1.55 &&
+          now - last > Math.max(0.28, limpHitCooldown)
+        ) {
           const nx = dx / dist,
             nz = dz / dist;
           pos.x = o.mesh.position.x + nx * min;
@@ -385,6 +395,7 @@ export class Course extends CourseBuilder {
           effects.burst(pos, o.mesh.material.color.getHex(), 16, 1.15);
           sfx?.bumper();
           player.impact = Math.max(player.impact, 0.4);
+          player.knockDown?.(0.4);
         }
         continue;
       }
@@ -399,7 +410,7 @@ export class Course extends CourseBuilder {
           Math.abs(along) < o.length / 2 + radius &&
           Math.abs(cross) < o.width / 2 + radius &&
           Math.abs(pos.y - o.center.y) < 1.05 &&
-          now - last > 0.32
+          now - last > Math.max(0.32, limpHitCooldown)
         ) {
           const side = Math.sign(cross) || 1,
             nx = sin * side,
@@ -416,6 +427,7 @@ export class Course extends CourseBuilder {
           effects.burst(pos, COLORS.yellow, 12, 1);
           sfx?.spinner();
           player.impact = Math.max(player.impact, 0.5);
+          player.knockDown?.(0.5);
         }
         continue;
       }
@@ -426,7 +438,7 @@ export class Course extends CourseBuilder {
           Math.abs(dx) < o.w / 2 + radius &&
           Math.abs(dz) < o.d / 2 + radius &&
           Math.abs(pos.y - o.mesh.position.y) < 1.5 &&
-          now - last > 0.34
+          now - last > Math.max(0.34, limpHitCooldown)
         ) {
           const dir = Math.sign(dx) || Math.sign(Math.cos(now * o.speed + o.phase)) || 1;
           pos.x += dir * (o.w / 2 + radius - Math.abs(dx) + 0.05);
@@ -439,6 +451,7 @@ export class Course extends CourseBuilder {
           effects.burst(pos, COLORS.pink, 12, 1);
           sfx?.puncher();
           player.impact = Math.max(player.impact, 0.55);
+          player.knockDown?.(0.55);
         }
       }
     }

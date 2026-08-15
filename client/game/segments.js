@@ -54,13 +54,16 @@ function slider(course, ctx, { x = 0, y = 0.15, z, w = 3.8, d = 3, axis = 'x', r
 }
 
 function puncher(course, ctx, { x, z, range, speed, phase }) {
+  const w = 3.15;
+  const h = 2.35;
+  const d = 1.4;
   const mesh = course.box({
     x,
     y: 1,
     z,
-    w: 2.7,
-    h: 2.1,
-    d: 1.2,
+    w,
+    h,
+    d,
     color: COLORS.pink,
     collider: false
   }).mesh;
@@ -72,9 +75,9 @@ function puncher(course, ctx, { x, z, range, speed, phase }) {
     range,
     speed,
     phase,
-    w: 2.7,
-    d: 1.2,
-    radius: 1.7
+    w,
+    d,
+    radius: Math.hypot(w, d) / 2
   });
 }
 
@@ -289,10 +292,10 @@ const bumpers = [
     slab(course, ctx);
     rails(course, ctx, 5.6);
     const points = [
-      [0, 4],
-      [-1.6, 0],
-      [1.6, 0],
-      [0, -4]
+      [0, 5],
+      [-2.35, 1.7],
+      [2.35, -1.7],
+      [0, -5]
     ];
     points.forEach(([x, oz], j) =>
       course.addBumper(x, 1.25, ctx.z + oz, 0.9, ctx.palette[(ctx.index + j + 3) % ctx.palette.length])

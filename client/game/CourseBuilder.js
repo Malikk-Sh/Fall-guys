@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
+import { PLAYER_BODY_RADIUS, PLAYER_FOOT } from './PlayerDimensions.js';
 
 // Общая основа для всех уровней.
 //
@@ -9,7 +10,7 @@ import { COLORS } from '../core/Config.js';
 // Course, и кооперативным главам пришлось бы завести вторую копию коллизий — то есть два места,
 // где физика могла бы разъехаться.
 
-export const PLAYER_FOOT = 0.48;
+export { PLAYER_FOOT } from './PlayerDimensions.js';
 
 // Запас по краю опоры.
 //
@@ -167,7 +168,7 @@ export class CourseBuilder {
       const top = m.position.y + p.h / 2;
       const foot = position.y - PLAYER_FOOT;
       const previousFoot = previousY - PLAYER_FOOT;
-      if (foot > top + 0.45 || previousFoot < top - 0.48 || velocityY > 2.2) continue;
+      if (foot > top + 0.45 || previousFoot < top - PLAYER_FOOT || velocityY > 2.2) continue;
       if (!best || top > best.y) best = { y: top, platform: p, delta: p.delta || new THREE.Vector3() };
     }
     return best;
@@ -178,8 +179,8 @@ export class CourseBuilder {
     for (const wall of this.skillWalls) {
       const m = wall.mesh;
       if (Math.abs(position.y - m.position.y) > wall.h / 2 + 0.45) continue;
-      const withinX = Math.abs(position.x - m.position.x) <= wall.w / 2 + 0.48;
-      const withinZ = Math.abs(position.z - m.position.z) <= wall.d / 2 + 0.48;
+      const withinX = Math.abs(position.x - m.position.x) <= wall.w / 2 + PLAYER_BODY_RADIUS;
+      const withinZ = Math.abs(position.z - m.position.z) <= wall.d / 2 + PLAYER_BODY_RADIUS;
       if (!withinX || !withinZ) continue;
 
       if (wall.w < wall.d) {

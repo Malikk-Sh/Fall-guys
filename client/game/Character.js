@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
+import { PLAYER_VISUAL_SCALE } from './PlayerDimensions.js';
 
 const standard = (color, roughness = 0.28, metalness = 0.02) =>
   new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -16,6 +17,7 @@ export class Character {
     { color = COLORS.pink, accent = COLORS.yellow, name = '', remote = false, cosmetics = null } = {}
   ) {
     this.group = new THREE.Group();
+    this.group.scale.setScalar(PLAYER_VISUAL_SCALE);
     this.visual = new THREE.Group();
     this.group.add(this.visual);
     this.remote = remote;
@@ -172,14 +174,40 @@ export class Character {
     this.visual.children[0].material.color.setHex(color);
     this.visual.children[1].material.color.setHex(accent);
   }
-  animate(dt, { speed = 0, grounded = true, vertical = 0, diving = false } = {}) {
+  animate(
+    dt,
+    { speed = 0, grounded = true, vertical = 0, diving = false, knockedDown = false, recovering = false } = {}
+  ) {
     this.phase += dt * (4 + speed * 1.25);
     const run = Math.min(1, speed / 7),
       swing = Math.sin(this.phase) * run;
-    this.state = diving ? 'dive' : !grounded ? 'air' : run > 0.08 ? 'run' : 'idle';
+    if (knockedDown && this.state !== 'knockdown') this.fallSide = Math.sin(this.phase) < 0 ? -1 : 1;
+    this.state = knockedDown
+      ? 'knockdown'
+      : diving
+        ? 'dive'
+        : !grounded
+          ? 'air'
+          : run > 0.08
+            ? 'run'
+            : 'idle';
     // На дальней дистанции поза не читается: движется силуэт, а не руки и ноги. Считать её —
     // чистая трата кадра, и тем большая, чем больше игроков в гонке.
     if (this.detail === 'minimal') return;
+    if (this.state === 'knockdown') {
+      const side = this.fallSide || 1;
+      this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, 1.05, 8, dt);
+      this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, -0.72, 8, dt);
+      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, 0.58, 8, dt);
+      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -0.46, 8, dt);
+      this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, -1.28, 10, dt);
+      this.visual.rotation.z = THREE.MathUtils.damp(this.visual.rotation.z, side * 0.38, 9, dt);
+      this.visual.position.y = THREE.MathUtils.damp(this.visual.position.y, -0.24, 11, dt);
+      this.visual.scale.set(1.04, 0.94, 1.04);
+      this.antenna.rotation.z = THREE.MathUtils.damp(this.antenna.rotation.z, side * 0.72, 8, dt);
+      this.landPulse = Math.max(0, this.landPulse - dt * 4.4);
+      return;
+    }
     if (this.state === 'run') {
       this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, swing * 0.82, 13, dt);
       this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, -swing * 0.82, 13, dt);
@@ -196,10 +224,17 @@ export class Character {
         limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
     }
     const diveAngle = diving ? -1.24 : 0;
-    this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, diving ? 13 : 9, dt);
-    this.visual.position.y =
+    const poseDamping = recovering ? 5 : diving ? 13 : 9;
+    this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, poseDamping, dt);
+    const targetY =
       Math.sin(this.phase * 0.5) * 0.025 * (1 - run) + Math.abs(Math.sin(this.phase)) * run * 0.055;
-    this.visual.rotation.z = Math.sin(this.phase * 0.5) * 0.018 * (1 - run);
+    this.visual.position.y = THREE.MathUtils.damp(this.visual.position.y, targetY, recovering ? 5 : 14, dt);
+    this.visual.rotation.z = THREE.MathUtils.damp(
+      this.visual.rotation.z,
+      Math.sin(this.phase * 0.5) * 0.018 * (1 - run),
+      recovering ? 5 : 12,
+      dt
+    );
     this.antenna.rotation.z = Math.sin(this.phase * 0.85) * 0.14;
     this.landPulse = Math.max(0, this.landPulse - dt * 4.4);
     const squash = Math.sin(this.landPulse * Math.PI) * 0.16;

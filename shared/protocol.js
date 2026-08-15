@@ -10,7 +10,7 @@
 
 // Версия протокола. Поднимать при любом несовместимом изменении схем: сервер отклонит клиента с
 // другой версией, и игрок увидит понятное «обновите страницу» вместо необъяснимых сбоев.
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 // Сообщения клиент → сервер.
 export const C2S = Object.freeze({
@@ -206,7 +206,7 @@ const PLAYER_STATE_SHAPE = {
     vy: optional(VELOCITY),
     vz: VELOCITY,
     checkpoint: optional(num(0, 64)),
-    state: optional(oneOf(['ground', 'air', 'dive', 'slam', 'downed']))
+    state: optional(oneOf(['ground', 'air', 'dive', 'slam', 'knockdown', 'downed']))
   }
 };
 

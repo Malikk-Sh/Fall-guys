@@ -64,7 +64,7 @@ function normalizeState(value) {
     vx: +n.vx,
     vy: Number.isFinite(n.vy) ? +n.vy : 0,
     vz: +n.vz,
-    state: ['ground', 'air', 'dive', 'slam', 'downed'].includes(n.state) ? n.state : 'air'
+    state: ['ground', 'air', 'dive', 'slam', 'knockdown', 'downed'].includes(n.state) ? n.state : 'air'
   };
 }
 // Потолок интервала между двумя состояниями, по которому считается допустимый шаг.
@@ -106,7 +106,9 @@ function verifyMovement(player, value, now = Date.now(), spec = null) {
   if (!state || !player.last || !player.lastAt) return [];
   const dt = Math.max(0.04, (now - player.lastAt) / 1000);
   const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
-  const accelerationLimit = ['dive', 'slam'].includes(state.state) ? 240 : MAX_HORIZONTAL_ACCELERATION;
+  const accelerationLimit = ['dive', 'slam', 'knockdown'].includes(state.state)
+    ? 240
+    : MAX_HORIZONTAL_ACCELERATION;
 
   const findings = auditMovement(player, state, spec, now, dt);
   if (acceleration > accelerationLimit) {

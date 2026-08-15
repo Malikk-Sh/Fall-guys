@@ -26,7 +26,14 @@ test('новый matchId меняет клетки и не закрепляет 
 
   // Первые четыре клетки — передний ряд сетки. Они не должны всегда доставаться первым четырём
   // вошедшим; иначе хост и ранние участники сохраняют продольную фору в каждом матче.
-  assert.notDeepEqual(new Set(first.slice(0, 4)), new Set(players().slice(0, 4).map(player => player.id)));
+  assert.notDeepEqual(
+    new Set(first.slice(0, 4)),
+    new Set(
+      players()
+        .slice(0, 4)
+        .map(player => player.id)
+    )
+  );
 });
 
 test('assignRaceSlots выдаёт полный набор уникальных slot 0..N-1', () => {

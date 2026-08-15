@@ -48,8 +48,9 @@ const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { IncidentDiagnostics } = require('./incidentDiagnostics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
-const { preloadBots, spawnBots, resetBots, stepBots, clearBots } = require('./roomBots');
+const { preloadBots, spawnBots, resetBots, stepBots, clearBots, placeBotsOnGrid } = require('./roomBots');
 const { raceSpawnFor } = require('../shared/raceGrid.js');
+const { assignRaceSlots } = require('./raceSlots');
 
 // Модель бота загружается здесь, а не только в bootstrap: иначе любая точка входа, берущая
 // index.js напрямую, молча оставалась бы без ботов — и добор в подборе не срабатывал бы, ничего
@@ -1659,15 +1660,16 @@ function beginCountdown(room) {
     return false;
   }
   if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return false;
-  // Слоты должны быть окончательными ДО сброса ботов: внутренняя модель бота и публичный snapshot
-  // обязаны получить одну и ту же клетку стартовой решётки уже во время отсчёта.
-  assignSlots(room);
-  // Боты бегут заново вместе со всеми. Комната после реванша та же, и модель бота — та же, поэтому
-  // без сброса он остался бы стоять на ленте с прошлого забега и «финишировал» бы на первом тике.
-  resetBots(room);
-  // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
-  // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
+  // matchId одновременно отсекает хвост прошлого забега и служит солью для перестановки race-slot'ов:
+  // ряды отличаются по Z, поэтому привязывать переднюю клетку к joinOrder было бы постоянной форой.
   room.matchId = crypto.randomBytes(8).toString('hex');
+  // Сначала сбрасываем/при необходимости пересоздаём ботов. Смена сложности может пересобрать их
+  // записи целиком, поэтому окончательные slot'ы назначаются уже после resetBots.
+  resetBots(room);
+  if (room.mode === GAME_MODE.RACE) assignRaceSlots(room, room.matchId);
+  else assignSlots(room);
+  // Внутренняя физика ботов должна получить те же уже перемешанные клетки, что player.last и клиенты.
+  placeBotsOnGrid(room);
   room.snapshotSequence = 0;
   room.startedAt = Date.now() + COUNTDOWN_MS;
   room.firstFinishAt = null;

@@ -84,7 +84,11 @@ function placeBotsOnGrid(room) {
     const player = room.players.get(entry.id);
     if (!player) continue;
     const start = raceSpawnFor(room.spec, player.slot, total);
-    entry.bot.player.teleport(new runtime.THREE.Vector3(start.x, start.y, start.z));
+    const position = new runtime.THREE.Vector3(start.x, start.y, start.z);
+    // Player.respawn() без авторитетной позиции возвращается в player.spawn. Один teleport менял
+    // только текущую физику, поэтому первый промах бота снова схлопывал его в общий центр.
+    entry.bot.player.spawn.copy(position);
+    entry.bot.player.teleport(position);
   }
 }
 
@@ -285,5 +289,6 @@ module.exports = {
   resetBots,
   stepBots,
   clearBots,
+  placeBotsOnGrid,
   isBot
 };

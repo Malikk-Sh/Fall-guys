@@ -31,8 +31,8 @@ export const C2S = Object.freeze({
   COOP_PING: 'coopPing',
   RESPAWN: 'respawn',
   FINISH: 'finish',
-  // Хост приватной комнаты зовёт ботов. В публичной комнате подбора этого сообщения не ждут:
-  // там состав определяет сервер, а не человек.
+  // Хост приватной комнаты управляет ботами. Положительный count добавляет столько соперников,
+  // ноль убирает одного; старое {count:3} остаётся полностью совместимым.
   ADD_BOTS: 'addBots',
   REMATCH_VOTE: 'rematch',
   NEXT_CHAPTER_VOTE: 'nextChapter',
@@ -258,7 +258,9 @@ export const MESSAGE_SCHEMAS = Object.freeze({
   [C2S.CANCEL_MATCHMAKING]: {},
 
   [C2S.PLAYER_READY]: { ready: bool() },
-  [C2S.ADD_BOTS]: { count: num(1, 8), skill: optional(oneOf(['rookie', 'steady', 'sharp'])) },
+  // 0 — убрать одного бота; 1..8 — добавить указанное количество. Расширение назад совместимо:
+  // все сообщения старых клиентов по-прежнему лежат в разрешённой части диапазона.
+  [C2S.ADD_BOTS]: { count: num(0, 8), skill: optional(oneOf(['rookie', 'steady', 'sharp'])) },
 
   [C2S.START_MATCH]: {},
 
@@ -329,8 +331,8 @@ export const RATE_LIMITS = Object.freeze({
   [C2S.FIND_RACE]: [10, 60_000],
   [C2S.CANCEL_MATCHMAKING]: [10, 10_000],
   [C2S.PLAYER_READY]: [30, 10_000],
-  // Ботов зовут один раз перед забегом; частить тут незачем.
-  [C2S.ADD_BOTS]: [6, 10_000],
+  // Плюс/минус — обычный UI-контрол: восьми быстрых тапов должно хватать до потолка комнаты.
+  [C2S.ADD_BOTS]: [16, 10_000],
   [C2S.HOST_CONFIGURE]: [20, 10_000],
   [C2S.START_MATCH]: [10, 10_000],
   [C2S.PLAYER_STATE]: [25, 1_000],

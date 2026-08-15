@@ -1,0 +1,131 @@
+name: Focused knockdown E2E driver
+
+on:
+  push:
+    branches:
+      - agent/game-feel-e2e-lab
+
+permissions:
+  contents: write
+
+jobs:
+  focused-e2e:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/game-feel-e2e-lab
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Patch driver to evade after knockdown
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('e2e/full-match.spec.js')
+          text = path.read_text()
+
+          old_status = """        return {
+          x: player?.position?.x ?? 0,
+          finished: !!player?.finished,
+          results: !document.querySelector('#finish')?.classList.contains('hidden')
+        };
+"""
+          new_status = """        return {
+          x: player?.position?.x ?? 0,
+          knockedDown: (player?.knockdownTimer ?? 0) > 0,
+          finished: !!player?.finished,
+          results: !document.querySelector('#finish')?.classList.contains('hidden')
+        };
+"""
+          if text.count(old_status) != 1:
+              raise SystemExit(f'expected one status block, found {text.count(old_status)}')
+          text = text.replace(old_status, new_status, 1)
+
+          old_setup = """  await hold('KeyW');
+  try {
+    while (Date.now() < deadline) {
+"""
+          new_setup = """  let evadeDirection = 1;
+  let evadeUntil = 0;
+  let wasKnockedDown = false;
+
+  await hold('KeyW');
+  try {
+    while (Date.now() < deadline) {
+"""
+          if text.count(old_setup) != 1:
+              raise SystemExit(f'expected one loop setup, found {text.count(old_setup)}')
+          text = text.replace(old_setup, new_setup, 1)
+
+          old_steering = """      // Подруливание к оси трассы. Клавиши те же, что у человека: управление относительно камеры,
+      // а камера идёт за спиной, поэтому «вправо» — это плюс по X.
+      if (status.x > CENTER_TOLERANCE) {
+        await release('KeyD');
+        await hold('KeyA');
+      } else if (status.x < -CENTER_TOLERANCE) {
+        await release('KeyA');
+        await hold('KeyD');
+      } else {
+        await release('KeyA');
+        await release('KeyD');
+      }
+"""
+          new_steering = """      // После настоящего удара новый knockdown делает старую стратегию «всегда возвращайся в центр»
+      // плохой: бот вставал и снова шёл ровно в тот же центральный бампер. Человек в такой ситуации
+      // обходит препятствие сбоку. Тест делает то же самое обычными клавишами и на несколько секунд
+      // сохраняет выбранную полосу; сервер по-прежнему проверяет каждое положение.
+      if (status.knockedDown && !wasKnockedDown) {
+        evadeDirection = Math.abs(status.x) > 0.5 ? Math.sign(status.x) : -evadeDirection;
+        evadeUntil = Date.now() + 2800;
+      }
+      wasKnockedDown = status.knockedDown;
+      const targetX = Date.now() < evadeUntil ? evadeDirection * 3.2 : 0;
+
+      // Подруливание к выбранной полосе. Клавиши те же, что у человека: управление относительно
+      // камеры, а камера идёт за спиной, поэтому «вправо» — это плюс по X.
+      if (status.x > targetX + CENTER_TOLERANCE) {
+        await release('KeyD');
+        await hold('KeyA');
+      } else if (status.x < targetX - CENTER_TOLERANCE) {
+        await release('KeyA');
+        await hold('KeyD');
+      } else {
+        await release('KeyA');
+        await release('KeyD');
+      }
+"""
+          if text.count(old_steering) != 1:
+              raise SystemExit(f'expected one steering block, found {text.count(old_steering)}')
+          path.write_text(text.replace(old_steering, new_steering, 1))
+
+      - name: Format and verify patch
+        run: |
+          npx prettier --write e2e/full-match.spec.js
+          npx prettier --check e2e/full-match.spec.js
+          git diff --check
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run focused full-match scenarios
+        run: npx playwright test e2e/full-match.spec.js --project=chromium
+
+      - name: Commit verified driver without helper workflow
+        run: |
+          rm .github/workflows/temp-e2e-knockdown-driver.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add e2e/full-match.spec.js .github/workflows/temp-e2e-knockdown-driver.yml
+          git commit -m 'Teach full-match driver to evade after knockdown'
+          git push origin HEAD:agent/game-feel-e2e-lab

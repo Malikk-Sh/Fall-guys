@@ -193,7 +193,7 @@ export class Character {
       this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -0.28, 10, dt);
     } else {
       for (const limb of [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg])
-        limb.rotation.x = THREE.MathUtils.damp(this.limb?.rotation?.x ?? limb.rotation.x, 0, 8, dt);
+        limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
     }
     const diveAngle = diving ? -1.24 : 0;
     this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, diving ? 13 : 9, dt);

@@ -1,0 +1,38 @@
+name: PR95 targeted server patch
+
+on:
+  push:
+    branches:
+      - agent/race-lobby-grid
+    paths:
+      - .github/workflows/pr95-server-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/race-lobby-grid
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply exact server patch
+        run: |
+          node scripts/pr95PatchServerIndex.mjs
+          npx prettier --write server/index.js
+          rm scripts/pr95PatchServerIndex.mjs .github/workflows/pr95-server-patch.yml
+          git diff --check
+      - name: Commit patch and remove helper
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix authoritative race grid server state [skip ci]"
+          git push origin HEAD:agent/race-lobby-grid

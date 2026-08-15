@@ -1,0 +1,42 @@
+name: One-shot Prettier fix
+
+on:
+  push:
+    branches:
+      - agent/game-feel-scale
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/game-feel-scale
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Format and verify target
+        run: |
+          npx prettier --write server/socketAuthIntegration.test.mjs
+          npx prettier --check server/socketAuthIntegration.test.mjs
+          git diff --check
+
+      - name: Commit formatted file and remove helper
+        run: |
+          rm .github/workflows/temp-prettier-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/socketAuthIntegration.test.mjs .github/workflows/temp-prettier-fix.yml
+          git commit -m 'Apply repository Prettier to socket auth integration test'
+          git push origin HEAD:agent/game-feel-scale

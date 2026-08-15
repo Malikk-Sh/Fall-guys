@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { APP_STATE } from '../core/AppStates.js';
+import { applyCollapseEvent } from '../game/CoopWorldSync.js';
 
 function syncCoopCampaignResult(message) {
   if (message.mode !== GAME_MODE.COOP || message.hasNextChapter !== false) return;
@@ -161,6 +162,14 @@ export function bindNetwork(game) {
   // `start` приходит и в начале забега, и при возвращении в уже идущий. Различает их поле
   // `resumed`: если оно есть, забег продолжается с того места, где сервер видел игрока.
   game.net.on('start', async message => {
+    // Всё, что описывает ИТОГ конкретного matchId, обязано умереть на границе следующего. Раньше
+    // таблица финишировавших переживала реванш и могла заставить досмотр считать соперников уже
+    // дошедшими ещё до первого финиша нового забега.
+    game.latestBoard = [];
+    game.finishedPlace = null;
+    game.finishedTime = null;
+    game.resultsPending = false;
+
     await game.startRace(
       message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
       message.spec,
@@ -176,9 +185,29 @@ export function bindNetwork(game) {
       game.ui.toast(message.away ? 'Напарник свернул игру — подождите.' : 'Напарник вернулся в игру.');
     }
   });
-  game.net.on('coopEvent', message => game.coopControl.receiveCoopEvent(message));
+  game.net.on('coopEvent', message => {
+    // Событийные препятствия получают один серверный момент начала. Периодические механизмы и без
+    // этого детерминированы общими часами; здесь закрываются именно локальные раньше события.
+    if (message.action === 'collapse') {
+      applyCollapseEvent(game.course, message, game.raceNow());
+      return;
+    }
+    // Катапульта раньше анимировалась только у ударившего. Сервер уже ретранслирует objectId,
+    // поэтому принимающей стороне достаточно запустить тот же визуальный recoil.
+    if (message.action === 'launch' && message.objectId) {
+      game.course?.triggerCatapultVisual?.(message.objectId);
+    }
+    game.coopControl.receiveCoopEvent(message);
+  });
   game.net.on('coopPing', message => game.coopControl.receivePing(message));
-  game.net.on('finish', message => game.receiveFinish(message));
+  game.net.on('finish', message => {
+    game.receiveFinish(message);
+    // Личное время уже зафиксировано в finalTime, но гонка ещё идёт. Отпускаем elapsed обратно к
+    // серверным часам, чтобы фазы препятствий не замерли вместе с нашим секундомером.
+    if (message.id === game.net.id && game.mode === 'multi' && message.racing > 0) {
+      game.session.continueWorldClock();
+    }
+  });
   game.net.on('results', message => {
     game.receiveResults(message);
     syncCoopCampaignResult(message);

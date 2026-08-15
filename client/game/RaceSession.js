@@ -13,6 +13,10 @@ export class RaceSession {
     this.finalTime = 0;
     this.unranked = null;
     this.finished = false;
+    // Обычно elapsed после финиша заморожен: это время результата. В досмотре сетевой гонки мир
+    // обязан продолжать жить, поэтому отдельным явным действием часы можно отпустить, не меняя
+    // finished и finalTime.
+    this.worldClockContinues = false;
   }
 
   start({ mode, spec, startedAt }) {
@@ -24,11 +28,12 @@ export class RaceSession {
     this.finalTime = 0;
     this.unranked = null;
     this.finished = false;
+    this.worldClockContinues = false;
     return this;
   }
 
   elapsed(now) {
-    if (this.finished) return this.finalTime;
+    if (this.finished && !this.worldClockContinues) return this.finalTime;
     if (!Number.isFinite(now) || !this.mode) return 0;
     return Math.max(0, now - this.startedAt);
   }
@@ -37,6 +42,7 @@ export class RaceSession {
     if (this.finished) return this.finalTime;
     this.finalTime = this.elapsed(now);
     this.finished = true;
+    this.worldClockContinues = false;
     return this.finalTime;
   }
 
@@ -46,9 +52,19 @@ export class RaceSession {
     return this.finalTime;
   }
 
+  // В гонке свой результат уже зафиксирован, но остальные ещё бегут. finalTime остаётся личным
+  // временем финиша, а elapsed снова следует общим серверным часам — от него зависят фазы
+  // препятствий и таймер мира во время досмотра.
+  continueWorldClock() {
+    if (!this.finished) return false;
+    this.worldClockContinues = true;
+    return true;
+  }
+
   reopenFinish() {
     this.finished = false;
     this.finalTime = 0;
+    this.worldClockContinues = false;
   }
 
   markUnranked(reason) {

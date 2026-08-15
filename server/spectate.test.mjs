@@ -6,7 +6,12 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { racersStillRunning, spectateTarget } from '../client/core/spectate.js';
+import {
+  isSpectateTap,
+  racersStillRunning,
+  requestSpectateAdvance,
+  spectateTarget
+} from '../client/core/spectate.js';
 
 // Ось Z направлена от старта к финишу отрицательно: меньше — дальше по трассе.
 const racer = (id, checkpoint, z) => ({ id, checkpoint, z });
@@ -33,6 +38,24 @@ test('выбранный соперник не меняется, пока он �
   assert.equal(target, 'b');
   const overtaken = [racer('a', 2, -34), racer('b', 2, -33)];
   assert.equal(spectateTarget(overtaken, target), 'b', 'обгон не должен дёргать камеру');
+});
+
+test('тап явно переключает на следующего соперника и оборачивает список', () => {
+  const racers = [racer('a', 1, -10), racer('b', 3, -50), racer('c', 2, -30)];
+  assert.equal(spectateTarget(racers, null), 'b');
+  requestSpectateAdvance();
+  assert.equal(spectateTarget(racers, 'b'), 'c');
+  requestSpectateAdvance();
+  assert.equal(spectateTarget(racers, 'c'), 'a');
+  requestSpectateAdvance();
+  assert.equal(spectateTarget(racers, 'a'), 'b');
+});
+
+test('тап и свайп различаются с запасом на дрожание пальца', () => {
+  assert.equal(isSpectateTap(0, 0), true);
+  assert.equal(isSpectateTap(9, 10), true);
+  assert.equal(isSpectateTap(17, 0), false);
+  assert.equal(isSpectateTap(12, 12), false);
 });
 
 test('когда прежний соперник сошёл с трассы, ищется новый', () => {

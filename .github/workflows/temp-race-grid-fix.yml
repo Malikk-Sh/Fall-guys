@@ -1,0 +1,86 @@
+name: Apply focused race resume patch
+
+on:
+  push:
+    branches:
+      - agent/race-lobby-grid-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/race-lobby-grid-fix
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Patch authoritative resume spawn
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('server/index.js')
+          text = path.read_text()
+          old = """      resumed: {
+                position: player.last || spawnFor(room.spec, player.checkpoint),
+                checkpoint: player.checkpoint || 0,
+                finished: !!player.finished,
+                downed: !!player.downed,
+                nextSequence: (player.lastSequence ?? -1) + 1
+              }
+          """
+          new = """      resumed: {
+                position: player.last || spawnFor(room.spec, player.checkpoint),
+                raceSpawn:
+                  room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,
+                checkpoint: player.checkpoint || 0,
+                finished: !!player.finished,
+                downed: !!player.downed,
+                nextSequence: (player.lastSequence ?? -1) + 1
+              }
+          """
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one resume payload block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+
+      - name: Format focused changes
+        run: >-
+          npx prettier --write
+          server/index.js
+          client/net/networkBindings.js
+          server/networkBindingsRaceResume.test.mjs
+          shared/protocol.js
+          server/addBotsProtocol.test.mjs
+          package.json
+
+      - name: Run focused regressions
+        run: >-
+          node --experimental-loader ./server/client-loader.mjs --test
+          server/networkBindingsRaceResume.test.mjs
+          server/addBotsProtocol.test.mjs
+
+      - name: Verify patch
+        run: |
+          git diff --check
+          git diff --exit-code -- .github/workflows/temp-race-grid-fix.yml
+          grep -q 'raceSpawn:' server/index.js
+
+      - name: Commit focused patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/index.js client/net/networkBindings.js server/networkBindingsRaceResume.test.mjs shared/protocol.js server/addBotsProtocol.test.mjs package.json
+          git commit -m 'Preserve authoritative race spawn on resume'
+          git push origin HEAD:agent/race-lobby-grid-fix

@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   focused-e2e:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -28,86 +27,28 @@ jobs:
         run: npm ci
 
       - name: Patch driver to evade after knockdown
-        shell: python
+        env:
+          OLD_STATUS: ICAgICAgICByZXR1cm4gewogICAgICAgICAgeDogcGxheWVyPy5wb3NpdGlvbj8ueCA/PyAwLAogICAgICAgICAgZmluaXNoZWQ6ICEhcGxheWVyPy5maW5pc2hlZCwKICAgICAgICAgIHJlc3VsdHM6ICFkb2N1bWVudC5xdWVyeVNlbGVjdG9yKCcjZmluaXNoJyk/LmNsYXNzTGlzdC5jb250YWlucygnaGlkZGVuJykKICAgICAgICB9Owo=
+          NEW_STATUS: ICAgICAgICByZXR1cm4gewogICAgICAgICAgeDogcGxheWVyPy5wb3NpdGlvbj8ueCA/PyAwLAogICAgICAgICAga25vY2tlZERvd246IChwbGF5ZXI/Lmtub2NrZG93blRpbWVyID8/IDApID4gMCwKICAgICAgICAgIGZpbmlzaGVkOiAhIXBsYXllcj8uZmluaXNoZWQsCiAgICAgICAgICByZXN1bHRzOiAhZG9jdW1lbnQucXVlcnlTZWxlY3RvcignI2ZpbmlzaCcpPy5jbGFzc0xpc3QuY29udGFpbnMoJ2hpZGRlbicpCiAgICAgICAgfTsK
+          OLD_SETUP: ICBhd2FpdCBob2xkKCdLZXlXJyk7CiAgdHJ5IHsKICAgIHdoaWxlIChEYXRlLm5vdygpIDwgZGVhZGxpbmUpIHsK
+          NEW_SETUP: ICBsZXQgZXZhZGVEaXJlY3Rpb24gPSAxOwogIGxldCBldmFkZVVudGlsID0gMDsKICBsZXQgd2FzS25vY2tlZERvd24gPSBmYWxzZTsKCiAgYXdhaXQgaG9sZCgnS2V5VycpOwogIHRyeSB7CiAgICB3aGlsZSAoRGF0ZS5ub3coKSA8IGRlYWRsaW5lKSB7Cg==
+          OLD_STEERING: ICAgICAgLy8g0J/QvtC00YDRg9C70LjQstCw0L3QuNC1INC6INC+0YHQuCDRgtGA0LDRgdGB0YsuINCa0LvQsNCy0LjRiNC4INGC0LUg0LbQtSwg0YfRgtC+INGDINGH0LXQu9C+0LLQtdC60LA6INGD0L/RgNCw0LLQu9C10L3QuNC1INC+0YLQvdC+0YHQuNGC0LXQu9GM0L3QviDQutCw0LzQtdGA0YssCiAgICAgIC8vINCwINC60LDQvNC10YDQsCDQuNC00ZHRgiDQt9CwINGB0L/QuNC90L7QuSwg0L/QvtGN0YLQvtC80YMgwqvQstC/0YDQsNCy0L7CuyDigJQg0Y3RgtC+INC/0LvRjtGBINC/0L4gWC4KICAgICAgaWYgKHN0YXR1cy54ID4gQ0VOVEVSX1RPTEVSQU5DRSkgewogICAgICAgIGF3YWl0IHJlbGVhc2UoJ0tleUQnKTsKICAgICAgICBhd2FpdCBob2xkKCdLZXlBJyk7CiAgICAgIH0gZWxzZSBpZiAoc3RhdHVzLnggPCAtQ0VOVEVSX1RPTEVSQU5DRSkgewogICAgICAgIGF3YWl0IHJlbGVhc2UoJ0tleUEnKTsKICAgICAgICBhd2FpdCBob2xkKCdLZXlEJyk7CiAgICAgIH0gZWxzZSB7CiAgICAgICAgYXdhaXQgcmVsZWFzZSgnS2V5QScpOwogICAgICAgIGF3YWl0IHJlbGVhc2UoJ0tleUQnKTsKICAgICAgfQo=
+          NEW_STEERING: ICAgICAgLy8g0J/QvtGB0LvQtSDQvdCw0YHRgtC+0Y/RidC10LPQviDRg9C00LDRgNCwINC90L7QstGL0Lkga25vY2tkb3duINC00LXQu9Cw0LXRgiDRgdGC0LDRgNGD0Y4g0YHRgtGA0LDRgtC10LPQuNGOIMKr0LLRgdC10LPQtNCwINCy0L7Qt9Cy0YDQsNGJ0LDQudGB0Y8g0LIg0YbQtdC90YLRgMK7CiAgICAgIC8vINC/0LvQvtGF0L7QuTog0LHQvtGCINCy0YHRgtCw0LLQsNC7INC4INGB0L3QvtCy0LAg0YjRkdC7INGA0L7QstC90L4g0LIg0YLQvtGCINC20LUg0YbQtdC90YLRgNCw0LvRjNC90YvQuSDQsdCw0LzQv9C10YAuINCn0LXQu9C+0LLQtdC6INCyINGC0LDQutC+0Lkg0YHQuNGC0YPQsNGG0LjQuAogICAgICAvLyDQvtCx0YXQvtC00LjRgiDQv9GA0LXQv9GP0YLRgdGC0LLQuNC1INGB0LHQvtC60YMuINCi0LXRgdGCINC00LXQu9Cw0LXRgiDRgtC+INC20LUg0YHQsNC80L7QtSDQvtCx0YvRh9C90YvQvNC4INC60LvQsNCy0LjRiNCw0LzQuCDQuCDQvdCwINC90LXRgdC60L7Qu9GM0LrQviDRgdC10LrRg9C90LQKICAgICAgLy8g0YHQvtGF0YDQsNC90Y/QtdGCINCy0YvQsdGA0LDQvdC90YPRjiDQv9C+0LvQvtGB0YM7INGB0LXRgNCy0LXRgCDQv9C+LdC/0YDQtdC20L3QtdC80YMg0L/RgNC+0LLQtdGA0Y/QtdGCINC60LDQttC00L7QtSDQv9C+0LvQvtC20LXQvdC40LUuCiAgICAgIGlmIChzdGF0dXMua25vY2tlZERvd24gJiYgIXdhc0tub2NrZWREb3duKSB7CiAgICAgICAgZXZhZGVEaXJlY3Rpb24gPSBNYXRoLmFicyhzdGF0dXMueCkgPiAwLjUgPyBNYXRoLnNpZ24oc3RhdHVzLngpIDogLWV2YWRlRGlyZWN0aW9uOwogICAgICAgIGV2YWRlVW50aWwgPSBEYXRlLm5vdygpICsgMjgwMDsKICAgICAgfQogICAgICB3YXNLbm9ja2VkRG93biA9IHN0YXR1cy5rbm9ja2VkRG93bjsKICAgICAgY29uc3QgdGFyZ2V0WCA9IERhdGUubm93KCkgPCBldmFkZVVudGlsID8gZXZhZGVEaXJlY3Rpb24gKiAzLjIgOiAwOwoKICAgICAgLy8g0J/QvtC00YDRg9C70LjQstCw0L3QuNC1INC6INCy0YvQsdGA0LDQvdC90L7QuSDQv9C+0LvQvtGB0LUuINCa0LvQsNCy0LjRiNC4INGC0LUg0LbQtSwg0YfRgtC+INGDINGH0LXQu9C+0LLQtdC60LA6INGD0L/RgNCw0LLQu9C10L3QuNC1INC+0YLQvdC+0YHQuNGC0LXQu9GM0L3QvgogICAgICAvLyDQutCw0LzQtdGA0YssINCwINC60LDQvNC10YDQsCDQuNC00ZHRgiDQt9CwINGB0L/QuNC90L7QuSwg0L/QvtGN0YLQvtC80YMgwqvQstC/0YDQsNCy0L7CuyDigJQg0Y3RgtC+INC/0LvRjtGBINC/0L4gWC4KICAgICAgaWYgKHN0YXR1cy54ID4gdGFyZ2V0WCArIENFTlRFUl9UT0xFUkFOQ0UpIHsKICAgICAgICBhd2FpdCByZWxlYXNlKCdLZXlEJyk7CiAgICAgICAgYXdhaXQgaG9sZCgnS2V5QScpOwogICAgICB9IGVsc2UgaWYgKHN0YXR1cy54IDwgdGFyZ2V0WCAtIENFTlRFUl9UT0xFUkFOQ0UpIHsKICAgICAgICBhd2FpdCByZWxlYXNlKCdLZXlBJyk7CiAgICAgICAgYXdhaXQgaG9sZCgnS2V5RCcpOwogICAgICB9IGVsc2UgewogICAgICAgIGF3YWl0IHJlbGVhc2UoJ0tleUEnKTsKICAgICAgICBhd2FpdCByZWxlYXNlKCdLZXlEJyk7CiAgICAgIH0K
         run: |
+          python - <<'PY'
+          import base64, os
           from pathlib import Path
 
           path = Path('e2e/full-match.spec.js')
           text = path.read_text()
-
-          old_status = """        return {
-          x: player?.position?.x ?? 0,
-          finished: !!player?.finished,
-          results: !document.querySelector('#finish')?.classList.contains('hidden')
-        };
-"""
-          new_status = """        return {
-          x: player?.position?.x ?? 0,
-          knockedDown: (player?.knockdownTimer ?? 0) > 0,
-          finished: !!player?.finished,
-          results: !document.querySelector('#finish')?.classList.contains('hidden')
-        };
-"""
-          if text.count(old_status) != 1:
-              raise SystemExit(f'expected one status block, found {text.count(old_status)}')
-          text = text.replace(old_status, new_status, 1)
-
-          old_setup = """  await hold('KeyW');
-  try {
-    while (Date.now() < deadline) {
-"""
-          new_setup = """  let evadeDirection = 1;
-  let evadeUntil = 0;
-  let wasKnockedDown = false;
-
-  await hold('KeyW');
-  try {
-    while (Date.now() < deadline) {
-"""
-          if text.count(old_setup) != 1:
-              raise SystemExit(f'expected one loop setup, found {text.count(old_setup)}')
-          text = text.replace(old_setup, new_setup, 1)
-
-          old_steering = """      // Подруливание к оси трассы. Клавиши те же, что у человека: управление относительно камеры,
-      // а камера идёт за спиной, поэтому «вправо» — это плюс по X.
-      if (status.x > CENTER_TOLERANCE) {
-        await release('KeyD');
-        await hold('KeyA');
-      } else if (status.x < -CENTER_TOLERANCE) {
-        await release('KeyA');
-        await hold('KeyD');
-      } else {
-        await release('KeyA');
-        await release('KeyD');
-      }
-"""
-          new_steering = """      // После настоящего удара новый knockdown делает старую стратегию «всегда возвращайся в центр»
-      // плохой: бот вставал и снова шёл ровно в тот же центральный бампер. Человек в такой ситуации
-      // обходит препятствие сбоку. Тест делает то же самое обычными клавишами и на несколько секунд
-      // сохраняет выбранную полосу; сервер по-прежнему проверяет каждое положение.
-      if (status.knockedDown && !wasKnockedDown) {
-        evadeDirection = Math.abs(status.x) > 0.5 ? Math.sign(status.x) : -evadeDirection;
-        evadeUntil = Date.now() + 2800;
-      }
-      wasKnockedDown = status.knockedDown;
-      const targetX = Date.now() < evadeUntil ? evadeDirection * 3.2 : 0;
-
-      // Подруливание к выбранной полосе. Клавиши те же, что у человека: управление относительно
-      // камеры, а камера идёт за спиной, поэтому «вправо» — это плюс по X.
-      if (status.x > targetX + CENTER_TOLERANCE) {
-        await release('KeyD');
-        await hold('KeyA');
-      } else if (status.x < targetX - CENTER_TOLERANCE) {
-        await release('KeyA');
-        await hold('KeyD');
-      } else {
-        await release('KeyA');
-        await release('KeyD');
-      }
-"""
-          if text.count(old_steering) != 1:
-              raise SystemExit(f'expected one steering block, found {text.count(old_steering)}')
-          path.write_text(text.replace(old_steering, new_steering, 1))
+          for old_key, new_key in [('OLD_STATUS', 'NEW_STATUS'), ('OLD_SETUP', 'NEW_SETUP'), ('OLD_STEERING', 'NEW_STEERING')]:
+              old = base64.b64decode(os.environ[old_key]).decode()
+              new = base64.b64decode(os.environ[new_key]).decode()
+              if text.count(old) != 1:
+                  raise SystemExit(f'{old_key}: expected one match, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
 
       - name: Format and verify patch
         run: |

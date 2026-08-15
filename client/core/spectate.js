@@ -10,6 +10,23 @@
 // смотреть на это невозможно. Поэтому выбранный соперник держится до конца своего забега, а замена
 // ищется, только когда смотреть стало не на кого: он дошёл, вышел или потерял связь.
 
+// Максимальный сдвиг пальца, который всё ещё считается тапом, а не управлением камерой.
+// На телефоне палец почти никогда не отпускается в точности там же, где коснулся, поэтому ноль
+// здесь сделал бы переключение наблюдаемого игрока случайным и ненадёжным.
+export const SPECTATE_TAP_SLOP = 16;
+
+let advanceRequested = false;
+
+// InputManager вызывает это только в lookOnly-режиме после короткого тапа. Флаг, а не немедленная
+// смена id: список соперников принадлежит игровому кадру и только там известно, кто ещё бежит.
+export function requestSpectateAdvance() {
+  advanceRequested = true;
+}
+
+export function isSpectateTap(dx, dy, threshold = SPECTATE_TAP_SLOP) {
+  return Math.hypot(dx, dy) <= threshold;
+}
+
 // Порядок «кто ближе к финишу»: сначала по числу пройденных контрольных точек, при равенстве —
 // по продвижению вдоль трассы. Ось Z направлена от старта к финишу отрицательно, поэтому меньшее
 // значение — дальше по трассе.
@@ -25,10 +42,23 @@ function ahead(a, b) {
  * @returns {string|null} идентификатор или null, если смотреть не на кого.
  */
 export function spectateTarget(racers, current = null) {
-  if (!racers?.length) return null;
+  if (!racers?.length) {
+    // Не переносим отложенный тап в следующий забег: если в этот момент смотреть было не на кого,
+    // жест уже закончился и не должен неожиданно сработать через минуту.
+    advanceRequested = false;
+    return null;
+  }
+
+  const ordered = [...racers].sort(ahead);
+  if (advanceRequested) {
+    advanceRequested = false;
+    const index = current ? ordered.findIndex(racer => racer.id === current) : -1;
+    return ordered[(index + 1 + ordered.length) % ordered.length].id;
+  }
+
   // Прежний соперник всё ещё на трассе — остаёмся с ним.
   if (current && racers.some(racer => racer.id === current)) return current;
-  return [...racers].sort(ahead)[0].id;
+  return ordered[0].id;
 }
 
 /**
@@ -47,10 +77,11 @@ export function spectateTarget(racers, current = null) {
  *     но между двумя рассылками признак финиша успевает устареть.
  *
  * Ни один из них не «отменяет» финиш: дошедший не начинает бежать заново, поэтому объединение
- * двух списков безопасно в любом порядке.
+ * двух списков безопасно в любом порядке. Доска ОБЯЗАНА сбрасываться на новом matchId — это делает
+ * networkBindings перед startRace, иначе результаты прошлого реванша отравили бы следующий.
  *
  * @param {Iterable<[string, {checkpoint: number, position: {z: number}}]>} remotes
- * @param {Array<{id: string}>} board — таблица финишировавших.
+ * @param {Array<{id: string}>} board — таблица финишировавших текущего забега.
  * @param {string|null} selfId
  * @param {Array<{id: string, online?: boolean, finished?: boolean}>} roster — состав комнаты.
  */

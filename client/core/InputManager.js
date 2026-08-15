@@ -1,4 +1,5 @@
 import { DEFAULT_BINDINGS } from './settings.js';
+import { isSpectateTap, requestSpectateAdvance } from './spectate.js';
 
 // Клавиши, которые браузер понимает по-своему: пробел листает страницу, стрелки её прокручивают.
 // Отменять их поведение можно только когда они действительно назначены на действие в игре, иначе
@@ -118,7 +119,11 @@ export class InputManager {
     let stickId = null,
       lookId = null,
       lastX = 0,
-      lastY = 0;
+      lastY = 0,
+      lookStartX = 0,
+      lookStartY = 0,
+      lookDragged = false,
+      lookTapEligible = false;
 
     // Центр джойстика в координатах окна. У фиксированного он там, где его нарисовал CSS; у
     // плавающего — там, где палец коснулся экрана, и запоминается на всё касание. Считать центр
@@ -225,8 +230,11 @@ export class InputManager {
       if (e.pointerType === 'touch' && !this.lookOnly && this.inStickZone(e.clientX)) return;
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 2) return;
       lookId = e.pointerId;
-      lastX = e.clientX;
-      lastY = e.clientY;
+      lastX = lookStartX = e.clientX;
+      lastY = lookStartY = e.clientY;
+      lookDragged = false;
+      // Правая кнопка мыши остаётся способом вращать камеру, но не переключает наблюдаемого.
+      lookTapEligible = e.pointerType !== 'mouse' || e.button === 0;
       this.canvas.setPointerCapture?.(e.pointerId);
       this.setMethod(e.pointerType === 'touch' ? 'touch' : 'keyboard');
       document.querySelector('#lookHint')?.classList.add('hidden');
@@ -237,9 +245,22 @@ export class InputManager {
       this.cameraY += e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
+      if (!lookDragged && !isSpectateTap(e.clientX - lookStartX, e.clientY - lookStartY)) {
+        lookDragged = true;
+      }
     });
     const endLook = e => {
-      if (e.pointerId === lookId) lookId = null;
+      if (e.pointerId !== lookId) return;
+      const tap =
+        e.type === 'pointerup' &&
+        this.lookOnly &&
+        lookTapEligible &&
+        !lookDragged &&
+        isSpectateTap(e.clientX - lookStartX, e.clientY - lookStartY);
+      lookId = null;
+      lookDragged = false;
+      lookTapEligible = false;
+      if (tap) requestSpectateAdvance();
     };
     this.canvas.addEventListener('pointerup', endLook);
     this.canvas.addEventListener('pointercancel', endLook);

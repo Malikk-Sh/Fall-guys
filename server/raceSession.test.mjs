@@ -13,6 +13,16 @@ test('RaceSession хранит время и делает финиш идемп�
   assert.equal(session.finalTime, 1_480);
 });
 
+test('RaceSession после своего финиша может продолжить общие часы досмотра', () => {
+  const session = new RaceSession().start({ mode: 'multi', spec: {}, startedAt: 1_000 });
+  assert.equal(session.finish(2_500), 1_500);
+  assert.equal(session.elapsed(5_000), 1_500, 'обычный финиш замораживает секундомер');
+  assert.equal(session.continueWorldClock(), true);
+  assert.equal(session.elapsed(5_000), 4_000, 'мир снова следует серверному времени');
+  assert.equal(session.finalTime, 1_500, 'личный результат не меняется');
+  assert.equal(session.finished, true, 'игрок по-прежнему считается финишировавшим');
+});
+
 test('RaceSession возобновляет часы после отклонённого финиша', () => {
   const session = new RaceSession().start({ mode: 'multi', spec: {}, startedAt: 5_000 });
   session.finish(7_000);

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 import { updateRoleActions as updateRoleActionsFor } from './CoopActions.js';
 import { CoopSession } from './CoopSession.js';
+import { requestCollapseUnderPlayer } from './CoopWorldSync.js';
 import { SIGNATURE_INTERACT_RADIUS, signatureLayout } from '/shared/signatureCoop.js';
 
 export const COOP_PING_LABELS = Object.freeze({
@@ -294,6 +295,16 @@ export class CoopController {
   // прежняя катапульта и slam работают без изменений.
   updateRoleActions() {
     if (this.game.mode !== 'coop' || !this.game.player) return;
+
+    // Осипающаяся плитка — событийный объект. Локально заводим её сразу, чтобы не чувствовать RTT,
+    // и одновременно просим сервер разослать одну общую отметку времени обоим клиентам.
+    requestCollapseUnderPlayer(
+      this.game.course,
+      this.game.player.position,
+      id => this.game.net?.sendCoopEvent('plate', { objectId: `collapse:${id}` }) ?? false,
+      this.game.sfx
+    );
+
     this.syncSignature();
     this.applySignatureGate();
     const usedByCore = this.handleCoreAction();

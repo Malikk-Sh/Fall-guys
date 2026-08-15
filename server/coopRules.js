@@ -6,6 +6,7 @@
 // позиции игроков вывести нельзя. Поэтому именно ими сервер владеет полностью.
 
 const { chapterLayout } = require('../shared/coopChapters.js');
+const { validateCollapseEvent } = require('./coopCollapseSync');
 const {
   CORE_FLOOR_Y,
   SIGNATURE_INTERACT_RADIUS,
@@ -312,6 +313,11 @@ function validateCoopEvent(room, player, message, now = Date.now()) {
     }
 
     case 'plate':
+      // Осыпание — уже не локальная анимация: сервер выдаёт всем один момент начала. Канал plate
+      // оставляем совместимым с протоколом и различаем объект по префиксу.
+      if ((message.objectId || '').startsWith('collapse:')) {
+        return validateCollapseEvent(room, player, message, now);
+      }
       // Старые сообщения о плитах были no-op: их состояние выводится из позиций. Используем этот
       // уже совместимый объектный канал для новых signature-команд. Обычный legacy plate по-прежнему
       // принимается молча, поэтому старые клиенты не получают ошибок.

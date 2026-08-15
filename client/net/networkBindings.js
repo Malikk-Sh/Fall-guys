@@ -173,25 +173,22 @@ export function bindNetwork(game) {
 
     // Сервер раздаёт стабильные номера слотов. Раньше клиент игнорировал их в обычной гонке и
     // каждый Player создавался ровно в `spec.start`, поэтому все участники начинали внутри друг
-    // друга. Для локального клиента меняем только start его копии спеки: геометрия, seed,
-    // препятствия и checkpoint'ы остаются идентичными у всех.
+    // друга. На время отсчёта даём локальному Course персональную стартовую точку; сразу после
+    // отсчёта возвращаем канонический start как точку респауна, чтобы клиент и сервер не расходились.
     const slots = message.slots || {};
     const slot = slots[game.net.id];
     const participantCount = Object.keys(slots).length;
-    const spec =
-      message.mode === GAME_MODE.RACE && Number.isFinite(slot) && participantCount > 1
-        ? {
-            ...message.spec,
-            start: raceSpawnFor(message.spec, slot, participantCount)
-          }
-        : message.spec;
+    const gridStart =
+      message.mode === GAME_MODE.RACE && !message.resumed && Number.isFinite(slot) && participantCount > 1
+        ? raceSpawnFor(message.spec, slot, participantCount)
+        : null;
+    const spec = gridStart ? { ...message.spec, start: gridStart } : message.spec;
 
-    await game.startRace(
-      message.mode === GAME_MODE.COOP ? 'coop' : 'multi',
-      spec,
-      message.at,
-      message.slots
-    );
+    await game.startRace(message.mode === GAME_MODE.COOP ? 'coop' : 'multi', spec, message.at, message.slots);
+    if (gridStart && game.player) {
+      game.player.spawn.set(message.spec.start.x, message.spec.start.y, message.spec.start.z);
+      if (game.course?.spec) game.course.spec.start = { ...message.spec.start };
+    }
     if (message.resumed) game.restoreRun(message.resumed);
   });
   game.net.on('presence', message => {

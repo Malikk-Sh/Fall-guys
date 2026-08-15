@@ -95,7 +95,7 @@ export class Character {
   // Три ступени, и убирают они разное. `full` — всё как есть. `simple` снимает отбрасывание тени:
   // персонаж остаётся целым, но исчезает из прохода теней, а он тем дороже, чем больше в нём
   // объектов. `minimal` прячет мелочи, которые с такого расстояния занимают меньше пикселя, и
-  // табличку с именем — спрайт с `depthTest: false` рисуется всегда, даже за геометрией.
+  // табличку с именем — она уже не читается и только засоряет дальний план.
   //
   // Само по себе это экономит немного. Главное — в `animate`: на «minimal» анимация не считается
   // вовсе, а это четырнадцать вызовов затухания и тригонометрия на каждого игрока каждый кадр.
@@ -118,25 +118,53 @@ export class Character {
     return pivot;
   }
   addNameplate(name) {
+    const label = String(name || 'Wobbler').slice(0, 16);
     const canvas = document.createElement('canvas');
-    canvas.width = 384;
-    canvas.height = 80;
+    canvas.width = 320;
+    canvas.height = 72;
     const ctx = canvas.getContext('2d');
-    ctx.font = '900 31px Trebuchet MS';
+
+    // Компактная тёмная плашка вместо огромного белого strokeText. Старый спрайт был почти шире
+    // персонажа втрое и рисовался с depthTest:false, поэтому несколько стоящих рядом имён
+    // превращались в бело-чёрный «штрихкод» поверх всей сцены.
+    const left = 18;
+    const top = 10;
+    const width = canvas.width - left * 2;
+    const height = 50;
+    const radius = 20;
+    ctx.beginPath();
+    ctx.moveTo(left + radius, top);
+    ctx.lineTo(left + width - radius, top);
+    ctx.quadraticCurveTo(left + width, top, left + width, top + radius);
+    ctx.lineTo(left + width, top + height - radius);
+    ctx.quadraticCurveTo(left + width, top + height, left + width - radius, top + height);
+    ctx.lineTo(left + radius, top + height);
+    ctx.quadraticCurveTo(left, top + height, left, top + height - radius);
+    ctx.lineTo(left, top + radius);
+    ctx.quadraticCurveTo(left, top, left + radius, top);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(35, 22, 83, 0.88)';
+    ctx.fill();
+
+    ctx.font = '900 27px Trebuchet MS';
     ctx.textAlign = 'center';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 10;
-    ctx.strokeText(name, 192, 48);
-    ctx.fillStyle = '#2b1768';
-    ctx.fillText(name, 192, 48);
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(label, canvas.width / 2, top + height / 2 + 1, width - 24);
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true })
+      new THREE.SpriteMaterial({
+        map: texture,
+        depthTest: true,
+        depthWrite: false,
+        transparent: true,
+        alphaTest: 0.04
+      })
     );
-    sprite.position.y = 2.1;
-    sprite.scale.set(3.3, 0.69, 1);
+    sprite.position.y = 2.02;
+    sprite.scale.set(2.55, 0.57, 1);
     this.group.add(sprite);
     this.nameplate = sprite;
   }
@@ -165,7 +193,7 @@ export class Character {
       this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -0.28, 10, dt);
     } else {
       for (const limb of [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg])
-        limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
+        limb.rotation.x = THREE.MathUtils.damp(this.limb?.rotation?.x ?? limb.rotation.x, 0, 8, dt);
     }
     const diveAngle = diving ? -1.24 : 0;
     this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, diving ? 13 : 9, dt);

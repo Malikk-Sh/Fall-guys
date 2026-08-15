@@ -7,6 +7,7 @@ const WebSocket = require('ws');
 const WAIT_MS = 10_000;
 const { VERIFICATION_VERSION } = require('./verifiedLeaderboard');
 const { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER } = require('../shared/courseSpec.js');
+const { PROTOCOL_VERSION } = require('../shared/protocol.js');
 const {
   server,
   accounts,
@@ -121,9 +122,9 @@ test('matchmaking соединяет двух старейших совмест�
   });
   await Promise.all([first.wait('hello'), second.wait('hello')]);
 
-  first.send('findCoop', { name: 'Первый', chapterId: 'ch9', protocolVersion: 9 });
+  first.send('findCoop', { name: 'Первый', chapterId: 'ch9', protocolVersion: PROTOCOL_VERSION - 1 });
   await first.wait('matchmakingWaiting');
-  second.send('findCoop', { name: 'Второй', chapterId: 'ch9', protocolVersion: 9 });
+  second.send('findCoop', { name: 'Второй', chapterId: 'ch9', protocolVersion: PROTOCOL_VERSION - 1 });
 
   const [firstStart, secondStart] = await Promise.all([first.wait('start'), second.wait('start')]);
   assert.equal(firstStart.mode, 'coop');
@@ -153,15 +154,15 @@ test('свёрнутый игрок удаляется из matchmaking и не 
     await shutdown();
   });
   await Promise.all([away.wait('hello'), second.wait('hello'), third.wait('hello')]);
-  away.send('findCoop', { name: 'Отошёл', chapterId: 'ch1', protocolVersion: 9 });
+  away.send('findCoop', { name: 'Отошёл', chapterId: 'ch1', protocolVersion: PROTOCOL_VERSION - 1 });
   await away.wait('matchmakingWaiting');
   away.send('presence', { away: true });
   const cancelled = await away.wait('matchmakingWaiting', message => message.cancelled === true);
   assert.equal(cancelled.reason, 'away');
 
-  second.send('findCoop', { name: 'Второй', chapterId: 'ch1', protocolVersion: 9 });
+  second.send('findCoop', { name: 'Второй', chapterId: 'ch1', protocolVersion: PROTOCOL_VERSION - 1 });
   await second.wait('matchmakingWaiting');
-  third.send('findCoop', { name: 'Третий', chapterId: 'ch1', protocolVersion: 9 });
+  third.send('findCoop', { name: 'Третий', chapterId: 'ch1', protocolVersion: PROTOCOL_VERSION - 1 });
   const [secondStart, thirdStart] = await Promise.all([second.wait('start'), third.wait('start')]);
   assert.equal(secondStart.matchId, thirdStart.matchId);
   assert.equal(

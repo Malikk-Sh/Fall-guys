@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { C2S, PROTOCOL_VERSION } from '../shared/protocol.js';
 import { validateMessage } from '../shared/validation.js';
 
-test('protocol v10 has an explicit one-shot socket AUTH message', () => {
-  assert.equal(PROTOCOL_VERSION, 10);
+test('protocol v11 has an explicit one-shot socket AUTH message', () => {
+  assert.equal(PROTOCOL_VERSION, 11);
   assert.equal(validateMessage({ type: C2S.AUTH, ticket: `WST.${'a'.repeat(32)}` }).ok, true);
   assert.equal(validateMessage({ type: C2S.AUTH, ticket: '' }).ok, false);
 });

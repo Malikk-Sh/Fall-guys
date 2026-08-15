@@ -48,7 +48,9 @@ const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { IncidentDiagnostics } = require('./incidentDiagnostics');
 const { BoundedIpRateLimiter } = require('./ipRateLimiter');
 const { networkIdentity } = require('./networkIdentity');
-const { preloadBots, spawnBots, resetBots, stepBots, clearBots } = require('./roomBots');
+const { preloadBots, spawnBots, resetBots, stepBots, clearBots, placeBotsOnGrid } = require('./roomBots');
+const { raceSpawnFor } = require('../shared/raceGrid.js');
+const { assignRaceSlots } = require('./raceSlots');
 
 // Модель бота загружается здесь, а не только в bootstrap: иначе любая точка входа, берущая
 // index.js напрямую, молча оставалась бы без ботов — и добор в подборе не срабатывал бы, ничего
@@ -1555,6 +1557,7 @@ function resume(ws, token) {
       // работало у финишировавшего: он снова оказывался на трассе, хотя уже ждал напарника.
       resumed: {
         position: player.last || spawnFor(room.spec, player.checkpoint),
+        raceSpawn: room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,
         checkpoint: player.checkpoint || 0,
         finished: !!player.finished,
         downed: !!player.downed,
@@ -1658,12 +1661,16 @@ function beginCountdown(room) {
     return false;
   }
   if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return false;
-  // Боты бегут заново вместе со всеми. Комната после реванша та же, и модель бота — та же, поэтому
-  // без сброса он остался бы стоять на ленте с прошлого забега и «финишировал» бы на первом тике.
-  resetBots(room);
-  // matchId отсекает запоздавшие сообщения прошлого забега: снапшот с чужим matchId
-  // игнорируется вместо того, чтобы дёрнуть игрока в позицию из предыдущей гонки.
+  // matchId одновременно отсекает хвост прошлого забега и служит солью для перестановки race-slot'ов:
+  // ряды отличаются по Z, поэтому привязывать переднюю клетку к joinOrder было бы постоянной форой.
   room.matchId = crypto.randomBytes(8).toString('hex');
+  // Сначала сбрасываем/при необходимости пересоздаём ботов. Смена сложности может пересобрать их
+  // записи целиком, поэтому окончательные slot'ы назначаются уже после resetBots.
+  resetBots(room);
+  if (room.mode === GAME_MODE.RACE) assignRaceSlots(room, room.matchId);
+  else assignSlots(room);
+  // Внутренняя физика ботов должна получить те же уже перемешанные клетки, что player.last и клиенты.
+  placeBotsOnGrid(room);
   room.snapshotSequence = 0;
   room.startedAt = Date.now() + COUNTDOWN_MS;
   room.firstFinishAt = null;
@@ -1695,17 +1702,23 @@ function beginCountdown(room) {
   if (room.mode === GAME_MODE.COOP) {
     for (const item of room.players.values()) gameplay.count('chapter_started', dims(room, item));
   }
-  assignSlots(room);
 
-  for (const item of room.players.values())
+  for (const item of room.players.values()) {
+    const start =
+      room.mode === GAME_MODE.COOP
+        ? coopSpawnFor(room.spec, 0, item.slot)
+        : raceSpawnFor(room.spec, item.slot, room.players.size);
     Object.assign(item, {
       finished: false,
       coopRevives: 0,
       coopFalls: 0,
       time: null,
       checkpoint: 0,
+      // Для гонки сохраняем клетку отдельно: checkpoint 0 обязан возвращать игрока именно сюда,
+      // а не в старую общую центральную точку. В коопе старт и так вычисляется по slot каждый раз.
+      raceSpawn: room.mode === GAME_MODE.RACE ? { ...start } : null,
       last: {
-        ...(room.mode === GAME_MODE.COOP ? coopSpawnFor(room.spec, 0, item.slot) : room.spec.start),
+        ...start,
         ry: 0,
         vx: 0,
         vz: 0,
@@ -1738,6 +1751,7 @@ function beginCountdown(room) {
       ready: false,
       resultChoice: null
     });
+  }
 
   log('info', 'match_started', { roomId: room.code, matchId: room.matchId, mode: room.mode });
   return broadcast(room, {
@@ -2292,13 +2306,21 @@ wss.on('connection', (ws, req) => {
         return sendError(ws, ERROR_CODES.WRONG_STATE, 'Боты пока есть только в гонке.');
       }
       const free = MAX_PLAYERS[GAME_MODE.RACE] - room.players.size;
-      if (free <= 0) return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
-      const added = addRoomBots(room, {
-        count: Math.min(message.count, free),
+      // Удаление не требует свободного места — наоборот, именно в полной комнате кнопка «−»
+      // особенно нужна, чтобы освободить слот живому игроку.
+      if (message.count > 0 && free <= 0)
+        return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
+      const changed = addRoomBots(room, {
+        count: message.count === 0 ? 0 : Math.min(message.count, free),
         skill: message.skill || RACE_BOT_SKILLS
       });
-      if (!added) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Соперники сейчас недоступны.');
-      log('info', 'room_bots_added', { roomId: room.code, bots: added });
+      if (!changed)
+        return sendError(
+          ws,
+          ERROR_CODES.WRONG_STATE,
+          message.count === 0 ? 'В комнате нет ботов.' : 'Соперники сейчас недоступны.'
+        );
+      log('info', 'room_bots_changed', { roomId: room.code, delta: changed });
       return undefined;
     },
 
@@ -2493,7 +2515,10 @@ wss.on('connection', (ws, req) => {
         });
         return send(ws, { type: S2C.CORRECTION, position: point, reason: 'respawn' });
       }
-      const position = spawnFor(room.spec, player.checkpoint);
+      const position =
+        player.checkpoint === 0 && player.raceSpawn
+          ? player.raceSpawn
+          : spawnFor(room.spec, player.checkpoint);
       // Главный вопрос про падения — не «сколько», а «где». Место берётся по последнему
       // положению, которое сервер успел принять: именно оттуда игрок и полетел вниз.
       gameplay.count('fall', dims(room, player, segmentTypeAt(room.spec, player.last?.z ?? 0)));

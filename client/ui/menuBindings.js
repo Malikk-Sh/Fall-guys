@@ -7,7 +7,7 @@
 
 import { COOP_CHAPTERS } from '/shared/coopChapters.js';
 import { COOP_PING_LABELS } from '../game/CoopController.js';
-import { GAME_MODE } from '/shared/protocol.js';
+import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { courseSpec, dailyCourseSpec, randomSeed } from '../core/Config.js';
 import { shareInvite } from '../core/invite.js';
 
@@ -36,6 +36,41 @@ export function bindMenu(game) {
       handler(event);
     });
 
+  // Старую одиночную кнопку «добавить ботов» превращаем в компактную пару −/+ без изменения
+  // HTML-шаблона. UI.lobby по-прежнему отвечает за весь список игроков, а эта проводка только
+  // синхронизирует органы управления с последним авторитетным room payload.
+  const addBotButton = $('#addBots');
+  const removeBotButton = addBotButton.cloneNode(true);
+  removeBotButton.id = 'removeBot';
+  removeBotButton.textContent = '− БОТ';
+  removeBotButton.setAttribute('aria-label', 'Убрать одного бота');
+  addBotButton.before(removeBotButton);
+  const syncBotControls = () => {
+    const room = game.room;
+    const players = room?.players || [];
+    const bots = players.filter(player => player.bot).length;
+    const matchmade = room?.minPlayers !== null && room?.minPlayers !== undefined;
+    const canManage =
+      !!room &&
+      room.state === ROOM_STATE.LOBBY &&
+      room.mode === GAME_MODE.RACE &&
+      room.host === game.net?.id &&
+      !matchmade;
+    const maxPlayers = room?.maxPlayers || 16;
+
+    addBotButton.classList.toggle('hidden', !canManage);
+    removeBotButton.classList.toggle('hidden', !canManage);
+    addBotButton.disabled = !canManage || bots >= 8 || players.length >= maxPlayers;
+    removeBotButton.disabled = !canManage || bots === 0;
+    addBotButton.textContent = `+ БОТ · ${bots}/8`;
+    removeBotButton.textContent = '− БОТ';
+  };
+  // UI.lobby полностью пересобирает #players на каждом ROOM_STATE. Это и есть надёжный момент,
+  // когда рядом уже лежит новый game.room: не держим второй счётчик ботов и не угадываем ответ
+  // сервера оптимистично.
+  new MutationObserver(syncBotControls).observe($('#players'), { childList: true });
+  syncBotControls();
+
   click('#play', () => game.startSingle(false));
   click('#again', () => game.startRace('single', game.lastSpec));
   click('#newCourse', () => game.startSingle(true));
@@ -63,9 +98,14 @@ export function bindMenu(game) {
     $('#ready').textContent = game.ready ? 'ОТМЕНИТЬ ГОТОВНОСТЬ' : 'Я ГОТОВ';
   });
   click('#start', () => game.net?.send('start'));
-  // Зовём троих: этого хватает, чтобы гонка ощущалась гонкой, и остаётся место живым игрокам,
-  // если хост позвал друзей. Уровни сервер раздаёт вперемешку.
-  click('#addBots', () => game.net?.send('addBots', { count: 3 }));
+  // Положительный count добавляет партию, ноль означает «убрать одного». Новый UI шлёт только
+  // один шаг за тап; старые клиенты с count:3 продолжают работать как раньше.
+  click('#addBots', () => {
+    if (!addBotButton.disabled) game.net?.send('addBots', { count: 1 });
+  });
+  click('#removeBot', () => {
+    if (!removeBotButton.disabled) game.net?.send('addBots', { count: 0 });
+  });
   $('#lobbyDifficulty').addEventListener('change', e =>
     game.net?.send('configure', { difficulty: e.target.value })
   );

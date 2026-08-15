@@ -15,7 +15,7 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --write . && git diff --exit-code",
     "moderation": "node server/moderationCli.mjs",
     "admin": "node server/adminCli.mjs",
     "load": "node server/loadProbe.mjs",

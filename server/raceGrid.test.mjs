@@ -10,7 +10,10 @@ test('одиночный участник сохраняет прежнюю ст
 
 test('четыре участника стоят в одном центрированном ряду и не пересекаются', () => {
   const starts = Array.from({ length: 4 }, (_, slot) => raceSpawnFor(spec, slot, 4));
-  assert.deepEqual(starts.map(point => point.z), [7, 7, 7, 7]);
+  assert.deepEqual(
+    starts.map(point => point.z),
+    [7, 7, 7, 7]
+  );
   assert.equal(new Set(starts.map(point => point.x)).size, 4);
   for (let index = 1; index < starts.length; index += 1)
     assert.ok(starts[index].x - starts[index - 1].x > 0.96, 'между капсулами должен оставаться зазор');

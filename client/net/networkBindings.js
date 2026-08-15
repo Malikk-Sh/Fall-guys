@@ -173,8 +173,8 @@ export function bindNetwork(game) {
 
     // Сервер раздаёт стабильные номера слотов. Раньше клиент игнорировал их в обычной гонке и
     // каждый Player создавался ровно в `spec.start`, поэтому все участники начинали внутри друг
-    // друга. На время отсчёта даём локальному Course персональную стартовую точку; сразу после
-    // отсчёта возвращаем канонический start как точку респауна, чтобы клиент и сервер не расходились.
+    // друга. Теперь checkpoint 0 авторитетно закреплён за тем же slot и на сервере, поэтому эта
+    // персональная точка остаётся стартом и точкой раннего респауна до первого checkpoint.
     const slots = message.slots || {};
     const slot = slots[game.net.id];
     const participantCount = Object.keys(slots).length;
@@ -185,10 +185,6 @@ export function bindNetwork(game) {
     const spec = gridStart ? { ...message.spec, start: gridStart } : message.spec;
 
     await game.startRace(message.mode === GAME_MODE.COOP ? 'coop' : 'multi', spec, message.at, message.slots);
-    if (gridStart && game.player) {
-      game.player.spawn.set(message.spec.start.x, message.spec.start.y, message.spec.start.z);
-      if (game.course?.spec) game.course.spec.start = { ...message.spec.start };
-    }
     if (message.resumed) game.restoreRun(message.resumed);
   });
   game.net.on('presence', message => {

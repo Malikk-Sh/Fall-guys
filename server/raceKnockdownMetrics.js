@@ -203,6 +203,7 @@ module.exports = {
   KNOCKDOWN_FALL_WINDOW_MS,
   MAX_REPEAT_HITS_PER_KNOCKDOWN,
   REPEAT_HIT_MIN_GAP_MS,
+  MAX_PENDING_EVENTS,
   trackRaceKnockdownState,
   trackRaceKnockdownRespawn,
   drainRaceKnockdownMetrics,

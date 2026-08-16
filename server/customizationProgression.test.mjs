@@ -198,7 +198,14 @@ test('multi-slot loadout отправляет server equip последоват�
   };
 
   applyLoadout(
-    { body: 'space-astronaut', visor: null, antenna: null, back: 'space-oxygen-pack', trail: null, finish: null },
+    {
+      body: 'space-astronaut',
+      visor: null,
+      antenna: null,
+      back: 'space-oxygen-pack',
+      trail: null,
+      finish: null
+    },
     null,
     null,
     storage,

@@ -14,7 +14,13 @@ import { join } from 'node:path';
 const require = createRequire(import.meta.url);
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { openDatabase } = require('./db');
-const { trackRaceKnockdownState, resetRaceKnockdownMetricsForTests } = require('./raceKnockdownMetrics');
+const {
+  MAX_PENDING_EVENTS,
+  trackRaceKnockdownState,
+  trackRaceKnockdownRespawn,
+  raceKnockdownMetricsStatus,
+  resetRaceKnockdownMetricsForTests
+} = require('./raceKnockdownMetrics');
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -193,8 +199,12 @@ test('race knockdown измеряет старт, повторный удар, �
   const second = { ...start, vx: 9, vy: 5, state: 'knockdown' };
   trackRaceKnockdownState({ player, spec, state: second, previousState: recovered, now: 5000 });
   player.lastRespawn = 6500;
-  const afterFall = { ...recovered, vx: 0, vy: 0, state: 'air' };
-  trackRaceKnockdownState({ player, spec, state: afterFall, previousState: second, now: 6600 });
+  assert.equal(trackRaceKnockdownRespawn({ player, now: 6500 }), true);
+  assert.equal(
+    trackRaceKnockdownRespawn({ player, now: 6500 }),
+    false,
+    'один server-side respawn не должен засчитываться дважды'
+  );
 
   const summary = gameplay.summary({ days: 1 });
   assert.equal(row(summary, { metric: 'knockdown_started', detail: 'bumpers' }).samples, 2);
@@ -238,6 +248,35 @@ test('race knockdown ограничивает число inferred repeat hits н
     4,
     'аномальный поток не может раздувать один knockdown бесконечными повторными ударами'
   );
+  resetRaceKnockdownMetricsForTests();
+});
+
+test('переполнение knockdown queue попадает в общий dropped signal', () => {
+  resetRaceKnockdownMetricsForTests();
+  const gameplay = memory();
+  const spec = {
+    difficulty: 'easy',
+    segmentCount: 1,
+    segments: [{ type: 'bumpers' }],
+    checkpoints: [-18],
+    finishZ: -31
+  };
+  const state = { x: 0, y: 1, z: -11, vx: 10, vy: 5, vz: 0, state: 'knockdown' };
+
+  for (let index = 0; index <= MAX_PENDING_EVENTS; index += 1) {
+    trackRaceKnockdownState({
+      player: { device: 'desktop', matchStartedAt: index + 1, lastRespawn: 0 },
+      spec,
+      state,
+      now: 10_000 + index
+    });
+  }
+
+  assert.deepEqual(raceKnockdownMetricsStatus(), { pending: MAX_PENDING_EVENTS, dropped: 1 });
+  const summary = gameplay.summary({ days: 1 });
+  assert.equal(summary.dropped, 1, 'оператор видит потерю knockdown telemetry в обычном dropped поле');
+  assert.equal(row(summary, { metric: 'knockdown_started', detail: 'bumpers' }).samples, MAX_PENDING_EVENTS);
+  assert.deepEqual(raceKnockdownMetricsStatus(), { pending: 0, dropped: 0 });
   resetRaceKnockdownMetricsForTests();
 });
 

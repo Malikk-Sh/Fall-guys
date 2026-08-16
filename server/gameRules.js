@@ -11,13 +11,16 @@ const {
 } = require('../shared/courseSpec.js');
 
 const { e2eSegmentCount } = require('./e2eCourse.js');
-const { trackRaceKnockdownState } = require('./raceKnockdownMetrics.js');
+const {
+  trackRaceKnockdownState,
+  trackRaceKnockdownRespawn
+} = require('./raceKnockdownMetrics.js');
 
 const {
   auditMovement,
   budgetFor,
   minSegmentSeconds,
-  resetHistory,
+  resetHistory: resetMovementHistory,
   FINISH_TAIL_SECONDS,
   DEFAULT_ANOMALY_BUDGET
 } = require('./movementAudit.js');
@@ -107,6 +110,11 @@ const MAX_HORIZONTAL_ACCELERATION = 120;
 // на «хаосе». Поднять сам потолок вместо запаса нельзя: при заявленной скорости до 17 предельное
 // изменение равно 34, и порог, не срабатывающий на честных ударах, не срабатывал бы ни на чём.
 const MAX_MOVEMENT_ANOMALIES = DEFAULT_ANOMALY_BUDGET;
+
+function resetHistory(player) {
+  trackRaceKnockdownRespawn({ player });
+  return resetMovementHistory(player);
+}
 
 function verifyMovement(player, value, now = Date.now(), spec = null) {
   const state = normalizeState(value);

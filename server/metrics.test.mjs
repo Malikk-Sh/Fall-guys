@@ -14,10 +14,7 @@ import { join } from 'node:path';
 const require = createRequire(import.meta.url);
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { openDatabase } = require('./db');
-const {
-  trackRaceKnockdownState,
-  resetRaceKnockdownMetricsForTests
-} = require('./raceKnockdownMetrics');
+const { trackRaceKnockdownState, resetRaceKnockdownMetricsForTests } = require('./raceKnockdownMetrics');
 
 const DAY = 24 * 60 * 60 * 1000;
 

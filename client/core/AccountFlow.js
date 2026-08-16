@@ -10,6 +10,7 @@ import {
   authConfig,
   createAccount,
   equipAccountCosmetic,
+  equipAccountEmote,
   forgetAccountChecked,
   listAccountSessions,
   loginAccount,
@@ -30,7 +31,11 @@ import {
   switchAccount,
   submitRecord
 } from './account.js';
-import { setServerCosmeticEquipHandler, setServerInventory } from './cosmetics.js';
+import {
+  setServerCosmeticEquipHandler,
+  setServerEmoteEquipHandler,
+  setServerInventory
+} from './cosmetics.js';
 import { listLocalRecords } from './records.js';
 
 const GOOGLE_SCRIPT = 'https://accounts.google.com/gsi/client';
@@ -46,6 +51,7 @@ export class AccountFlow {
     // при новом сокете свежий WST можно безопасно получить из HttpOnly session.
     this.game.ui.accountToken = options => this.takeNetworkTicket(options);
     setServerCosmeticEquipHandler((slot, cosmeticId) => this.equipCosmetic(slot, cosmeticId));
+    setServerEmoteEquipHandler((position, cosmeticId) => this.equipEmote(position, cosmeticId));
     this.game.ui.onProfileRefresh = () => this.refreshProfile();
     this.game.ui.onRecentPartnerAvoid = partner => this.avoidPartner(partner);
     this.game.ui.onRecentPartnerReport = (partner, reason) => this.reportPartner(partner, reason);
@@ -518,6 +524,9 @@ export class AccountFlow {
     this.game.ui.setAccount({ ...this.game.ui.account, inventory: session.inventory }, { online: true });
     this.game.ui.setAccountProgress(session.progress || null);
     this.game.ui.onCosmeticChange?.();
+    // Новый предмет показывается один раз. Список показанных лежит локально: подделать его можно,
+    // но получить этим ничего нельзя — владение остаётся серверным.
+    this.game.ui.announceUnlocks?.(session.inventory?.ownedIds || []);
     return session;
   }
 
@@ -634,6 +643,26 @@ export class AccountFlow {
       if (saved?.best) this.records?.set(`${mode}:${courseKey}`, saved.best);
     } catch {
       // Рекорд не уехал — забег от этого не перестаёт быть пройденным, а локальная запись уже есть.
+    }
+  }
+
+  // Эмоция уходит на сервер той же дорогой, что и носимый предмет: клиент просит, сервер решает и
+  // возвращает канонический профиль. Локальный выбор — предположение до этого ответа, не более.
+  async equipEmote(position, cosmeticId) {
+    if (!this.game.ui.account?.inventory) return;
+    try {
+      const inventory = await equipAccountEmote(position, cosmeticId);
+      if (!inventory) {
+        this.game.ui.accountStatus('Сервер не подтвердил выбор эмоции.');
+        this.game.ui.renderCosmetics();
+        return;
+      }
+      setServerInventory(inventory);
+      this.game.ui.setAccount({ ...this.game.ui.account, inventory }, { online: true });
+      this.game.ui.onCosmeticChange?.();
+    } catch {
+      this.game.ui.accountStatus('Выбор эмоции не удалось сохранить на сервере.');
+      this.game.ui.renderCosmetics();
     }
   }
 

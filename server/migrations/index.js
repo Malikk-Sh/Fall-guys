@@ -14,6 +14,7 @@ const playerSanctions = require('./013_player_sanctions');
 const playerIncidentDiagnostics = require('./014_player_incident_diagnostics');
 const serviceReliability = require('./015_service_reliability');
 const raceStats = require('./016_race_stats');
+const cosmeticWardrobe = require('./017_cosmetic_wardrobe');
 
 const MIGRATIONS = Object.freeze([
   initial,
@@ -31,7 +32,8 @@ const MIGRATIONS = Object.freeze([
   playerSanctions,
   playerIncidentDiagnostics,
   serviceReliability,
-  raceStats
+  raceStats,
+  cosmeticWardrobe
 ]);
 
 function migrateDatabase(db, { migrations = MIGRATIONS, now = Date.now() } = {}) {

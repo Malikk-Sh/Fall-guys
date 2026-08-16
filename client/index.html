@@ -271,7 +271,14 @@
 
         <div class="account-section">
           <small class="account-legend">НАГРАДЫ ЗА ИГРУ · БЕЗ МАГАЗИНА</small>
-          <div id="cosmeticGrid" class="cosmetic-grid" aria-label="Полученная косметика"></div>
+          <!--
+            Полный шкаф живёт на своём экране: шестьдесят с лишним предметов, превью и фильтры в
+            боковую панель аккаунта не помещаются. Здесь остаётся вход в него и ближайшая цель.
+          -->
+          <button id="openWardrobe" class="button button-primary wardrobe-open">
+            ОТКРЫТЬ ШКАФ<small id="wardrobeOwnedCount"></small>
+          </button>
+          <div id="cosmeticGrid" class="cosmetic-grid" aria-label="Надетая косметика"></div>
           <p id="cosmeticGoal" class="cosmetic-goal"></p>
         </div>
 
@@ -294,6 +301,89 @@
         <p id="accountStatus" class="status-line" role="status"></p>
       </div>
     </section>
+
+    <!--
+      Шкаф. Раскладка одна для всех экранов и перестраивается через CSS: на компьютере превью
+      слева и решётка справа, на телефоне превью сверху, вкладки лентой, кнопка «Надеть» липнет
+      к нижнему краю. Отдельной мобильной разметки нет намеренно — две разметки расходятся.
+    -->
+    <section id="wardrobe" class="screen wardrobe-screen hidden">
+      <div class="wardrobe-shell glass" role="dialog" aria-label="Шкаф">
+        <header class="wardrobe-head">
+          <div>
+            <small>КОЛЛЕКЦИЯ</small>
+            <h2>ШКАФ</h2>
+          </div>
+          <button id="wardrobeClose" class="close-button" aria-label="Закрыть шкаф">&times;</button>
+        </header>
+
+        <div class="wardrobe-body">
+          <div class="wardrobe-stage">
+            <canvas id="wardrobePreview" class="wardrobe-preview" aria-label="Превью образа"></canvas>
+            <div class="wardrobe-stage-actions">
+              <button id="wardrobeResetView" class="button button-secondary" type="button">СБРОС</button>
+              <button id="wardrobeRandom" class="button button-secondary" type="button">
+                СЛУЧАЙНЫЙ ОБРАЗ
+              </button>
+            </div>
+            <div id="wardrobeEmotes" class="wardrobe-emotes" aria-label="Ячейки эмоций"></div>
+            <div id="wardrobeCollections" class="wardrobe-collections" aria-label="Прогресс коллекций"></div>
+          </div>
+
+          <div class="wardrobe-main">
+            <div id="wardrobeTabs" class="wardrobe-tabs" role="tablist" aria-label="Категории"></div>
+
+            <div class="wardrobe-filters">
+              <select id="wardrobeOwnership" aria-label="Фильтр по владению">
+                <option value="all">ВСЁ</option>
+                <option value="owned">ПОЛУЧЕНО</option>
+                <option value="locked">НЕ ПОЛУЧЕНО</option>
+              </select>
+              <select id="wardrobeRarity" aria-label="Фильтр по редкости"></select>
+              <select id="wardrobeCollection" aria-label="Фильтр по коллекции"></select>
+              <button id="wardrobeFavoritesFilter" class="wardrobe-chip" type="button" aria-pressed="false">
+                ★ ИЗБРАННОЕ
+              </button>
+            </div>
+
+            <div id="wardrobeGrid" class="wardrobe-grid" aria-label="Предметы"></div>
+
+            <div id="wardrobeDetails" class="wardrobe-details">
+              <div class="wardrobe-details-copy">
+                <strong id="wardrobeItemName"></strong>
+                <span class="wardrobe-details-meta">
+                  <b id="wardrobeItemRarity"></b>
+                  <i id="wardrobeItemSlot"></i>
+                </span>
+                <small id="wardrobeItemCollection" class="wardrobe-details-collection"></small>
+                <p id="wardrobeItemDescription"></p>
+                <small id="wardrobeItemRequirement" class="wardrobe-details-requirement"></small>
+              </div>
+              <div class="wardrobe-details-actions">
+                <button id="wardrobeFavorite" class="button button-secondary" type="button">
+                  &#9734; В ИЗБРАННОЕ
+                </button>
+                <button id="wardrobeUnequip" class="button button-secondary hidden" type="button">
+                  СНЯТЬ
+                </button>
+                <button id="wardrobeEquip" class="button button-primary" type="button">НАДЕТЬ</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Карточка нового предмета. Показывается один раз на предмет, а не при каждом входе. -->
+    <div id="unlockToast" class="unlock-toast hidden" role="status" aria-live="polite">
+      <b>НОВЫЙ ПРЕДМЕТ!</b>
+      <strong id="unlockName"></strong>
+      <small id="unlockMeta"></small>
+      <div class="unlock-toast-actions">
+        <button id="unlockTry" class="button button-primary" type="button">ПРИМЕРИТЬ</button>
+        <button id="unlockLater" class="button button-secondary" type="button">ПОЗЖЕ</button>
+      </div>
+    </div>
 
     <section id="profile" class="screen center-screen hidden">
       <div class="profile-card glass" role="dialog" aria-label="Профиль игрока">
@@ -476,6 +566,10 @@
       <div id="stick" class="stick" aria-label="Джойстик движения"><i></i><span>БЕГ</span></div>
       <button id="recenter" class="recenter" aria-label="Посмотреть за спину">⌖</button>
       <button id="cameraMode" class="recenter camera-mode" aria-label="Режим камеры">◲</button>
+      <!-- Эмоции живут вверху справа: джойстик внизу слева, прыжок и рывок внизу справа, и
+           пересечься им негде. Промах по прыжку стоит дороже любой позы. -->
+      <button id="emoteButton" class="recenter emote-button hidden" aria-label="Эмоции">💃</button>
+      <div id="emoteWheel" class="emote-wheel hidden" role="menu" aria-label="Выбор эмоции"></div>
       <button id="dive" class="action-button dive-button"><i>➤</i><span>РЫВОК</span></button>
       <button id="jump" class="action-button jump-button"><i>↑</i><span>ПРЫЖОК</span></button>
       <div id="lookHint" class="look-hint">ПРОВЕДИТЕ ДЛЯ ОБЗОРА</div>

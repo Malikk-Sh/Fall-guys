@@ -84,16 +84,65 @@ test.describe('одиночная игра и меню', () => {
     await page.locator('[data-mode="single"]').click();
     await expect(page.locator('#single')).toBeVisible();
 
-    // Окно аккаунта: открывается по чипу, закрывается Escape. Не фиксируем общее число карточек:
-    // каталог растёт. Вместо этого проверяем базовую косметику и rewarded-предметы этой платформы.
+    // Окно аккаунта: открывается по чипу, закрывается Escape. Панель показывает надетое по слотам,
+    // а не весь каталог — полный разбор живёт в шкафу.
     await page.locator('#accountChip').click();
     await expect(page.locator('#account')).toBeVisible();
     await expect(page.locator('#accountList')).toBeAttached();
-    const cosmeticCards = page.locator('.cosmetic-card');
-    await expect(cosmeticCards.filter({ hasText: 'КЛАССИКА' })).toHaveCount(1);
-    await expect(cosmeticCards.filter({ hasText: 'НЕОНОВЫЙ ВИЗОР' })).toHaveCount(1);
-    await expect(cosmeticCards.filter({ hasText: 'КОНФЕТТИ-АНТЕННА' })).toHaveCount(1);
-    await expect(page.locator('.cosmetic-card-equipped')).toContainText('КЛАССИКА');
+    await expect(page.locator('.cosmetic-card[data-slot="body"]')).toContainText('КЛАССИКА');
+    await expect(page.locator('.cosmetic-card[data-slot="back"]')).toBeAttached();
+    await expect(page.locator('.cosmetic-card[data-slot="emote"]')).toBeAttached();
+
+    // Шкаф: превью, вкладки, фильтры, коллекции. Точное число карточек не фиксируем — каталог
+    // растёт, и тест, который приходится править при каждом новом предмете, быстро отключают.
+    await page.locator('#openWardrobe').click();
+    await expect(page.locator('#wardrobe')).toBeVisible();
+    await expect(page.locator('#wardrobePreview')).toBeVisible();
+    await expect(page.locator('.wardrobe-tab')).toHaveCount(8);
+    await expect(page.locator('.wardrobe-collection')).toHaveCount(4);
+    await expect(page.locator('.wardrobe-card').first()).toBeVisible();
+
+    // Вкладка «СПИНА» — новый слот. Он обязан быть и обязан фильтровать.
+    await page.locator('.wardrobe-tab[data-category="back"]').click();
+    const backCards = page.locator('.wardrobe-card');
+    await expect(backCards.first()).toHaveAttribute('data-slot', 'back');
+    await expect(backCards).toHaveCount(6);
+
+    // Закрытый предмет: виден, показывает требование, доступен для примерки, но не для надевания.
+    await page.locator('#wardrobeOwnership').selectOption('locked');
+    const locked = page.locator('.wardrobe-card.is-locked').first();
+    await expect(locked).toBeVisible();
+    await locked.click();
+    await expect(page.locator('#wardrobeItemRequirement')).toHaveClass(/locked/);
+    await expect(page.locator('#wardrobeItemRequirement')).not.toBeEmpty();
+    await expect(page.locator('#wardrobeEquip')).toBeDisabled();
+    // Примерка закрытого предмета не делает его надетым.
+    await expect(page.locator('.wardrobe-card.is-equipped.is-locked')).toHaveCount(0);
+
+    // Полученный предмет надевается и переживает перезагрузку страницы.
+    await page.locator('.wardrobe-tab[data-category="all"]').click();
+    await page.locator('#wardrobeOwnership').selectOption('owned');
+    await expect(page.locator('.wardrobe-card.is-locked')).toHaveCount(0);
+
+    // Шкаф не должен вылезать за экран — на телефоне это единственный способ обнаружить, что
+    // решётка или липкая панель действий выталкивают содержимое вбок.
+    const overflow = await page.evaluate(() => {
+      const shell = document.querySelector('.wardrobe-shell');
+      const grid = document.querySelector('.wardrobe-grid');
+      return {
+        shellWider: shell.scrollWidth > shell.clientWidth + 1,
+        gridWider: grid.scrollWidth > grid.clientWidth + 1,
+        pageWider: document.documentElement.scrollWidth > window.innerWidth + 1
+      };
+    });
+    expect(overflow).toEqual({ shellWider: false, gridWider: false, pageWider: false });
+
+    // Панель действий видна без прокрутки: «Надеть» должно быть под пальцем, а не в конце ленты.
+    await expect(page.locator('#wardrobeEquip')).toBeInViewport();
+
+    await page.locator('#wardrobeClose').click();
+    await expect(page.locator('#wardrobe')).toBeHidden();
+
     await page.keyboard.press('Escape');
     await expect(page.locator('#account')).toBeHidden();
 

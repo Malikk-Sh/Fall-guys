@@ -405,6 +405,49 @@ export class Sfx {
     this.engine.playTone({ freq: 880, type: 'square', duration: 0.05, volume: 0.09 });
   }
 
+  // Звуки шкафа. Всё тем же процедурным способом, что и остальное: заводить ради косметики пачку
+  // внешних аудиофайлов значило бы утяжелить первую загрузку ради шести коротких сигналов.
+
+  // Перелистывание карточек — самое частое действие в шкафу, поэтому и звук самый тихий.
+  uiTick() {
+    this.engine.playTone({ freq: vary(1180, 40), type: 'sine', duration: 0.035, volume: 0.05 });
+  }
+
+  // Подтверждение: короткая восходящая пара. «Надето» должно звучать законченно.
+  uiConfirm() {
+    this.engine.playTone({ freq: 720, type: 'triangle', duration: 0.09, volume: 0.12 });
+    this.engine.playTone({ freq: 1080, type: 'sine', duration: 0.14, volume: 0.08 });
+  }
+
+  /**
+   * Новый предмет. Длина и высота фанфары зависят от редкости: обычная награда не должна звучать
+   * как мифическая, иначе через десять открытий перестанет звучать вообще.
+   */
+  unlock(rarity = 'rare') {
+    const ladders = {
+      common: [660, 880],
+      rare: [660, 880, 1100],
+      epic: [587, 784, 988, 1175],
+      legendary: [523, 659, 784, 1046, 1318],
+      mythic: [392, 523, 659, 784, 1046, 1318],
+      prestige: [440, 554, 659, 880, 1108]
+    };
+    const ladder = ladders[rarity] || ladders.rare;
+    this.arpeggio(ladder, rarity === 'mythic' ? 92 : 74, null, {
+      duration: 0.26,
+      volume: rarity === 'mythic' ? 0.16 : 0.12
+    });
+    // Мифический получает вдобавок низкий гул: он и должен ощущаться событием.
+    if (rarity === 'mythic') {
+      this.engine.playTone({ freq: 98, type: 'sine', duration: 0.9, volume: 0.14 });
+    }
+  }
+
+  // Эмоция — жест, а не событие: короткий мягкий отклик, чтобы нажатие не было беззвучным.
+  emote() {
+    this.engine.playTone({ freq: vary(940, 90), type: 'triangle', duration: 0.11, volume: 0.09 });
+  }
+
   // Обратный отсчёт: три коротких сигнала и один длинный на «GO».
   countdown(isGo = false) {
     if (isGo) {

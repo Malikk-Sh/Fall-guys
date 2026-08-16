@@ -314,7 +314,9 @@ export class Player {
     if (this.diveTimer > 0 && Math.random() < dt * 18) {
       this.effects.trail(
         this._scratch.copy(this.physics).setY(this.physics.y + 0.35),
-        this.cosmetics?.trail?.color ?? COLORS.yellow
+        // Цвет берётся из render, а старое поле `color` остаётся запасным: у унаследованных
+        // следов оно и есть источник, у новых его нет вовсе.
+        this.cosmetics?.trail?.render?.primary ?? this.cosmetics?.trail?.color ?? COLORS.yellow
       );
     }
 

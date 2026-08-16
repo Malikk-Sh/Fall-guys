@@ -35,6 +35,9 @@ const TRANSIENT_TYPES = new Set([
   C2S.NEXT_CHAPTER_VOTE,
   C2S.RETURN_TO_LOBBY,
   C2S.PRESENCE,
+  // Эмоция описывает «сейчас» ровно так же: показанная через десять секунд после нажатия, она
+  // относится уже к другому моменту игры и выглядит случайной.
+  C2S.EMOTE,
   C2S.PING
 ]);
 
@@ -625,6 +628,14 @@ export class NetworkManager {
 
   cancelMatchmaking() {
     this.send(C2S.CANCEL_MATCHMAKING);
+  }
+
+  // Эмоция: только канонический ID. Ни длительности, ни позы, ни эффекта — всё это чужой клиент
+  // возьмёт из общего каталога сам. Локальный показ идёт своим путём и не ждёт сервера: ответ
+  // нужен остальным, а не отправителю.
+  sendEmote(emoteId) {
+    if (!emoteId) return false;
+    return this.send(C2S.EMOTE, { emoteId });
   }
 
   sendState(state, { force = false } = {}) {

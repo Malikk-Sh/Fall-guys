@@ -419,7 +419,7 @@ export class RaceRun {
     this.scene = new THREE.Scene();
     this.spec = spec;
     this.course = new Course(this.scene, spec, { quality: 'low' });
-    this.player = new Player(this.scene, this.course, NO_EFFECTS);
+    this.player = new Player(this.scene, this.course, NO_EFFECTS, { knockdownControl: 1 });
     this.input = new BotInput();
     this.elapsed = 0;
     this.frame = 0;

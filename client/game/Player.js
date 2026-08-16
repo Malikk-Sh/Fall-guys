@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 import { Character } from './Character.js';
-
-const FOOT = 0.48;
+import { PLAYER_FOOT } from './PlayerDimensions.js';
 
 // Гравитация и импульсы вынесены в именованные константы: раньше это были числа, вкраплённые прямо
 // в формулы, и подобрать «ощущение» персонажа, не перечитывая всю функцию, было невозможно.
@@ -16,6 +15,18 @@ const ROLL_TIME = 0.42;
 const ROLL_SPEED = 10.2;
 const LANDING_RETENTION_TIME = 0.34;
 const WALL_BOUNCE_SPEED = 8.8;
+const KNOCKDOWN_MIN_TIME = 1.05;
+const KNOCKDOWN_MAX_TIME = 1.65;
+
+// Сколько игрок защищён от НОВОГО сбивания после того, как поднялся.
+//
+// Именно от сбивания, а не от удара: препятствие в это окно по-прежнему толкает, отбрасывает и
+// меняет скорость — не запускается только новая полуторасекундная потеря управления. Разделить
+// удар и толчок в этой физике нельзя, они одно событие (проверено: попытка выталкивать без удара
+// превращает бампер в стену и ломает прохождение ботами), поэтому окно живёт здесь, в knockDown, а
+// не в разборе столкновений.
+const KNOCKDOWN_IMMUNITY_TIME = 0.7;
+const GETUP_TIME = 0.24;
 
 // Окно, в течение которого прыжок сработает, если нажать его чуть раньше приземления.
 const JUMP_BUFFER = 0.14;
@@ -62,6 +73,7 @@ export class Player {
     this.haptics = options.haptics || null;
     this.character = new Character(scene, options);
     this.cosmetics = options.cosmetics || null;
+    this.knockdownControl = THREE.MathUtils.clamp(Number(options.knockdownControl) || 0, 0, 1);
 
     this.velocity = new THREE.Vector3();
     this.checkpoint = 0;
@@ -85,6 +97,9 @@ export class Player {
     this.rollTimer = 0;
     this.landingRetention = 0;
     this.recoveryWindow = 0;
+    this.knockdownTimer = 0;
+    this.knockdownImmunityTimer = 0;
+    this.getupTimer = 0;
     this.finished = false;
     this.respawns = 0;
     // Счётчики для целей испытания дня. Ведутся всегда, а не только в дни соответствующей цели:
@@ -133,7 +148,24 @@ export class Player {
     if (this.finished || this.remote) return;
     this.previous.copy(this.physics);
 
-    const move = input.movement();
+    const knockedDown = this.knockdownTimer > 0;
+    this.knockdownImmunityTimer = Math.max(0, this.knockdownImmunityTimer - dt);
+    if (knockedDown) {
+      this.knockdownTimer = Math.max(0, this.knockdownTimer - dt);
+      if (this.knockdownTimer === 0) {
+        this.getupTimer = GETUP_TIME;
+        this.knockdownImmunityTimer = KNOCKDOWN_IMMUNITY_TIME;
+      }
+    } else {
+      this.getupTimer = Math.max(0, this.getupTimer - dt);
+    }
+    const rawMove = input.movement();
+    const moveScale = knockedDown ? this.knockdownControl : 1;
+    const move = {
+      x: rawMove.x * moveScale,
+      forward: rawMove.forward * moveScale,
+      magnitude: rawMove.magnitude * moveScale
+    };
     const sin = Math.sin(cameraYaw);
     const cos = Math.cos(cameraYaw);
     // Движение задаётся относительно камеры: «вперёд» — это туда, куда смотрит игрок, а не
@@ -149,7 +181,11 @@ export class Player {
     // и по ней выходило бы, что сдуваемый игрок «бежит по ветру».
     this.intentX = desired.x;
 
-    if (input.consume('jump')) this.jumpBuffer = JUMP_BUFFER;
+    if (knockedDown && this.knockdownControl < 0.8) {
+      input.consume('jump');
+      input.consume('dive');
+      this.jumpBuffer = 0;
+    } else if (input.consume('jump')) this.jumpBuffer = JUMP_BUFFER;
     else this.jumpBuffer = Math.max(0, this.jumpBuffer - dt);
     this.coyote = this.grounded ? COYOTE_TIME : Math.max(0, this.coyote - dt);
     this.diveCooldown = Math.max(0, this.diveCooldown - dt);
@@ -175,7 +211,7 @@ export class Player {
       this.haptics?.vibrate(0.32);
     }
 
-    if (input.consume('dive') && this.diveCooldown <= 0) {
+    if ((!knockedDown || this.knockdownControl >= 0.8) && input.consume('dive') && this.diveCooldown <= 0) {
       const direction =
         desired.lengthSq() > 0.02
           ? desired
@@ -213,18 +249,28 @@ export class Player {
     const accel = this.grounded ? ACCEL_GROUND * this.tuning.groundGrip : ACCEL_AIR;
     // Во время рывка управление почти отключается — это делает рывок осмысленным решением,
     // а не просто способом двигаться быстрее.
-    const control = this.diveTimer > 0 ? 0.28 : this.rollTimer > 0 ? 0.48 : 1;
+    const control = knockedDown
+      ? this.knockdownControl
+      : this.diveTimer > 0
+        ? 0.28
+        : this.rollTimer > 0
+          ? 0.48
+          : 1;
     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, desired.x * maxSpeed, accel * control, dt);
     this.velocity.z = THREE.MathUtils.damp(this.velocity.z, desired.z * maxSpeed, accel * control, dt);
     if (move.magnitude < 0.05 && this.grounded) {
-      const stop = 12 * this.tuning.groundGrip;
+      const stop = (knockedDown ? 3.2 : 12) * this.tuning.groundGrip;
       this.velocity.x = THREE.MathUtils.damp(this.velocity.x, 0, stop, dt);
       this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, stop, dt);
     }
 
     // Планирование: удержание прыжка в воздухе на пути вниз ослабляет гравитацию. Доступно всем.
     this.gliding =
-      this.tuning.glide && !this.grounded && this.velocity.y < 0 && input.isHeld?.('jump') === true;
+      !knockedDown &&
+      this.tuning.glide &&
+      !this.grounded &&
+      this.velocity.y < 0 &&
+      input.isHeld?.('jump') === true;
     const gravityScale = this.slamming ? 1.8 : this.gliding ? GLIDE_GRAVITY : 1;
     this.velocity.y -= GRAVITY * this.tuning.gravity * gravityScale * dt;
     const previousY = this.physics.y;
@@ -259,7 +305,7 @@ export class Player {
     const wasGrounded = this.grounded;
     this.grounded = false;
     if (surface && this.velocity.y <= 1.5) {
-      this.physics.y = surface.y + FOOT;
+      this.physics.y = surface.y + PLAYER_FOOT;
       // Перенос движущейся платформой: сдвиг платформы за кадр добавляется к позиции игрока,
       // иначе он соскальзывал бы с неё, стоя на месте.
       this.physics.add(surface.delta);
@@ -324,7 +370,9 @@ export class Player {
       speed: horizontal,
       grounded: this.grounded,
       vertical: this.velocity.y,
-      diving: this.diveTimer > 0 || this.rollTimer > 0
+      diving: this.diveTimer > 0 || this.rollTimer > 0,
+      knockedDown: this.knockdownTimer > 0,
+      recovering: this.getupTimer > 0
     });
 
     const next = this.course.checkpointFor(this.physics, this.checkpoint);
@@ -362,11 +410,28 @@ export class Player {
 
   // Удар сверху: доступен ГРУЗУ в воздухе. Приводит в действие катапульту и тяжёлые механизмы.
   startSlam() {
-    if (this.grounded || this.slamming) return false;
+    if (this.grounded || this.slamming || this.knockdownTimer > 0) return false;
     this.slamming = true;
     this.velocity.y = -SLAM_SPEED;
     this.velocity.x *= 0.3;
     this.velocity.z *= 0.3;
+    return true;
+  }
+
+  // Сильный контакт не замораживает физику: персонаж продолжает лететь от импульса,
+  // но на короткое время теряет управление и процедурно обмякает. Это НЕ coop-down state.
+  knockDown(strength = 0.5) {
+    if (this.finished || this.downed || this.knockdownTimer > 0 || this.knockdownImmunityTimer > 0)
+      return false;
+    const duration = THREE.MathUtils.clamp(0.8 + strength * 1.2, KNOCKDOWN_MIN_TIME, KNOCKDOWN_MAX_TIME);
+    this.knockdownTimer = Math.max(this.knockdownTimer, duration);
+    this.getupTimer = 0;
+    this.jumpBuffer = 0;
+    this.diveTimer = 0;
+    this.rollTimer = 0;
+    this.recoveryWindow = 0;
+    this.slamming = false;
+    this.gliding = false;
     return true;
   }
 
@@ -377,10 +442,16 @@ export class Player {
     this.slamming = false;
     this.rollTimer = 0;
     this.recoveryWindow = 0;
+    this.knockdownTimer = 0;
+    this.knockdownImmunityTimer = 0;
+    this.getupTimer = 0;
   }
 
   // Падение в кооперативе не откатывает обоих к чекпоинту: упавший ждёт напарника «пузырём».
   goDown(position) {
+    this.knockdownTimer = 0;
+    this.knockdownImmunityTimer = 0;
+    this.getupTimer = 0;
     this.downed = true;
     this.teleport(position);
     this.character.visual.scale.set(0.85, 0.85, 0.85);
@@ -403,6 +474,9 @@ export class Player {
     this.rollTimer = 0;
     this.landingRetention = 0;
     this.recoveryWindow = 0;
+    this.knockdownTimer = 0;
+    this.knockdownImmunityTimer = 0;
+    this.getupTimer = 0;
   }
 
   angleDamp(current, target, smoothing, dt) {
@@ -425,7 +499,14 @@ export class Player {
     this.rollTimer = 0;
     this.landingRetention = 0;
     this.recoveryWindow = 0;
+    this.knockdownTimer = 0;
+    this.knockdownImmunityTimer = 0;
+    this.getupTimer = 0;
     this.grounded = false;
+    // Наклон и смещение позы сбивания снимаются здесь же, вместе с таймерами: логический сброс их
+    // не касается, и возрождение оставляло игрока лежащим (см. Character.resetPose). Масштаб ниже
+    // выставляется уже намеренно — это приседание при появлении, а не остаток прежней позы.
+    this.character.resetPose();
     this.character.visual.scale.set(1.35, 0.72, 1.35);
     this.sfx?.respawn();
     this.haptics?.vibrate(0.6);
@@ -444,13 +525,15 @@ export class Player {
       checkpoint: this.checkpoint,
       state: this.downed
         ? 'downed'
-        : this.slamming
-          ? 'slam'
-          : this.diveTimer > 0 || this.rollTimer > 0
-            ? 'dive'
-            : this.grounded
-              ? 'ground'
-              : 'air'
+        : this.knockdownTimer > 0
+          ? 'knockdown'
+          : this.slamming
+            ? 'slam'
+            : this.diveTimer > 0 || this.rollTimer > 0
+              ? 'dive'
+              : this.grounded
+                ? 'ground'
+                : 'air'
     };
   }
 
@@ -480,7 +563,8 @@ export class Player {
       speed,
       grounded: state.state === 'ground',
       vertical: state.vy || 0,
-      diving: state.state === 'dive' || state.state === 'slam'
+      diving: state.state === 'dive' || state.state === 'slam',
+      knockedDown: state.state === 'knockdown'
     });
     this.checkpoint = state.checkpoint || 0;
     this.target = state;

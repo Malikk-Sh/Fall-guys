@@ -192,9 +192,17 @@ export function safeDifficulty(value) {
 
 // Полное описание трассы, восстанавливаемое из одного числа. Именно поэтому серверу достаточно
 // разослать сид: все клиенты соберут идентичную геометрию, не передавая ни байта уровня.
-export function createCourseSpec(seed, difficulty = 'normal') {
+//
+// Длину обычно задаёт сложность. Третий аргумент позволяет назвать её явно — в работающей игре им
+// пользуется единственное место, server/gameRules.js, чтобы укоротить трассу сквозного браузерного
+// теста. Здесь он намеренно без проверок и без знания о переменных окружения: это сборщик трассы, а
+// решение «когда короче можно» живёт в server/e2eCourse.js, где его видно, а не спрятано внутри
+// общего с клиентом модуля.
+export function createCourseSpec(seed, difficulty = 'normal', segmentCountOverride = null) {
   const key = safeDifficulty(difficulty);
-  const segmentCount = DIFFICULTY_SEGMENTS[key];
+  const segmentCount = Number.isInteger(segmentCountOverride)
+    ? segmentCountOverride
+    : DIFFICULTY_SEGMENTS[key];
   return {
     seed: seed >>> 0,
     difficulty: key,

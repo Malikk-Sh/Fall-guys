@@ -48,6 +48,14 @@ test('валидатор принимает корректные сообщен�
       state: { x: 1, y: 2, z: -3, ry: 0.5, vx: 1, vz: -1, state: 'ground' }
     }).ok
   );
+  assert.ok(
+    validateMessage({
+      type: C2S.PLAYER_STATE,
+      matchId: 'a1b2c3d4e5f60718',
+      sequence: 1,
+      state: { x: 1, y: 2, z: -3, ry: 0.5, vx: 9, vz: -4, state: 'knockdown' }
+    }).ok
+  );
 });
 
 // `matchId` стал обязательным во всех сообщениях забега. Пока он был необязательным, пакет

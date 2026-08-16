@@ -227,7 +227,10 @@ export class RaceBot {
   // потому что случайность бота детерминирована сидом.
   reset(run = 0) {
     this.player?.dispose();
-    this.player = new Player(this.scene, this.course, NO_EFFECTS);
+    // У ботов чуть разная устойчивость после удара: это не бонус к скорости, а небольшой
+    // разброс реакции, чтобы одинаковый контакт не собирал трёх соперников в один строй.
+    const knockdownControl = Math.min(0.98, 0.86 + (this.index % 4) * 0.04);
+    this.player = new Player(this.scene, this.course, NO_EFFECTS, { knockdownControl });
     this.random = seededRandom(this.baseSeed + run * 0x9e3779b1);
     this.elapsed = 0;
     this.frame = 0;

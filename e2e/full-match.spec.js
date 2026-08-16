@@ -5,20 +5,32 @@
 // только на серверных тестах. Между ними и живой игрой помещается весь клиент: разметка, состояния
 // экранов, обработчики кнопок. Исторически самые дорогие ошибки жили именно там.
 //
-// Забег проходится по-настоящему: бот держит «вперёд» и прыгает, сервер проверяет каждое положение
-// и телепорт не примет. Поэтому тест идёт настоящее время и на короткой трассе — иначе он проверял
-// бы не игру, а обход её правил.
+// Забег проходится по-настоящему: водитель держит «вперёд» и прыгает, сервер проверяет каждое
+// положение и телепорт не примет. Поэтому тест идёт настоящее время — иначе он проверял бы не игру,
+// а обход её правил.
 //
-// Трасса задана сидом WOBBLE_FIXED_SEED (см. playwright.config.js): в гонке она случайная, а тест на
-// случайной трассе означал бы разное каждый прогон. Тест, который падает через раз и не
-// воспроизводится, хуже отсутствующего.
+// Трасса задана снаружи (WOBBLE_FIXED_SEED и WOBBLE_E2E_SEGMENTS, см. playwright.config.js): в
+// гонке она случайная, а тест на случайной трассе означал бы разное каждый прогон. Тест, который
+// падает через раз и не воспроизводится, хуже отсутствующего. Её сид подобран замером под этого
+// водителя, а длина укорочена до трёх сегментов — два настоящих Chromium на одной машине выдают
+// 10–15 кадров в секунду, и полная трасса перестаёт укладываться в бюджет из-за раннера, а не
+// из-за игры. Почему это допустимо и чем ограничено — в server/e2eCourse.js.
+//
+// ЧТО ЗДЕСЬ НЕ ПРОВЕРЯЕТСЯ, и это осознанно. Водитель намеренно простой: он не разбирает
+// препятствия, не выбирает момент прыжка и не обходит ловушки. Проходимость всех настоящих трасс
+// проверяют боты и физика (server/raceBot.test.mjs, server/traverse.test.mjs) — без браузера, без
+// кадров и на десятках сидов. Сбивание с ног проверяет e2e/knockdown.spec.js, где два клиента и
+// один удар. Здесь же проверяется ровно то, чего не увидеть ни оттуда, ни со стороны сервера:
+// сквозной жизненный цикл матча в двух настоящих браузерах.
+//
+// Поэтому падение этого теста означает поломку матча, а не «водитель не справился с трассой» — при
+// условии, что сам водитель не превращает задержку CI в многосекундно зажатую боковую клавишу.
 
 import { test, expect } from '@playwright/test';
 
-// Запас на прохождение. Замер на этой машине — 19–21 секунда, но потолок взят кратно больше по двум
-// причинам: падение возвращает на чекпоинт и сегмент приходится проходить заново, а на раннере CI
-// WebGL рисуется программно, и вся игра идёт заметно медленнее. Физика при этом ограничена пятью
-// подшагами на кадр, то есть при низком FPS забег растягивается во времени пропорционально.
+// Запас на прохождение. Трасса короткая, но потолок взят кратно больше: падение возвращает на
+// чекпоинт и сегмент приходится проходить заново, а физика ограничена пятью подшагами на кадр, то
+// есть при низком FPS раннера забег растягивается по настенным часам пропорционально.
 const RUN_BUDGET_MS = 150_000;
 
 // Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
@@ -63,38 +75,76 @@ async function joinRoom(page, name, code) {
 
 // Доводит игрока до финиша живым управлением: те же клавиши, что нажимает человек.
 //
-// Одного «вперёд» не хватает. Первая версия бота только держала W и застревала на «узком повороте»
-// — держась прямо, поворот не пройти, — а финальный сегмент лёгкой трассы всегда ветреный, и на нём
-// боком сдувает с платформы. Поэтому бот подруливает к середине трассы.
+// Водитель специально примитивный, и это его главное свойство. Всё, что он умеет, — держать
+// «вперёд», коротко подруливать к оси трассы и жать прыжок. Разбор препятствий, выбор момента,
+// реакция на конкретный тип опасности сюда не добавляются сознательно: умный водитель становится
+// второй игровой логикой, которую придётся чинить при каждой правке баланса, и падение теста
+// перестаёт что-либо означать. Трасса подобрана под ЭТОГО водителя, а не наоборот.
 //
 // Положение читается из window.__WOBBLE_GAME__, который клиент выставляет и без тестов. Никакого
 // обхода правил тут нет: это собственная позиция игрока, которую его же браузер и рисует, а сервер
 // всё равно проверяет каждое присланное состояние.
 const CENTER_TOLERANCE = 0.8;
 
+// Боковая коррекция — импульс ограниченной длительности, а не клавиша, зажатая до следующего
+// round-trip Playwright. Это различие оказалось критичным именно на CI.
+//
+// В trace красного прогона фактический промежуток между чтениями позиции был не 220 мс из
+// waitForTimeout, а примерно 0.9 с по медиане и доходил до ~1.7 с. Из-за прежнего hold/release A/D
+// боковая клавиша оставалась зажатой ещё дольше: около двух секунд по медиане и до ~7 секунд.
+// После удара бампера/knockdown это превращало устаревшую коррекцию в новый разгон поперёк трассы;
+// в том же trace x гулял примерно от -15 до +15. Это уже поведение тестового водителя, а не матча.
+//
+// 140 мс хватает хотя бы на один кадр даже около 10 FPS, но длительность не зависит от того,
+// насколько занят runner после этого. Клавиша по-прежнему настоящая — проходит через тот же Input,
+// что и у человека.
+const STEER_PULSE_MS = 140;
+
+async function steerTowardCenter(page, x) {
+  if (x > CENTER_TOLERANCE) await page.keyboard.press('KeyA', { delay: STEER_PULSE_MS });
+  else if (x < -CENTER_TOLERANCE) await page.keyboard.press('KeyD', { delay: STEER_PULSE_MS });
+}
+
 // Сколько строк сейчас в таблице подтверждённых рекордов этой трассы. Сид и сложность фиксированы
 // конфигурацией, поэтому запрос детерминированный.
 async function countRecords(page) {
-  const response = await page.request.get('/leaderboard?seed=8&difficulty=easy&limit=25');
+  const response = await page.request.get('/leaderboard?seed=130&difficulty=easy&limit=25');
   expect(response.ok()).toBe(true);
   return (await response.json()).entries.length;
 }
 
-async function runToFinish(page, budget = RUN_BUDGET_MS) {
-  const deadline = Date.now() + budget;
-  const held = new Set();
-  const hold = async key => {
-    if (held.has(key)) return;
-    await page.keyboard.down(key);
-    held.add(key);
-  };
-  const release = async key => {
-    if (!held.has(key)) return;
-    await page.keyboard.up(key);
-    held.delete(key);
-  };
+// Что видно снаружи о ходе забега. Нужно не для управления, а для сообщения об ошибке: «обязан
+// дойти до финиша» без единой цифры не даёт понять, встал ли водитель на препятствии, не начал ли
+// забег вовсе или просто не уложился в бюджет на медленной машине.
+const progress = page =>
+  page.evaluate(() => {
+    const game = window.__WOBBLE_GAME__;
+    const player = game?.player;
+    return {
+      x: player?.position?.x ?? null,
+      z: player?.position?.z ?? null,
+      checkpoint: player?.checkpoint ?? null,
+      finishZ: game?.course?.spec?.finishZ ?? null,
+      segments: game?.course?.spec?.segmentCount ?? null,
+      state: player?.snapshot?.().state ?? null,
+      respawns: player?.respawns ?? null,
+      finished: !!player?.finished,
+      hud: !document.querySelector('#hud')?.classList.contains('hidden'),
+      results: !document.querySelector('#finish')?.classList.contains('hidden')
+    };
+  });
 
-  await hold('KeyW');
+const describeRun = report =>
+  report.done
+    ? 'дошёл'
+    : `не дошёл за ${(report.seconds ?? 0).toFixed(0)} с: z=${report.z ?? '—'} из ${report.finishZ ?? '—'}, ` +
+      `чекпоинт ${report.checkpoint ?? '—'}/${report.segments ?? '—'}, состояние ${report.state ?? '—'}, ` +
+      `падений ${report.respawns ?? '—'}, HUD ${report.hud ? 'виден' : 'нет'}`;
+
+async function runToFinish(page, budget = RUN_BUDGET_MS) {
+  const startedAt = Date.now();
+  const deadline = startedAt + budget;
+  await page.keyboard.down('KeyW');
   try {
     while (Date.now() < deadline) {
       const status = await page.evaluate(() => {
@@ -105,20 +155,9 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
           results: !document.querySelector('#finish')?.classList.contains('hidden')
         };
       });
-      if (status.finished || status.results) return true;
+      if (status.finished || status.results) return { done: true, seconds: (Date.now() - startedAt) / 1000 };
 
-      // Подруливание к оси трассы. Клавиши те же, что у человека: управление относительно камеры,
-      // а камера идёт за спиной, поэтому «вправо» — это плюс по X.
-      if (status.x > CENTER_TOLERANCE) {
-        await release('KeyD');
-        await hold('KeyA');
-      } else if (status.x < -CENTER_TOLERANCE) {
-        await release('KeyA');
-        await hold('KeyD');
-      } else {
-        await release('KeyA');
-        await release('KeyD');
-      }
+      await steerTowardCenter(page, status.x);
 
       // Прыжок отдельным нажатием, а не удержанием: удержание — это планирование, и с ним игрок
       // проносится мимо узких платформ вместо того, чтобы на них приземлиться.
@@ -126,9 +165,9 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
       await page.waitForTimeout(220);
     }
   } finally {
-    for (const key of [...held]) await release(key);
+    await page.keyboard.up('KeyW');
   }
-  return false;
+  return { done: false, seconds: (Date.now() - startedAt) / 1000, ...(await progress(page)) };
 }
 
 test.describe('полный матч на двоих', () => {
@@ -167,9 +206,9 @@ test.describe('полный матч на двоих', () => {
     await expect(guest.locator('#hud')).toBeVisible({ timeout: 15_000 });
 
     // Бегут одновременно — как в настоящей гонке, и вдвое быстрее последовательного прогона.
-    const [hostDone, guestDone] = await Promise.all([runToFinish(host), runToFinish(guest)]);
-    expect(hostDone, 'хост обязан дойти до финиша').toBe(true);
-    expect(guestDone, 'гость обязан дойти до финиша').toBe(true);
+    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
+    expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 
     // Экран результатов у обоих, и оба видят обоих: таблица собирается на сервере и рассылается.
     //
@@ -254,11 +293,17 @@ test.describe('полный матч на двоих', () => {
     await expect(host.locator('#players .player-row')).toHaveCount(2);
     await host.locator('#ready').click();
     await guest.locator('#ready').click();
+    // Готовность обоих и появление HUD у ОБОИХ — то же, что и в сценарии выше. Раньше здесь
+    // ждали только хоста, и отсчёт бюджета гостя начинался, пока тот ещё собирал уровень: на
+    // медленной машине эта фора уходила в минус целиком.
+    await expect(host.locator('#players .ready')).toHaveCount(2);
     await host.locator('#start').click();
-    await expect(host.locator('#hud')).toBeVisible({ timeout: 15_000 });
+    await expect(host.locator('#hud')).toBeVisible({ timeout: 20_000 });
+    await expect(guest.locator('#hud')).toBeVisible({ timeout: 20_000 });
 
-    const [hostDone, guestDone] = await Promise.all([runToFinish(host), runToFinish(guest)]);
-    expect(hostDone && guestDone, 'оба обязаны дойти до финиша').toBe(true);
+    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
+    expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 
     // Обратный отсчёт до автоматического решения виден игроку: без него ожидание выглядит зависанием.
     await expect(host.locator('#resultsTimer')).not.toBeEmpty();

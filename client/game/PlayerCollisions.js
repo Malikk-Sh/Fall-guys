@@ -1,8 +1,10 @@
+import { PLAYER_CROWD_RADIUS } from './PlayerDimensions.js';
+
 // Мягкое локальное разрешение столкновений. Сервер по-прежнему принимает только движение
 // владельца персонажа: чужой снапшот используется как подвижное препятствие, но никогда не
 // переписывается. Поэтому небольшая ошибка предсказания превращается в плавное расхождение, а не
 // в сетевой «пинг-понг» двух жёстких тел.
-export const PLAYER_RADIUS = 0.72;
+export const PLAYER_RADIUS = PLAYER_CROWD_RADIUS;
 const MAX_PUSH_SPEED = 2.8;
 const IMPULSE_TRANSFER = 0.16;
 const MAX_TOTAL_PUSH = 0.055;

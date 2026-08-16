@@ -51,6 +51,8 @@ const STATE_LIMITS = Object.freeze({
   dive: { reported: 19, observed: 40 },
   // Удар сверху гасит горизонтальную скорость втрое, но начаться может на любой.
   slam: { reported: 17, observed: 40 },
+  // После удара управление выключено, но импульс препятствия остаётся физически честным.
+  knockdown: { reported: 24, observed: 45 },
   // Упавший в кооперативе не двигается сам — его переносят.
   downed: { reported: 12, observed: 40 }
 });

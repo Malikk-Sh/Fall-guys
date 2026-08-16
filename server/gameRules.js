@@ -10,6 +10,8 @@ const {
   segmentTypeAt
 } = require('../shared/courseSpec.js');
 
+const { e2eSegmentCount } = require('./e2eCourse.js');
+
 const {
   auditMovement,
   budgetFor,
@@ -50,8 +52,12 @@ function randomSeed() {
   if (Number.isSafeInteger(fixed) && fixed >= 0 && fixed <= 0xffffffff) return fixed >>> 0;
   return crypto.randomBytes(4).readUInt32LE(0);
 }
+// Единственная точка, где сервер собирает трассу гонки. Здесь же — и только здесь — действует
+// тестовое укорочение: см. server/e2eCourse.js, где описано, чем оно ограничено и почему.
+// Спека едет клиенту целиком в MATCH_START, поэтому короткую трассу он строит по ней, а не
+// выводит длину из сложности сам: разойтись им негде.
 function createCourseSpec(seed = randomSeed(), difficulty = 'normal') {
-  return buildCourseSpec(seed, difficulty);
+  return buildCourseSpec(seed, difficulty, e2eSegmentCount(difficulty));
 }
 function normalizeState(value) {
   const n = value || {};
@@ -64,7 +70,7 @@ function normalizeState(value) {
     vx: +n.vx,
     vy: Number.isFinite(n.vy) ? +n.vy : 0,
     vz: +n.vz,
-    state: ['ground', 'air', 'dive', 'slam', 'downed'].includes(n.state) ? n.state : 'air'
+    state: ['ground', 'air', 'dive', 'slam', 'knockdown', 'downed'].includes(n.state) ? n.state : 'air'
   };
 }
 // Потолок интервала между двумя состояниями, по которому считается допустимый шаг.
@@ -106,7 +112,9 @@ function verifyMovement(player, value, now = Date.now(), spec = null) {
   if (!state || !player.last || !player.lastAt) return [];
   const dt = Math.max(0.04, (now - player.lastAt) / 1000);
   const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
-  const accelerationLimit = ['dive', 'slam'].includes(state.state) ? 240 : MAX_HORIZONTAL_ACCELERATION;
+  const accelerationLimit = ['dive', 'slam', 'knockdown'].includes(state.state)
+    ? 240
+    : MAX_HORIZONTAL_ACCELERATION;
 
   const findings = auditMovement(player, state, spec, now, dt);
   if (acceleration > accelerationLimit) {

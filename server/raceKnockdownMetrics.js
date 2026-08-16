@@ -57,13 +57,14 @@ function resetActive(state) {
   state.lastRepeatHitAt = null;
 }
 
-function ensurePlayerState(player) {
+function ensurePlayerState(player, spec) {
   const matchStartedAt = Number(player?.matchStartedAt) || 0;
   const current = player?.raceKnockdownMetricsState;
   if (current && current.matchStartedAt === matchStartedAt) return current;
 
   const created = {
     matchStartedAt,
+    course: spec?.difficulty || 'normal',
     active: false,
     activeStartedAt: null,
     activeSource: null,
@@ -99,30 +100,7 @@ function looksLikeRepeatImpact(previous, state) {
 function trackRaceKnockdownState({ player, spec, state, previousState = null, now = Date.now() } = {}) {
   if (!player || player.bot || !spec || !state) return false;
 
-  const tracked = ensurePlayerState(player);
-  const respawnAt = Number(player.lastRespawn) || 0;
-
-  if (respawnAt > tracked.lastRespawnAt) {
-    tracked.lastRespawnAt = respawnAt;
-    if (
-      tracked.lastStartedAt != null &&
-      tracked.lastFallCountedStartedAt !== tracked.lastStartedAt &&
-      respawnAt >= tracked.lastStartedAt &&
-      respawnAt - tracked.lastStartedAt <= KNOCKDOWN_FALL_WINDOW_MS
-    ) {
-      observe(
-        'knockdown_then_fall',
-        respawnAt - tracked.lastStartedAt,
-        player,
-        spec,
-        tracked.lastSource || sourceFor(spec, state)
-      );
-      tracked.lastFallCountedStartedAt = tracked.lastStartedAt;
-    }
-    // A respawn is not a normal get-up. Clear an active knockdown without emitting recovered.
-    if (tracked.active) resetActive(tracked);
-  }
-
+  const tracked = ensurePlayerState(player, spec);
   const isKnockdown = state.state === 'knockdown';
   if (isKnockdown && !tracked.active) {
     const source = sourceFor(spec, state);
@@ -161,8 +139,49 @@ function trackRaceKnockdownState({ player, spec, state, previousState = null, no
   return true;
 }
 
+// Called from the existing movement-history reset path. The race RESPawn handler sets
+// `player.lastRespawn` immediately before that reset, so the frustrating outcome is recorded even if
+// the browser disconnects before sending another player-state packet. Other resetHistory calls are
+// harmless because the respawn timestamp has not advanced; co-op players never create this state.
+function trackRaceKnockdownRespawn({ player, now = player?.lastRespawn } = {}) {
+  if (!player || player.bot) return false;
+  const tracked = player.raceKnockdownMetricsState;
+  if (!tracked) return false;
+
+  const respawnAt = Number(now) || 0;
+  if (respawnAt <= tracked.lastRespawnAt) return false;
+  tracked.lastRespawnAt = respawnAt;
+
+  if (
+    tracked.lastStartedAt != null &&
+    tracked.lastFallCountedStartedAt !== tracked.lastStartedAt &&
+    respawnAt >= tracked.lastStartedAt &&
+    respawnAt - tracked.lastStartedAt <= KNOCKDOWN_FALL_WINDOW_MS
+  ) {
+    observe(
+      'knockdown_then_fall',
+      respawnAt - tracked.lastStartedAt,
+      player,
+      { difficulty: tracked.course },
+      tracked.lastSource || 'unknown'
+    );
+    tracked.lastFallCountedStartedAt = tracked.lastStartedAt;
+  }
+
+  // Respawn is not a normal get-up. Clear an active knockdown without emitting recovered.
+  if (tracked.active) resetActive(tracked);
+  return true;
+}
+
 function drainRaceKnockdownMetrics(gameplay) {
   if (!gameplay || typeof gameplay.count !== 'function' || typeof gameplay.observe !== 'function') return 0;
+
+  // The normal GameplayMetrics.dropped field is the operator-visible signal for incomplete
+  // instrumentation. Fold queue overflow into it before resetting the local counter so an overloaded
+  // knockdown experiment cannot silently look complete.
+  if (dropped > 0 && Number.isFinite(gameplay.dropped)) gameplay.dropped += dropped;
+  dropped = 0;
+
   const events = pending.splice(0);
   for (const event of events) {
     if (event.kind === 'observe') gameplay.observe(event.metric, event.value, event.dimensions);
@@ -185,6 +204,7 @@ module.exports = {
   MAX_REPEAT_HITS_PER_KNOCKDOWN,
   REPEAT_HIT_MIN_GAP_MS,
   trackRaceKnockdownState,
+  trackRaceKnockdownRespawn,
   drainRaceKnockdownMetrics,
   raceKnockdownMetricsStatus,
   resetRaceKnockdownMetricsForTests

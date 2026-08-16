@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { PROTOCOL_VERSION } from '../shared/protocol.js';
 
 const require = createRequire(import.meta.url);
 const WebSocket = require('ws');
 const core = require('./index');
+const { PROTOCOL_VERSION } = require('../shared/protocol.js');
+
+// Клиент на версию старше текущей. Сервер принимает актуальную и предыдущую, и тесты проверяют
+// именно совместимость со «вчерашним» браузером. Раньше здесь стояло число 10, и после каждого
+// подъёма протокола эти девять тестов начинали падать по таймауту ожидания лобби — сообщение
+// отклонялось как VERSION_MISMATCH ещё до создания комнаты, и причина в отчёте не называлась.
+const PREVIOUS_PROTOCOL_VERSION = PROTOCOL_VERSION - 1;
 const { AuthService } = require('./auth');
 const { networkIdentity } = require('./networkIdentity');
 
@@ -72,11 +78,7 @@ test('real WebSocket AUTH consumes WST and room messages no longer carry credent
   core.accounts.rename(account.id, 'Support Renamed');
   const lobbyReply = waitFor(first, 'lobby');
   first.send(
-    JSON.stringify({
-      type: 'create',
-      name: 'Socket Integration',
-      protocolVersion: PROTOCOL_VERSION
-    })
+    JSON.stringify({ type: 'create', name: 'Socket Integration', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -109,11 +111,7 @@ test('late WebSocket AUTH synchronizes room identity and reconnect revocation', 
 
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({
-      type: 'create',
-      name: 'Anonymous Old',
-      protocolVersion: PROTOCOL_VERSION
-    })
+    JSON.stringify({ type: 'create', name: 'Anonymous Old', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -162,11 +160,7 @@ test('late WebSocket AUTH does not emit room-state while a match is already play
 
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({
-      type: 'create',
-      name: 'Before Auth',
-      protocolVersion: PROTOCOL_VERSION
-    })
+    JSON.stringify({ type: 'create', name: 'Before Auth', protocolVersion: PREVIOUS_PROTOCOL_VERSION })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -213,7 +207,7 @@ test('incident diagnostics follows authenticated socket lifecycle without storin
     JSON.stringify({
       type: 'create',
       name: 'Ignored Cached Name',
-      protocolVersion: PROTOCOL_VERSION
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
     })
   );
   await lobbyReply;
@@ -261,7 +255,7 @@ test('incident storage failure does not change the gameplay protocol response', 
       type: 'join',
       code: 'ZZZZZZ',
       name: account.name,
-      protocolVersion: PROTOCOL_VERSION
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
     })
   );
   const response = await errorReply;
@@ -293,7 +287,7 @@ test('blocked late WebSocket AUTH cannot resume the anonymous room slot', async 
     JSON.stringify({
       type: 'create',
       name: 'Anonymous Before Block',
-      protocolVersion: PROTOCOL_VERSION
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
     })
   );
   const lobby = await lobbyReply;
@@ -342,11 +336,7 @@ test('disconnect abandonment keeps original race context after room advances to 
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({
-      type: 'create',
-      name: account.name,
-      protocolVersion: PROTOCOL_VERSION
-    })
+    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PREVIOUS_PROTOCOL_VERSION })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -389,11 +379,7 @@ test('explicit LEAVE_ROOM during an active match records an immediate abandon in
   await authReply;
   const lobbyReply = waitFor(client, 'lobby');
   client.send(
-    JSON.stringify({
-      type: 'create',
-      name: account.name,
-      protocolVersion: PROTOCOL_VERSION
-    })
+    JSON.stringify({ type: 'create', name: account.name, protocolVersion: PREVIOUS_PROTOCOL_VERSION })
   );
   const lobby = await lobbyReply;
   const room = core.rooms.get(lobby.code);
@@ -435,7 +421,7 @@ test('operational drain records restart as the terminal matchmaking event', asyn
       type: 'findCoop',
       name: account.name,
       chapterId: '',
-      protocolVersion: PROTOCOL_VERSION
+      protocolVersion: PREVIOUS_PROTOCOL_VERSION
     })
   );
   await waitingReply;

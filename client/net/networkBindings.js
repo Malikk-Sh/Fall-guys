@@ -217,6 +217,9 @@ export function bindNetwork(game) {
     game.coopControl.receiveCoopEvent(message);
   });
   game.net.on('coopPing', message => game.coopControl.receivePing(message));
+  // Эмоция соседа по комнате. Сервер уже проверил владение, выбор и частоту; клиенту остаётся
+  // разрешить ID по каталогу и проиграть позу — ничего из сообщения он не применяет напрямую.
+  game.net.on('emote', message => game.receiveEmote(message));
   game.net.on('finish', message => {
     game.receiveFinish(message);
     // Личное время уже зафиксировано в finalTime, но гонка ещё идёт. Отпускаем elapsed обратно к

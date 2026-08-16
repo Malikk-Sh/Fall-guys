@@ -299,6 +299,13 @@ export async function equipAccountCosmetic(slot, cosmeticId, options) {
   return ok ? data.inventory || null : null;
 }
 
+// У эмоций не слот, а позиция: их четыре, и «слот эмоции» означал бы четыре псевдослота в общем
+// equip. Отдельный маршрут честнее и проверяется сервером так же строго.
+export async function equipAccountEmote(position, cosmeticId, options) {
+  const { ok, data } = await post('/api/cosmetics/emote', { position, cosmeticId }, options);
+  return ok ? data.inventory || null : null;
+}
+
 export async function avoidRecentPartner(targetAccountId, options) {
   const { ok, data } = await post('/api/social/avoid', { targetAccountId }, options);
   return ok ? data : null;

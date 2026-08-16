@@ -90,13 +90,42 @@ const CENTER_TOLERANCE = 0.8;
 // Сколько строк сейчас в таблице подтверждённых рекордов этой трассы. Сид и сложность фиксированы
 // конфигурацией, поэтому запрос детерминированный.
 async function countRecords(page) {
-  const response = await page.request.get('/leaderboard?seed=184&difficulty=easy&limit=25');
+  const response = await page.request.get('/leaderboard?seed=130&difficulty=easy&limit=25');
   expect(response.ok()).toBe(true);
   return (await response.json()).entries.length;
 }
 
+// Что видно снаружи о ходе забега. Нужно не для управления, а для сообщения об ошибке: «обязан
+// дойти до финиша» без единой цифры не даёт понять, встал ли водитель на препятствии, не начал ли
+// забег вовсе или просто не уложился в бюджет на медленной машине.
+const progress = page =>
+  page.evaluate(() => {
+    const game = window.__WOBBLE_GAME__;
+    const player = game?.player;
+    return {
+      x: player?.position?.x ?? null,
+      z: player?.position?.z ?? null,
+      checkpoint: player?.checkpoint ?? null,
+      finishZ: game?.course?.spec?.finishZ ?? null,
+      segments: game?.course?.spec?.segmentCount ?? null,
+      state: player?.snapshot?.().state ?? null,
+      respawns: player?.respawns ?? null,
+      finished: !!player?.finished,
+      hud: !document.querySelector('#hud')?.classList.contains('hidden'),
+      results: !document.querySelector('#finish')?.classList.contains('hidden')
+    };
+  });
+
+const describeRun = report =>
+  report.done
+    ? 'дошёл'
+    : `не дошёл за ${(report.seconds ?? 0).toFixed(0)} с: z=${report.z ?? '—'} из ${report.finishZ ?? '—'}, ` +
+      `чекпоинт ${report.checkpoint ?? '—'}/${report.segments ?? '—'}, состояние ${report.state ?? '—'}, ` +
+      `падений ${report.respawns ?? '—'}, HUD ${report.hud ? 'виден' : 'нет'}`;
+
 async function runToFinish(page, budget = RUN_BUDGET_MS) {
-  const deadline = Date.now() + budget;
+  const startedAt = Date.now();
+  const deadline = startedAt + budget;
   const held = new Set();
   const hold = async key => {
     if (held.has(key)) return;
@@ -120,7 +149,7 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
           results: !document.querySelector('#finish')?.classList.contains('hidden')
         };
       });
-      if (status.finished || status.results) return true;
+      if (status.finished || status.results) return { done: true, seconds: (Date.now() - startedAt) / 1000 };
 
       // Подруливание к оси трассы. Клавиши те же, что у человека: управление относительно камеры,
       // а камера идёт за спиной, поэтому «вправо» — это плюс по X.
@@ -143,7 +172,7 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
   } finally {
     for (const key of [...held]) await release(key);
   }
-  return false;
+  return { done: false, seconds: (Date.now() - startedAt) / 1000, ...(await progress(page)) };
 }
 
 test.describe('полный матч на двоих', () => {
@@ -182,9 +211,9 @@ test.describe('полный матч на двоих', () => {
     await expect(guest.locator('#hud')).toBeVisible({ timeout: 15_000 });
 
     // Бегут одновременно — как в настоящей гонке, и вдвое быстрее последовательного прогона.
-    const [hostDone, guestDone] = await Promise.all([runToFinish(host), runToFinish(guest)]);
-    expect(hostDone, 'хост обязан дойти до финиша').toBe(true);
-    expect(guestDone, 'гость обязан дойти до финиша').toBe(true);
+    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
+    expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 
     // Экран результатов у обоих, и оба видят обоих: таблица собирается на сервере и рассылается.
     //
@@ -269,11 +298,17 @@ test.describe('полный матч на двоих', () => {
     await expect(host.locator('#players .player-row')).toHaveCount(2);
     await host.locator('#ready').click();
     await guest.locator('#ready').click();
+    // Готовность обоих и появление HUD у ОБОИХ — то же, что и в сценарии выше. Раньше здесь
+    // ждали только хоста, и отсчёт бюджета гостя начинался, пока тот ещё собирал уровень: на
+    // медленной машине эта фора уходила в минус целиком.
+    await expect(host.locator('#players .ready')).toHaveCount(2);
     await host.locator('#start').click();
-    await expect(host.locator('#hud')).toBeVisible({ timeout: 15_000 });
+    await expect(host.locator('#hud')).toBeVisible({ timeout: 20_000 });
+    await expect(guest.locator('#hud')).toBeVisible({ timeout: 20_000 });
 
-    const [hostDone, guestDone] = await Promise.all([runToFinish(host), runToFinish(guest)]);
-    expect(hostDone && guestDone, 'оба обязаны дойти до финиша').toBe(true);
+    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
+    expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 
     // Обратный отсчёт до автоматического решения виден игроку: без него ожидание выглядит зависанием.
     await expect(host.locator('#resultsTimer')).not.toBeEmpty();

@@ -1,13 +1,23 @@
 // Подбор сида для сквозного браузерного теста.
 //
 // Гоняет ТОТ ЖЕ простой водитель, что живёт в e2e/full-match.spec.js — держит «вперёд», подруливает
-// к оси, жмёт прыжок — по настоящей физике клиента, но без браузера. Один прогон здесь занимает
-// доли секунды вместо минут, поэтому можно проверить сотни сочетаний «сид × тайминг».
+// к оси, жмёт прыжок, — по настоящей физике клиента, но без браузера. Один прогон здесь занимает
+// доли секунды вместо минут, поэтому можно проверить сотни сочетаний.
 //
 // Запуск: node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+//   SEEDS=200   сколько сидов перебрать
+//   ONLY=184    проверить один сид и показать разбивку по частоте кадров
 //
 // Это инструмент, а не тест: в наборе не участвует. Инвариант выбранного сида живёт в
 // server/e2eCourse.test.mjs.
+//
+// ГЛАВНОЕ ПРО МОДЕЛЬ. Первая редакция шагала ровно шестьдесят раз в секунду и считала фазу
+// препятствий по игровому времени. Подобранный ею сид обещал ноль падений, а в настоящем браузере
+// дал тридцать три. Причина в игровом цикле: физика идёт фиксированными шагами с потолком
+// MAX_SUBSTEPS на кадр, а фаза препятствий берётся из courseElapsed() — то есть по НАСТЕННЫМ часам
+// забега. При 10–15 кадрах в секунду, а именно столько выдают два Chromium на одной машине, игра
+// продвигается медленнее часов, и препятствия уходят вперёд относительно пройденного игроком пути.
+// Это другая трасса, а не та же самая помедленнее. Модель ниже воспроизводит цикл как есть.
 
 import * as THREE from 'three';
 import { createCourseSpec } from '/shared/courseSpec.js';
@@ -15,70 +25,123 @@ import { Course } from '../client/game/Course.js';
 import { Effects } from '../client/game/Effects.js';
 import { Player } from '../client/game/Player.js';
 
+// Оба числа — из client/main.js, и расходиться с ними нельзя: на них держится весь смысл модели.
 const FIXED_DT = 1 / 60;
+const MAX_SUBSTEPS = 5;
+
 const CENTER_TOLERANCE = 0.8;
 const DIFFICULTY = 'easy';
 const SEGMENTS = Number(process.env.SEGMENTS || 3);
 const BUDGET_SECONDS = 150;
-const LIMIT_STEPS = Math.round(BUDGET_SECONDS / FIXED_DT);
 
-// Период решения водителя в браузере плавает: обмен со страницей стоит по-разному, а на раннере CI
-// программный WebGL роняет FPS. Поэтому годным считается только сид, проходимый на ВСЁМ диапазоне.
-const PERIODS_MS = [160, 200, 240, 280, 320, 360, 400, 420];
-const PHASES = 8;
+// Кадры раннера: 10–15 — замер на двух Chromium, 60 — обычная машина. Годный сид обязан проходить
+// на всех, иначе тест зелёный только у разработчика.
+const FRAME_RATES = [10, 12, 15, 60];
+// Период решения водителя и задержка доставки: позиция читается одним обменом со страницей, клавиши
+// уходят следующим, и оба стоят по-разному.
+const PERIODS_MS = [220, 340, 460];
+const LATENCIES_MS = [60, 200];
+const PHASES = 3;
 
-function run(seed, periodMs, phaseSteps) {
+function run(seed, { fps, periodMs, latencyMs, phase }) {
   const scene = new THREE.Scene();
   const spec = createCourseSpec(seed, DIFFICULTY, SEGMENTS);
   const course = new Course(scene, spec, { quality: 'low' });
   const effects = new Effects(scene, 'low');
   const player = new Player(scene, course, effects);
 
-  const periodSteps = Math.max(1, Math.round(periodMs / 1000 / FIXED_DT));
+  const frameDt = 1 / fps;
   let inputX = 0;
   let jump = false;
   let respawns = 0;
+  let accumulator = 0;
+  let wall = 0;
+  let nextPoll = (phase / PHASES) * (periodMs / 1000);
+  // Решения в пути: посчитаны по позиции на момент опроса, применятся спустя задержку.
+  const inFlight = [];
 
   const input = {
     movement: () => ({ x: inputX, forward: 1, magnitude: 1 }),
-    consume: action => (action === 'jump' && jump ? ((jump = false), true) : false)
+    consume: action => (action === 'jump' && jump ? ((jump = false), true) : false),
+    isHeld: () => false
   };
 
-  let steps = 0;
-  let finished = false;
-  while (steps < LIMIT_STEPS) {
-    if ((steps + phaseSteps) % periodSteps === 0) {
+  while (wall < BUDGET_SECONDS && !player.finished) {
+    wall += frameDt;
+
+    if (wall >= nextPoll) {
+      nextPoll += periodMs / 1000;
       const x = player.position.x;
-      inputX = x > CENTER_TOLERANCE ? -1 : x < -CENTER_TOLERANCE ? 1 : 0;
+      inFlight.push({
+        at: wall + latencyMs / 1000,
+        x: x > CENTER_TOLERANCE ? -1 : x < -CENTER_TOLERANCE ? 1 : 0
+      });
+    }
+    while (inFlight.length && inFlight[0].at <= wall) {
+      inputX = inFlight.shift().x;
       jump = true;
     }
-    const elapsed = steps * FIXED_DT;
-    course.update(FIXED_DT, elapsed);
-    const before = player.respawns;
-    player.step(FIXED_DT, input, 0, elapsed);
-    if (player.respawns > before) respawns++;
-    steps++;
-    if (player.finished) {
-      finished = true;
-      break;
+
+    // Ровно цикл из client/main.js: фаза препятствий по настенным часам, физика — фиксированным
+    // шагом с потолком подшагов на кадр.
+    accumulator += frameDt;
+    let steps = 0;
+    while (accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+      course.update(FIXED_DT, wall);
+      const before = player.respawns;
+      player.step(FIXED_DT, input, 0, wall);
+      if (player.respawns > before) respawns++;
+      accumulator -= FIXED_DT;
+      steps++;
     }
+    if (steps === MAX_SUBSTEPS) accumulator = 0;
   }
 
-  const seconds = steps * FIXED_DT;
+  const finished = player.finished;
   player.dispose();
   course.dispose();
-  return { finished, seconds, respawns };
+  return { finished, seconds: wall, respawns };
 }
 
-const seeds = Number(process.env.SEEDS || 400);
-const results = [];
-for (let seed = 0; seed < seeds; seed++) {
-  let ok = true;
-  let worst = 0;
-  let falls = 0;
-  for (const periodMs of PERIODS_MS) {
-    for (let phase = 0; phase < PHASES; phase++) {
-      const attempt = run(seed, periodMs, phase);
+function modes() {
+  const list = [];
+  for (const fps of FRAME_RATES)
+    for (const periodMs of PERIODS_MS)
+      for (const latencyMs of LATENCIES_MS)
+        for (let phase = 0; phase < PHASES; phase++) list.push({ fps, periodMs, latencyMs, phase });
+  return list;
+}
+
+const only = process.env.ONLY ? Number(process.env.ONLY) : null;
+
+if (only !== null) {
+  const spec = createCourseSpec(only, DIFFICULTY, SEGMENTS);
+  console.log(`сид ${only}: ${spec.segments.map(s => `${s.type}/v${s.variant}`).join(' → ')}`);
+  const byFps = new Map(FRAME_RATES.map(fps => [fps, { passed: 0, total: 0, falls: 0, worst: 0 }]));
+  for (const mode of modes()) {
+    const attempt = run(only, mode);
+    const box = byFps.get(mode.fps);
+    box.total++;
+    box.falls += attempt.respawns;
+    if (attempt.finished) {
+      box.passed++;
+      box.worst = Math.max(box.worst, attempt.seconds);
+    }
+  }
+  for (const [fps, box] of byFps)
+    console.log(
+      `  ${String(fps).padStart(2)} кадров: ${box.passed}/${box.total}, худшее ${box.worst.toFixed(1)}с, падений ${box.falls}`
+    );
+} else {
+  const seeds = Number(process.env.SEEDS || 200);
+  const all = modes();
+  const results = [];
+  for (let seed = 0; seed < seeds; seed++) {
+    let ok = true;
+    let worst = 0;
+    let falls = 0;
+    for (const mode of all) {
+      const attempt = run(seed, mode);
       if (!attempt.finished) {
         ok = false;
         break;
@@ -86,17 +149,17 @@ for (let seed = 0; seed < seeds; seed++) {
       worst = Math.max(worst, attempt.seconds);
       falls += attempt.respawns;
     }
-    if (!ok) break;
+    if (!ok) continue;
+    const spec = createCourseSpec(seed, DIFFICULTY, SEGMENTS);
+    results.push({ seed, worst, falls, types: spec.segments.map(segment => segment.type) });
   }
-  if (!ok) continue;
-  const spec = createCourseSpec(seed, DIFFICULTY, SEGMENTS);
-  const types = spec.segments.map(segment => segment.type);
-  results.push({ seed, worst, falls, types });
-}
 
-results.sort((a, b) => a.falls - b.falls || a.worst - b.worst);
-console.log(`годных сидов: ${results.length} из ${seeds} (сегментов ${SEGMENTS}, ${DIFFICULTY})`);
-for (const item of results.slice(0, 25))
+  results.sort((a, b) => a.falls - b.falls || a.worst - b.worst);
   console.log(
-    `сид ${String(item.seed).padStart(3)}  худшее ${item.worst.toFixed(1)}с  падений ${String(item.falls).padStart(3)}  ${item.types.join(' → ')}`
+    `годных сидов: ${results.length} из ${seeds} (сегментов ${SEGMENTS}, ${DIFFICULTY}, режимов ${all.length})`
   );
+  for (const item of results.slice(0, 20))
+    console.log(
+      `сид ${String(item.seed).padStart(3)}  худшее ${item.worst.toFixed(1)}с  падений ${String(item.falls).padStart(4)}  ${item.types.join(' → ')}`
+    );
+}

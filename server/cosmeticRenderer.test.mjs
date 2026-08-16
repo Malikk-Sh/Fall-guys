@@ -167,7 +167,7 @@ test('цифровые призраки не клонируют персонаж
 test('следы каталога переживают сборку и уборку без утечки живых частиц', () => {
   const scene = new THREE.Group();
   const trails = COSMETIC_CATALOG.filter(item => item.slot === 'trail');
-  assert.equal(trails.length, 11, 'три унаследованных следа плюс восемь новых');
+  assert.equal(trails.length, 15, 'три унаследованных, восемь базовых и четыре milestone-следа');
   for (const item of trails) {
     const trail = createTrail(scene, item);
     const position = new THREE.Vector3();

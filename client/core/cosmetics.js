@@ -31,6 +31,7 @@ let serverInventory = null;
 let serverEquip = null;
 let serverEmoteEquip = null;
 let presetFallback = new Array(LOADOUT_PRESET_COUNT).fill(null);
+let presetFallbackActive = false;
 
 export function cosmeticLoadoutFromIds(loadout) {
   const safe = publicCosmeticLoadout(loadout);
@@ -53,6 +54,31 @@ export function setServerEmoteEquipHandler(handler) {
 
 export function serverInventorySnapshot() {
   return serverInventory;
+}
+
+function requestServerEquip(slot, cosmeticId, batch = null) {
+  if (batch) batch.push([slot, cosmeticId]);
+  else serverEquip?.(slot, cosmeticId);
+}
+
+// Один preset/random loadout может менять сразу несколько server-owned слотов. HTTP equip возвращает
+// целый inventory snapshot, поэтому параллельные запросы способны применить ответы в обратном порядке
+// и временно вернуть старый образ. Синхронные тестовые handlers по-прежнему вызываются сразу, а
+// реальные Promise-запросы после первого выполняются строго последовательно.
+function runServerEquipBatch(actions) {
+  const handler = serverEquip;
+  if (!handler || !actions.length) return;
+  let pending = null;
+  for (const [slot, cosmeticId] of actions) {
+    const invoke = () => handler(slot, cosmeticId);
+    if (pending) {
+      pending = pending.then(invoke, invoke);
+      continue;
+    }
+    const result = invoke();
+    if (result && typeof result.then === 'function') pending = Promise.resolve(result);
+  }
+  pending?.catch(() => {});
 }
 
 /**
@@ -114,14 +140,15 @@ export function equipCosmetic(
   progress = null,
   profile = null,
   storage = globalThis.localStorage,
-  inventory = serverInventory
+  inventory = serverInventory,
+  serverBatch = null
 ) {
   const item = unlockedCosmetics(progress, profile, inventory).find(candidate => candidate.id === id);
   if (!item || item.slot === EMOTE_SLOT) return readCosmetics(progress, profile, storage, inventory);
   const equipped = readCosmetics(progress, profile, storage, inventory);
   equipped[item.slot] = item.id;
   persist(storage, equipped);
-  if (inventory && !isLocalUnlock(item)) serverEquip?.(item.slot, item.id);
+  if (inventory && !isLocalUnlock(item)) requestServerEquip(item.slot, item.id, serverBatch);
   return equipped;
 }
 
@@ -130,14 +157,15 @@ export function unequipCosmetic(
   progress = null,
   profile = null,
   storage = globalThis.localStorage,
-  inventory = serverInventory
+  inventory = serverInventory,
+  serverBatch = null
 ) {
   const equipped = readCosmetics(progress, profile, storage, inventory);
   if (slot === 'body' || !COSMETIC_SLOTS.includes(slot)) return equipped;
   const previous = COSMETIC_BY_ID[equipped[slot]];
   equipped[slot] = null;
   persist(storage, equipped);
-  if (inventory && previous && !isLocalUnlock(previous)) serverEquip?.(slot, null);
+  if (inventory && previous && !isLocalUnlock(previous)) requestServerEquip(slot, null, serverBatch);
   return equipped;
 }
 
@@ -216,17 +244,22 @@ function normalizePresetList(value) {
   });
 }
 
+function fallbackPresets() {
+  return presetFallback.map(preset => (preset ? { ...preset } : null));
+}
+
 /**
  * Presets — локальное удобство, а не entitlement. Они содержат только канонические ID и при
  * применении всё равно проходят обычный applyLoadout → server equip.
  */
 export function readLoadoutPresets(storage = globalThis.localStorage) {
+  if (presetFallbackActive) return fallbackPresets();
   try {
     const raw = storage?.getItem(LOADOUT_PRESET_STORAGE_KEY);
     if (raw != null) return normalizePresetList(JSON.parse(raw));
     return new Array(LOADOUT_PRESET_COUNT).fill(null);
   } catch {
-    return presetFallback.map(preset => (preset ? { ...preset } : null));
+    return fallbackPresets();
   }
 }
 
@@ -236,9 +269,12 @@ export function saveLoadoutPreset(index, loadout, storage = globalThis.localStor
   if (!Number.isInteger(position) || position < 0 || position >= LOADOUT_PRESET_COUNT) return presets;
   presets[position] = loadout && typeof loadout === 'object' ? publicCosmeticLoadout(loadout) : null;
   presetFallback = presets.map(preset => (preset ? { ...preset } : null));
+  const serialized = JSON.stringify(presets);
   try {
-    storage?.setItem(LOADOUT_PRESET_STORAGE_KEY, JSON.stringify(presets));
+    storage?.setItem(LOADOUT_PRESET_STORAGE_KEY, serialized);
+    presetFallbackActive = storage?.getItem(LOADOUT_PRESET_STORAGE_KEY) !== serialized;
   } catch {
+    presetFallbackActive = true;
     // На устройстве без localStorage три образа продолжают работать до закрытия вкладки.
   }
   return presets;
@@ -332,14 +368,16 @@ export function applyLoadout(
   inventory = serverInventory
 ) {
   const unlocked = new Set(unlockedCosmetics(progress, profile, inventory).map(item => item.id));
+  const serverBatch = [];
   for (const slot of COSMETIC_SLOTS) {
     const id = loadout?.[slot] ?? null;
     if (id && unlocked.has(id) && COSMETIC_BY_ID[id]?.slot === slot) {
-      equipCosmetic(id, progress, profile, storage, inventory);
+      equipCosmetic(id, progress, profile, storage, inventory, serverBatch);
     } else if (slot !== 'body') {
-      unequipCosmetic(slot, progress, profile, storage, inventory);
+      unequipCosmetic(slot, progress, profile, storage, inventory, serverBatch);
     }
   }
+  runServerEquipBatch(serverBatch);
   return readCosmetics(progress, profile, storage, inventory);
 }
 

@@ -1,9 +1,10 @@
 // Проверка выбранного сида на широком диапазоне таймингов и вдвоём.
 //
-// Запуск: SEED=98 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedVerify.mjs
+// Запуск: SEED=130 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedVerify.mjs
 
 import * as THREE from 'three';
 import { createCourseSpec } from '/shared/courseSpec.js';
+import { raceSpawnFor } from '/shared/raceGrid.js';
 import { Course } from '../client/game/Course.js';
 import { Effects } from '../client/game/Effects.js';
 import { Player } from '../client/game/Player.js';
@@ -11,27 +12,40 @@ import { resolvePlayerCrowd } from '../client/game/PlayerCollisions.js';
 
 const FIXED_DT = 1 / 60;
 const CENTER_TOLERANCE = 0.8;
-const SEED = Number(process.env.SEED || 98);
+const STEER_PULSE_MS = 140;
+const STEER_PULSE_SECONDS = STEER_PULSE_MS / 1000;
+const SEED = Number(process.env.SEED || 130);
 const SEGMENTS = Number(process.env.SEGMENTS || 3);
 const LIMIT_STEPS = Math.round(150 / FIXED_DT);
 
-// Шире, чем при подборе: реальный период решения в браузере зависит от того, сколько стоит один
-// обмен со страницей, а на просевшем до 10 FPS раннере он растягивается сильно.
-const PERIODS_MS = [100, 140, 180, 220, 260, 300, 340, 380, 420, 460, 500, 560, 620, 700];
+// Trace настоящего красного CI показал, что цикл evaluate → keyboard → wait далеко не равен
+// номинальным 220 мс: медиана была около 0.9 с, отдельные циклы доходили примерно до 1.7 с.
+// Проверяем обе стороны этого диапазона. Сам боковой ввод при этом ограничен отдельным импульсом,
+// как и в браузерном водителе: редкий poll не превращается в многосекундно зажатую A/D.
+const PERIODS_MS = [300, 500, 700, 900, 1200, 1500, 1800];
 const PHASES = 8;
+const STEER_STEPS = Math.max(1, Math.round(STEER_PULSE_SECONDS / FIXED_DT));
 
 function driver(player) {
   let inputX = 0;
+  let steerSteps = 0;
   let jump = false;
   return {
     decide() {
       const x = player.position.x;
       inputX = x > CENTER_TOLERANCE ? -1 : x < -CENTER_TOLERANCE ? 1 : 0;
+      steerSteps = inputX === 0 ? 0 : STEER_STEPS;
       jump = true;
+    },
+    afterStep() {
+      if (steerSteps <= 0) return;
+      steerSteps--;
+      if (steerSteps === 0) inputX = 0;
     },
     input: {
       movement: () => ({ x: inputX, forward: 1, magnitude: 1 }),
-      consume: action => (action === 'jump' && jump ? ((jump = false), true) : false)
+      consume: action => (action === 'jump' && jump ? ((jump = false), true) : false),
+      isHeld: () => false
     }
   };
 }
@@ -42,10 +56,14 @@ function run(periodMs, phaseSteps, playerCount) {
   const course = new Course(scene, spec, { quality: 'low' });
   const effects = new Effects(scene, 'low');
   const players = Array.from({ length: playerCount }, () => new Player(scene, course, effects));
-  // Стартовая сетка: в настоящем матче участники стоят не в одной точке.
+
+  // Точная общая стартовая решётка из production-кода, а не приближение. Для двух участников это
+  // x = ±0.875 на одной линии Z; именно эти значения видны в CI trace до конца отсчёта.
   players.forEach((player, index) => {
-    if (index > 0) player.teleport(new THREE.Vector3(1.4 * index, spec.start.y, spec.start.z + 1.2));
+    const spawn = raceSpawnFor(spec, index, playerCount);
+    player.teleport(new THREE.Vector3(spawn.x, spawn.y, spawn.z));
   });
+
   const drivers = players.map(driver);
   const periodSteps = Math.max(1, Math.round(periodMs / 1000 / FIXED_DT));
 
@@ -59,6 +77,7 @@ function run(periodMs, phaseSteps, playerCount) {
       if (player.finished) return;
       const before = player.respawns;
       player.step(FIXED_DT, drivers[index].input, 0, elapsed);
+      drivers[index].afterStep();
       if (player.respawns > before) falls++;
     });
     // Мягкое расталкивание между участниками — ровно то, что делает клиент в настоящем матче.

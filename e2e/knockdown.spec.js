@@ -19,6 +19,34 @@ import { test, expect } from '@playwright/test';
 const KNOCKDOWN_MIN_MS = 1050;
 const RECOVERY_TIMEOUT_MS = 6000;
 
+// Сколько держать «вперёд», проверяя потерю управления, и с каким шагом смотреть на скорость.
+// Ряд обрывается сам, как только игрок встал: сбивание длится 1.05–1.65 с, а до этого места тест
+// успевает потратить непредсказуемое время на опросы состояния, и фиксированное окно уехало бы за
+// подъём. Под управлением даже пары кадров хватает, чтобы разгон стал видно.
+const HELD_SAMPLES = 8;
+const HELD_SAMPLE_MS = 80;
+// Запас на дрожь физики и на остаточную инерцию удара. Замер на самой физике: сбитый из состояния
+// покоя, удерживая «вперёд» эти полсекунды, при полной утечке управления набирает 7.70, при
+// четвертной — 1.77, а при исправном коде — ровно 0.00.
+//
+// Проверено внедрением поломки: с knockdownControl, поднятым до 1, этот тест падает с «разогнался
+// с 0.00 до 7.66». Отдельно взятая правка одного из двух гейтов (масштаб ввода и масштаб ускорения)
+// им НЕ ловится — второй продолжает гасить разгон. Тест стережёт свойство «потеря управления
+// действует», а не каждую строку по отдельности, и это ровно то, что он и обещает названием.
+const CONTROL_LEAK_TOLERANCE = 1.5;
+// А вот при какой начальной скорости проверка перестаёт что-либо значить: разогнанному почти до
+// беговой (7.7) утечка добавит лишь десятые доли, и порог выше её не отличит. Поэтому базовая
+// скорость проверяется отдельно — пусть тест скажет, что бессилен, а не промолчит.
+const CONTROL_CHECK_BASELINE_MAX = 2;
+
+// Скорость И остаток сбивания одним обменом со страницей: замер обязан относиться к тому же
+// мгновению, что и признак «ещё лежит», иначе окно наблюдения незаметно уедет за подъём.
+const sampleOf = page =>
+  page.evaluate(() => {
+    const player = window.__WOBBLE_GAME__.player;
+    return { speed: Math.hypot(player.velocity.x, player.velocity.z), down: player.knockdownTimer > 0 };
+  });
+
 async function setPlayerName(page, name) {
   await expect(page.locator('#accountName')).not.toHaveText('…', { timeout: 20_000 });
   await page.locator('#accountChip').click();
@@ -109,25 +137,47 @@ test.describe('сбивание с ног', () => {
       expect(knocked, 'удар прошёл').toBe(true);
       const knockedAt = Date.now();
 
-      // Сбитый действительно потерял управление: физика вернула состояние knockdown.
-      await expect
-        .poll(() => host.evaluate(() => window.__WOBBLE_GAME__.player.snapshot().state), {
-          timeout: 5000
-        })
-        .toBe('knockdown');
-
-      // И это увидел ВТОРОЙ клиент — то самое, ради чего сценарий браузерный.
-      await expect
-        .poll(() => remoteState(guest, hostId), { timeout: 5000, message: 'соперник видит сбитого' })
-        .toBe('knockdown');
-
-      // Пока сбит, управление не работает: «вперёд» не разгоняет.
-      await host.keyboard.down('KeyW');
-      const speedWhileDown = await host.evaluate(() => {
-        const v = window.__WOBBLE_GAME__.player.velocity;
-        return Math.hypot(v.x, v.z);
-      });
+      // Дальше два наблюдения за ОДНИМ И ТЕМ ЖЕ окном, поэтому они идут параллельно.
+      //
+      // Окно короткое — сбивание длится 1.05–1.65 с, — и последовательные опросы состояния съели бы
+      // его заметную часть: в первой редакции замер скорости уезжал за подъём и обвинял исправный
+      // код в утечке управления, показывая ровно беговые 7.70.
+      //
+      // Что проверяет каждое. Слева — что состояние пересекло сетевую границу и его видит ВТОРОЙ
+      // клиент; ради этого сценарий и браузерный. Справа — что сбитый действительно потерял
+      // управление: «вперёд» держится несколько кадров подряд, и под управлением скорость за это
+      // время ушла бы к беговой (ускорение по земле — 18 в секунду), а у сбитого остаётся лишь
+      // затухающая инерция удара. Одного замера сразу после нажатия для этого мало: клавиша к тому
+      // моменту ещё не дошла до шага физики, и «скорость не выросла» было бы правдой и при
+      // полностью сломанной блокировке.
+      const speeds = [];
+      await Promise.all([
+        expect
+          .poll(() => remoteState(guest, hostId), { timeout: 5000, message: 'соперник видит сбитого' })
+          .toBe('knockdown'),
+        (async () => {
+          await host.keyboard.down('KeyW');
+          for (let sample = 0; sample < HELD_SAMPLES; sample++) {
+            const now = await sampleOf(host);
+            // За подъём выходить нельзя: там разгон законен, и замер оттуда обвинил бы исправный код.
+            if (!now.down) break;
+            speeds.push(now.speed);
+            await host.waitForTimeout(HELD_SAMPLE_MS);
+          }
+        })()
+      ]);
       await host.keyboard.up('KeyW');
+      expect(speeds.length, 'нужен хотя бы один замер, снятый пока игрок ещё лежит').toBeGreaterThan(1);
+
+      const speedWhileDown = Math.max(...speeds);
+      expect(
+        speeds[0],
+        `сбитый уже двигался со скоростью ${speeds[0].toFixed(2)} — на таком разгоне утечка управления неотличима`
+      ).toBeLessThan(CONTROL_CHECK_BASELINE_MAX);
+      expect(
+        speedWhileDown,
+        `сбитый разогнался с ${speeds[0].toFixed(2)} до ${speedWhileDown.toFixed(2)} — управление не отключено`
+      ).toBeLessThan(speeds[0] + CONTROL_LEAK_TOLERANCE);
 
       // Подъём. Проверяется и то, что он вообще происходит, и то, что происходит НЕ мгновенно:
       // сбивание без длительности не отличалось бы от лёгкого толчка.
@@ -142,14 +192,10 @@ test.describe('сбивание с ног', () => {
       // Управление вернулось: тот же «вперёд» теперь разгоняет.
       await host.keyboard.down('KeyW');
       await expect
-        .poll(
-          () =>
-            host.evaluate(() => {
-              const v = window.__WOBBLE_GAME__.player.velocity;
-              return Math.hypot(v.x, v.z);
-            }),
-          { timeout: 5000, message: 'после подъёма управление работает' }
-        )
+        .poll(async () => (await sampleOf(host)).speed, {
+          timeout: 5000,
+          message: 'после подъёма управление работает'
+        })
         .toBeGreaterThan(speedWhileDown + 1);
       await host.keyboard.up('KeyW');
 

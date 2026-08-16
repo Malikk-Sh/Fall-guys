@@ -13,6 +13,7 @@
 ```text
 shared/cosmetics.js          собирает каталог, нормализует записи, публичные loadout
 shared/cosmeticContent.js    данные шестидесяти предметов Content & Customization 2.0
+shared/cosmeticMilestones.js бонусные награды коллекций за ступени 5/10/15
 shared/cosmeticMeta.js       редкости, коллекции, слоты, типы выдачи
 shared/cosmeticUnlocks.js    декларативный резолвер условий выдачи
 shared/cosmeticValidation.js проверка каталога (используется тестами)
@@ -89,7 +90,7 @@ common · rare · epic · legendary · mythic · prestige
 
 ## 4. Коллекции
 
-Четыре тематические коллекции по пятнадцать предметов:
+Четыре тематические коллекции по пятнадцать **базовых** предметов:
 
 ```text
 space-trouble  15   КОСМИЧЕСКИЕ НЕПРИЯТНОСТИ
@@ -99,9 +100,20 @@ pirate-panic   15   ПИРАТСКАЯ ПАНИКА
 ```
 
 Реестр — `COLLECTION_META`. Прогресс считает `collectionProgress(ownedIds)`: собранное, всего,
-процент, признак полноты и список мифических предметов коллекции.
+процент, признак полноты, список мифических предметов и отдельный массив `milestones`.
 
-Собранная коллекция даёт значок и ничего больше. Игрового бонуса за неё нет намеренно.
+У каждой коллекции есть три бонусные награды поверх исходных пятнадцати: за **5/15**, **10/15** и
+**15/15** подтверждённых базовых предметов. Ступень 15/15 — `prestige`. Эти двенадцать наград
+имеют `collectionReward: true` и **не входят обратно в знаменатель 15**: получение бонуса не может
+само приблизить следующую ступень.
+
+Milestone entitlement остаётся server-authoritative. `InventoryService.syncEntitlements()` сначала
+материализует обычные награды, затем читает фактические `account_cosmetics`, считает только базовые
+предметы каждой коллекции и выдаёт достигнутые milestones. Клиентская daily-награда может
+показываться как полученная, но не увеличивает server-owned счётчик и не может выдать milestone.
+
+Полная коллекция по-прежнему не даёт игрового преимущества: награда косметическая, а не gameplay-
+бонус.
 
 ---
 
@@ -127,7 +139,13 @@ unlock: { type: 'rewarded' }   // event | shop | pass — каталог гот�
 race.finishes   race.wins      race.podiums
 coop.matches    coop.chapters  coop.revives   coop.flawless   coop.ch10Runs
 daily.bestStreak
+collection.<collection-id>     // заполняется из server-owned inventory для milestones
 ```
+
+Collection milestones используют тот же декларативный `stat`-формат для UI, но generic
+`resolveServerGrants()` намеренно их пропускает: их вход — уже существующий server inventory, поэтому
+выдача выполняется отдельным проходом `InventoryService.syncEntitlements()` после подсчёта базовых
+предметов коллекции.
 
 ### Кто что решает
 
@@ -331,7 +349,8 @@ minimal  ≤3
 
 Что есть: превью с вращением пальцем и автоповоротом, вкладки категорий, фильтры (владение,
 редкость, коллекция, избранное), карточки с редкостью/коллекцией/требованием/пометкой «новое»,
-прогресс коллекций, случайный образ, ячейки эмоций, карточка нового предмета.
+прогресс коллекций с milestones 5/10/15, случайный образ, три локальных быстрых образа, ячейки
+эмоций, карточка нового предмета.
 
 **Паритет превью и игры** обеспечен конструкцией: `CosmeticPreview` создаёт тот же `Character` и тот
 же `CosmeticRenderer`, что и забег. Отдельной модели или отдельного набора иконок нет — им негде
@@ -340,6 +359,11 @@ minimal  ≤3
 **Примерка ≠ надевание.** Выбранный предмет подставляется в образ на превью, включая закрытый;
 сохранённый loadout меняется только по кнопке «Надеть» и только через обычный server-authoritative
 путь.
+
+Три быстрых образа хранят только канонические ID в `localStorage` и не являются ownership. При
+применении все server-owned изменения проходят обычный equip **последовательно**, чтобы ответы с
+целым inventory snapshot не могли приехать в обратном порядке и визуально откатить часть preset.
+Если запись preset в `localStorage` не удалась, актуальные три образа остаются в памяти вкладки.
 
 Избранное и список «уже показанных» предметов хранятся локально и **не являются entitlement**.
 Недоступный `localStorage` (приватный режим, переполненная квота) шкаф не ломает: он переходит на
@@ -350,7 +374,7 @@ minimal  ≤3
 ## 11. Как добавить новый cosmetic
 
 1. Добавить запись в `shared/cosmeticContent.js` (или в унаследованный список, если это правка
-   старого предмета).
+   старого предмета). Milestone-награды коллекций живут отдельно в `shared/cosmeticMilestones.js`.
 2. Выбрать существующий `render.kind` и подобрать параметры. Новый kind нужен редко.
 3. Указать `unlock` — тип и параметры.
 4. Если нужен новый kind: добавить его в `RENDER_KINDS` (`shared/cosmeticValidation.js`) и
@@ -381,12 +405,13 @@ minimal  ≤3
 ## 12. Тесты
 
 ```text
-server/cosmeticCatalog.test.mjs    состав каталога, валидация, счётчики, совместимость
-server/cosmeticRenderer.test.mjs   сборка всех предметов, LOD, бюджеты, уборка
-server/cosmetics.test.mjs          клиентская логика: владение, equip, фильтры, избранное
-server/inventory.test.mjs          server-authoritative выдача, back, эмоции, миграция
-server/socialCosmetics.test.mjs    санитизация публичного loadout
-server/emoteNetwork.test.mjs       сетевой контракт эмоций
+server/cosmeticCatalog.test.mjs          состав каталога, валидация, счётчики, совместимость
+server/customizationProgression.test.mjs milestones, presets, тексты условий, server ownership
+server/cosmeticRenderer.test.mjs         сборка всех предметов, LOD, бюджеты, уборка
+server/cosmetics.test.mjs                клиентская логика: владение, equip, фильтры, избранное
+server/inventory.test.mjs                server-authoritative выдача, back, эмоции, миграция
+server/socialCosmetics.test.mjs          санитизация публичного loadout
+server/emoteNetwork.test.mjs             сетевой контракт эмоций
 ```
 
 Запуск точечно:
@@ -394,7 +419,8 @@ server/emoteNetwork.test.mjs       сетевой контракт эмоций
 ```bash
 node --test server/inventory.test.mjs server/emoteNetwork.test.mjs
 node --experimental-loader ./server/client-loader.mjs --test \
-  server/cosmetics.test.mjs server/cosmeticCatalog.test.mjs server/cosmeticRenderer.test.mjs
+  server/cosmetics.test.mjs server/cosmeticCatalog.test.mjs server/customizationProgression.test.mjs \
+  server/cosmeticRenderer.test.mjs
 ```
 
 ---

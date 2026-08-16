@@ -8,7 +8,8 @@ Gameplay analytics отвечает на вопросы уровня игры и
 - где бросают матч;
 - какая глава хуже проходит;
 - чем отличаются mobile и desktop;
-- как меняется verified finish time.
+- как меняется verified finish time;
+- превращает ли race knockdown удар в короткий весёлый хаос или в серию повторных ударов и падение.
 
 Основной endpoint:
 
@@ -45,6 +46,10 @@ match_finished
 match_abandoned
 fall
 finish_time
+knockdown_started
+knockdown_recovered
+knockdown_then_fall
+knockdown_repeat_hit
 ```
 
 `device` имеет грубые категории `mobile` и `desktop`. Это инструмент сравнения touch/mobile против
@@ -58,6 +63,29 @@ desktop, а не детектор конкретной модели устрой
 - `detail` разделяет `verified` и `unverified`.
 
 Не смешивайте verified и unverified время в одном среднем.
+
+### Race knockdown
+
+Новый race knockdown не смешивается со старым co-op `playerDowned`. Это разные механики и разные
+состояния.
+
+- `knockdown_started` — сервер принял переход игрока в `state=knockdown`;
+- `knockdown_recovered` — сервер принял обычный выход из `knockdown`; `average` — сколько миллисекунд
+  прошло от начала сбивания до восстановления;
+- `knockdown_then_fall` — после knockdown сервер обработал настоящий respawn не позднее чем через
+  3 секунды; `average` — время от начала knockdown до respawn;
+- `knockdown_repeat_hit` — пока игрок уже лежал, между двумя принятыми сервером состояниями появился
+  новый сильный импульс, характерный для повторного удара препятствия.
+
+Для этих метрик `detail` — тип процедурного участка, определённый сервером по принятой позиции:
+например `bumpers`, `sweepers`, `punchers`. Это bounded набор из каталога сегментов, а не ID объекта
+или координаты.
+
+`knockdown_started`, `knockdown_recovered` и факт respawn опираются на состояние, уже прошедшее
+обычную серверную проверку, и серверный timestamp respawn. `knockdown_repeat_hit` — продуктовая
+эвристика по скачку скорости: она нужна для баланса, но не является доказательством конкретной
+коллизии. Ни одна knockdown-метрика не участвует в физике, выдаче наград, проверке результата или
+таблице рекордов.
 
 ## 3. Retention и cardinality
 
@@ -186,6 +214,37 @@ GROUP BY mode, course, device
 ORDER BY avg_ms;
 ```
 
+### Knockdown по препятствиям
+
+```sql
+SELECT
+  metric,
+  course,
+  detail AS obstacle_segment,
+  device,
+  SUM(samples) AS samples,
+  CASE
+    WHEN SUM(total) <> 0
+    THEN ROUND(1.0 * SUM(total) / SUM(samples))
+    ELSE NULL
+  END AS average_ms
+FROM gameplay_metrics
+WHERE day >= date('now', '-6 day')
+  AND mode = 'race'
+  AND metric IN (
+    'knockdown_started',
+    'knockdown_recovered',
+    'knockdown_then_fall',
+    'knockdown_repeat_hit'
+  )
+GROUP BY metric, course, detail, device
+ORDER BY metric, samples DESC;
+```
+
+Для первого решения по балансу смотрите как минимум на `started`, долю `then_fall`, число
+`repeat_hit` на одно начало и среднее время восстановления. Всегда сравнивайте mobile и desktop
+отдельно и показывайте sample count.
+
 ### Mobile vs desktop
 
 ```sql
@@ -259,16 +318,17 @@ Release / build:
 1. Starts / finishes
 2. Completion rate по mode/course/device
 3. Top fall hotspots
-4. Top abandon checkpoints
-5. Verified average finish time
-6. Доля unverified finish
-7. Mobile vs desktop
-8. dropped metric keys
-9. Technical health и restarts
-10. Moderation open/reviewing cases
-11. Выводы
-12. Что изменить
-13. Что измерить после следующего release
+4. Knockdown: starts / recovery / then-fall / repeat hits по obstacle segment и device
+5. Top abandon checkpoints
+6. Verified average finish time
+7. Доля unverified finish
+8. Mobile vs desktop
+9. dropped metric keys
+10. Technical health и restarts
+11. Moderation open/reviewing cases
+12. Выводы
+13. Что изменить
+14. Что измерить после следующего release
 ```
 
 Всегда показывайте sample count. Корреляцию не называйте причиной без дополнительного

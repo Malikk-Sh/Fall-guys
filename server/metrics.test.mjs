@@ -14,6 +14,13 @@ import { join } from 'node:path';
 const require = createRequire(import.meta.url);
 const { GameplayMetrics, deviceFromUserAgent } = require('./metrics');
 const { openDatabase } = require('./db');
+const {
+  MAX_PENDING_EVENTS,
+  trackRaceKnockdownState,
+  trackRaceKnockdownRespawn,
+  raceKnockdownMetricsStatus,
+  resetRaceKnockdownMetricsForTests
+} = require('./raceKnockdownMetrics');
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -162,6 +169,115 @@ test('пробел внутри значения нормализуется, а 
   assert.equal(row(summary, { course: 'узкий_поворот' }).detail, 'мост');
   assert.equal(row(summary, { course: 'узкий' }).detail, 'поворот_мост');
   assert.equal(summary.rows.length, 2, 'наборы измерений разные — значит, и строки разные');
+});
+
+test('race knockdown измеряет старт, повторный удар, восстановление и падение после удара', () => {
+  resetRaceKnockdownMetricsForTests();
+  const gameplay = memory();
+  const spec = {
+    difficulty: 'easy',
+    segmentCount: 1,
+    segments: [{ type: 'bumpers' }],
+    checkpoints: [-18],
+    finishZ: -31
+  };
+  const player = {
+    device: 'mobile',
+    matchStartedAt: 1000,
+    lastRespawn: 0
+  };
+
+  const start = { x: 0, y: 1, z: -11, vx: 10, vy: 6.2, vz: 0, state: 'knockdown' };
+  trackRaceKnockdownState({ player, spec, state: start, previousState: null, now: 2000 });
+
+  const repeat = { ...start, vx: -10, vy: 6, state: 'knockdown' };
+  trackRaceKnockdownState({ player, spec, state: repeat, previousState: start, now: 2300 });
+
+  const recovered = { ...repeat, vx: -3, vy: 0, state: 'ground' };
+  trackRaceKnockdownState({ player, spec, state: recovered, previousState: repeat, now: 3400 });
+
+  const second = { ...start, vx: 9, vy: 5, state: 'knockdown' };
+  trackRaceKnockdownState({ player, spec, state: second, previousState: recovered, now: 5000 });
+  player.lastRespawn = 6500;
+  assert.equal(trackRaceKnockdownRespawn({ player, now: 6500 }), true);
+  assert.equal(
+    trackRaceKnockdownRespawn({ player, now: 6500 }),
+    false,
+    'один server-side respawn не должен засчитываться дважды'
+  );
+
+  const summary = gameplay.summary({ days: 1 });
+  assert.equal(row(summary, { metric: 'knockdown_started', detail: 'bumpers' }).samples, 2);
+  assert.equal(row(summary, { metric: 'knockdown_repeat_hit', detail: 'bumpers' }).samples, 1);
+  assert.equal(row(summary, { metric: 'knockdown_recovered', detail: 'bumpers' }).samples, 1);
+  assert.equal(row(summary, { metric: 'knockdown_recovered', detail: 'bumpers' }).average, 1400);
+  assert.equal(row(summary, { metric: 'knockdown_then_fall', detail: 'bumpers' }).samples, 1);
+  assert.equal(row(summary, { metric: 'knockdown_then_fall', detail: 'bumpers' }).average, 1500);
+  resetRaceKnockdownMetricsForTests();
+});
+
+test('race knockdown ограничивает число inferred repeat hits на одно сбивание', () => {
+  resetRaceKnockdownMetricsForTests();
+  const gameplay = memory();
+  const spec = {
+    difficulty: 'chaos',
+    segmentCount: 1,
+    segments: [{ type: 'punchers' }],
+    checkpoints: [-18],
+    finishZ: -31
+  };
+  const player = { device: 'desktop', matchStartedAt: 2000, lastRespawn: 0 };
+  let previous = { x: 0, y: 1, z: -11, vx: 10, vy: 5, vz: 0, state: 'knockdown' };
+  trackRaceKnockdownState({ player, spec, state: previous, now: 3000 });
+
+  for (let index = 0; index < 7; index += 1) {
+    const next = { ...previous, vx: index % 2 === 0 ? -10 : 10, vy: 5, state: 'knockdown' };
+    trackRaceKnockdownState({
+      player,
+      spec,
+      state: next,
+      previousState: previous,
+      now: 3300 + index * 300
+    });
+    previous = next;
+  }
+
+  const summary = gameplay.summary({ days: 1 });
+  assert.equal(
+    row(summary, { metric: 'knockdown_repeat_hit', detail: 'punchers' }).samples,
+    4,
+    'аномальный поток не может раздувать один knockdown бесконечными повторными ударами'
+  );
+  resetRaceKnockdownMetricsForTests();
+});
+
+test('переполнение knockdown queue попадает в общий dropped signal', () => {
+  resetRaceKnockdownMetricsForTests();
+  const gameplay = memory();
+  const spec = {
+    difficulty: 'easy',
+    segmentCount: 1,
+    segments: [{ type: 'bumpers' }],
+    checkpoints: [-18],
+    finishZ: -31
+  };
+  const state = { x: 0, y: 1, z: -11, vx: 10, vy: 5, vz: 0, state: 'knockdown' };
+
+  for (let index = 0; index <= MAX_PENDING_EVENTS; index += 1) {
+    trackRaceKnockdownState({
+      player: { device: 'desktop', matchStartedAt: index + 1, lastRespawn: 0 },
+      spec,
+      state,
+      now: 10_000 + index
+    });
+  }
+
+  assert.deepEqual(raceKnockdownMetricsStatus(), { pending: MAX_PENDING_EVENTS, dropped: 1 });
+  const summary = gameplay.summary({ days: 1 });
+  assert.equal(summary.dropped, 1, 'оператор видит потерю knockdown telemetry в обычном dropped поле');
+  assert.equal(row(summary, { metric: 'knockdown_started', detail: 'bumpers' }).samples, MAX_PENDING_EVENTS);
+  assert.deepEqual(raceKnockdownMetricsStatus(), { pending: 0, dropped: 0 });
+  resetRaceKnockdownMetricsForTests();
 });
 
 test('устройство различает палец и мышь', () => {

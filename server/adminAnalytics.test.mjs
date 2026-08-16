@@ -5,7 +5,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { openDatabase } = require('./db');
 const { GameplayMetrics } = require('./metrics');
-const { AdminAnalytics, MAX_DAYS, normalizeFilter, periodFor } = require('./adminAnalytics');
+const {
+  AdminAnalytics,
+  MAX_DAYS,
+  normalizeFilter,
+  periodFor,
+  summarizeKnockdowns
+} = require('./adminAnalytics');
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -115,6 +121,16 @@ test('admin analytics compares equal completed-day windows and keeps today out o
     unverifiedFinishes: 0,
     verifiedAverageMs: 24_000
   });
+  assert.deepEqual(report.knockdowns.current, {
+    started: 0,
+    recovered: 0,
+    recoveredPercent: null,
+    thenFall: 0,
+    thenFallPercent: null,
+    repeatHits: 0,
+    averageRecoveryMs: null,
+    averageTimeToFallMs: null
+  });
   assert.equal(report.kpis.previous.started, 2);
   assert.equal(report.kpis.previous.finished, 1);
   assert.equal(report.kpis.previous.falls, 1);
@@ -158,6 +174,26 @@ test('admin analytics compares equal completed-day windows and keeps today out o
   assert.equal(today.comparisonReason, 'current-day-incomplete');
   assert.equal(today.kpis.previous, null);
   db.close();
+});
+
+test('admin knockdown summary keeps outcomes, repeats and durations separate', () => {
+  const rows = [
+    { metric: 'knockdown_started', detail: 'bumpers', samples: 10, total: 0 },
+    { metric: 'knockdown_recovered', detail: 'bumpers', samples: 7, total: 8400 },
+    { metric: 'knockdown_then_fall', detail: 'bumpers', samples: 3, total: 4500 },
+    { metric: 'knockdown_repeat_hit', detail: 'bumpers', samples: 4, total: 0 },
+    { metric: 'knockdown_recovered', detail: 'punchers', samples: 1, total: 1600 }
+  ];
+  assert.deepEqual(summarizeKnockdowns(rows), {
+    started: 10,
+    recovered: 8,
+    recoveredPercent: 80,
+    thenFall: 3,
+    thenFallPercent: 30,
+    repeatHits: 4,
+    averageRecoveryMs: 1250,
+    averageTimeToFallMs: 1500
+  });
 });
 
 test('admin analytics bounds periods, rows and untrusted filter strings', () => {

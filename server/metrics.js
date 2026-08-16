@@ -1,3 +1,7 @@
+'use strict';
+
+const { drainRaceKnockdownMetrics } = require('./raceKnockdownMetrics');
+
 // Игровые метрики: сколько раз что случилось, с разбивкой и без потерь при перезапуске.
 //
 // До этого счётчики были плоскими числами в памяти процесса: «падений 4312». Такое число не
@@ -130,6 +134,10 @@ class GameplayMetrics {
   // Сброс накопленного в базу. Возвращает число записанных ключей — по нему видно, работает ли
   // сброс вообще.
   flush() {
+    // Knockdown transitions are observed in the race movement verifier, which intentionally does
+    // not own the GameplayMetrics instance. Drain that tiny bounded product-event queue here so
+    // it shares the same batching, retention and cardinality guarantees as every other metric.
+    drainRaceKnockdownMetrics(this);
     if (!this.db || !this.pending.size) return 0;
     const day = dayKey(this.now());
     const entries = [...this.pending.values()];

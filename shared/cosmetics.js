@@ -1,12 +1,12 @@
 // Канонический каталог косметики. Он используется и браузером, и серверным inventory, поэтому
 // cosmetic id/slot/unlock не могут разъехаться между двумя независимыми списками.
 //
-// Каталог собирается из двух частей: унаследованные предметы (ниже, в исходном порядке — их ID и
-// поля нельзя ни переименовать, ни переосмыслить) и контент Content & Customization 2.0 из
-// shared/cosmeticContent.js. Единственный источник правды по-прежнему один: разделение на файлы
-// чисто механическое, второго каталога не появилось.
+// Каталог собирается из унаследованных предметов, шестидесяти предметов Content & Customization
+// 2.0 и бонусных milestone-наград. Единственный источник правды по-прежнему один: разделение на
+// файлы чисто механическое, второго каталога не появилось.
 
 import { NEW_COSMETIC_CONTENT } from './cosmeticContent.js';
+import { COLLECTION_MILESTONE_COSMETICS } from './cosmeticMilestones.js';
 import {
   ALL_COSMETIC_SLOTS,
   COLLECTIONS,
@@ -219,17 +219,22 @@ function normalize(item) {
 
 export const COSMETIC_CATALOG = Object.freeze([
   ...LEGACY_COSMETICS.map(normalize),
-  ...NEW_COSMETIC_CONTENT.map(normalize)
+  ...NEW_COSMETIC_CONTENT.map(normalize),
+  ...COLLECTION_MILESTONE_COSMETICS.map(normalize)
 ]);
 
 export const COSMETIC_BY_ID = Object.freeze(
   Object.fromEntries(COSMETIC_CATALOG.map(item => [item.id, item]))
 );
 
-// Предметы, добавленные Content & Customization 2.0. Отдельный список нужен тестам и шкафу
-// («новое»), но каталог остаётся один — это просто выборка из него.
+// Предметы, добавленные Content & Customization 2.0. Milestone-награды намеренно не входят в этот
+// список: исходный контент остаётся ровно шестьюдесятью предметами и четыре коллекции — по 15.
 export const NEW_COSMETIC_IDS = Object.freeze(
   COSMETIC_CATALOG.filter(item => item.expansion === 'customization-2').map(item => item.id)
+);
+
+export const COLLECTION_MILESTONE_IDS = Object.freeze(
+  COSMETIC_CATALOG.filter(item => item.collectionReward).map(item => item.id)
 );
 
 export const DEFAULT_COSMETIC_LOADOUT = Object.freeze({
@@ -247,8 +252,16 @@ export function cosmeticsForSlot(slot) {
   return COSMETIC_CATALOG.filter(item => item.slot === slot);
 }
 
+// Базовые предметы коллекции. Milestone-награды относятся к теме, но не могут считать сами себя в
+// прогресс: иначе награда за 5 предметов превращала 5/15 в 6/15 без нового коллекционного предмета.
 export function cosmeticsInCollection(collection) {
-  return COSMETIC_CATALOG.filter(item => item.collection === collection);
+  return COSMETIC_CATALOG.filter(item => item.collection === collection && !item.collectionReward);
+}
+
+export function collectionRewards(collection) {
+  return COSMETIC_CATALOG.filter(item => item.collection === collection && item.collectionReward).sort(
+    (a, b) => Number(a.unlock?.gte || 0) - Number(b.unlock?.gte || 0)
+  );
 }
 
 /**
@@ -300,8 +313,8 @@ export function cosmeticDetailMode(item, level = 'full') {
 }
 
 /**
- * Прогресс по коллекциям. Возвращает по записи на каждую коллекцию — даже пустую, чтобы шкаф не
- * приходилось учить, какие коллекции «уже бывают», а какие ещё нет.
+ * Прогресс по четырём базовым коллекциям. Milestone-награды возвращаются отдельно и не меняют
+ * знаменатель 15 — это бонусы за прогресс, а не новые требования для самих себя.
  */
 export function collectionProgress(ownedIds = []) {
   const owned = ownedIds instanceof Set ? ownedIds : new Set(ownedIds);
@@ -314,7 +327,15 @@ export function collectionProgress(ownedIds = []) {
       owned: ownedCount,
       percent: items.length ? Math.round((ownedCount / items.length) * 100) : 0,
       complete: items.length > 0 && ownedCount === items.length,
-      mythic: items.filter(item => item.rarity === 'mythic').map(item => item.id)
+      mythic: items.filter(item => item.rarity === 'mythic').map(item => item.id),
+      milestones: collectionRewards(collection.id).map(item => ({
+        id: item.id,
+        name: item.name,
+        rarity: item.rarity,
+        threshold: Number(item.unlock?.gte || 0),
+        reached: ownedCount >= Number(item.unlock?.gte || 0),
+        owned: owned.has(item.id)
+      }))
     };
   });
 }

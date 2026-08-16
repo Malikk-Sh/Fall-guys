@@ -11,10 +11,7 @@ const {
 } = require('../shared/courseSpec.js');
 
 const { e2eSegmentCount } = require('./e2eCourse.js');
-const {
-  trackRaceKnockdownState,
-  trackRaceKnockdownRespawn
-} = require('./raceKnockdownMetrics.js');
+const { trackRaceKnockdownState, trackRaceKnockdownRespawn } = require('./raceKnockdownMetrics.js');
 
 const {
   auditMovement,

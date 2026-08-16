@@ -54,6 +54,30 @@ function summarizeKpis(rows) {
   };
 }
 
+function summarizeKnockdowns(rows) {
+  const metricRows = metric => rows.filter(row => row.metric === metric);
+  const samples = metric => metricRows(metric).reduce((sum, row) => sum + Number(row.samples || 0), 0);
+  const average = metric => {
+    const list = metricRows(metric);
+    const count = list.reduce((sum, row) => sum + Number(row.samples || 0), 0);
+    const total = list.reduce((sum, row) => sum + Number(row.total || 0), 0);
+    return count > 0 ? Math.round(total / count) : null;
+  };
+  const started = samples('knockdown_started');
+  const recovered = samples('knockdown_recovered');
+  const thenFall = samples('knockdown_then_fall');
+  return {
+    started,
+    recovered,
+    recoveredPercent: started > 0 ? Math.round((recovered / started) * 1000) / 10 : null,
+    thenFall,
+    thenFallPercent: started > 0 ? Math.round((thenFall / started) * 1000) / 10 : null,
+    repeatHits: samples('knockdown_repeat_hit'),
+    averageRecoveryMs: average('knockdown_recovered'),
+    averageTimeToFallMs: average('knockdown_then_fall')
+  };
+}
+
 function buildTrend(rows, from, days) {
   const byDay = new Map();
   for (let offset = 0; offset < days; offset += 1) {
@@ -195,6 +219,10 @@ class AdminAnalytics {
         current: summarizeKpis(currentKpiRows),
         previous: previousKpiRows ? summarizeKpis(previousKpiRows) : null
       },
+      knockdowns: {
+        current: summarizeKnockdowns(currentKpiRows),
+        previous: previousKpiRows ? summarizeKnockdowns(previousKpiRows) : null
+      },
       trend: buildTrend(trendRows, period.from, periodDays),
       hotspots: {
         falls: fallHotspots,
@@ -270,5 +298,6 @@ module.exports = {
   clampDays,
   normalizeFilter,
   summarizeKpis,
+  summarizeKnockdowns,
   periodFor
 };

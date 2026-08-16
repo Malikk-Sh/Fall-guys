@@ -11,6 +11,7 @@ const {
 } = require('../shared/courseSpec.js');
 
 const { e2eSegmentCount } = require('./e2eCourse.js');
+const { trackRaceKnockdownState } = require('./raceKnockdownMetrics.js');
 
 const {
   auditMovement,
@@ -109,7 +110,9 @@ const MAX_MOVEMENT_ANOMALIES = DEFAULT_ANOMALY_BUDGET;
 
 function verifyMovement(player, value, now = Date.now(), spec = null) {
   const state = normalizeState(value);
-  if (!state || !player.last || !player.lastAt) return [];
+  if (!state) return [];
+  trackRaceKnockdownState({ player, spec, state, previousState: player.last, now });
+  if (!player.last || !player.lastAt) return [];
   const dt = Math.max(0.04, (now - player.lastAt) / 1000);
   const acceleration = Math.hypot(state.vx - (player.last.vx || 0), state.vz - (player.last.vz || 0)) / dt;
   const accelerationLimit = ['dive', 'slam', 'knockdown'].includes(state.state)

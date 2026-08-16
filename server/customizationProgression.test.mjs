@@ -66,6 +66,10 @@ test('закрытые предметы объясняют действие че
     unlockRequirementText(COSMETIC_BY_ID['space-orbit-visor']),
     'Соберите 5 подтверждённых предметов коллекции «КОСМОС»'
   );
+  assert.equal(
+    unlockRequirementText(COSMETIC_BY_ID['podium-trail']),
+    'Попадите в тройку в гонке, где финишировали минимум 3 игрока'
+  );
   assert.equal(unlockRequirementText(COSMETIC_BY_ID['space-void']), 'Награда за просмотр · скоро');
   assert.equal(unlockRequirementText(COSMETIC_BY_ID['neon-gl1tch']), 'Событие · скоро');
 });
@@ -154,6 +158,62 @@ test('три loadout presets хранят только канонические 
     calls.some(([, id]) => id === 'space-astronaut'),
     false
   );
+  setServerCosmeticEquipHandler(null);
+});
+
+test('preset остаётся доступен в сессии, если storage не сохранил запись', () => {
+  const failedStorage = {
+    getItem: () => null,
+    setItem() {
+      throw new Error('quota exceeded');
+    }
+  };
+  saveLoadoutPreset(1, { body: 'classic', back: 'space-oxygen-pack' }, failedStorage);
+  assert.equal(readLoadoutPresets(failedStorage)[1].back, 'space-oxygen-pack');
+
+  // Успешная запись возвращает обычный persisted-режим и не оставляет fallback включённым навсегда.
+  const healthyStorage = memory();
+  saveLoadoutPreset(1, { body: 'classic', back: null }, healthyStorage);
+  assert.equal(readLoadoutPresets(healthyStorage)[1].back, null);
+});
+
+test('multi-slot loadout отправляет server equip последовательно', async () => {
+  const storage = memory();
+  const calls = [];
+  const releases = [];
+  setServerCosmeticEquipHandler((slot, id) => {
+    calls.push([slot, id]);
+    return new Promise(resolve => releases.push(resolve));
+  });
+  const inventory = {
+    ownedIds: ['classic', 'space-astronaut', 'space-oxygen-pack'],
+    equipped: {
+      body: 'classic',
+      visor: null,
+      antenna: null,
+      back: null,
+      trail: null,
+      finish: null
+    }
+  };
+
+  applyLoadout(
+    { body: 'space-astronaut', visor: null, antenna: null, back: 'space-oxygen-pack', trail: null, finish: null },
+    null,
+    null,
+    storage,
+    inventory
+  );
+  assert.deepEqual(calls, [['body', 'space-astronaut']], 'второй запрос ждёт первого ответа');
+
+  releases.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [
+    ['body', 'space-astronaut'],
+    ['back', 'space-oxygen-pack']
+  ]);
+  releases.shift()();
+  await new Promise(resolve => setImmediate(resolve));
   setServerCosmeticEquipHandler(null);
 });
 

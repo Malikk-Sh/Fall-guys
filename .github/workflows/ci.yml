@@ -34,19 +34,13 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
-      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
-      # в успешную проверку и фактически отключал защиту от merge markers.
+      # Временный диагностический шаг этого PR: runner печатает ровно тот diff, который сделал бы
+      # установленный в проекте Prettier. После переноса diff в исходник этот блок удаляется.
       - name: Check formatting and merge artifacts
         run: |
-          npm run format:check
-          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' \
-            --exclude-dir=node_modules \
-            --exclude-dir=.git \
-            .; then
-            echo "Merge conflict markers found"
-            exit 1
-          fi
+          npx prettier --write e2e/menu-polish.spec.js
+          git diff -- e2e/menu-polish.spec.js
+          exit 1
 
       - name: Validate production scripts
         run: bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh deploy/verify-shared443-config.sh

@@ -1,9 +1,15 @@
 import { test, expect } from '@playwright/test';
 
-test('PWA регистрируется, не кэширует health и показывает offline shell', async ({ page, context }) => {
+test('PWA регистрируется, предпочитает landscape, не кэширует health и показывает offline shell', async ({
+  page,
+  context
+}) => {
   await page.goto('/');
   const manifest = await page.evaluate(async () => (await fetch('/manifest.webmanifest')).json());
+  // Fullscreen manifest mode остаётся intentionally deferred до smoke на реальных installed PWA.
+  // DOM Fullscreen API покрывается отдельно и не должен подменять эту проверку.
   expect(manifest.display).toBe('standalone');
+  expect(manifest.orientation).toBe('landscape');
   expect(manifest.start_url).toBe('/');
   expect(manifest.icons.some(icon => icon.purpose === 'maskable')).toBeTruthy();
 

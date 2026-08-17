@@ -34,6 +34,10 @@ export default defineConfig({
       name: 'mobile-chromium',
       use: {
         ...devices['Pixel 7'],
+        // Продукт теперь landscape-first: базовый мобильный проект проверяет именно рабочую
+        // ориентацию. Portrait остаётся отдельным explicit case в mobile-landscape.spec.js.
+        viewport: { width: 915, height: 412 },
+        screen: { width: 915, height: 412 },
         launchOptions,
         extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
       }

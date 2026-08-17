@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-test('manifest делает Wobble Rush устанавливаемым standalone PWA', async () => {
+test('manifest делает Wobble Rush устанавливаемым landscape-first standalone PWA', async () => {
   const manifest = JSON.parse(await readFile('client/manifest.webmanifest', 'utf8'));
   assert.equal(manifest.start_url, '/');
   assert.equal(manifest.scope, '/');
+  // display=fullscreen intentionally ждёт real-device installed-PWA smoke; DOM fullscreen живёт отдельно.
   assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.orientation, 'landscape');
   assert.equal(manifest.theme_color, '#4b35b7');
   assert.ok(manifest.icons.some(icon => icon.sizes === '192x192'));
   assert.ok(manifest.icons.some(icon => icon.sizes === '512x512'));

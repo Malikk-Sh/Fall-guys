@@ -356,7 +356,7 @@ function makeDisclosure({ panel, primary, controls, id, label }) {
     drawer.classList.toggle('hidden', !open);
     toggle.setAttribute('aria-expanded', String(open));
     toggle.textContent = `${label} ${open ? '⌄' : '›'}`;
-    if (open && !prefersReducedMotion()) animateCardEnter(drawer, null);
+    if (open) animateCardEnter(drawer, globalThis.__WOBBLE_GAME__?.ui || null);
   };
 
   toggle.addEventListener('click', () => setOpen(toggle.getAttribute('aria-expanded') !== 'true'));
@@ -457,6 +457,12 @@ function installModeMotion(ui) {
       token++;
       exitAnimation?.cancel();
       enterAnimation?.cancel();
+      exitAnimation = null;
+      enterAnimation = null;
+      MODE_ORDER.forEach(id => {
+        const panel = $(`#${id}`);
+        if (panel) panel.style.pointerEvents = '';
+      });
       original(mode);
       return;
     }
@@ -529,7 +535,7 @@ function installScreenMotion(ui) {
         return;
       }
       if (id === 'menu') {
-        animate(
+        const animation = animate(
           $('#menu .menu-card'),
           [
             { opacity: 0, transform: 'translateX(-14px) scale(.99)' },
@@ -538,6 +544,9 @@ function installScreenMotion(ui) {
           { duration: MOTION.screenEnter, easing: 'cubic-bezier(.16,.9,.28,1.1)' },
           ui
         );
+        Promise.resolve(animation?.finished || Promise.resolve())
+          .catch(() => {})
+          .then(() => animation?.cancel());
         return;
       }
       if (id !== 'finish') return;
@@ -688,17 +697,33 @@ function installSoundToggle(game) {
   if (!button || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
 
+  let lastAudibleMaster = Number(game.audio.volumes.master || 0);
+  if (lastAudibleMaster <= 0) lastAudibleMaster = 0.8;
+
   const sync = () => {
-    const silent = game.audio.muted || Number(game.audio.volumes.master || 0) <= 0;
+    const master = Number(game.audio.volumes.master || 0);
+    if (master > 0) lastAudibleMaster = master;
+    const silent = game.audio.muted || master <= 0;
     button.textContent = silent ? '🔇' : '🔊';
-    button.setAttribute('aria-pressed', String(game.audio.muted));
-    button.setAttribute('aria-label', game.audio.muted ? 'Включить звук' : 'Выключить звук');
-    button.title = game.audio.muted ? 'Включить звук' : 'Выключить звук';
+    button.setAttribute('aria-pressed', String(silent));
+    button.setAttribute('aria-label', silent ? 'Включить звук' : 'Выключить звук');
+    button.title = silent ? 'Включить звук' : 'Выключить звук';
   };
 
   button.addEventListener('click', () => {
     game.audio.unlock();
-    game.audio.setMuted(!game.audio.muted);
+    const master = Number(game.audio.volumes.master || 0);
+    const silent = game.audio.muted || master <= 0;
+    if (silent) {
+      if (master <= 0) {
+        game.audio.setVolume('master', lastAudibleMaster);
+        const slider = $('#vol-master');
+        if (slider) slider.value = String(lastAudibleMaster);
+      }
+      game.audio.setMuted(false);
+    } else {
+      game.audio.setMuted(true);
+    }
     sync();
   });
   $('#vol-master')?.addEventListener('input', sync);

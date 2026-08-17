@@ -91,6 +91,8 @@ test('два браузера видят server-owned косметику дру�
   await host.locator('#profileClose').click();
   const hostCosmetic = await equipServerCosmetic(host, `social-host-${testInfo.project.name}-${Date.now()}`);
   await host.locator('[data-mode="coop"]').click();
+  await host.locator('#coopFriendsToggle').click();
+  await expect(host.locator('#coopCreate')).toBeVisible();
   await host.locator('#coopCreate').click();
   await expect(host.locator('#lobby')).toBeVisible();
   const code = (await host.locator('#roomCode').textContent()).trim();
@@ -98,12 +100,14 @@ test('два браузера видят server-owned косметику дру�
 
   await guest.goto(`/?room=${code}&mode=coop`);
   await expect(guest.locator('[data-mode="coop"]')).toHaveClass(/active/);
-  await expect(guest.locator('#coopCode')).toHaveValue(code);
   await setPlayerName(guest, 'Гость E2E');
   const guestCosmetic = await equipServerCosmetic(
     guest,
     `social-guest-${testInfo.project.name}-${Date.now()}`
   );
+  await guest.locator('#coopFriendsToggle').click();
+  await expect(guest.locator('#coopCode')).toBeVisible();
+  await expect(guest.locator('#coopCode')).toHaveValue(code);
   await guest.locator('#coopJoin').click();
 
   await expect(host.locator('#players .player-row')).toHaveCount(2);

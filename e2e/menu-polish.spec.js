@@ -22,6 +22,19 @@ test.describe('полировка главного меню', () => {
     await expect(page.locator('#soundToggle')).toHaveAttribute('aria-pressed', 'true');
     expect(await page.evaluate(() => window.__WOBBLE_GAME__.audio.muted)).toBe(true);
 
+    await page.locator('#soundToggle').click();
+    expect(await page.evaluate(() => window.__WOBBLE_GAME__.audio.muted)).toBe(false);
+    await page.evaluate(() => window.__WOBBLE_GAME__.audio.setVolume('master', 0));
+    await page.locator('#vol-master').dispatchEvent('input');
+    await expect(page.locator('#soundToggle')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#soundToggle').click();
+    const recoveredAudio = await page.evaluate(() => ({
+      muted: window.__WOBBLE_GAME__.audio.muted,
+      master: window.__WOBBLE_GAME__.audio.volumes.master
+    }));
+    expect(recoveredAudio.muted).toBe(false);
+    expect(recoveredAudio.master).toBeGreaterThan(0);
+
     await page.locator('#openSettings').click();
     await expect(page.locator('#settings')).toBeVisible();
     await expect(page.locator('#settings #vol-master')).toBeVisible();
@@ -69,7 +82,7 @@ test.describe('полировка главного меню', () => {
     await expect(page.locator('#coopCode')).toBeVisible();
   });
 
-  test('режим reduced motion превращает смену вкладки почти в мгновенную', async ({ page }) => {
+  test('режим reduced motion отключает и вкладки, и раскрытие private room', async ({ page }) => {
     await openMenu(page);
     await page.evaluate(() => window.__WOBBLE_GAME__.settings.set('motion', 'reduced'));
     await page.locator('[data-mode="multi"]').click();
@@ -78,5 +91,33 @@ test.describe('полировка главного меню', () => {
       .locator('#multi')
       .evaluate(node => node.getAnimations().filter(animation => animation.playState === 'running').length);
     expect(activeAnimations).toBe(0);
+
+    await page.locator('#raceFriendsToggle').click();
+    const drawerAnimations = await page
+      .locator('#raceFriendsTogglePanel')
+      .evaluate(node => node.getAnimations().filter(animation => animation.playState === 'running').length);
+    expect(drawerAnimations).toBe(0);
+  });
+
+  test('отмена перехода не оставляет mode panel заблокированной', async ({ page }) => {
+    await openMenu(page);
+    await page.locator('[data-mode="multi"]').click();
+    await page.locator('[data-mode="single"]').click();
+    await expect(page.locator('#single')).toBeVisible();
+    expect(await page.locator('#single').evaluate(node => node.style.pointerEvents)).toBe('');
+  });
+
+  test('desktop menu после entrance motion остаётся вертикально центрированным', async ({
+    page
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', 'desktop-only geometry invariant');
+    await openMenu(page);
+    await page.evaluate(() => window.__WOBBLE_GAME__.ui.show('menu'));
+    await page.waitForTimeout(250);
+    const offset = await page.locator('#menu .menu-card').evaluate(node => {
+      const rect = node.getBoundingClientRect();
+      return Math.abs(rect.top + rect.height / 2 - window.innerHeight / 2);
+    });
+    expect(offset).toBeLessThan(4);
   });
 });

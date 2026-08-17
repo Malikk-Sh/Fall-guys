@@ -41,34 +41,33 @@ test.describe('полировка главного меню', () => {
     await expect(page.locator('#code')).toBeVisible();
   });
 
-  test(
-    'в коопе карточка сама выбирает главу, а private room раскрывается вторым уровнем',
-    async ({ page }) => {
-      await openMenu(page);
-      await page.locator('[data-mode="coop"]').click();
-      await expect(page.locator('#coop')).toBeVisible();
+  test('в коопе карточка сама выбирает главу, а private room раскрывается вторым уровнем', async ({
+    page
+  }) => {
+    await openMenu(page);
+    await page.locator('[data-mode="coop"]').click();
+    await expect(page.locator('#coop')).toBeVisible();
 
-      // Старого дублирующего select в живом интерфейсе больше нет.
-      await expect(page.locator('#coopChapter')).toHaveCount(0);
-      await expect(page.locator('#coopCreate')).toBeHidden();
-      await expect(page.locator('#coopCode')).toBeHidden();
+    // Старого дублирующего select в живом интерфейсе больше нет.
+    await expect(page.locator('#coopChapter')).toHaveCount(0);
+    await expect(page.locator('#coopCreate')).toBeHidden();
+    await expect(page.locator('#coopCode')).toBeHidden();
 
-      const chapter = page.locator('.campaign-card[data-chapter="ch4"]');
-      await chapter.click();
-      await expect(chapter).toHaveClass(/selected/);
-      await expect(chapter).toHaveAttribute('aria-pressed', 'true');
-      await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 4');
+    const chapter = page.locator('.campaign-card[data-chapter="ch4"]');
+    await chapter.click();
+    await expect(chapter).toHaveClass(/selected/);
+    await expect(chapter).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 4');
 
-      await page.locator('#coopAnyChapter').check();
-      await expect(page.locator('#coopFind')).toContainText('НАЙТИ НАПАРНИКА');
-      await page.locator('#coopAnyChapter').uncheck();
-      await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 4');
+    await page.locator('#coopAnyChapter').check();
+    await expect(page.locator('#coopFind')).toContainText('НАЙТИ НАПАРНИКА');
+    await page.locator('#coopAnyChapter').uncheck();
+    await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 4');
 
-      await page.locator('#coopFriendsToggle').click();
-      await expect(page.locator('#coopCreate')).toBeVisible();
-      await expect(page.locator('#coopCode')).toBeVisible();
-    }
-  );
+    await page.locator('#coopFriendsToggle').click();
+    await expect(page.locator('#coopCreate')).toBeVisible();
+    await expect(page.locator('#coopCode')).toBeVisible();
+  });
 
   test('режим reduced motion превращает смену вкладки почти в мгновенную', async ({ page }) => {
     await openMenu(page);

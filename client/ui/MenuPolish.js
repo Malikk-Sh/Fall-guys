@@ -3,8 +3,8 @@ import { GAME_MODE } from '/shared/protocol.js';
 const $ = selector => document.querySelector(selector);
 const MODE_ORDER = ['single', 'multi', 'coop'];
 
-// Пять повторяемых жестов вместо десятков несвязанных transition/animation. Значения короткие:
-// интерфейс должен ощущаться живым, но никогда не заставлять игрока ждать декоративное движение.
+// Пять стандартных жестов интерфейса. Длительности короткие намеренно: motion должен объяснять
+// переход, а не заставлять игрока ждать украшение.
 const MOTION = Object.freeze({
   screenExit: 120,
   screenEnter: 180,
@@ -14,7 +14,7 @@ const MOTION = Object.freeze({
 });
 
 const STYLE = `
-/* Visual polish: одно главное действие на экран + единый motion language. */
+/* Главное меню: одно главное действие, остальное уходит на второй уровень. */
 body.menu-polish .feature-pills,
 body.menu-polish #single .profile-strip,
 body.menu-polish #coop .coop-profile,
@@ -55,6 +55,7 @@ body.menu-polish .menu-disclosure {
   cursor: pointer;
   transition: color 120ms ease, background 120ms ease;
 }
+
 body.menu-polish .menu-disclosure:hover,
 body.menu-polish .menu-disclosure:focus-visible,
 body.menu-polish .menu-disclosure[aria-expanded='true'] {
@@ -71,6 +72,7 @@ body.menu-polish .private-room-panel {
   background: rgba(17, 10, 56, 0.34);
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
 }
+
 body.menu-polish .private-room-panel .button-primary {
   min-height: 46px;
   font-size: 0.8rem;
@@ -88,8 +90,7 @@ body.menu-polish .coop-lead {
   line-height: 1.42;
 }
 
-/* Карточка и есть выбор главы. Невыбранные остаются компактной картой кампании, выбранная
-   раскрывает механику и статистику, после чего взгляд естественно падает на единственную CTA. */
+/* Карточка — единственный выбор главы. Невыбранные компактны, выбранная раскрывает детали. */
 body.menu-polish .campaign-card {
   transition:
     border-color 140ms ease,
@@ -97,10 +98,12 @@ body.menu-polish .campaign-card {
     box-shadow 140ms ease,
     transform 140ms ease;
 }
+
 body.menu-polish .campaign-card:not(.selected) .campaign-preview,
 body.menu-polish .campaign-card:not(.selected) .campaign-stats {
   display: none;
 }
+
 body.menu-polish .campaign-card.selected {
   grid-column: 1 / -1;
   padding: 12px;
@@ -112,9 +115,11 @@ body.menu-polish .campaign-card.selected {
     inset 0 0 0 1px var(--cyan),
     0 8px 24px rgba(10, 7, 42, 0.2);
 }
+
 body.menu-polish .campaign-card.selected .campaign-copy b {
   font-size: 0.72rem;
 }
+
 body.menu-polish .campaign-card.selected .campaign-copy small {
   white-space: normal;
 }
@@ -131,9 +136,11 @@ body.menu-polish .menu-footer {
   gap: 7px;
   margin-top: 12px;
 }
+
 body.menu-polish .menu-footer .icon-button {
   min-width: 0;
 }
+
 body.menu-polish #soundToggle {
   width: 42px;
   padding-inline: 0;
@@ -144,6 +151,7 @@ body.menu-polish #soundToggle {
 body.menu-polish .settings-card {
   overflow-y: auto;
 }
+
 body.menu-polish .settings-essentials {
   display: grid;
   gap: 9px;
@@ -153,48 +161,55 @@ body.menu-polish .settings-essentials {
   border-radius: 15px;
   background: rgba(255, 255, 255, 0.055);
 }
+
 body.menu-polish .settings-essentials-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
+
 body.menu-polish .settings-essentials-head strong {
   color: var(--yellow);
   font-size: 0.7rem;
   letter-spacing: 0.09em;
 }
+
 body.menu-polish .settings-essentials-head small {
   color: rgba(255, 255, 255, 0.45);
   font-size: 0.52rem;
   text-align: right;
 }
+
 body.menu-polish .settings-essentials .audio-panel {
   display: grid !important;
   margin: 0;
   padding: 0;
-  background: transparent;
   border: 0;
+  background: transparent;
 }
+
 body.menu-polish .settings-essentials #quality {
   width: 100%;
   min-height: 38px;
 }
 
-/* Motion language. WAAPI двигает экраны/карточки, а reward-reveal удобнее задать каскадом CSS:
-   данные результатов записываются синхронно, затем на следующем кадре проявляются в одном ритме. */
+/* reward-reveal: затемнение → медаль → результат → детали. */
 .motion-result-reveal #medal {
   animation: motion-reward-reveal 420ms cubic-bezier(0.18, 0.9, 0.3, 1.25) 40ms both !important;
 }
+
 .motion-result-reveal #finishEyebrow,
 .motion-result-reveal #finishTitle {
   animation: motion-result-line 180ms ease-out 145ms both;
 }
+
 .motion-result-reveal #finishTime,
 .motion-result-reveal #unrankedNote,
 .motion-result-reveal #finishStats {
   animation: motion-result-line 180ms ease-out 235ms both;
 }
+
 .motion-result-reveal #finishHighlights,
 .motion-result-reveal #board,
 .motion-result-reveal #again,
@@ -206,41 +221,71 @@ body.menu-polish .settings-essentials #quality {
 .motion-result-reveal .back {
   animation: motion-result-line 180ms ease-out 320ms both;
 }
+
 #finish:not(.hidden) {
   background: rgba(27, 15, 73, 0.1);
   animation: motion-result-dim 140ms ease-out both;
 }
+
 .motion-button-confirm {
   animation: motion-button-confirm 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2) !important;
 }
 
 @keyframes motion-result-dim {
-  from { background: rgba(27, 15, 73, 0); }
-  to { background: rgba(27, 15, 73, 0.1); }
+  from {
+    background: rgba(27, 15, 73, 0);
+  }
+  to {
+    background: rgba(27, 15, 73, 0.1);
+  }
 }
+
 @keyframes motion-reward-reveal {
-  0% { opacity: 0; transform: translateY(-22px) rotate(-12deg) scale(0.55); }
-  70% { opacity: 1; transform: translateY(2px) rotate(2deg) scale(1.06); }
-  100% { opacity: 1; transform: none; }
+  0% {
+    opacity: 0;
+    transform: translateY(-22px) rotate(-12deg) scale(0.55);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(2px) rotate(2deg) scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
 }
+
 @keyframes motion-result-line {
-  from { opacity: 0; transform: translateY(8px) scale(0.985); }
-  to { opacity: 1; transform: none; }
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
+
 @keyframes motion-button-confirm {
-  0% { transform: scale(1); }
-  45% { transform: scale(0.96); }
-  72% { transform: scale(1.025); }
-  100% { transform: scale(1); }
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(0.96);
+  }
+  72% {
+    transform: scale(1.025);
+  }
+  100% {
+    transform: scale(1);
+  }
 }
 
 @media (max-width: 620px) {
   body.menu-polish .screen-menu {
     padding-inline: calc(16px + var(--safe-right)) calc(16px + var(--safe-left));
   }
-  body.menu-polish .menu-card {
-    width: min(458px, calc(100vw - 32px));
-  }
+
   body.menu-polish .campaign-grid {
     gap: 6px;
   }
@@ -251,10 +296,38 @@ body.menu-polish .settings-essentials #quality {
     transition: none;
   }
 }
+
 body.reduced-motion.menu-polish .campaign-card {
   transition: none;
 }
 `;
+
+function prefersReducedMotion(ui = null) {
+  if (ui?.settings) return Boolean(ui.settings.reducedMotion);
+  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+}
+
+function animate(node, keyframes, options, ui = null) {
+  if (!node || prefersReducedMotion(ui) || typeof node.animate !== 'function') return null;
+  try {
+    return node.animate(keyframes, { fill: 'both', ...options });
+  } catch {
+    return null;
+  }
+}
+
+function animateCardEnter(node, ui, delay = 0) {
+  return animate(
+    node,
+    [
+      { opacity: 0, transform: 'translateY(9px) scale(.94)' },
+      { opacity: 1, transform: 'translateY(-1px) scale(1.012)', offset: 0.72 },
+      { opacity: 1, transform: 'none' }
+    ],
+    { duration: MOTION.cardEnter, delay, easing: 'cubic-bezier(.18,.88,.28,1.15)' },
+    ui
+  );
+}
 
 function installStyles() {
   if ($('#menuPolishStyles')) return;
@@ -285,6 +358,7 @@ function makeDisclosure({ panel, primary, controls, id, label }) {
     toggle.textContent = `${label} ${open ? '⌄' : '›'}`;
     if (open && !prefersReducedMotion()) animateCardEnter(drawer, null);
   };
+
   toggle.addEventListener('click', () => setOpen(toggle.getAttribute('aria-expanded') !== 'true'));
   primary.addEventListener('click', () => setOpen(false));
   setOpen(false);
@@ -310,8 +384,7 @@ function simplifyMarkup() {
     label: 'ИГРАТЬ С ДРУЗЬЯМИ'
   });
 
-  const chapterSelect = $('#coopChapter');
-  chapterSelect?.closest('label')?.classList.add('legacy-chapter-picker');
+  $('#coopChapter')?.closest('label')?.classList.add('legacy-chapter-picker');
 
   const settingsCard = $('#settings .settings-card');
   const audio = $('.audio-panel');
@@ -333,6 +406,7 @@ function simplifyMarkup() {
   settingsScreen?.querySelector('.settings-card')?.setAttribute('aria-label', 'Настройки');
   const settingsEyebrow = settingsScreen?.querySelector('.eyebrow');
   if (settingsEyebrow) settingsEyebrow.textContent = 'НАСТРОЙКИ';
+
   const settingsButton = $('#openSettings');
   if (settingsButton) {
     settingsButton.textContent = 'НАСТРОЙКИ';
@@ -351,35 +425,12 @@ function simplifyMarkup() {
     footer.insertBefore(sound, settingsButton || footer.firstChild);
   }
 
-  if ($('#connectStatus')) $('#connectStatus').textContent = 'Быстрый подбор соберёт соперников автоматически.';
-  if ($('#coopStatus')) $('#coopStatus').textContent = 'Выберите главу — напарника найдём автоматически.';
-}
-
-function prefersReducedMotion(ui = null) {
-  if (ui?.settings) return Boolean(ui.settings.reducedMotion);
-  return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-}
-
-function animate(node, keyframes, options, ui = null) {
-  if (!node || prefersReducedMotion(ui) || typeof node.animate !== 'function') return null;
-  try {
-    return node.animate(keyframes, { fill: 'both', ...options });
-  } catch {
-    return null;
+  if ($('#connectStatus')) {
+    $('#connectStatus').textContent = 'Быстрый подбор соберёт соперников автоматически.';
   }
-}
-
-function animateCardEnter(node, ui, delay = 0) {
-  return animate(
-    node,
-    [
-      { opacity: 0, transform: 'translateY(9px) scale(.94)' },
-      { opacity: 1, transform: 'translateY(-1px) scale(1.012)', offset: 0.72 },
-      { opacity: 1, transform: 'none' }
-    ],
-    { duration: MOTION.cardEnter, delay, easing: 'cubic-bezier(.18,.88,.28,1.15)' },
-    ui
-  );
+  if ($('#coopStatus')) {
+    $('#coopStatus').textContent = 'Выберите главу — напарника найдём автоматически.';
+  }
 }
 
 function syncModeTabs(mode) {
@@ -400,7 +451,7 @@ function installModeMotion(ui) {
 
   ui.selectMode = mode => {
     const target = $(`#${mode}`);
-    const currentId = MODE_ORDER.find(id => ! $(`#${id}`)?.classList.contains('hidden'));
+    const currentId = MODE_ORDER.find(id => !$(`#${id}`)?.classList.contains('hidden'));
     const current = currentId ? $(`#${currentId}`) : null;
     if (!target || current === target || prefersReducedMotion(ui) || typeof target.animate !== 'function') {
       token++;
@@ -428,22 +479,25 @@ function installModeMotion(ui) {
       ui
     );
 
-    const finishExit = exitAnimation?.finished || Promise.resolve();
-    Promise.resolve(finishExit)
+    Promise.resolve(exitAnimation?.finished || Promise.resolve())
       .catch(() => {})
       .then(() => {
         if (mine !== token) return;
+        exitAnimation?.cancel();
+        exitAnimation = null;
         current.classList.add('hidden');
         current.style.pointerEvents = '';
-        current.style.opacity = '';
-        current.style.transform = '';
         target.classList.remove('hidden');
         target.style.pointerEvents = 'none';
         enterAnimation = animate(
           target,
           [
             { opacity: 0, transform: `translateX(${18 * direction}px) scale(.985)` },
-            { opacity: 1, transform: `translateX(${-2 * direction}px) scale(1.006)`, offset: 0.72 },
+            {
+              opacity: 1,
+              transform: `translateX(${-2 * direction}px) scale(1.006)`,
+              offset: 0.72
+            },
             { opacity: 1, transform: 'none' }
           ],
           { duration: MOTION.screenEnter, easing: 'cubic-bezier(.16,.9,.28,1.14)' },
@@ -453,6 +507,8 @@ function installModeMotion(ui) {
           .catch(() => {})
           .then(() => {
             if (mine !== token) return;
+            enterAnimation?.cancel();
+            enterAnimation = null;
             target.style.pointerEvents = '';
             if (mode === 'coop') animateCampaignCards(ui);
           });
@@ -468,8 +524,11 @@ function installScreenMotion(ui) {
     original(id);
     if (!id || prefersReducedMotion(ui)) return;
     requestAnimationFrame(() => {
-      if (id === 'lobby') animateCardEnter($('#lobby .lobby-card'), ui);
-      else if (id === 'menu') {
+      if (id === 'lobby') {
+        animateCardEnter($('#lobby .lobby-card'), ui);
+        return;
+      }
+      if (id === 'menu') {
         animate(
           $('#menu .menu-card'),
           [
@@ -479,15 +538,15 @@ function installScreenMotion(ui) {
           { duration: MOTION.screenEnter, easing: 'cubic-bezier(.16,.9,.28,1.1)' },
           ui
         );
-      } else if (id === 'finish') {
-        const card = $('#finish .finish-card');
-        animateCardEnter(card, ui);
-        if (card) {
-          card.classList.remove('motion-result-reveal');
-          void card.offsetWidth;
-          card.classList.add('motion-result-reveal');
-        }
+        return;
       }
+      if (id !== 'finish') return;
+      const card = $('#finish .finish-card');
+      animateCardEnter(card, ui);
+      if (!card) return;
+      card.classList.remove('motion-result-reveal');
+      void card.offsetWidth;
+      card.classList.add('motion-result-reveal');
     });
   };
 }
@@ -513,22 +572,20 @@ function installButtonMotion(ui) {
   });
 
   const unlock = $('#unlockToast');
-  if (unlock) {
-    new MutationObserver(() => {
-      if (!unlock.classList.contains('hidden')) {
-        animate(
-          unlock,
-          [
-            { opacity: 0, transform: 'translateY(16px) scale(.84)' },
-            { opacity: 1, transform: 'translateY(-2px) scale(1.04)', offset: 0.72 },
-            { opacity: 1, transform: 'none' }
-          ],
-          { duration: MOTION.rewardReveal, easing: 'cubic-bezier(.18,.9,.3,1.2)' },
-          ui
-        );
-      }
-    }).observe(unlock, { attributes: true, attributeFilter: ['class'] });
-  }
+  if (!unlock) return;
+  new MutationObserver(() => {
+    if (unlock.classList.contains('hidden')) return;
+    animate(
+      unlock,
+      [
+        { opacity: 0, transform: 'translateY(16px) scale(.84)' },
+        { opacity: 1, transform: 'translateY(-2px) scale(1.04)', offset: 0.72 },
+        { opacity: 1, transform: 'none' }
+      ],
+      { duration: MOTION.rewardReveal, easing: 'cubic-bezier(.18,.9,.3,1.2)' },
+      ui
+    );
+  }).observe(unlock, { attributes: true, attributeFilter: ['class'] });
 }
 
 function selectedChapterIndex(ui, id) {
@@ -544,16 +601,16 @@ function installChapterCards(game) {
   ui.__chapterCardsOwnSelection = true;
 
   let selectedId = select.value || ui.coopChapters[0].id;
-  const picker = select.closest('label');
-  picker?.remove();
+  select.closest('label')?.remove();
 
   const syncCta = () => {
     const button = $('#coopFind');
     const span = button?.querySelector('span');
     if (!button || !span || button.dataset.searching === 'true') return;
-    span.textContent = $('#coopAnyChapter')?.checked
+    const desired = $('#coopAnyChapter')?.checked
       ? 'НАЙТИ НАПАРНИКА'
       : `ИГРАТЬ ГЛАВУ ${selectedChapterIndex(ui, selectedId)}`;
+    if (span.textContent !== desired) span.textContent = desired;
   };
 
   const apply = id => {
@@ -573,9 +630,8 @@ function installChapterCards(game) {
   ui.coopChapter = () => selectedId;
   ui.selectCoopChapter = id => apply(id);
 
-  // Capture останавливает старый обработчик карточки до того, как тот обратится к удалённому select.
-  // Так PR остаётся визуальным: сетевой контракт и сигнатуры UI не меняются, а пользовательский
-  // выбор уже действительно живёт в карточке, а не во втором контроле под ней.
+  // Старые карточки всё ещё содержат обработчик legacy-select. Capture перехватывает клик раньше,
+  // поэтому после удаления select единственным пользовательским выбором действительно является card.
   grid.addEventListener(
     'click',
     event => {
@@ -601,14 +657,12 @@ function installChapterCards(game) {
   if (button) {
     new MutationObserver(syncCta).observe(button, {
       attributes: true,
-      attributeFilter: ['data-searching'],
-      childList: true,
-      subtree: true
+      attributeFilter: ['data-searching']
     });
   }
 
-  // Старый replay-handler тоже использовал удалённый select. Переподключаем его к той же карточке,
-  // сохраняя неизменными серверный createRoom и источник главы последнего совместного матча.
+  // Replay из профиля раньше напрямую писал в удалённый select. Оставляем тот же createRoom,
+  // но источник выбора теперь тот же, что и у обычного клика по campaign card.
   ui.onRecentPartnerInvite = async partner => {
     await game.accountReady;
     const chapter = ui.coopChapters.find(item => item.id === partner?.lastChapterId) || ui.coopChapters[0];
@@ -633,6 +687,7 @@ function installSoundToggle(game) {
   const button = $('#soundToggle');
   if (!button || button.dataset.bound === '1') return;
   button.dataset.bound = '1';
+
   const sync = () => {
     const silent = game.audio.muted || Number(game.audio.volumes.master || 0) <= 0;
     button.textContent = silent ? '🔇' : '🔊';
@@ -640,6 +695,7 @@ function installSoundToggle(game) {
     button.setAttribute('aria-label', game.audio.muted ? 'Включить звук' : 'Выключить звук');
     button.title = game.audio.muted ? 'Включить звук' : 'Выключить звук';
   };
+
   button.addEventListener('click', () => {
     game.audio.unlock();
     game.audio.setMuted(!game.audio.muted);
@@ -663,8 +719,7 @@ function waitForGame() {
   let frames = 0;
   const tick = () => {
     const game = globalThis.__WOBBLE_GAME__;
-    // bindMenu заполняет главы после создания Game. Ждём именно этого момента: тогда можно удалить
-    // legacy select, не рискуя, что старый setup попытается наполнить уже отсутствующий узел.
+    // bindMenu должен успеть заполнить список глав до удаления legacy-select.
     if (game?.ui?.coopChapters?.length) {
       attachGame(game);
       return;

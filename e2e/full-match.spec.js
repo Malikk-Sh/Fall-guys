@@ -59,6 +59,8 @@ async function createRoom(page, name) {
   // Лёгкая трасса выбрана намеренно: она самая короткая, а тест идёт настоящее время.
   await page.locator('#difficulty').selectOption('easy');
   await page.locator('[data-mode="multi"]').click();
+  await page.locator('#raceFriendsToggle').click();
+  await expect(page.locator('#create')).toBeVisible();
   await page.locator('#create').click();
   await expect(page.locator('#lobby')).toBeVisible();
   return (await page.locator('#roomCode').textContent()).trim();
@@ -68,6 +70,8 @@ async function joinRoom(page, name, code) {
   await page.goto('/');
   await setPlayerName(page, name);
   await page.locator('[data-mode="multi"]').click();
+  await page.locator('#raceFriendsToggle').click();
+  await expect(page.locator('#code')).toBeVisible();
   await page.locator('#code').fill(code);
   await page.locator('#join').click();
   await expect(page.locator('#lobby')).toBeVisible();

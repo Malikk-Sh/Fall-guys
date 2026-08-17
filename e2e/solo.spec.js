@@ -79,8 +79,11 @@ test.describe('одиночная игра и меню', () => {
     await expect(page.locator('#coop')).toBeVisible();
     await expect(page.locator('#multi')).toBeHidden();
     await expect(page.locator('.campaign-card')).toHaveCount(10);
-    await page.locator('.campaign-card[data-chapter="ch7"]').click();
-    await expect(page.locator('#coopChapter')).toHaveValue('ch7');
+    const chapterSeven = page.locator('.campaign-card[data-chapter="ch7"]');
+    await chapterSeven.click();
+    await expect(chapterSeven).toHaveClass(/selected/);
+    await expect(chapterSeven).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 7');
     await page.locator('[data-mode="single"]').click();
     await expect(page.locator('#single')).toBeVisible();
 

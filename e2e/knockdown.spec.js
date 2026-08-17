@@ -95,6 +95,8 @@ test.describe('сбивание с ног', () => {
       await setPlayerName(host, 'Сбитый');
       await host.locator('#difficulty').selectOption('easy');
       await host.locator('[data-mode="multi"]').click();
+      await host.locator('#raceFriendsToggle').click();
+      await expect(host.locator('#create')).toBeVisible();
       await host.locator('#create').click();
       await expect(host.locator('#lobby')).toBeVisible();
       const code = (await host.locator('#roomCode').textContent()).trim();
@@ -102,6 +104,8 @@ test.describe('сбивание с ног', () => {
       await guest.goto('/');
       await setPlayerName(guest, 'Свидетель');
       await guest.locator('[data-mode="multi"]').click();
+      await guest.locator('#raceFriendsToggle').click();
+      await expect(guest.locator('#code')).toBeVisible();
       await guest.locator('#code').fill(code);
       await guest.locator('#join').click();
       await expect(guest.locator('#lobby')).toBeVisible();

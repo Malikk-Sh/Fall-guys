@@ -9,6 +9,7 @@ const APP_SHELL = [
   '/pwa.css',
   '/main.js',
   '/pwa-entry.js',
+  '/ui/MenuPolish.js',
   '/core/pwa.js',
   '/manifest.webmanifest',
   '/icons/apple-touch-icon-180.png',

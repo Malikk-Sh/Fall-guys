@@ -75,20 +75,35 @@ async function expectInsideViewport(locator, page) {
   expect(box.y + box.height).toBeLessThanOrEqual(viewport.height + 1);
 }
 
-test('target landscape sizes show the game shell without the rotate gate', async ({ page }, testInfo) => {
+function boxesOverlap(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+test('target landscape sizes show a scroll-free game shell without the rotate gate', async ({
+  page
+}, testInfo) => {
   mobileOnly(testInfo);
   await page.goto('/');
 
   for (const viewport of [
     { width: 667, height: 375 },
+    { width: 740, height: 360 },
     { width: 844, height: 390 },
-    { width: 915, height: 412 }
+    { width: 873, height: 393 },
+    { width: 915, height: 412 },
+    { width: 1024, height: 576 }
   ]) {
     await page.setViewportSize(viewport);
     await expect(page.locator('body')).toHaveAttribute('data-mobile-orientation', 'landscape');
     await expect(page.locator('#rotateDevice')).toBeHidden();
     await expect(page.locator('#menu')).toBeVisible();
-    await expectInsideViewport(page.locator('.menu-card'), page);
+    const card = page.locator('.menu-card');
+    await expectInsideViewport(card, page);
+    const geometry = await card.evaluate(node => ({
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight
+    }));
+    expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
   }
 });
 
@@ -114,6 +129,35 @@ test('portrait gate survives orientation changes without reload or UI-state loss
     navigationEntries
   );
   expect(await page.evaluate(() => window.__WOBBLE_GAME__.state.name)).toBe('menu');
+});
+
+test('portrait gate suppresses paired-keyboard gameplay input', async ({ page }, testInfo) => {
+  mobileOnly(testInfo);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.goto('/');
+  await page.locator('#play').click();
+  await expect(page.locator('#hud')).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('#rotateDevice')).toBeVisible();
+  await page.keyboard.down('KeyW');
+  await page.keyboard.press('Space');
+  const blocked = await page.evaluate(() => {
+    const input = window.__WOBBLE_GAME__.input;
+    input.update();
+    return {
+      enabled: input.enabled,
+      movement: input.movement(),
+      jumpQueued: input.jumpQueued,
+      keys: input.keys.size
+    };
+  });
+  await page.keyboard.up('KeyW');
+
+  expect(blocked.enabled).toBe(false);
+  expect(blocked.movement.magnitude).toBe(0);
+  expect(blocked.jumpQueued).toBe(false);
+  expect(blocked.keys).toBe(0);
 });
 
 test('portrait accessibility fallback provides a real escape hatch', async ({ page }, testInfo) => {
@@ -150,6 +194,19 @@ test('missing and rejected Fullscreen API never block normal play', async ({ pag
   await rejected.close();
 });
 
+test('fullscreen advisory disappears immediately when gameplay leaves the menu', async ({ page }, testInfo) => {
+  mobileOnly(testInfo);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await installFullscreenMock(page, { supported: true });
+  await page.goto('/');
+  await expect(page.locator('#mobileGameModePrompt')).toBeVisible();
+
+  await page.locator('#play').click();
+  await expect(page.locator('#hud')).toBeVisible();
+  await expect(page.locator('#menu')).toBeHidden();
+  await expect(page.locator('#mobileGameModePrompt')).toBeHidden();
+});
+
 test('fullscreenchange owns button state and orientation-lock rejection is harmless', async ({
   page
 }, testInfo) => {
@@ -169,7 +226,7 @@ test('fullscreenchange owns button state and orientation-lock rejection is harml
   await expect(page.locator('body')).not.toHaveClass(/is-fullscreen/);
 });
 
-test('landscape HUD and permanent touch controls stay inside the viewport edges', async ({
+test('landscape HUD and permanent touch controls stay separated inside viewport edges', async ({
   page
 }, testInfo) => {
   mobileOnly(testInfo);
@@ -191,16 +248,27 @@ test('landscape HUD and permanent touch controls stay inside the viewport edges'
 
   const hudBox = await hud.boundingBox();
   expect(hudBox.height).toBeLessThanOrEqual(60);
-  const centers = await page.evaluate(() => {
-    const center = selector => {
-      const rect = document.querySelector(selector).getBoundingClientRect();
-      return rect.left + rect.width / 2;
-    };
-    return { width: innerWidth, stick: center('#stick'), jump: center('#jump'), dive: center('#dive') };
-  });
-  expect(centers.stick).toBeLessThan(centers.width * 0.36);
-  expect(centers.jump).toBeGreaterThan(centers.width * 0.64);
-  expect(centers.dive).toBeGreaterThan(centers.width * 0.64);
+
+  for (const hand of ['left', 'right']) {
+    await page.locator('body').evaluate((body, value) => {
+      body.dataset.hand = value;
+    }, hand);
+    const [stickBox, jumpBox, diveBox] = await Promise.all([
+      stick.boundingBox(),
+      jump.boundingBox(),
+      dive.boundingBox()
+    ]);
+    expect(boxesOverlap(jumpBox, diveBox)).toBe(false);
+    if (hand === 'left') {
+      expect(stickBox.x + stickBox.width / 2).toBeLessThan(667 * 0.36);
+      expect(jumpBox.x + jumpBox.width / 2).toBeGreaterThan(667 * 0.64);
+      expect(diveBox.x + diveBox.width / 2).toBeGreaterThan(667 * 0.55);
+    } else {
+      expect(stickBox.x + stickBox.width / 2).toBeGreaterThan(667 * 0.64);
+      expect(jumpBox.x + jumpBox.width / 2).toBeLessThan(667 * 0.36);
+      expect(diveBox.x + diveBox.width / 2).toBeLessThan(667 * 0.45);
+    }
+  }
 });
 
 test('reduced motion removes the rotate-device animation', async ({ page }, testInfo) => {

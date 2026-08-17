@@ -258,6 +258,7 @@ body.mobile-landscape.menu-polish .menu-card {
   border-radius: 19px;
 }
 body.mobile-landscape.menu-polish .mode-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 9px;
 }
 body.mobile-landscape.menu-polish .mode-panel {
@@ -331,24 +332,31 @@ body.mobile-landscape[data-hand='right'] #stickZone {
   right: calc(16px + var(--safe-right));
 }
 body.mobile-landscape[data-hand='left'] #jump,
-body.mobile-landscape[data-hand='left'] #dive,
 body.mobile-landscape[data-hand='left'] #recenter,
 body.mobile-landscape[data-hand='left'] #cameraMode,
 body.mobile-landscape[data-hand='left'] #emoteButton {
   right: calc(16px + var(--safe-right));
 }
+body.mobile-landscape[data-hand='left'] #dive {
+  right: calc(28px + var(--safe-right) + var(--action-size) * var(--ui-scale));
+}
 body.mobile-landscape[data-hand='right'] #jump,
-body.mobile-landscape[data-hand='right'] #dive,
 body.mobile-landscape[data-hand='right'] #recenter,
 body.mobile-landscape[data-hand='right'] #cameraMode,
 body.mobile-landscape[data-hand='right'] #emoteButton {
   left: calc(16px + var(--safe-left));
   right: auto;
 }
+body.mobile-landscape[data-hand='right'] #dive {
+  left: calc(28px + var(--safe-left) + var(--action-size) * var(--ui-scale));
+  right: auto;
+}
 body.mobile-landscape #stick,
-body.mobile-landscape #jump,
-body.mobile-landscape #dive {
+body.mobile-landscape #jump {
   bottom: calc(14px + var(--safe-bottom));
+}
+body.mobile-landscape #dive {
+  bottom: calc(18px + var(--safe-bottom));
 }
 
 /* Accessibility portrait fallback: playable, intentionally simplified and with larger controls. */
@@ -396,7 +404,8 @@ body.portrait-accessibility.menu-polish .menu-card {
     padding: 10px;
   }
   body.mobile-landscape.menu-polish .mode-tab {
-    padding-block: 8px;
+    padding-block: 6px;
+    font-size: 9px;
   }
   body.mobile-landscape #hud.hud {
     top: calc(5px + var(--safe-top));

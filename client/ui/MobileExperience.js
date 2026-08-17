@@ -1,8 +1,9 @@
 const FULLSCREEN_PROMPT_KEY = 'wobble-fullscreen-prompt-v1';
 const GAMEPLAY_INPUT_STATES = new Set(['race', 'spectate']);
+const MAX_GAME_WAIT_FRAMES = 300;
 
-export function isTouchMobile({ coarse = false, maxTouchPoints = 0 } = {}) {
-  return Boolean(coarse || Number(maxTouchPoints) > 0);
+export function isTouchMobile({ coarse = false, hoverNone = false, maxTouchPoints = 0 } = {}) {
+  return Boolean(coarse || (hoverNone && Number(maxTouchPoints) > 0));
 }
 
 export function mobileOrientationState({ mobile, width, height, portraitOverride = false } = {}) {
@@ -57,7 +58,9 @@ export class MobileExperience {
     this.settings = null;
     this.unsubscribeSettings = null;
     this.gameWaitFrame = 0;
+    this.gameWaitAttempts = 0;
     this.orientationFrame = 0;
+    this.menuObserver = null;
 
     this.onFullscreenChange = () => this.updateFullscreen();
     this.onFullscreenError = () => this.updateFullscreen();
@@ -65,11 +68,17 @@ export class MobileExperience {
     this.onVisibilityChange = () => {
       if (!this.root?.hidden) this.scheduleOrientationUpdate();
     };
+    this.onBlockedKeyboard = event => {
+      if (!this.portraitBlocked) return;
+      if (event.cancelable) event.preventDefault();
+      event.stopImmediatePropagation?.();
+    };
   }
 
   get mobile() {
     return isTouchMobile({
       coarse: this.window?.matchMedia?.('(pointer: coarse)').matches === true,
+      hoverNone: this.window?.matchMedia?.('(hover: none)').matches === true,
       maxTouchPoints: this.window?.navigator?.maxTouchPoints || 0
     });
   }
@@ -102,12 +111,15 @@ export class MobileExperience {
     if (this.initialized || !this.root?.body) return this;
     this.initialized = true;
     this.installMarkup();
+    this.observeMenu();
 
     this.root.addEventListener('fullscreenchange', this.onFullscreenChange);
     this.root.addEventListener('fullscreenerror', this.onFullscreenError);
     this.root.addEventListener('visibilitychange', this.onVisibilityChange);
     this.window?.addEventListener?.('resize', this.onOrientationSignal);
     this.window?.addEventListener?.('orientationchange', this.onOrientationSignal);
+    this.window?.addEventListener?.('keydown', this.onBlockedKeyboard, true);
+    this.window?.addEventListener?.('keyup', this.onBlockedKeyboard, true);
     this.window?.visualViewport?.addEventListener?.('resize', this.onOrientationSignal);
     this.window?.screen?.orientation?.addEventListener?.('change', this.onOrientationSignal);
 
@@ -125,8 +137,11 @@ export class MobileExperience {
     this.root?.removeEventListener?.('visibilitychange', this.onVisibilityChange);
     this.window?.removeEventListener?.('resize', this.onOrientationSignal);
     this.window?.removeEventListener?.('orientationchange', this.onOrientationSignal);
+    this.window?.removeEventListener?.('keydown', this.onBlockedKeyboard, true);
+    this.window?.removeEventListener?.('keyup', this.onBlockedKeyboard, true);
     this.window?.visualViewport?.removeEventListener?.('resize', this.onOrientationSignal);
     this.window?.screen?.orientation?.removeEventListener?.('change', this.onOrientationSignal);
+    this.menuObserver?.disconnect?.();
     this.unsubscribeSettings?.();
     if (this.gameWaitFrame) this.window?.cancelAnimationFrame?.(this.gameWaitFrame);
     if (this.orientationFrame) this.window?.cancelAnimationFrame?.(this.orientationFrame);
@@ -198,19 +213,31 @@ export class MobileExperience {
     this.root.querySelector('#fullscreenToggle')?.addEventListener('click', () => this.toggleFullscreen());
   }
 
+  observeMenu() {
+    const menu = this.root?.querySelector?.('#menu');
+    const Observer = this.window?.MutationObserver || globalThis.MutationObserver;
+    if (!menu || typeof Observer !== 'function') return;
+    this.menuObserver?.disconnect?.();
+    this.menuObserver = new Observer(() => this.syncFullscreenPrompt());
+    this.menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
+  }
+
   bindGameWhenReady() {
     const game = this.window?.__WOBBLE_GAME__;
     if (game) {
       this.bindGame(game);
       return;
     }
-    if (this.destroyed) return;
+    if (this.destroyed || this.root?.querySelector?.('#error:not(.hidden)')) return;
+    this.gameWaitAttempts += 1;
+    if (this.gameWaitAttempts > MAX_GAME_WAIT_FRAMES) return;
     this.gameWaitFrame = this.window?.requestAnimationFrame?.(() => this.bindGameWhenReady()) || 0;
   }
 
   bindGame(game) {
     if (this.game === game) return;
     this.game = game;
+    this.gameWaitAttempts = 0;
     this.settings = game?.settings || null;
     this.unsubscribeSettings?.();
     this.unsubscribeSettings = this.settings?.subscribe?.(() => this.syncAccessibility()) || null;

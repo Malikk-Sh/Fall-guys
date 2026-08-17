@@ -107,7 +107,9 @@ test.describe('одиночная игра и меню', () => {
     await page.locator('.wardrobe-tab[data-category="back"]').click();
     const backCards = page.locator('.wardrobe-card');
     await expect(backCards.first()).toHaveAttribute('data-slot', 'back');
-    expect(await backCards.evaluateAll(cards => cards.every(card => card.dataset.slot === 'back'))).toBe(true);
+    expect(
+      await backCards.evaluateAll(cards => cards.every(card => card.dataset.slot === 'back'))
+    ).toBe(true);
 
     // Закрытый предмет: виден, показывает требование, доступен для примерки, но не для надевания.
     await page.locator('#wardrobeOwnership').selectOption('locked');

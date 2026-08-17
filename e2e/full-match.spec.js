@@ -84,7 +84,13 @@ async function joinRoom(page, name, code) {
 // Положение читается из window.__WOBBLE_GAME__, который клиент выставляет и без тестов. Никакого
 // обхода правил тут нет: это собственная позиция игрока, которую его же браузер и рисует, а сервер
 // всё равно проверяет каждое присланное состояние.
-const CENTER_TOLERANCE = 0.8;
+// CI #645 дал уже не один случайный кадр, а два одинаковых retry: гость 44/45 раз падал на
+// первом сегменте, пока хост в итоге прорывался. У bumpers/v3 ближайший к центру бампер стоит на
+// |x|=1.4; его hit radius (0.78 * 1.08) вместе с PLAYER_OBSTACLE_RADIUS (0.42 * 0.8) оставляет
+// прямой центральной траектории всего ~0.22 м запаса. Старые ±0.8 считали игрока «по центру» уже
+// внутри зоны удара. Водитель всё так же ничего не знает о препятствиях — он просто действительно
+// держит ось фиксированной тестовой трассы.
+const CENTER_TOLERANCE = 0.16;
 
 // Боковая коррекция — импульс ограниченной длительности, а не клавиша, зажатая до следующего
 // round-trip Playwright. Это различие оказалось критичным именно на CI.
@@ -104,11 +110,17 @@ const STEER_PULSE_MS = 140;
 // как предыдущий импульс уже развернул боковую скорость к центру. Не добавляем второй импульс, пока
 // игрок уже возвращается достаточно быстро; это простой тормоз по скорости, а не знание препятствий.
 const CENTERING_SPEED = 1.4;
+// На #645 чтения приходили примерно раз в секунду. Одного текущего x поэтому мало: игрок может быть
+// ещё внутри узкого центрального коридора, но уже иметь скорость наружу. Короткий прогноз заставляет
+// дать один реальный A/D-импульс до выхода из коридора; после отпускания обычный ground/air damping
+// снова гасит боковую скорость.
+const STEER_LOOKAHEAD_SECONDS = 0.35;
 
 async function steerTowardCenter(page, { x, vx }) {
-  if (x > CENTER_TOLERANCE && vx > -CENTERING_SPEED) {
+  const projectedX = x + vx * STEER_LOOKAHEAD_SECONDS;
+  if (projectedX > CENTER_TOLERANCE && vx > -CENTERING_SPEED) {
     await page.keyboard.press('KeyA', { delay: STEER_PULSE_MS });
-  } else if (x < -CENTER_TOLERANCE && vx < CENTERING_SPEED) {
+  } else if (projectedX < -CENTER_TOLERANCE && vx < CENTERING_SPEED) {
     await page.keyboard.press('KeyD', { delay: STEER_PULSE_MS });
   }
 }
@@ -180,6 +192,22 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
   return { done: false, seconds: (Date.now() - startedAt) / 1000, ...(await progress(page)) };
 }
 
+// Два водителя не должны сами превращаться в дополнительное препятствие теста. На старте их x =
+// ±0.875, а crowd diameter = 2 * (0.72 * 0.8) = 1.152 м. Если оба в один и тот же физический кадр
+// сходятся к узкой центральной линии bumpers/v3, crowd solver закономерно раздвигает их обратно —
+// ровно в бамперы. Это и видно на #645: один браузер в конце концов проходит, второй десятки раз
+// повторяет checkpoint 0. Небольшой стартовый интервал оставляет гонку одновременной, но разводит
+// игроков по Z до первого узкого места; никакой тип препятствия во время забега водитель не читает.
+const RUNNER_STAGGER_MS = 900;
+
+async function runPairToFinish(host, guest) {
+  const guestRun = async () => {
+    await new Promise(resolve => setTimeout(resolve, RUNNER_STAGGER_MS));
+    return runToFinish(guest);
+  };
+  return Promise.all([runToFinish(host), guestRun()]);
+}
+
 test.describe('полный матч на двоих', () => {
   // Настоящий забег идёт настоящее время, и его нельзя ускорить: сервер проверяет скорость так же,
   // как у живого игрока.
@@ -215,8 +243,9 @@ test.describe('полный матч на двоих', () => {
     await expect(host.locator('#hud')).toBeVisible({ timeout: 15_000 });
     await expect(guest.locator('#hud')).toBeVisible({ timeout: 15_000 });
 
-    // Бегут одновременно — как в настоящей гонке, и вдвое быстрее последовательного прогона.
-    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    // Бегут почти одновременно: короткий разнос старта убирает искусственную драку двух E2E-водителей
+    // за одну центральную линию, но оба клиента остаются в одном живом забеге.
+    const [hostRun, guestRun] = await runPairToFinish(host, guest);
     expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
     expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 
@@ -311,7 +340,7 @@ test.describe('полный матч на двоих', () => {
     await expect(host.locator('#hud')).toBeVisible({ timeout: 20_000 });
     await expect(guest.locator('#hud')).toBeVisible({ timeout: 20_000 });
 
-    const [hostRun, guestRun] = await Promise.all([runToFinish(host), runToFinish(guest)]);
+    const [hostRun, guestRun] = await runPairToFinish(host, guest);
     expect(hostRun.done, `хост ${describeRun(hostRun)}`).toBe(true);
     expect(guestRun.done, `гость ${describeRun(guestRun)}`).toBe(true);
 

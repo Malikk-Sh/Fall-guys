@@ -231,6 +231,8 @@ body.mobile-landscape .screen {
   padding-left: calc(12px + var(--safe-left));
 }
 body.mobile-landscape .screen-menu {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 48vw, 472px);
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
@@ -248,7 +250,9 @@ body.mobile-landscape .brand p {
   font-size: 12px;
 }
 body.mobile-landscape.menu-polish .menu-card {
-  width: min(54vw, 472px);
+  width: 100%;
+  max-width: 472px;
+  justify-self: end;
   max-height: calc(100vh - 18px - var(--safe-top) - var(--safe-bottom));
   padding: 12px;
   border-radius: 19px;
@@ -407,7 +411,7 @@ body.portrait-accessibility.menu-polish .menu-card {
     font-size: clamp(34px, 7vw, 50px);
   }
   body.mobile-landscape.menu-polish .menu-card {
-    width: min(65vw, 458px);
+    width: 100%;
   }
   body.mobile-landscape #hud.hud {
     grid-template-columns: auto auto minmax(90px, 1fr) auto;

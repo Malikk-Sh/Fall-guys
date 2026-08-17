@@ -79,7 +79,20 @@ function boxesOverlap(a, b) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
-test('target landscape sizes show a scroll-free game shell without the rotate gate', async ({
+async function expectMenuModeFits(page, mode) {
+  const tab = page.locator(`.mode-tab[data-mode="${mode}"]`);
+  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click();
+  await expect(page.locator(`#${mode}`)).toBeVisible();
+  const card = page.locator('.menu-card');
+  await expectInsideViewport(card, page);
+  const geometry = await card.evaluate(node => ({
+    clientHeight: node.clientHeight,
+    scrollHeight: node.scrollHeight
+  }));
+  expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+}
+
+test('target landscape sizes keep Single, Race and Co-op scroll-free without the rotate gate', async ({
   page
 }, testInfo) => {
   mobileOnly(testInfo);
@@ -97,13 +110,7 @@ test('target landscape sizes show a scroll-free game shell without the rotate ga
     await expect(page.locator('body')).toHaveAttribute('data-mobile-orientation', 'landscape');
     await expect(page.locator('#rotateDevice')).toBeHidden();
     await expect(page.locator('#menu')).toBeVisible();
-    const card = page.locator('.menu-card');
-    await expectInsideViewport(card, page);
-    const geometry = await card.evaluate(node => ({
-      clientHeight: node.clientHeight,
-      scrollHeight: node.scrollHeight
-    }));
-    expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+    for (const mode of ['single', 'multi', 'coop']) await expectMenuModeFits(page, mode);
   }
 });
 

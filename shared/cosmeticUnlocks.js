@@ -1,22 +1,21 @@
 // Декларативный резолвер выдачи косметики.
 //
-// Шестьдесят предметов — это шестьдесят условий. Записанные ветками `if (item.id === ...)`, они
-// расползлись бы по клиенту и серверу двумя копиями, которые обязаны совпадать и однажды перестанут.
-// Поэтому условие живёт в самом предмете (`unlock`), а здесь — единственный код, который умеет его
+// Условие живёт в самом предмете (`unlock`), а здесь — единственный код, который умеет его
 // прочитать. Клиент и сервер вызывают одну и ту же функцию с разными источниками статистики.
 
-import { FUTURE_UNLOCKS, SERVER_GRANTABLE_UNLOCKS } from './cosmeticMeta.js';
+import { COLLECTION_META, FUTURE_UNLOCKS, SERVER_GRANTABLE_UNLOCKS } from './cosmeticMeta.js';
 
 const number = value => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
-// Плоская статистика, по которой считаются `stat`-условия. Пути стабильны и не зависят от того,
-// пришли данные с сервера или из локального профиля гостя: у обоих источников разная форма, и
-// сводить их к общей здесь — единственный способ не завести два набора путей.
+// `collection` заполняется из server-owned inventory для отображения milestone-прогресса. Сами
+// milestone entitlement выдаёт InventoryService отдельным проходом после подсчёта ownership: это
+// намеренно не часть обычного progress resolver, чтобы ownership не зависел от самого себя.
 export function emptyCosmeticStats() {
   return {
     race: { finishes: 0, wins: 0, podiums: 0 },
     coop: { matches: 0, chapters: 0, revives: 0, flawless: 0, ch10Runs: 0 },
-    daily: { bestStreak: 0 }
+    daily: { bestStreak: 0 },
+    collection: {}
   };
 }
 
@@ -30,7 +29,6 @@ function mergeMax(target, source) {
   return target;
 }
 
-// Серверный прогресс аккаунта → статистика косметики.
 export function statsFromProgress(progress) {
   const stats = emptyCosmeticStats();
   if (!progress) return stats;
@@ -46,8 +44,6 @@ export function statsFromProgress(progress) {
   return stats;
 }
 
-// Локальный профиль браузера → та же статистика. Гость не имеет серверного прогресса, но у него
-// есть daily-серия и локальные кооперативные счётчики, на которых висят унаследованные награды.
 export function statsFromProfile(profile) {
   const stats = emptyCosmeticStats();
   if (!profile) return stats;
@@ -60,8 +56,6 @@ export function statsFromProfile(profile) {
   return stats;
 }
 
-// Лучшее из двух источников. Серверный прогресс авторитетен для выдачи, но локальный профиль
-// содержит то, чего сервер не знает вовсе (daily-серия), — и терять его нельзя.
 export function cosmeticStats(progress = null, profile = null) {
   return mergeMax(statsFromProgress(progress), statsFromProfile(profile));
 }
@@ -77,26 +71,19 @@ export function statValue(stats, path) {
 }
 
 export function isServerGrantable(item) {
-  return SERVER_GRANTABLE_UNLOCKS.includes(item?.unlock?.type);
+  // Collection reward тоже описан `stat`-условием для общего UI, но выдаётся после чтения
+  // account_cosmetics, а не из игрового progress. Generic resolver его намеренно не трогает.
+  return !item?.collectionReward && SERVER_GRANTABLE_UNLOCKS.includes(item?.unlock?.type);
 }
 
 export function isFutureUnlock(item) {
   return FUTURE_UNLOCKS.includes(item?.unlock?.type);
 }
 
-// Локальные условия — единственное, что клиенту разрешено решать самому: унаследованная daily-серия
-// и локальные фолбэки старых кооперативных наград. Всё ценное новое проходит через сервер.
 export function isLocalUnlock(item) {
   return item?.unlock?.type === 'daily' || Boolean(item?.unlock?.localStat);
 }
 
-/**
- * Выполнено ли условие выдачи предмета.
- *
- * @param {object} item предмет каталога
- * @param {{stats?: object, achievements?: Set<string>|string[], local?: boolean}} context
- *   `local` разрешает локальные фолбэки: клиент их учитывает, сервер — нет.
- */
 export function unlockSatisfied(item, { stats = null, achievements = null, local = false } = {}) {
   const unlock = item?.unlock;
   if (!unlock) return false;
@@ -116,18 +103,12 @@ export function unlockSatisfied(item, { stats = null, achievements = null, local
     case 'stat':
       return statValue(resolved, unlock.path) >= number(unlock.gte) || localFallback();
     case 'daily':
-      // Daily-серия никогда не была серверной и не должна ею притвориться: сервер её не считает,
-      // поэтому вне локального контекста условие просто не выполняется.
       return local && statValue(resolved, 'daily.bestStreak') >= number(unlock.streak);
     default:
-      // rewarded / event / shop / pass / admin выдаются извне. Каталог к ним готов, механики нет.
       return false;
   }
 }
 
-/**
- * Все ID, которые полагаются игроку по его данным.
- */
 export function resolveUnlockedIds(catalog, context = {}) {
   const ids = [];
   for (const item of catalog) if (unlockSatisfied(item, context)) ids.push(item.id);
@@ -135,8 +116,8 @@ export function resolveUnlockedIds(catalog, context = {}) {
 }
 
 /**
- * Только то, что сервер вправе выдать сам. Rewarded/shop/pass сюда не попадают никогда:
- * entitlement по клиентскому «успеху» не выдаётся.
+ * Обычные server grants из прогресса аккаунта. Collection milestones сюда не входят, потому что
+ * их вход — server inventory, а не progress; их выдаёт InventoryService после materialization.
  */
 export function resolveServerGrants(catalog, { stats = null, achievements = null } = {}) {
   return catalog
@@ -155,12 +136,77 @@ const STAT_LABELS = Object.freeze({
   'coop.ch10Runs': 'Глава 10'
 });
 
+const ACHIEVEMENT_GOALS = Object.freeze({
+  'race-first-finish': 'Финишируйте в онлайн-гонке',
+  'race-win': 'Одержите победу в онлайн-гонке',
+  'race-veteran-25': 'Финишируйте в 25 онлайн-гонках',
+  'race-podium': 'Попадите в тройку в гонке, где финишировали минимум 3 игрока',
+  'coop-ch10-clear': 'Пройдите главу 10',
+  'coop-flawless-5': 'Пройдите 5 глав без падений',
+  'coop-helper-25': 'Спасите напарника 25 раз',
+  'coop-campaign-complete': 'Пройдите все 10 глав'
+});
+
+function collectionPath(path) {
+  if (typeof path !== 'string' || !path.startsWith('collection.')) return null;
+  return path.slice('collection.'.length) || null;
+}
+
 export function statLabel(path) {
+  const collection = collectionPath(path);
+  if (collection) {
+    const meta = COLLECTION_META[collection];
+    return meta ? `Коллекция «${meta.shortName}»` : 'Коллекция';
+  }
   return STAT_LABELS[path] || path;
 }
 
-// Короткое требование для карточки. Одна функция вместо подписи, продублированной в каталоге,
-// в шкафу и в экране результатов.
+function plural(value, one, few, many) {
+  const count = Math.abs(Math.trunc(number(value)));
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 14) return many;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}
+
+export function statGoalText(path, target) {
+  const count = Math.max(1, Math.trunc(number(target)));
+  const collection = collectionPath(path);
+  if (collection) {
+    const meta = COLLECTION_META[collection];
+    const label = meta?.shortName || collection;
+    return `Соберите ${count} подтверждённых ${plural(count, 'предмет', 'предмета', 'предметов')} коллекции «${label}»`;
+  }
+
+  switch (path) {
+    case 'race.finishes':
+      return `Финишируйте в ${count} ${plural(count, 'гонке', 'гонках', 'гонках')}`;
+    case 'race.wins':
+      return `Одержите ${count} ${plural(count, 'победу', 'победы', 'побед')}`;
+    case 'race.podiums':
+      return `Попадите на пьедестал ${count} ${plural(count, 'раз', 'раза', 'раз')}`;
+    case 'coop.matches':
+      return `Завершите ${count} ${plural(
+        count,
+        'кооперативный матч',
+        'кооперативных матча',
+        'кооперативных матчей'
+      )}`;
+    case 'coop.chapters':
+      return `Пройдите ${count} ${plural(count, 'главу', 'главы', 'глав')} в кооперативе`;
+    case 'coop.revives':
+      return `Спасите напарника ${count} ${plural(count, 'раз', 'раза', 'раз')}`;
+    case 'coop.flawless':
+      return `Пройдите ${count} ${plural(count, 'главу', 'главы', 'глав')} без падений`;
+    case 'coop.ch10Runs':
+      return 'Пройдите главу 10';
+    default:
+      return `${statLabel(path)}: ${count}`;
+  }
+}
+
 export function unlockRequirementText(item) {
   const unlock = item?.unlock;
   if (!unlock) return item?.detail || '';
@@ -168,11 +214,11 @@ export function unlockRequirementText(item) {
     case 'default':
       return 'Доступно сразу';
     case 'achievement':
-      return item.detail || 'За достижение';
+      return ACHIEVEMENT_GOALS[unlock.id] || item.detail || 'Получите достижение';
     case 'stat':
-      return `${statLabel(unlock.path)}: ${unlock.gte}`;
+      return statGoalText(unlock.path, unlock.gte);
     case 'daily':
-      return `Серия daily ${unlock.streak} ${unlock.streak === 1 ? 'день' : 'дней'}`;
+      return `Поддерживайте серию daily ${unlock.streak} ${plural(unlock.streak, 'день', 'дня', 'дней')}`;
     case 'rewarded':
       return 'Награда за просмотр · скоро';
     case 'event':
@@ -188,8 +234,6 @@ export function unlockRequirementText(item) {
   }
 }
 
-// Прогресс к предмету: сколько есть и сколько нужно. Возвращает null там, где прогресс не
-// выражается числом (достижение без локального фолбэка, будущие источники).
 export function unlockProgress(item, stats) {
   const unlock = item?.unlock;
   if (!unlock) return null;

@@ -35,12 +35,12 @@ class InventoryService {
     return this.statements.insertCosmetic.run(id, cosmetic.id, now, String(source || 'system')).changes > 0;
   }
 
-  // Выдача по каталогу, а не по списку веток.
+  // Выдача по каталогу, а не по списку ID.
   //
-  // Раньше здесь перебирались предметы с полем `achievement`; с появлением stat-условий такой
-  // перебор пришлось бы дописывать при каждом новом типе. Теперь условие читает общий резолвер, и
-  // сервер выдаёт ровно то, что каталог объявил серверно выдаваемым: rewarded/shop/pass/event
-  // сюда не попадают никогда — entitlement по клиентскому «успеху» не выдаётся.
+  // Сначала материализуем обычные achievement/stat-награды. Затем сервер сам считает, сколько
+  // БАЗОВЫХ предметов каждой коллекции реально лежит в account_cosmetics, и выдаёт достигнутые
+  // milestone rewards. Бонусы не входят в базовые 15, поэтому получение награды не приближает
+  // следующую ступень само по себе.
   syncEntitlements(accountId, now = Date.now()) {
     const id = String(accountId || '');
     if (!this.statements.account.get(id)) return null;
@@ -51,6 +51,18 @@ class InventoryService {
     const stats = statsFromProgress(progress);
     for (const cosmeticId of resolveServerGrants(COSMETIC_CATALOG, { stats, achievements })) {
       this.grant(id, cosmeticId, grantSource(COSMETIC_BY_ID[cosmeticId]), now);
+    }
+
+    // Только server-owned inventory. Клиент не сообщает сюда ни число, ни список «собранного».
+    const ownedIds = this.owned(id).map(item => item.id);
+    const collections = collectionProgress(ownedIds);
+    stats.collection = Object.fromEntries(collections.map(collection => [collection.id, collection.owned]));
+    for (const collection of collections) {
+      for (const reward of collection.milestones || []) {
+        if (!reward.reached) continue;
+        const cosmetic = COSMETIC_BY_ID[reward.id];
+        if (cosmetic) this.grant(id, cosmetic.id, grantSource(cosmetic), now);
+      }
     }
 
     return this.profile(id);
@@ -70,8 +82,6 @@ class InventoryService {
     return publicCosmeticLoadout(row || DEFAULT_COSMETIC_LOADOUT);
   }
 
-  // Порядок ячеек задаёт клиент, но валидность — сервер: чужой слот, неизвестный ID и повтор
-  // отсекаются нормализацией, а не доверием к сохранённой строке.
   emoteLoadout(accountId) {
     const rows = this.statements.emotes.all(String(accountId || ''));
     const slots = new Array(EMOTE_LOADOUT_SIZE).fill(null);
@@ -105,12 +115,6 @@ class InventoryService {
     return { ok: true, loadout: this.loadout(id) };
   }
 
-  /**
-   * Эмоция в ячейку 0..3. Пустой ID очищает ячейку.
-   *
-   * Проверки те же, что у носимых слотов, плюс запрет дубликата: одна и та же эмоция в двух
-   * ячейках — не польза, а потерянная ячейка.
-   */
   equipEmote(accountId, position, cosmeticId, now = Date.now()) {
     const id = String(accountId || '');
     const index = Number(position);
@@ -129,11 +133,6 @@ class InventoryService {
     return { ok: true, emotes: this.emoteLoadout(id) };
   }
 
-  /**
-   * Разрешено ли игроку проиграть эту эмоцию прямо сейчас: предмет существует, принадлежит ему и
-   * выбран в его loadout. Проверяется на каждый сетевой emote — выбранный набор может измениться
-   * между двумя сообщениями.
-   */
   canPlayEmote(accountId, cosmeticId) {
     const id = String(accountId || '');
     const cosmetic = COSMETIC_BY_ID[cosmeticId];
@@ -163,8 +162,6 @@ class InventoryService {
   }
 }
 
-// Источник записывается в ledger и виден в поддержке: «откуда у игрока этот предмет» — первый
-// вопрос при разборе жалобы, и отвечать на него «system» для всего каталога бесполезно.
 function grantSource(cosmetic) {
   const unlock = cosmetic?.unlock;
   if (!unlock) return 'system';

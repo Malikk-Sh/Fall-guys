@@ -102,11 +102,13 @@ test.describe('одиночная игра и меню', () => {
     await expect(page.locator('.wardrobe-collection')).toHaveCount(4);
     await expect(page.locator('.wardrobe-card').first()).toBeVisible();
 
-    // Вкладка «СПИНА» — новый слот. Он обязан быть и обязан фильтровать.
+    // Вкладка «СПИНА» — новый слот. Он обязан быть и обязан фильтровать. Количество карточек не
+    // фиксируем: milestone-награды и будущий контент законно расширяют этот слот.
     await page.locator('.wardrobe-tab[data-category="back"]').click();
     const backCards = page.locator('.wardrobe-card');
     await expect(backCards.first()).toHaveAttribute('data-slot', 'back');
-    await expect(backCards).toHaveCount(6);
+    const allBack = await backCards.evaluateAll(cards => cards.every(card => card.dataset.slot === 'back'));
+    expect(allBack).toBe(true);
 
     // Закрытый предмет: виден, показывает требование, доступен для примерки, но не для надевания.
     await page.locator('#wardrobeOwnership').selectOption('locked');

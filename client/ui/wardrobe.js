@@ -10,12 +10,15 @@ import {
 } from '/shared/cosmetics.js';
 import { RARITY_ORDER } from '/shared/cosmeticMeta.js';
 import {
+  LOADOUT_PRESET_COUNT,
   applyLoadout,
   equipCosmetic,
   equipEmote,
   randomLoadout,
   readCosmetics,
   readEmoteLoadout,
+  readLoadoutPresets,
+  saveLoadoutPreset,
   unequipCosmetic,
   wardrobeCollections,
   wardrobeItems
@@ -30,12 +33,9 @@ import { CosmeticPreview } from '../game/cosmetics/CosmeticPreview.js';
 
 // Шкаф.
 //
-// Раньше косметика была решёткой кнопок внутри панели аккаунта: четырнадцать предметов помещались,
-// шестьдесят четыре — нет. Здесь отдельный экран с превью, вкладками, фильтрами и коллекциями.
-//
-// Он ничего не знает про конкретные предметы. Всё, что он рисует, приходит из `wardrobeItems()`,
-// то есть из каталога: новый предмет появляется в шкафу сам, без правки этого файла. Это и есть
-// требование catalog-driven — «не должно требоваться вручную править шесть разных списков».
+// Каталог большой, поэтому здесь отдельный экран с превью, вкладками, фильтрами, коллекциями и
+// тремя быстрыми образами. Он ничего не знает про конкретные обычные предметы: всё приходит из
+// каталога через wardrobeItems(). Milestone-награды тоже являются обычными catalog items.
 
 const $ = selector => document.querySelector(selector);
 const OWNERSHIP_FILTERS = ['all', 'owned', 'locked'];
@@ -94,6 +94,7 @@ export class Wardrobe {
     });
     this.buildTabs();
     this.buildFilterOptions();
+    this.buildPresetControls();
     globalThis.addEventListener?.('resize', () => this.preview?.resize());
   }
 
@@ -150,6 +151,72 @@ export class Wardrobe {
     }
   }
 
+  // Три пресета добавляются рядом с быстрыми действиями без второго варианта разметки для mobile.
+  // Сами пресеты локальны; нажатие «Надеть» всё равно проходит через обычный server-authoritative
+  // equip для каждого слота.
+  buildPresetControls() {
+    if ($('#wardrobePresets')) return;
+    const actions = document.querySelector('.wardrobe-stage-actions');
+    if (!actions) return;
+
+    const root = document.createElement('div');
+    root.id = 'wardrobePresets';
+    root.setAttribute('aria-label', 'Сохранённые образы');
+    root.style.cssText =
+      'display:grid;gap:6px;padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.04)';
+    const title = document.createElement('small');
+    title.textContent = 'БЫСТРЫЕ ОБРАЗЫ';
+    title.style.cssText = 'font-weight:800;letter-spacing:.1em;opacity:.75';
+    root.append(title);
+
+    for (let index = 0; index < LOADOUT_PRESET_COUNT; index++) {
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px;align-items:center';
+
+      const summary = document.createElement('span');
+      summary.dataset.presetSummary = String(index);
+      summary.style.cssText =
+        'min-width:0;font-size:.68rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.className = 'button button-secondary';
+      apply.dataset.presetApply = String(index);
+      apply.textContent = 'НАДЕТЬ';
+      apply.style.cssText = 'min-height:34px;padding:6px 8px;font-size:.62rem';
+      apply.addEventListener('click', () => this.applyPreset(index));
+
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'button button-secondary';
+      save.textContent = 'СОХРАНИТЬ';
+      save.style.cssText = 'min-height:34px;padding:6px 8px;font-size:.62rem';
+      save.addEventListener('click', () => this.savePreset(index));
+
+      row.append(summary, apply, save);
+      root.append(row);
+    }
+    actions.after(root);
+    this.renderPresetControls();
+  }
+
+  renderPresetControls() {
+    const presets = readLoadoutPresets();
+    for (let index = 0; index < LOADOUT_PRESET_COUNT; index++) {
+      const preset = presets[index];
+      const summary = document.querySelector(`[data-preset-summary="${index}"]`);
+      const apply = document.querySelector(`[data-preset-apply="${index}"]`);
+      if (summary) {
+        const count = preset ? Object.values(preset).filter(Boolean).length : 0;
+        summary.textContent = preset
+          ? `ОБРАЗ ${index + 1} · ${count}/6 СЛОТОВ`
+          : `ОБРАЗ ${index + 1} · ПУСТО`;
+      }
+      if (apply) apply.disabled = !preset;
+    }
+  }
+
   // ── Показ ─────────────────────────────────────────────────────────────────────────────────
 
   show() {
@@ -160,6 +227,7 @@ export class Wardrobe {
     this.open = true;
     this.previewLoadout = null;
     this.ensurePreview();
+    this.renderPresetControls();
     this.render();
     this.startLoop();
   }
@@ -169,8 +237,6 @@ export class Wardrobe {
     screen?.classList.add('hidden');
     this.open = false;
     this.stopLoop();
-    // Превью — отдельный WebGL-контекст. Держать его живым за закрытым экраном значит держать
-    // второй контекст на телефоне всё время игры; браузеры такие контексты и сами отбирают.
     this.preview?.dispose();
     this.preview = null;
   }
@@ -181,7 +247,6 @@ export class Wardrobe {
     try {
       this.preview = new CosmeticPreview(canvas, { reducedMotion: this.reducedMotion });
     } catch {
-      // Без WebGL шкаф остаётся полностью рабочим: карточки, фильтры и equip от превью не зависят.
       this.preview = null;
       canvas.classList.add('hidden');
     }
@@ -253,6 +318,7 @@ export class Wardrobe {
     this.renderDetails(entries.find(entry => entry.id === this.selectedId) || null);
     this.renderCollections();
     this.renderEmoteBar(entries);
+    this.renderPresetControls();
     this.applyPreview();
   }
 
@@ -267,9 +333,7 @@ export class Wardrobe {
       grid.append(empty);
       return;
     }
-    for (const entry of entries) {
-      grid.append(this.card(entry));
-    }
+    for (const entry of entries) grid.append(this.card(entry));
   }
 
   card(entry) {
@@ -290,8 +354,6 @@ export class Wardrobe {
 
     const swatch = document.createElement('i');
     swatch.className = 'wardrobe-card-swatch';
-    // Иконка предмета — его собственные цвета из каталога. Отдельного набора картинок нет
-    // намеренно: он был бы шестьдесят первым списком, который надо синхронизировать вручную.
     swatch.style.setProperty(
       '--primary',
       cssColor(entry.item.render.primary ?? entry.item.color ?? 0xff4f91)
@@ -304,12 +366,9 @@ export class Wardrobe {
 
     const name = document.createElement('strong');
     name.textContent = entry.item.name;
-
     const meta = document.createElement('small');
     meta.className = 'wardrobe-card-meta';
-    // Редкость подписана словом и значком, а не только цветом: цветовое зрение не обязано быть.
     meta.textContent = `${entry.rarity.icon} ${entry.rarity.label}`;
-
     const state = document.createElement('span');
     state.className = 'wardrobe-card-state';
     state.textContent = entry.equipped ? 'НАДЕТО' : entry.owned ? '' : entry.requirement;
@@ -373,7 +432,6 @@ export class Wardrobe {
     equip.disabled = !entry.owned || entry.equipped;
     equip.textContent = entry.equipped ? 'НАДЕТО' : entry.owned ? 'НАДЕТЬ' : 'ЗАКРЫТО';
     const unequip = $('#wardrobeUnequip');
-    // Тело снять нельзя: персонаж без корпуса — не образ, а невидимка.
     const removable = entry.slot !== 'body' && entry.equipped;
     unequip.classList.toggle('hidden', !removable);
 
@@ -401,13 +459,35 @@ export class Wardrobe {
       bar.className = 'wardrobe-collection-bar';
       bar.style.setProperty('--percent', `${collection.percent}%`);
       const percent = document.createElement('small');
-      // Значок за сто процентов — только отметка. Никакого игрового бонуса за коллекцию нет и
-      // не должно быть: косметика не влияет на шансы победить.
       percent.textContent = collection.complete
         ? `${collection.percent}% ✓ СОБРАНА`
         : `${collection.percent}%`;
 
       row.append(title, count, bar, percent);
+
+      // Награда видна заранее: 5/15, 10/15 и 15/15 — это понятные ступени, а не сюрприз после
+      // неизвестного количества замков. Нажатие открывает обычную карточку предмета/превью.
+      const milestones = document.createElement('div');
+      milestones.style.cssText = 'grid-column:1/-1;display:grid;gap:4px;margin-top:4px';
+      for (const reward of collection.milestones || []) {
+        const meta = rarityMeta(reward.rarity);
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'wardrobe-chip';
+        chip.style.cssText = 'width:100%;text-align:left;white-space:normal;line-height:1.2';
+        chip.textContent = `${reward.owned ? '✓ ' : ''}${reward.threshold}/15 · ${meta.icon} ${reward.name}`;
+        chip.setAttribute(
+          'aria-label',
+          `${reward.threshold} из 15: ${reward.name}, ${reward.owned ? 'получено' : 'награда коллекции'}`
+        );
+        chip.addEventListener('click', event => {
+          event.stopPropagation();
+          this.select(reward.id);
+        });
+        milestones.append(chip);
+      }
+      row.append(milestones);
+
       row.addEventListener('click', () => {
         this.collection = this.collection === collection.id ? 'all' : collection.id;
         const select = $('#wardrobeCollection');
@@ -452,9 +532,6 @@ export class Wardrobe {
 
   // ── Превью ────────────────────────────────────────────────────────────────────────────────
 
-  // Примерка идёт отдельно от надевания: выбранный предмет подставляется в образ на превью, но
-  // сохранённый loadout остаётся прежним, пока игрок не нажмёт «Надеть». Именно это и позволяет
-  // рассмотреть закрытый предмет, не получая его.
   applyPreview() {
     if (!this.preview) return;
     const equipped = this.previewLoadout || readCosmetics(this.progress, this.profile);
@@ -507,10 +584,25 @@ export class Wardrobe {
 
   randomize() {
     const loadout = randomLoadout({ progress: this.progress, profile: this.profile });
-    // Сначала показываем, потом сохраняем — но сохраняем сразу же тем же серверным путём, что и
-    // обычный equip: отдельной «быстрой» дороги к владению у случайного образа нет.
     this.previewLoadout = loadout;
     applyLoadout(loadout, this.progress, this.profile);
+    this.previewLoadout = null;
+    this.sfx?.uiConfirm?.();
+    this.render();
+    this.onChange();
+  }
+
+  savePreset(index) {
+    const current = readCosmetics(this.progress, this.profile);
+    saveLoadoutPreset(index, current);
+    this.sfx?.uiConfirm?.();
+    this.renderPresetControls();
+  }
+
+  applyPreset(index) {
+    const preset = readLoadoutPresets()[index];
+    if (!preset) return;
+    applyLoadout(preset, this.progress, this.profile);
     this.previewLoadout = null;
     this.sfx?.uiConfirm?.();
     this.render();
@@ -523,16 +615,12 @@ export class Wardrobe {
     this.render();
   }
 
-  /**
-   * Карточка «новый предмет». Показывается один раз на предмет: список показанных живёт локально,
-   * а владение всё равно остаётся серверным, поэтому подделать здесь нечего.
-   */
+  /** Карточка «новый предмет». Показывается один раз на предмет. */
   announceUnlocks(ownedIds = []) {
     const seen = readSeenCosmetics();
     const fresh = ownedIds.filter(id => COSMETIC_BY_ID[id] && !seen.has(id));
     markCosmeticsSeen(ownedIds);
     if (!fresh.length || !this.knownOwnership) {
-      // Первый заход после входа в аккаунт не должен вываливать всю историю наград разом.
       this.knownOwnership = true;
       return null;
     }

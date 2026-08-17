@@ -64,7 +64,8 @@ test.describe('быстрый подбор кооперативной пары',
       await findPartner(page);
       await page.locator('#coopFind').click();
       await expect(page.locator('#coopStatus')).toContainText('Поиск отменён');
-      await expect(page.locator('#coopFind')).toContainText('НАЙТИ НАПАРНИКА');
+      await expect(page.locator('#coopFind')).toHaveAttribute('data-searching', 'false');
+      await expect(page.locator('#coopFind')).toContainText('ИГРАТЬ ГЛАВУ 1');
       expect(await page.evaluate(() => window.__WOBBLE_GAME__?.net?.roomCode)).toBeFalsy();
     } finally {
       await context.close();

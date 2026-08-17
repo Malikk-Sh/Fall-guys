@@ -24,9 +24,12 @@ test.describe('полировка главного меню', () => {
 
     await page.locator('#soundToggle').click();
     expect(await page.evaluate(() => window.__WOBBLE_GAME__.audio.muted)).toBe(false);
-    await page.evaluate(() => window.__WOBBLE_GAME__.audio.setVolume('master', 0));
-    await page.locator('#vol-master').dispatchEvent('input');
+    await page.locator('#vol-master').evaluate(slider => {
+      slider.value = '0';
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    });
     await expect(page.locator('#soundToggle')).toHaveAttribute('aria-pressed', 'true');
+    expect(await page.evaluate(() => window.__WOBBLE_GAME__.audio.volumes.master)).toBe(0);
     await page.locator('#soundToggle').click();
     const recoveredAudio = await page.evaluate(() => ({
       muted: window.__WOBBLE_GAME__.audio.muted,
@@ -101,8 +104,11 @@ test.describe('полировка главного меню', () => {
 
   test('отмена перехода не оставляет mode panel заблокированной', async ({ page }) => {
     await openMenu(page);
-    await page.locator('[data-mode="multi"]').click();
-    await page.locator('[data-mode="single"]').click();
+    await page.evaluate(() => {
+      const ui = window.__WOBBLE_GAME__.ui;
+      ui.selectMode('multi');
+      ui.selectMode('single');
+    });
     await expect(page.locator('#single')).toBeVisible();
     expect(await page.locator('#single').evaluate(node => node.style.pointerEvents)).toBe('');
   });

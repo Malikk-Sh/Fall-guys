@@ -194,7 +194,9 @@ test('missing and rejected Fullscreen API never block normal play', async ({ pag
   await rejected.close();
 });
 
-test('fullscreen advisory disappears immediately when gameplay leaves the menu', async ({ page }, testInfo) => {
+test('fullscreen advisory disappears immediately when gameplay leaves the menu', async ({
+  page
+}, testInfo) => {
   mobileOnly(testInfo);
   await page.setViewportSize({ width: 844, height: 390 });
   await installFullscreenMock(page, { supported: true });

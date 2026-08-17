@@ -99,10 +99,18 @@ const CENTER_TOLERANCE = 0.8;
 // насколько занят runner после этого. Клавиша по-прежнему настоящая — проходит через тот же Input,
 // что и у человека.
 const STEER_PULSE_MS = 140;
+// Одной ограниченной длительности недостаточно. Trace CI #643 показал, что при редких чтениях позиции
+// x всё ещё гулял примерно от -15 до +15: водитель продолжал жать в ту же сторону даже после того,
+// как предыдущий импульс уже развернул боковую скорость к центру. Не добавляем второй импульс, пока
+// игрок уже возвращается достаточно быстро; это простой тормоз по скорости, а не знание препятствий.
+const CENTERING_SPEED = 1.4;
 
-async function steerTowardCenter(page, x) {
-  if (x > CENTER_TOLERANCE) await page.keyboard.press('KeyA', { delay: STEER_PULSE_MS });
-  else if (x < -CENTER_TOLERANCE) await page.keyboard.press('KeyD', { delay: STEER_PULSE_MS });
+async function steerTowardCenter(page, { x, vx }) {
+  if (x > CENTER_TOLERANCE && vx > -CENTERING_SPEED) {
+    await page.keyboard.press('KeyA', { delay: STEER_PULSE_MS });
+  } else if (x < -CENTER_TOLERANCE && vx < CENTERING_SPEED) {
+    await page.keyboard.press('KeyD', { delay: STEER_PULSE_MS });
+  }
 }
 
 // Сколько строк сейчас в таблице подтверждённых рекордов этой трассы. Сид и сложность фиксированы
@@ -123,6 +131,7 @@ const progress = page =>
     return {
       x: player?.position?.x ?? null,
       z: player?.position?.z ?? null,
+      vx: player?.velocity?.x ?? null,
       checkpoint: player?.checkpoint ?? null,
       finishZ: game?.course?.spec?.finishZ ?? null,
       segments: game?.course?.spec?.segmentCount ?? null,
@@ -138,8 +147,8 @@ const describeRun = report =>
   report.done
     ? 'дошёл'
     : `не дошёл за ${(report.seconds ?? 0).toFixed(0)} с: z=${report.z ?? '—'} из ${report.finishZ ?? '—'}, ` +
-      `чекпоинт ${report.checkpoint ?? '—'}/${report.segments ?? '—'}, состояние ${report.state ?? '—'}, ` +
-      `падений ${report.respawns ?? '—'}, HUD ${report.hud ? 'виден' : 'нет'}`;
+      `x=${report.x ?? '—'}, vx=${report.vx ?? '—'}, чекпоинт ${report.checkpoint ?? '—'}/${report.segments ?? '—'}, ` +
+      `состояние ${report.state ?? '—'}, падений ${report.respawns ?? '—'}, HUD ${report.hud ? 'виден' : 'нет'}`;
 
 async function runToFinish(page, budget = RUN_BUDGET_MS) {
   const startedAt = Date.now();
@@ -151,13 +160,14 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
         const player = window.__WOBBLE_GAME__?.player;
         return {
           x: player?.position?.x ?? 0,
+          vx: player?.velocity?.x ?? 0,
           finished: !!player?.finished,
           results: !document.querySelector('#finish')?.classList.contains('hidden')
         };
       });
       if (status.finished || status.results) return { done: true, seconds: (Date.now() - startedAt) / 1000 };
 
-      await steerTowardCenter(page, status.x);
+      await steerTowardCenter(page, status);
 
       // Прыжок отдельным нажатием, а не удержанием: удержание — это планирование, и с ним игрок
       // проносится мимо узких платформ вместо того, чтобы на них приземлиться.

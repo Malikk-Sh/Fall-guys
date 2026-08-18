@@ -157,6 +157,7 @@ jobs:
     env:
       WOBBLE_E2E_EXCLUDE_FULL_MATCH: ${{ matrix.exclude_full_match }}
       WOBBLE_E2E_RETRIES: ${{ matrix.retries }}
+      WOBBLE_E2E_DIAGNOSTICS: ${{ matrix.name == 'full-match' && '1' || '0' }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4

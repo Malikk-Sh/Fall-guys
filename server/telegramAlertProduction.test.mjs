@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { expandNpmScript } from './testScriptGraph.mjs';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -36,11 +37,12 @@ test('all internal Control Plane feeds are explicitly denied at the public Nginx
 });
 
 test('standard npm test includes all Telegram delivery regressions', () => {
+  const standardTest = expandNpmScript(pkg.scripts, 'test');
   for (const file of [
     'server/telegramAlertDelivery.test.mjs',
     'server/telegramAlertTest.test.mjs',
     'server/telegramAlertProduction.test.mjs'
   ]) {
-    assert.ok(pkg.scripts.test.includes(file), `${file} missing from npm test`);
+    assert.ok(standardTest.includes(file), `${file} missing from npm test`);
   }
 });

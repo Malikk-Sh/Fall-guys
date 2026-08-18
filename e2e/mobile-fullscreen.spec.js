@@ -76,19 +76,27 @@ async function installFullscreenMock(
   );
 }
 
+async function armFullscreenPrompt(page) {
+  await expect(page.locator('#mobileGameModePrompt')).toBeHidden();
+  await page.locator('.mode-tab[data-mode="single"]').click();
+  await expect(page.locator('#mobileGameModePrompt')).toBeVisible();
+}
+
 test('missing and rejected Fullscreen API never block normal play', async ({ page }, testInfo) => {
   fullscreenOnly(testInfo);
   await installFullscreenMock(page, { supported: false });
   await page.goto('/');
   await expect(page.locator('#mobileGameModePrompt')).toBeHidden();
   await expect(page.locator('#fullscreenToggle')).toBeHidden();
+  await page.locator('.mode-tab[data-mode="single"]').click();
+  await expect(page.locator('#mobileGameModePrompt')).toBeHidden();
   await expect(page.locator('#play')).toBeVisible();
 
   const rejected = await page.context().newPage();
   await rejected.setViewportSize({ width: 844, height: 390 });
   await installFullscreenMock(rejected, { supported: true, rejectRequest: true, rejectLock: true });
   await rejected.goto('/');
-  await expect(rejected.locator('#mobileGameModePrompt')).toBeVisible();
+  await armFullscreenPrompt(rejected);
   await rejected.locator('#mobileFullscreenStart').click();
   await expect(rejected.locator('#mobileGameModePrompt')).toBeHidden();
   await expect(rejected.locator('body')).not.toHaveClass(/is-fullscreen/);
@@ -118,7 +126,7 @@ test('fullscreen advisory disappears immediately when gameplay leaves the menu',
   await page.setViewportSize({ width: 844, height: 390 });
   await installFullscreenMock(page, { supported: true });
   await page.goto('/');
-  await expect(page.locator('#mobileGameModePrompt')).toBeVisible();
+  await armFullscreenPrompt(page);
 
   await page.locator('#play').click();
   await expect(page.locator('#hud')).toBeVisible();
@@ -133,8 +141,8 @@ test('fullscreenchange owns button state and orientation-lock rejection is harml
   await page.setViewportSize({ width: 844, height: 390 });
   await installFullscreenMock(page, { supported: true, rejectLock: true });
   await page.goto('/');
+  await armFullscreenPrompt(page);
 
-  await expect(page.locator('#mobileGameModePrompt')).toBeVisible();
   await page.locator('#mobileFullscreenStart').click();
   await expect(page.locator('#fullscreenToggle')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('body')).toHaveClass(/is-fullscreen/);

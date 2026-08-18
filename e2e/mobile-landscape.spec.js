@@ -9,12 +9,7 @@ function mobileOnly(testInfo) {
 
 async function installFullscreenMock(
   page,
-  {
-    supported = true,
-    rejectRequest = false,
-    rejectLock = false,
-    armOnModePointerDown = false
-  } = {}
+  { supported = true, rejectRequest = false, rejectLock = false, armOnModePointerDown = false } = {}
 ) {
   await page.addInitScript(
     ({ supported, rejectRequest, rejectLock, armOnModePointerDown }) => {

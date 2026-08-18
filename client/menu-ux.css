@@ -92,10 +92,6 @@ body.menu-stage-experience .menu-card {
   min-width: 0;
 }
 
-body.menu-stage-experience.mobile-landscape .menu-card {
-  overflow-y: hidden;
-}
-
 body.menu-stage-experience .menu-preview-caption {
   grid-column: 2;
   grid-row: 1;

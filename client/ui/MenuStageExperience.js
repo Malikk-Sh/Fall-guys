@@ -36,6 +36,12 @@ const MODE_COPY = Object.freeze({
   })
 });
 
+const RACE_PREVIEW_OFFSETS = Object.freeze([
+  Object.freeze({ x: -2.2, z: 1.45 }),
+  Object.freeze({ x: 2.2, z: 1.45 }),
+  Object.freeze({ x: 0, z: 3 })
+]);
+
 function hexColor(value, fallback) {
   const number = Number.isFinite(value) ? value : fallback;
   return `#${number.toString(16).padStart(6, '0').slice(-6)}`;
@@ -59,10 +65,18 @@ export class MenuStageExperience {
     this.waitFrame = 0;
     this.waitAttempts = 0;
     this.gridObserver = null;
+    this.modeObserver = null;
     this.lastChapterId = '';
     this.lastPreviewSignature = '';
-    this.originalSelectMode = null;
     this.initialized = false;
+    this.onModeTabClick = event => {
+      const button = event.target?.closest?.('.mode-tab');
+      const mode = button?.dataset?.mode;
+      if (!['single', 'multi', 'coop'].includes(mode)) return;
+      const sync = () => this.syncMode(mode);
+      if (typeof this.window?.requestAnimationFrame === 'function') this.window.requestAnimationFrame(sync);
+      else sync();
+    };
   }
 
   init() {
@@ -88,6 +102,13 @@ export class MenuStageExperience {
     const tabs = menu?.querySelector('.mode-tabs');
     if (!menu || !tabs) return;
     this.root.body.classList.add('menu-stage-experience');
+    tabs.addEventListener('click', this.onModeTabClick);
+
+    // The normal collapsed menu still fits without scrolling. Private/friend disclosures are an
+    // explicit secondary flow, so if large UI or a short viewport makes them taller than the card
+    // they must stay reachable instead of being clipped by the landscape presentation stylesheet.
+    const menuCard = menu.querySelector('.menu-card');
+    if (menuCard) menuCard.style.overflowY = 'auto';
 
     if (!$('#menuModeRail')) {
       const rail = this.root.createElement('nav');
@@ -146,7 +167,7 @@ export class MenuStageExperience {
       windowRef: this.window,
       getReducedMotion: () => Boolean(game.ui?.settings?.reducedMotion || game.settings?.reducedMotion)
     });
-    this.wrapModeSelection();
+    this.observeModeState();
     this.observeCampaign();
     $('#raceDifficulty')?.addEventListener('change', () => {
       if (visibleMenuMode(game.ui) === 'multi') this.schedulePreview('multi');
@@ -154,21 +175,21 @@ export class MenuStageExperience {
     $('#runType')?.addEventListener('change', () => this.syncCaption('single'));
     $('#difficulty')?.addEventListener('change', () => this.syncCaption('single'));
     this.syncCampaignContext();
-    const mode = visibleMenuMode(game.ui);
-    this.syncMode(mode);
+    this.syncMode(visibleMenuMode(game.ui));
   }
 
-  wrapModeSelection() {
-    const ui = this.game?.ui;
-    if (!ui || ui.__menuStageModeBound) return;
-    ui.__menuStageModeBound = true;
-    const original = ui.selectMode.bind(ui);
-    this.originalSelectMode = original;
-    ui.selectMode = mode => {
-      const result = original(mode);
-      this.syncMode(mode);
-      return result;
-    };
+  observeModeState() {
+    const Observer = this.window?.MutationObserver || globalThis.MutationObserver;
+    const menu = $('#menu');
+    if (!menu || typeof Observer !== 'function') return;
+    this.modeObserver?.disconnect?.();
+    this.modeObserver = new Observer(() => {
+      if (menu.classList.contains('hidden')) return;
+      this.syncMode(visibleMenuMode(this.game?.ui));
+    });
+    for (const node of [menu, $('#single'), $('#multi'), $('#coop')]) {
+      if (node) this.modeObserver.observe(node, { attributes: true, attributeFilter: ['class'] });
+    }
   }
 
   observeCampaign() {
@@ -187,9 +208,10 @@ export class MenuStageExperience {
 
   syncMode(mode) {
     if (!['single', 'multi', 'coop'].includes(mode)) return;
+    const changed = this.root.body.dataset.menuMode !== mode;
     this.root.body.dataset.menuMode = mode;
     this.syncCaption(mode);
-    this.transitions?.celebrate($('#menuPreviewCaption'), 'card');
+    if (changed) this.transitions?.celebrate($('#menuPreviewCaption'), 'card');
     if (mode === 'coop') this.syncCampaignContext();
     this.schedulePreview(mode);
   }
@@ -260,12 +282,42 @@ export class MenuStageExperience {
     return `single:${spec?.seed || 0}:${spec?.difficulty || 'normal'}`;
   }
 
+  previewMatches(mode) {
+    const game = this.game;
+    const spec = game?.course?.spec;
+    if (!game || !spec) return false;
+    if (mode === 'coop') {
+      const chapterId = this.lastChapterId || game.ui?.coopChapter?.() || COOP_CHAPTERS[0]?.id;
+      return spec.chapterId === chapterId && game.remotes?.has(PREVIEW_IDS[0]);
+    }
+    if (mode === 'multi') {
+      const difficulty = $('#raceDifficulty')?.value || 'normal';
+      return (
+        !spec.chapterId &&
+        spec.seed === game.menuRandomSeed &&
+        spec.difficulty === difficulty &&
+        PREVIEW_IDS.every(id => game.remotes?.has(id))
+      );
+    }
+    const preview = game.previewSpec;
+    return (
+      !spec.chapterId &&
+      spec.seed === preview?.seed &&
+      spec.difficulty === preview?.difficulty &&
+      PREVIEW_IDS.every(id => !game.remotes?.has(id))
+    );
+  }
+
   renderPreview(mode) {
     const game = this.game;
     if (!game || game.running || game.state?.name !== 'menu') return;
     const signature = this.previewSignature(mode);
-    if (signature === this.lastPreviewSignature && this.root.body.dataset.menuPreviewMode === mode) return;
-    this.lastPreviewSignature = signature;
+    if (
+      signature === this.lastPreviewSignature &&
+      this.root.body.dataset.menuPreviewMode === mode &&
+      this.previewMatches(mode)
+    )
+      return;
 
     if (mode === 'coop') {
       const chapterId = this.lastChapterId || game.ui?.coopChapter?.() || COOP_CHAPTERS[0]?.id;
@@ -293,6 +345,7 @@ export class MenuStageExperience {
       delete this.root.body.dataset.menuPreviewChapter;
     }
 
+    this.lastPreviewSignature = signature;
     this.root.body.dataset.menuPreviewMode = mode;
   }
 
@@ -306,7 +359,14 @@ export class MenuStageExperience {
       accent: COLORS.yellow,
       cosmetics: game.ui?.cosmeticLoadout?.()
     });
-    actor.teleport(game.course.spawnFor(index));
+    const coop = Boolean(game.course.spec?.chapterId);
+    const spawn = coop ? game.course.spawnFor(0, index) : game.course.spawnFor(0);
+    if (!coop) {
+      const offset = RACE_PREVIEW_OFFSETS[index - 1] || RACE_PREVIEW_OFFSETS[0];
+      spawn.x += offset.x;
+      spawn.z += offset.z;
+    }
+    actor.teleport(spawn);
     game.remotes.set(id, actor);
     return actor;
   }

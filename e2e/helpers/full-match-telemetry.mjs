@@ -75,13 +75,15 @@ const number = (value, digits = 0) => (Number.isFinite(value) ? value.toFixed(di
 
 export function describeRuntimeTelemetry(telemetry) {
   if (!telemetry) return 'timing —';
-  const poll = telemetry.poll?.intervals || {};
+  const control = telemetry.control || telemetry.poll || {};
+  const controlIntervals = control.intervals || {};
+  const controlLabel = telemetry.control ? 'control' : 'poll';
   const frame = telemetry.frame?.intervals || {};
   return (
-    `poll итераций ${telemetry.poll?.iterations ?? 0}, median ${number(poll.median)}мс, ` +
-    `p95 ${number(poll.p95)}мс, max ${number(poll.max)}мс; ` +
+    `${controlLabel} итераций ${control.iterations ?? 0}, median ${number(controlIntervals.median)}мс, ` +
+    `p95 ${number(controlIntervals.p95)}мс, max ${number(controlIntervals.max)}мс; ` +
     `rAF ~${number(telemetry.frame?.estimatedFps, 1)} FPS, median ${number(frame.median, 1)}мс, ` +
     `p95 ${number(frame.p95, 1)}мс, max ${number(frame.max, 1)}мс; ` +
-    `max |x| ${number(telemetry.poll?.maxAbsX, 2)}, max |vx| ${number(telemetry.poll?.maxAbsVx, 2)}`
+    `max |x| ${number(control.maxAbsX, 2)}, max |vx| ${number(control.maxAbsVx, 2)}`
   );
 }

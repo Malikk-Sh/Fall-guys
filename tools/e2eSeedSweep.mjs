@@ -20,7 +20,7 @@ import { Course } from '../client/game/Course.js';
 import { Effects } from '../client/game/Effects.js';
 import { Player } from '../client/game/Player.js';
 import { resolvePlayerCrowd } from '../client/game/PlayerCollisions.js';
-import { STEER_PULSE_MS, steeringAxis } from '../e2e/helpers/full-match-driver.mjs';
+import { DRIVER_CONTROL_PERIOD_MS, STEER_PULSE_MS, steeringAxis } from '../e2e/helpers/full-match-driver.mjs';
 
 // Ровно значения игрового цикла client/main.js: при низком FPS физика делает не более пяти
 // фиксированных подшагов за кадр, а препятствия продолжают жить по настенному времени.
@@ -38,9 +38,9 @@ const START_LANE_X = 0.875;
 
 // 10–15 FPS — диапазон двух Chromium на GitHub runner, 60 FPS — обычная машина.
 const FRAME_RATES = [10, 12, 15, 60];
-// Реальный round-trip Playwright заметно длиннее nominal waitForTimeout(220). Модель проверяет
-// быстрые и медленные циклы вплоть до наблюдённого в CI хвоста ~1.7 с.
-const PERIODS_MS = [300, 500, 700, 900, 1200, 1700];
+// Первый режим — точный cadence browser-local driver. Остальные сохраняют запас по задержке,
+// чтобы sweep продолжал проверять деградацию runner scheduling, а не только идеальный такт.
+const PERIODS_MS = [DRIVER_CONTROL_PERIOD_MS, 300, 500, 700, 900, 1200, 1700];
 const LATENCIES_MS = [60, 200];
 const PHASES = 3;
 

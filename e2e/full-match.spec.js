@@ -27,14 +27,16 @@
 // условии, что сам водитель не превращает задержку CI в многосекундно зажатую боковую клавишу.
 
 import { test, expect } from '@playwright/test';
-import { STEER_PULSE_MS, steeringKey } from './helpers/full-match-driver.mjs';
 import {
-  createPollTelemetry,
+  readFullMatchBrowserDriverTelemetry,
+  startFullMatchBrowserDriver,
+  stopFullMatchBrowserDriver,
+  waitForFullMatchBrowserDriver
+} from './helpers/full-match-browser-driver.mjs';
+import {
   describeRuntimeTelemetry,
   installFrameProbe,
-  readFrameTelemetry,
-  recordPoll,
-  summarizePollTelemetry
+  readFrameTelemetry
 } from './helpers/full-match-telemetry.mjs';
 
 // Запас на прохождение. Трасса короткая, но потолок взят кратно больше: падение возвращает на
@@ -94,16 +96,13 @@ async function joinRoom(page, name, code) {
 // второй игровой логикой, которую придётся чинить при каждой правке баланса, и падение теста
 // перестаёт что-либо означать. Трасса подобрана под ЭТОГО водителя, а не наоборот.
 //
-// Положение читается из window.__WOBBLE_GAME__, который клиент выставляет и без тестов. Никакого
-// обхода правил тут нет: это собственная позиция игрока, которую его же браузер и рисует, а сервер
-// всё равно проверяет каждое присланное состояние.
+// Раньше каждое решение делало round-trip Node → Playwright → Chromium. На двух браузерах под
+// нагрузкой один идеальный 220-мс такт превращался в 0.9–1.6 с, из-за чего короткое боковое
+// нажатие становилось грубым и водитель улетал с трассы. Теперь цикл живёт внутри каждого Chromium
+// и синхронизирован с его requestAnimationFrame; Playwright только ждёт факт финиша.
 //
-// Steering policy живёт в e2e/helpers/full-match-driver.mjs и используется также seed-sweep. Это
-// не даёт дешёвой физической модели снова незаметно разойтись с настоящим browser driver.
-async function steerTowardCenter(page, status) {
-  const key = steeringKey(status);
-  if (key) await page.keyboard.press(key, { delay: STEER_PULSE_MS });
-}
+// Steering policy лежит в shared/e2eFullMatchDriver.js: её импортируют и browser-driver, и
+// seed-sweep, поэтому дешёвая модель и настоящий Chromium больше не могут тихо разойтись.
 
 // Сколько строк сейчас в таблице подтверждённых рекордов этой трассы. Сид и сложность фиксированы
 // конфигурацией, поэтому запрос детерминированный.
@@ -157,50 +156,31 @@ const describeRun = report => {
   return `${result}; ${describeRuntimeTelemetry(report.telemetry)}${remotes}`;
 };
 
-async function runReport(page, startedAt, telemetry, done) {
-  const [state, frame] = await Promise.all([progress(page), readFrameTelemetry(page)]);
+async function runReport(page, startedAt, done) {
+  const [state, frame, control] = await Promise.all([
+    progress(page),
+    readFrameTelemetry(page),
+    readFullMatchBrowserDriverTelemetry(page)
+  ]);
   return {
     done,
     seconds: (Date.now() - startedAt) / 1000,
     ...state,
-    telemetry: {
-      poll: summarizePollTelemetry(telemetry),
-      frame
-    }
+    telemetry: { control, frame }
   };
 }
 
 async function runToFinish(page, budget = RUN_BUDGET_MS) {
   const startedAt = Date.now();
-  const deadline = startedAt + budget;
-  const telemetry = createPollTelemetry(startedAt);
   await installFrameProbe(page);
-  await page.keyboard.down('KeyW');
+  await startFullMatchBrowserDriver(page);
+  let done = false;
   try {
-    while (Date.now() < deadline) {
-      const status = await page.evaluate(() => {
-        const player = window.__WOBBLE_GAME__?.player;
-        return {
-          x: player?.position?.x ?? 0,
-          vx: player?.velocity?.x ?? 0,
-          finished: !!player?.finished,
-          results: !document.querySelector('#finish')?.classList.contains('hidden')
-        };
-      });
-      recordPoll(telemetry, status);
-      if (status.finished || status.results) return runReport(page, startedAt, telemetry, true);
-
-      await steerTowardCenter(page, status);
-
-      // Прыжок отдельным нажатием, а не удержанием: удержание — это планирование, и с ним игрок
-      // проносится мимо узких платформ вместо того, чтобы на них приземлиться.
-      await page.keyboard.press('Space');
-      await page.waitForTimeout(220);
-    }
+    done = await waitForFullMatchBrowserDriver(page, budget);
   } finally {
-    await page.keyboard.up('KeyW');
+    await stopFullMatchBrowserDriver(page);
   }
-  return runReport(page, startedAt, telemetry, false);
+  return runReport(page, startedAt, done);
 }
 
 // Два водителя не должны сами превращаться в дополнительное препятствие теста. На старте их x =

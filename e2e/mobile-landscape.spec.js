@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 function mobileOnly(testInfo) {
   test.skip(
-    testInfo.project.name !== 'mobile-chromium',
-    'Mobile landscape suite runs only in the touch project.'
+    testInfo.project.name !== 'mobile-fullscreen',
+    'Mobile landscape suite runs only in the dedicated fullscreen touch project.'
   );
 }
 
@@ -16,12 +16,6 @@ async function installFullscreenMock(
       let fullscreenElement = null;
       let fullscreenEnabled = supported && !armOnModePointerDown;
       window.__orientationLocks = [];
-
-      // Базовый mobile project хранит явный выбор «продолжить в браузере». Fullscreen-suite
-      // намеренно снимает его до старта приложения, чтобы тестировать настоящий onboarding.
-      try {
-        localStorage.removeItem('wobble-fullscreen-prompt-v1');
-      } catch {}
 
       Object.defineProperty(document, 'fullscreenEnabled', {
         configurable: true,

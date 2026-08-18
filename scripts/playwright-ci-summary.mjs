@@ -45,10 +45,7 @@ class GitHubStepSummaryReporter {
     );
     const passed = latest.filter(({ result }) => result.status === 'passed').length;
     const skipped = latest.filter(({ result }) => result.status === 'skipped').length;
-    const retryAttempts = latest.reduce(
-      (sum, { attempts }) => sum + Math.max(0, attempts.length - 1),
-      0
-    );
+    const retryAttempts = latest.reduce((sum, { attempts }) => sum + Math.max(0, attempts.length - 1), 0);
     const executionMs = latest.reduce(
       (sum, { attempts }) => sum + attempts.reduce((attemptSum, result) => attemptSum + result.duration, 0),
       0

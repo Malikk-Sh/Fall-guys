@@ -5,6 +5,20 @@ import { defineConfig, devices } from '@playwright/test';
 // задаётся — там браузер ставится шагом `playwright install`.
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 const launchOptions = executablePath ? { executablePath } : {};
+const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
+const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
+
+// Обычные mobile E2E моделируют уже сделанный пользователем выбор «продолжить в браузере».
+// Fullscreen/onboarding поведение запускается отдельным mobile-fullscreen project без этого флага.
+const windowedMobileStorage = {
+  cookies: [],
+  origins: [
+    {
+      origin: 'http://127.0.0.1:4173',
+      localStorage: [{ name: 'wobble-fullscreen-prompt-v1', value: '1' }]
+    }
+  ]
+};
 
 export default defineConfig({
   testDir: './e2e',
@@ -22,6 +36,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: mobileOnlySuite,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions,
@@ -32,14 +47,27 @@ export default defineConfig({
     },
     {
       name: 'mobile-chromium',
+      testIgnore: fullscreenSuite,
       use: {
         ...devices['Pixel 7'],
-        // Продукт теперь landscape-first: базовый мобильный проект проверяет именно рабочую
-        // ориентацию. Portrait остаётся отдельным explicit case в mobile-landscape.spec.js.
+        // Продукт теперь landscape-first: базовый мобильный project проверяет рабочую ориентацию и
+        // обычные E2E с уже выбранным windowed mode. Fullscreen lifecycle закреплён отдельно ниже.
+        viewport: { width: 915, height: 412 },
+        screen: { width: 915, height: 412 },
+        storageState: windowedMobileStorage,
+        launchOptions,
+        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
+      }
+    },
+    {
+      name: 'mobile-fullscreen',
+      testMatch: fullscreenSuite,
+      use: {
+        ...devices['Pixel 7'],
         viewport: { width: 915, height: 412 },
         screen: { width: 915, height: 412 },
         launchOptions,
-        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
+        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.12' }
       }
     }
   ],

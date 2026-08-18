@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ACHIEVEMENT_CATALOG } from '../shared/achievements.js';
+import { continueInWindowedMode } from './helpers/windowed-mode.js';
 
 // Имя игрока живёт в аккаунте, а не отдельным полем в меню. Задаём его так же, как игрок: открываем
 // окно аккаунта, вводим имя, сохраняем.
@@ -61,6 +62,7 @@ test('два браузера видят server-owned косметику дру�
   const device = { viewport, userAgent, deviceScaleFactor, isMobile, hasTouch, extraHTTPHeaders };
   const hostContext = await browser.newContext(device);
   const guestContext = await browser.newContext(device);
+  await Promise.all([continueInWindowedMode(hostContext), continueInWindowedMode(guestContext)]);
   const host = await hostContext.newPage();
   const guest = await guestContext.newPage();
 

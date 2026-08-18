@@ -61,6 +61,9 @@ export class MobileExperience {
     this.gameWaitAttempts = 0;
     this.orientationFrame = 0;
     this.menuObserver = null;
+    this.fullscreenPromptArmed = false;
+    this.fullscreenPromptGestureActive = false;
+    this.fullscreenPromptReleaseTimer = 0;
 
     this.onFullscreenChange = () => this.updateFullscreen();
     this.onFullscreenError = () => this.updateFullscreen();
@@ -73,6 +76,27 @@ export class MobileExperience {
       if (event.cancelable) event.preventDefault();
       event.stopImmediatePropagation?.();
     };
+    this.onMenuPointerDown = event => {
+      const button = event.target?.closest?.('.mode-tab');
+      const menu = this.root?.querySelector?.('#menu');
+      if (!button || !menu?.contains?.(button)) return;
+      const clearTimer = this.window?.clearTimeout || globalThis.clearTimeout;
+      if (this.fullscreenPromptReleaseTimer) clearTimer?.(this.fullscreenPromptReleaseTimer);
+      this.fullscreenPromptReleaseTimer = 0;
+      this.fullscreenPromptGestureActive = true;
+      this.syncFullscreenPrompt();
+    };
+    this.onMenuClick = event => {
+      const button = event.target?.closest?.('.mode-tab');
+      const menu = this.root?.querySelector?.('#menu');
+      if (!button || !menu?.contains?.(button)) return;
+      // The click has started delivery to the original mode button. Arm onboarding now, but keep
+      // the overlay suppressed until the event finishes so it can never steal this activation.
+      this.fullscreenPromptArmed = true;
+      this.fullscreenPromptGestureActive = true;
+      this.scheduleFullscreenPromptRelease();
+    };
+    this.onMenuPointerCancel = () => this.scheduleFullscreenPromptRelease();
   }
 
   get mobile() {
@@ -116,6 +140,9 @@ export class MobileExperience {
     this.root.addEventListener('fullscreenchange', this.onFullscreenChange);
     this.root.addEventListener('fullscreenerror', this.onFullscreenError);
     this.root.addEventListener('visibilitychange', this.onVisibilityChange);
+    this.root.addEventListener('pointerdown', this.onMenuPointerDown, true);
+    this.root.addEventListener('click', this.onMenuClick, true);
+    this.root.addEventListener('pointercancel', this.onMenuPointerCancel, true);
     this.window?.addEventListener?.('resize', this.onOrientationSignal);
     this.window?.addEventListener?.('orientationchange', this.onOrientationSignal);
     this.window?.addEventListener?.('keydown', this.onBlockedKeyboard, true);
@@ -135,6 +162,9 @@ export class MobileExperience {
     this.root?.removeEventListener?.('fullscreenchange', this.onFullscreenChange);
     this.root?.removeEventListener?.('fullscreenerror', this.onFullscreenError);
     this.root?.removeEventListener?.('visibilitychange', this.onVisibilityChange);
+    this.root?.removeEventListener?.('pointerdown', this.onMenuPointerDown, true);
+    this.root?.removeEventListener?.('click', this.onMenuClick, true);
+    this.root?.removeEventListener?.('pointercancel', this.onMenuPointerCancel, true);
     this.window?.removeEventListener?.('resize', this.onOrientationSignal);
     this.window?.removeEventListener?.('orientationchange', this.onOrientationSignal);
     this.window?.removeEventListener?.('keydown', this.onBlockedKeyboard, true);
@@ -143,6 +173,8 @@ export class MobileExperience {
     this.window?.screen?.orientation?.removeEventListener?.('change', this.onOrientationSignal);
     this.menuObserver?.disconnect?.();
     this.unsubscribeSettings?.();
+    const clearTimer = this.window?.clearTimeout || globalThis.clearTimeout;
+    if (this.fullscreenPromptReleaseTimer) clearTimer?.(this.fullscreenPromptReleaseTimer);
     if (this.gameWaitFrame) this.window?.cancelAnimationFrame?.(this.gameWaitFrame);
     if (this.orientationFrame) this.window?.cancelAnimationFrame?.(this.orientationFrame);
   }
@@ -248,6 +280,23 @@ export class MobileExperience {
   syncAccessibility() {
     const reduced = Boolean(this.settings?.reducedMotion);
     this.root?.body?.classList.toggle('mobile-reduced-motion', reduced);
+  }
+
+  scheduleFullscreenPromptRelease() {
+    if (!this.fullscreenPromptGestureActive) return;
+    const clearTimer = this.window?.clearTimeout || globalThis.clearTimeout;
+    const setTimer = this.window?.setTimeout || globalThis.setTimeout;
+    if (this.fullscreenPromptReleaseTimer) clearTimer?.(this.fullscreenPromptReleaseTimer);
+    if (typeof setTimer !== 'function') {
+      this.fullscreenPromptGestureActive = false;
+      this.syncFullscreenPrompt();
+      return;
+    }
+    this.fullscreenPromptReleaseTimer = setTimer(() => {
+      this.fullscreenPromptReleaseTimer = 0;
+      this.fullscreenPromptGestureActive = false;
+      this.syncFullscreenPrompt();
+    }, 0);
   }
 
   scheduleOrientationUpdate() {
@@ -373,11 +422,13 @@ export class MobileExperience {
     const menu = this.root.querySelector('#menu');
     const dismissed = readFlag(this.storage, FULLSCREEN_PROMPT_KEY);
     const show =
+      this.fullscreenPromptArmed &&
       this.mobile &&
       !this.portraitBlocked &&
       !this.fullscreen &&
       this.fullscreenSupported &&
       !dismissed &&
+      !this.fullscreenPromptGestureActive &&
       menu &&
       !menu.classList.contains('hidden');
     prompt.classList.toggle('hidden', !show);

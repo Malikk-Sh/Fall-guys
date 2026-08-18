@@ -28,7 +28,9 @@ export class ScreenTransitions {
     if (!animation) return;
     try {
       animation.cancel();
-    } catch {}
+    } catch {
+      // Cancelling an already-finished Web Animation is presentation-only and safe to ignore.
+    }
     this.active.delete(node);
   }
 

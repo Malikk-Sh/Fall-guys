@@ -152,7 +152,7 @@ jobs:
           - name: full-match
             command: npm run test:e2e:full-match
             exclude_full_match: '0'
-            retries: '1'
+            retries: '0'
             timeout_minutes: 20
     env:
       WOBBLE_E2E_EXCLUDE_FULL_MATCH: ${{ matrix.exclude_full_match }}

@@ -5,10 +5,10 @@ import { defineConfig, devices } from '@playwright/test';
 // задаётся — там браузер ставится шагом `playwright install`.
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 const launchOptions = executablePath ? { executablePath } : {};
+const fullscreenSuite = /mobile-landscape\.spec\.js/;
 
 // Обычные mobile E2E моделируют уже сделанный пользователем выбор «продолжить в браузере».
-// Fullscreen/onboarding поведение проверяется отдельно в mobile-landscape.spec.js, где этот флаг
-// намеренно очищается до загрузки приложения.
+// Fullscreen/onboarding поведение запускается отдельным mobile-fullscreen project без этого флага.
 const windowedMobileStorage = {
   cookies: [],
   origins: [
@@ -35,6 +35,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
+      testIgnore: fullscreenSuite,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions,
@@ -45,15 +46,27 @@ export default defineConfig({
     },
     {
       name: 'mobile-chromium',
+      testIgnore: fullscreenSuite,
       use: {
         ...devices['Pixel 7'],
         // Продукт теперь landscape-first: базовый мобильный проект проверяет именно рабочую
-        // ориентацию. Portrait остаётся отдельным explicit case в mobile-landscape.spec.js.
+        // ориентацию, а fullscreen/portrait lifecycle закреплён отдельным project ниже.
         viewport: { width: 915, height: 412 },
         screen: { width: 915, height: 412 },
         storageState: windowedMobileStorage,
         launchOptions,
         extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
+      }
+    },
+    {
+      name: 'mobile-fullscreen',
+      testMatch: fullscreenSuite,
+      use: {
+        ...devices['Pixel 7'],
+        viewport: { width: 915, height: 412 },
+        screen: { width: 915, height: 412 },
+        launchOptions,
+        extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.12' }
       }
     }
   ],

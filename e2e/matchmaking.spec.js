@@ -118,7 +118,13 @@ test.describe('быстрый подбор кооперативной пары',
       await findPartner(third);
       await expect(third.locator('#coopStatus')).toContainText('Ищем напарника');
       await expect(third.locator('#hud')).toBeHidden();
-      expect(await third.evaluate(() => window.__WOBBLE_GAME__?.remotes?.size || 0)).toBe(0);
+
+      // MenuStageExperience keeps one local decorative Co-op preview actor in game.remotes while
+      // the player is still in the menu. The matchmaking invariant is that no real network remote
+      // exists for a queued third player, not that the presentation map is physically empty.
+      const remoteIds = await third.evaluate(() => [...(window.__WOBBLE_GAME__?.remotes?.keys?.() || [])]);
+      expect(remoteIds.filter(id => !id.startsWith('__menu-preview-'))).toEqual([]);
+      expect(remoteIds.filter(id => id.startsWith('__menu-preview-'))).toEqual(['__menu-preview-1']);
     } finally {
       await Promise.all(contexts.map(context => context.close()));
     }

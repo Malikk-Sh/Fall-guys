@@ -67,14 +67,7 @@ class GitHubStepSummaryReporter {
     }
 
     for (const error of this.globalErrors) {
-      lines.push(
-        '#### ❌ Runner error',
-        '',
-        '```text',
-        clean(error.message).slice(0, 4000),
-        '```',
-        ''
-      );
+      lines.push('#### ❌ Runner error', '', '```text', clean(error.message).slice(0, 4000), '```', '');
     }
 
     if (flaky.length > 0) {

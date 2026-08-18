@@ -9,9 +9,7 @@ const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
 const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
 const fullMatchSuite = /full-match\.spec\.js/;
 const desktopIgnore =
-  process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1'
-    ? [mobileOnlySuite, fullMatchSuite]
-    : mobileOnlySuite;
+  process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1' ? [mobileOnlySuite, fullMatchSuite] : mobileOnlySuite;
 const requestedRetries = Number.parseInt(process.env.WOBBLE_E2E_RETRIES || '0', 10);
 const ciRetries = Number.isFinite(requestedRetries) ? Math.max(0, requestedRetries) : 0;
 

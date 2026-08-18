@@ -7,6 +7,13 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 const launchOptions = executablePath ? { executablePath } : {};
 const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
 const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
+const fullMatchSuite = /full-match\.spec\.js/;
+const desktopIgnore =
+  process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1'
+    ? [mobileOnlySuite, fullMatchSuite]
+    : mobileOnlySuite;
+const requestedRetries = Number.parseInt(process.env.WOBBLE_E2E_RETRIES || '0', 10);
+const ciRetries = Number.isFinite(requestedRetries) ? Math.max(0, requestedRetries) : 0;
 
 // Обычные mobile E2E моделируют уже сделанный пользователем выбор «продолжить в браузере».
 // Fullscreen/onboarding поведение запускается отдельным mobile-fullscreen project без этого флага.
@@ -25,8 +32,12 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
-  retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
+  // Детерминированные сценарии в CI не повторяем: первый failure уже является сигналом.
+  // Только отдельный long/full-match job получает один retry через WOBBLE_E2E_RETRIES=1.
+  retries: process.env.CI ? ciRetries : 0,
+  reporter: process.env.CI
+    ? [['github'], ['./scripts/playwright-ci-summary.mjs'], ['html', { open: 'never' }]]
+    : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
     trace: 'retain-on-failure',
@@ -36,7 +47,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: mobileOnlySuite,
+      testIgnore: desktopIgnore,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions,
@@ -47,7 +58,7 @@ export default defineConfig({
     },
     {
       name: 'mobile-chromium',
-      testIgnore: fullscreenSuite,
+      testIgnore: [fullscreenSuite, fullMatchSuite],
       use: {
         ...devices['Pixel 7'],
         // Продукт теперь landscape-first: базовый мобильный project проверяет рабочую ориентацию и

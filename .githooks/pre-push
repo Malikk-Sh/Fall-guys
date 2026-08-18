@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running Wobble Rush preflight before push..."
+npm run preflight

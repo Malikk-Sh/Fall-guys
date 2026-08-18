@@ -1,0 +1,12 @@
+{
+  "name": "Wobble Rush",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "postCreateCommand": "npm ci && npm run setup:dev",
+  "forwardPorts": [4173],
+  "portsAttributes": {
+    "4173": {
+      "label": "Wobble Rush",
+      "onAutoForward": "notify"
+    }
+  }
+}

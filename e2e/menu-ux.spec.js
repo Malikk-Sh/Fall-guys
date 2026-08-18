@@ -88,6 +88,28 @@ test('landscape menu uses a mode rail, contextual panel and network-free live pr
   expect(state.remotes).toBe(1);
 });
 
+test('desktop menu card participates in the three-column grid instead of legacy absolute positioning', async ({
+  page
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Desktop layout is covered once in Chromium.');
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await page.goto('/');
+
+  const layout = await page.locator('.menu-card').evaluate(node => {
+    const style = getComputedStyle(node);
+    return {
+      position: style.position,
+      right: style.right,
+      top: style.top,
+      transform: style.transform
+    };
+  });
+  expect(layout.position).toBe('static');
+  expect(layout.right).toBe('auto');
+  expect(layout.top).toBe('auto');
+  expect(layout.transform).toBe('none');
+});
+
 test('audio controls live in Settings while the menu keeps a quick mute action', async ({ page }) => {
   await page.goto('/');
 

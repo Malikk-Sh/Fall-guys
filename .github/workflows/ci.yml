@@ -35,6 +35,19 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
+      - name: Capture exact Prettier output
+        run: |
+          npx prettier --write client/menu-ux.css client/ui/MenuStageExperience.js
+          echo 'MENU_UX_CSS_B64_BEGIN'
+          base64 -w0 client/menu-ux.css
+          echo
+          echo 'MENU_UX_CSS_B64_END'
+          echo 'MENU_STAGE_JS_B64_BEGIN'
+          base64 -w0 client/ui/MenuStageExperience.js
+          echo
+          echo 'MENU_STAGE_JS_B64_END'
+          exit 1
+
       # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
       # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
       # в успешную проверку и фактически отключал защиту от merge markers.

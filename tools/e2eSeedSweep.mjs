@@ -8,6 +8,7 @@
 //   node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
 //   ONLY=130 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
 //   SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+//   MIN_GOOD_SEEDS=1 SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
 //
 // Инвариант выбранного сида живёт в server/e2eCourse.test.mjs. Steering policy вынесена отдельно,
 // чтобы sweep не повторил ошибку старой версии: браузер уже учитывал vx/lookahead и tolerance 0.16,
@@ -189,12 +190,20 @@ if (only !== null) {
       box.worst = Math.max(box.worst, attempt.seconds);
     }
   }
-  for (const [fps, box] of byFps)
+  let failed = false;
+  for (const [fps, box] of byFps) {
     console.log(
       `  ${String(fps).padStart(2)} кадров: пара ${box.passed}/${box.total}, худшее ${box.worst.toFixed(1)}с, падений ${box.falls}`
     );
+    if (box.passed !== box.total) failed = true;
+  }
+  if (failed) {
+    console.error(`сид ${only} не проходит все моделируемые timing-режимы`);
+    process.exitCode = 1;
+  }
 } else {
   const seeds = Number(process.env.SEEDS || 200);
+  const minGoodSeeds = Number(process.env.MIN_GOOD_SEEDS || 0);
   const all = modes();
   const results = [];
   for (let seed = 0; seed < seeds; seed++) {
@@ -223,4 +232,9 @@ if (only !== null) {
     console.log(
       `сид ${String(item.seed).padStart(3)}  худшее ${item.worst.toFixed(1)}с  падений ${String(item.falls).padStart(4)}  ${item.types.join(' → ')}`
     );
+
+  if (results.length < minGoodSeeds) {
+    console.error(`годных сидов ${results.length}, требуется минимум ${minGoodSeeds}`);
+    process.exitCode = 1;
+  }
 }

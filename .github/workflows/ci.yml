@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: wobble-rush-${{ github.workflow }}-${{ github.ref }}
@@ -34,21 +34,6 @@ jobs:
 
       - name: Install exact dependencies
         run: npm ci
-
-      - name: Apply exact Prettier output to PR branch
-        env:
-          PR_BRANCH: agent/menu-motion-ux
-        run: |
-          set -euo pipefail
-          git fetch origin "$PR_BRANCH"
-          git checkout -B "$PR_BRANCH" FETCH_HEAD
-          npx prettier --write client/menu-ux.css client/ui/MenuStageExperience.js
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add client/menu-ux.css client/ui/MenuStageExperience.js
-          git commit -m 'style: format menu UX sources'
-          git push origin "HEAD:$PR_BRANCH"
-          exit 1
 
       # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
       # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep

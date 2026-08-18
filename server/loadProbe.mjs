@@ -12,7 +12,11 @@
 
 import { writeFile } from 'node:fs/promises';
 import { WebSocket } from 'ws';
-import { loadStateMessage, loadTargets } from './loadProbeConfig.mjs';
+import {
+  loadStateMessage,
+  loadTargets,
+  loopbackSourceAddress
+} from './loadProbeConfig.mjs';
 
 const { wsUrl, httpUrl } = loadTargets();
 const ROOMS = Math.max(1, Number(process.argv[2] || 12));
@@ -22,17 +26,20 @@ const RESULT_PATH = String(process.env.WOBBLE_LOAD_RESULT_PATH || '').trim() || 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class Client {
-  constructor() {
+  constructor(sourceAddress = null) {
     this.waiters = [];
     this.matchId = null;
     this.spec = null;
     this.sequence = 0;
+    this.sourceAddress = sourceAddress;
 
     // HELLO может прилететь почти сразу после локального WebSocket handshake. Waiter ставится ДО
     // открытия сокета, иначе быстрый loopback успевает доставить событие между `new Client()` и
     // внешним `client.wait('hello')`, после чего probe восемь секунд ждёт уже прошедшее сообщение.
     this.hello = this.wait('hello');
-    this.ws = new WebSocket(wsUrl);
+    this.ws = sourceAddress
+      ? new WebSocket(wsUrl, { localAddress: sourceAddress })
+      : new WebSocket(wsUrl);
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
       if (message.type === 'hello') this.id = message.id;
@@ -122,14 +129,19 @@ function metricDelta(before, after, name) {
 const initial = await health();
 const rooms = [];
 const clients = [];
+const sourceSharded = loopbackSourceAddress(wsUrl, 0) !== null;
 console.log(`target ws:   ${wsUrl}`);
 console.log(`target http: ${httpUrl}`);
+if (sourceSharded) console.log('source IPs: loopback-sharded per room');
 console.log(`поднимаю ${ROOMS} кооп-комнат (${ROOMS * 2} игроков)…`);
 
 try {
   for (let index = 0; index < ROOMS; index++) {
-    const host = new Client();
-    const guest = new Client();
+    // Production intentionally caps sockets and room operations per IP. Local CI therefore gives
+    // every simulated room its own 127/8 source address instead of disabling the real protection.
+    const sourceAddress = loopbackSourceAddress(wsUrl, index);
+    const host = new Client(sourceAddress);
+    const guest = new Client(sourceAddress);
     clients.push(host, guest);
     await Promise.all([host.hello, guest.hello]);
 
@@ -194,7 +206,7 @@ try {
     roomsRequested: ROOMS,
     playersRequested: ROOMS * 2,
     seconds: SECONDS,
-    targets: { wsUrl, httpUrl },
+    targets: { wsUrl, httpUrl, sourceSharded },
     build: {
       version: after.version,
       commit: after.commit || null,

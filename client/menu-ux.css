@@ -83,6 +83,9 @@ body.menu-stage-experience .brand p {
 }
 
 body.menu-stage-experience .menu-card {
+  position: static;
+  right: auto;
+  top: auto;
   grid-column: 3;
   grid-row: 1;
   align-self: center;
@@ -90,6 +93,7 @@ body.menu-stage-experience .menu-card {
   width: 100%;
   max-width: none;
   min-width: 0;
+  transform: none;
 }
 
 body.menu-stage-experience .menu-preview-caption {

@@ -1,0 +1,209 @@
+name: Nightly Reliability Stress
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wobble-rush-nightly-stress
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    name: Nightly quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Run preflight checks
+        run: npm run preflight
+
+  seed-sweep:
+    name: Physics seed stress
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Verify fixed full-match seed
+        run: ONLY=130 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+
+      - name: Sweep alternate seeds and timing modes
+        run: MIN_GOOD_SEEDS=1 SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+
+  server-stress:
+    name: Server reliability stress
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Repeat reliability-sensitive server tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "Reliability pass $attempt/3"
+            node --test \
+              server/reliability.test.mjs \
+              server/dbConcurrency.test.mjs \
+              server/raceMatchmaking.test.mjs \
+              server/roomBotsSession.test.mjs \
+              server/raceLobbyGridSession.test.mjs
+          done
+
+  network-e2e:
+    name: Network E2E (${{ matrix.name }})
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: desktop
+            project: chromium
+          - name: mobile
+            project: mobile-chromium
+    env:
+      WOBBLE_E2E_RETRIES: '0'
+      WOBBLE_E2E_EXCLUDE_FULL_MATCH: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Repeat matchmaking and multiplayer scenarios
+        run: >-
+          npx playwright test
+          e2e/matchmaking.spec.js
+          e2e/multiplayer.spec.js
+          --project=${{ matrix.project }}
+          --repeat-each=3
+
+      - name: Upload browser test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-network-report-${{ matrix.name }}
+          path: playwright-report/
+          retention-days: 14
+
+  full-match:
+    name: Full-match stress
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WOBBLE_E2E_RETRIES: '0'
+      WOBBLE_E2E_DIAGNOSTICS: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Repeat real-time full match without retries
+        run: npm run test:e2e:full-match -- --repeat-each=3
+
+      - name: Upload browser test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-full-match-report
+          path: playwright-report/
+          retention-days: 14
+
+  summary:
+    name: Nightly reliability ready
+    if: always()
+    needs: [quality, seed-sweep, server-stress, network-e2e, full-match]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Summarize stress groups
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          SEEDS: ${{ needs.seed-sweep.result }}
+          SERVER: ${{ needs.server-stress.result }}
+          NETWORK: ${{ needs.network-e2e.result }}
+          FULL_MATCH: ${{ needs.full-match.result }}
+        shell: bash
+        run: |
+          {
+            echo "### Nightly reliability stress"
+            echo
+            echo "| Group | Result |"
+            echo "| --- | --- |"
+            echo "| Quality | $QUALITY |"
+            echo "| Physics seed stress | $SEEDS |"
+            echo "| Server reliability | $SERVER |"
+            echo "| Network browser E2E | $NETWORK |"
+            echo "| Full-match stress | $FULL_MATCH |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          for result in "$QUALITY" "$SEEDS" "$SERVER" "$NETWORK" "$FULL_MATCH"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          exit "$failed"

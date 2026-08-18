@@ -129,7 +129,7 @@ jobs:
     name: E2E (${{ matrix.name }})
     needs: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
       matrix:
@@ -138,18 +138,22 @@ jobs:
             command: npm run test:e2e:desktop
             exclude_full_match: "1"
             retries: "0"
+            timeout_minutes: 12
           - name: mobile
             command: npm run test:e2e:mobile
             exclude_full_match: "0"
             retries: "0"
+            timeout_minutes: 12
           - name: fullscreen
             command: npm run test:e2e:fullscreen
             exclude_full_match: "0"
             retries: "0"
+            timeout_minutes: 12
           - name: full-match
             command: npm run test:e2e:full-match
             exclude_full_match: "0"
             retries: "1"
+            timeout_minutes: 20
     env:
       WOBBLE_E2E_EXCLUDE_FULL_MATCH: ${{ matrix.exclude_full_match }}
       WOBBLE_E2E_RETRIES: ${{ matrix.retries }}

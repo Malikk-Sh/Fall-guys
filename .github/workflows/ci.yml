@@ -14,18 +14,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
-    # Сквозной тест полного матча идёт в настоящем времени: забег нельзя ускорить, сервер проверяет
-    # скорость так же, как у живого игрока. Подготовительные проверки и браузерный E2E делят один
-    # job, поэтому оставляем запас над обычным временем прогона вместо отмены E2E на самом финише.
-    timeout-minutes: 30
+    # Быстрые source/server checks не должны делить timeout с real-time Playwright матчами.
+    timeout-minutes: 20
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
       # 22, а не 20: в проекте используется встроенный node:sqlite, он появился в 22.5.
-      # Подпись шага раньше говорила «Node.js 20», хотя ставилась 22, — расходилась с делом.
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -36,8 +33,6 @@ jobs:
         run: npm ci
 
       # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
-      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
-      # в успешную проверку и фактически отключал защиту от merge markers.
       - name: Check formatting and merge artifacts
         run: |
           npm run format:check
@@ -106,10 +101,28 @@ jobs:
             exit 1
           fi
 
+  browser:
+    needs: verify
+    runs-on: ubuntu-latest
+    # Playwright включает real-time full-match/performance сценарии и получает собственный бюджет.
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
       - name: Install Chromium for browser tests
         run: npx playwright install --with-deps chromium
 
-      - name: Run two-browser multiplayer smoke test
+      - name: Run browser test suite
         run: npm run test:e2e
 
       - name: Upload browser test report
@@ -119,3 +132,18 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  # Сохраняем прежнее имя обязательного check `test`: он зелёный только после обоих слоёв.
+  test:
+    if: ${{ always() }}
+    needs: [verify, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require verification jobs
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$BROWSER_RESULT" = success

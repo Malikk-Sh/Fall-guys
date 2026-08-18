@@ -5,7 +5,8 @@ import { defineConfig, devices } from '@playwright/test';
 // задаётся — там браузер ставится шагом `playwright install`.
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 const launchOptions = executablePath ? { executablePath } : {};
-const fullscreenSuite = /mobile-landscape\.spec\.js/;
+const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
+const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
 
 // Обычные mobile E2E моделируют уже сделанный пользователем выбор «продолжить в браузере».
 // Fullscreen/onboarding поведение запускается отдельным mobile-fullscreen project без этого флага.
@@ -35,7 +36,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      testIgnore: fullscreenSuite,
+      testIgnore: mobileOnlySuite,
       use: {
         ...devices['Desktop Chrome'],
         launchOptions,
@@ -49,8 +50,8 @@ export default defineConfig({
       testIgnore: fullscreenSuite,
       use: {
         ...devices['Pixel 7'],
-        // Продукт теперь landscape-first: базовый мобильный проект проверяет именно рабочую
-        // ориентацию, а fullscreen/portrait lifecycle закреплён отдельным project ниже.
+        // Продукт теперь landscape-first: базовый мобильный project проверяет рабочую ориентацию и
+        // обычные E2E с уже выбранным windowed mode. Fullscreen lifecycle закреплён отдельно ниже.
         viewport: { width: 915, height: 412 },
         screen: { width: 915, height: 412 },
         storageState: windowedMobileStorage,

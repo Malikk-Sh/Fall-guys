@@ -143,6 +143,6 @@ test('expanded private-room controls remain reachable on short landscape screens
 
   const overflow = await page.locator('.menu-card').evaluate(node => getComputedStyle(node).overflowY);
   expect(['auto', 'scroll']).toContain(overflow);
-  await page.locator('#raceCreate').scrollIntoViewIfNeeded();
-  await expect(page.locator('#raceCreate')).toBeVisible();
+  await page.locator('#create').scrollIntoViewIfNeeded();
+  await expect(page.locator('#create')).toBeVisible();
 });

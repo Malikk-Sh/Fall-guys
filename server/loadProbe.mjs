@@ -10,12 +10,14 @@
 // `WOBBLE_URL` оставлен как совместимый alias для старых команд, но новые сценарии должны явно
 // использовать WOBBLE_WS_URL и WOBBLE_HTTP_URL.
 
+import { writeFile } from 'node:fs/promises';
 import { WebSocket } from 'ws';
 import { loadStateMessage, loadTargets } from './loadProbeConfig.mjs';
 
 const { wsUrl, httpUrl } = loadTargets();
 const ROOMS = Math.max(1, Number(process.argv[2] || 12));
 const SECONDS = Math.max(1, Number(process.argv[3] || 20));
+const RESULT_PATH = String(process.env.WOBBLE_LOAD_RESULT_PATH || '').trim() || null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -81,6 +83,34 @@ async function health() {
   return response.json();
 }
 
+async function readiness() {
+  const response = await fetch(`${httpUrl}/health/ready`);
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    // The status is still useful if an intermediary returned a non-JSON error body.
+  }
+  return { ok: response.ok && body?.ok === true, status: response.status };
+}
+
+function compactHealth(value) {
+  return {
+    rooms: value.rooms,
+    players: value.players,
+    sessions: value.sessions,
+    capacity: value.capacity,
+    load: value.load,
+    matchmaking: value.matchmaking,
+    metrics: value.metrics
+  };
+}
+
+function metricDelta(before, after, name) {
+  return Number(after.metrics?.[name] || 0) - Number(before.metrics?.[name] || 0);
+}
+
+const initial = await health();
 const rooms = [];
 console.log(`target ws:   ${wsUrl}`);
 console.log(`target http: ${httpUrl}`);
@@ -124,6 +154,36 @@ await sleep(SECONDS * 1000);
 clearInterval(timer);
 
 const after = await health();
+const ready = await readiness();
+const deltas = Object.fromEntries(
+  [
+    'invalidMessages',
+    'socketSendFailures',
+    'handlerErrors',
+    'capacityRejected',
+    'snapshotsSkippedForLoad',
+    'verificationFailed',
+    'latePacketsDropped'
+  ].map(name => [name, metricDelta(initial, after, name)])
+);
+const result = {
+  roomsRequested: ROOMS,
+  playersRequested: ROOMS * 2,
+  seconds: SECONDS,
+  targets: { wsUrl, httpUrl },
+  build: {
+    version: after.version,
+    commit: after.commit || null,
+    protocolVersion: after.protocolVersion
+  },
+  initial: compactHealth(initial),
+  beforeTraffic: compactHealth(before),
+  after: compactHealth(after),
+  readiness: ready,
+  deltas
+};
+
+if (RESULT_PATH) await writeFile(RESULT_PATH, `${JSON.stringify(result, null, 2)}\n`, 'utf8');
 
 console.log('\n--- РЕЗУЛЬТАТ ГЕНЕРАТОРА ---');
 console.log(
@@ -134,11 +194,12 @@ console.log(`комнат:                ${after.rooms}`);
 console.log(`matchmaking waiting:   ${after.matchmaking?.waiting ?? '—'}`);
 console.log(`event-loop p95:        ${after.load?.eventLoopP95Ms ?? '—'} мс`);
 console.log(`RSS по health:         ${after.load?.rssMb ?? '—'} МБ`);
-console.log(`некорректных сообщений: ${after.metrics.invalidMessages - before.metrics.invalidMessages}`);
-console.log(
-  `сбоев отправки:         ${after.metrics.socketSendFailures - before.metrics.socketSendFailures}`
-);
-console.log(`ошибок обработчика:     ${after.metrics.handlerErrors - before.metrics.handlerErrors}`);
+console.log(`ready после нагрузки:  ${ready.ok ? 'да' : `нет (HTTP ${ready.status})`}`);
+console.log(`некорректных сообщений: ${deltas.invalidMessages}`);
+console.log(`сбоев отправки:         ${deltas.socketSendFailures}`);
+console.log(`ошибок обработчика:     ${deltas.handlerErrors}`);
+console.log(`отказов по capacity:    ${deltas.capacityRejected}`);
+console.log(`snapshot skip по load:  ${deltas.snapshotsSkippedForLoad}`);
 
 for (const [host, guest] of rooms) {
   host.close();

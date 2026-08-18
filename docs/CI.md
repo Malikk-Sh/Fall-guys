@@ -49,7 +49,7 @@ npm run test:e2e:menu
 
 `CI ready` is the final aggregate status. It succeeds only when every required group succeeds. A small compatibility job named `test` follows it because branch protection still requires the historical check name.
 
-The desktop, mobile, and fullscreen jobs use zero retries. `full-match` gets one retry because it is intentionally timing-sensitive and runs in wall-clock time. A test that needs a retry is shown as flaky in the job summary instead of being silently hidden.
+The desktop, mobile, fullscreen, and full-match jobs use zero retries. Timing-sensitive failures are surfaced directly together with their diagnostics instead of being hidden by a retry.
 
 ## Browser timing and flaky summaries
 
@@ -67,7 +67,7 @@ The normal CI workflow also records E2E lane wall-clock time including npm/brows
 
 `full-match.spec.js` uses the same steering policy as `tools/e2eSeedSweep.mjs`. The browser run additionally records test-only telemetry without changing game behavior:
 
-- actual intervals between Playwright position polls;
+- actual intervals between browser-local control updates;
 - median/p95/max `requestAnimationFrame` intervals and estimated FPS;
 - maximum observed lateral position and velocity;
 - checkpoint, respawn and remote-player state on failure.
@@ -83,10 +83,24 @@ The nightly workflow runs these groups after its own quality gate:
 - the fixed full-match seed across modeled FPS/poll/latency combinations;
 - a 300-seed alternate physics sweep with at least one valid seed required;
 - reliability-sensitive server tests three times;
+- a local multi-room WebSocket load gate using real co-op clients and `PLAYER_STATE` traffic;
 - matchmaking and multiplayer browser scenarios three times on desktop and mobile;
 - the real-time two-browser full-match suite three times with **zero retries**.
 
-The nightly full-match lane disables retries deliberately: a pass after retry is useful in PR CI, but nightly stress should expose any intermittent failure as a red run.
+The WebSocket load lane starts a real local gameplay server, waits for `/health/ready`, creates 24 co-op rooms (48 clients), sends state traffic for 12 seconds, and records a machine-readable before/after result. It fails when the server stops being ready, the expected rooms/players are missing, or `invalidMessages`, `socketSendFailures`, `handlerErrors`, or `capacityRejected` increase. Event-loop p95, RSS, snapshot load skips, and other counters are written to the GitHub Step Summary as baseline telemetry. The first gate deliberately does not add a new hard event-loop or RSS budget before several GitHub runner samples exist; readiness still enforces the server's existing overload threshold.
+
+Useful local load checks:
+
+```bash
+node server/loadGate.mjs 24 12
+WOBBLE_LOAD_RESULT_PATH=/tmp/wobble-load.json \
+WOBBLE_LOAD_SUMMARY_PATH=/tmp/wobble-load.md \
+node server/loadGate.mjs 24 12
+```
+
+Start the local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. Do not use the automated load gate against production by default.
+
+The nightly full-match lane disables retries deliberately: nightly stress should expose any intermittent failure as a red run.
 
 Useful local seed checks:
 

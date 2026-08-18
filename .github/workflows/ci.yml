@@ -216,3 +216,15 @@ jobs:
             fi
           done
           exit "$failed"
+
+  test:
+    name: test
+    if: always()
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Preserve required status check
+        env:
+          CI_READY: ${{ needs.verify.result }}
+        run: test "$CI_READY" = "success"

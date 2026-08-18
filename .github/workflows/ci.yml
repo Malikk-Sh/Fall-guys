@@ -167,6 +167,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Start E2E lane timer
+        run: echo "WOBBLE_E2E_LANE_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Install exact dependencies
         run: npm ci
 
@@ -183,6 +186,23 @@ jobs:
           name: playwright-report-${{ matrix.name }}
           path: playwright-report/
           retention-days: 7
+
+      - name: Summarize E2E lane duration
+        if: always()
+        env:
+          LANE: ${{ matrix.name }}
+        shell: bash
+        run: |
+          ended_at="$(date +%s)"
+          elapsed=$((ended_at - WOBBLE_E2E_LANE_STARTED_AT))
+          minutes=$((elapsed / 60))
+          seconds=$((elapsed % 60))
+          {
+            echo "### E2E lane wall-clock"
+            echo
+            printf -- '- Lane: `%s`\n' "$LANE"
+            printf -- '- Wall-clock: **%dm %02ds**\n' "$minutes" "$seconds"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify:
     name: CI ready

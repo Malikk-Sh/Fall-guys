@@ -85,7 +85,14 @@ export class MobileExperience {
       this.fullscreenPromptGestureActive = true;
       this.syncFullscreenPrompt();
     };
-    this.onMenuPointerEnd = () => this.scheduleFullscreenPromptRelease();
+    this.onMenuClick = event => {
+      if (!this.fullscreenPromptGestureActive) return;
+      const button = event.target?.closest?.('.mode-tab');
+      const menu = this.root?.querySelector?.('#menu');
+      if (!button || !menu?.contains?.(button)) return;
+      this.scheduleFullscreenPromptRelease();
+    };
+    this.onMenuPointerCancel = () => this.scheduleFullscreenPromptRelease();
   }
 
   get mobile() {
@@ -130,8 +137,8 @@ export class MobileExperience {
     this.root.addEventListener('fullscreenerror', this.onFullscreenError);
     this.root.addEventListener('visibilitychange', this.onVisibilityChange);
     this.root.addEventListener('pointerdown', this.onMenuPointerDown, true);
-    this.root.addEventListener('pointerup', this.onMenuPointerEnd, true);
-    this.root.addEventListener('pointercancel', this.onMenuPointerEnd, true);
+    this.root.addEventListener('click', this.onMenuClick, true);
+    this.root.addEventListener('pointercancel', this.onMenuPointerCancel, true);
     this.window?.addEventListener?.('resize', this.onOrientationSignal);
     this.window?.addEventListener?.('orientationchange', this.onOrientationSignal);
     this.window?.addEventListener?.('keydown', this.onBlockedKeyboard, true);
@@ -152,8 +159,8 @@ export class MobileExperience {
     this.root?.removeEventListener?.('fullscreenerror', this.onFullscreenError);
     this.root?.removeEventListener?.('visibilitychange', this.onVisibilityChange);
     this.root?.removeEventListener?.('pointerdown', this.onMenuPointerDown, true);
-    this.root?.removeEventListener?.('pointerup', this.onMenuPointerEnd, true);
-    this.root?.removeEventListener?.('pointercancel', this.onMenuPointerEnd, true);
+    this.root?.removeEventListener?.('click', this.onMenuClick, true);
+    this.root?.removeEventListener?.('pointercancel', this.onMenuPointerCancel, true);
     this.window?.removeEventListener?.('resize', this.onOrientationSignal);
     this.window?.removeEventListener?.('orientationchange', this.onOrientationSignal);
     this.window?.removeEventListener?.('keydown', this.onBlockedKeyboard, true);

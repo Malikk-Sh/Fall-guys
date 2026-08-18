@@ -61,6 +61,7 @@ export class MobileExperience {
     this.gameWaitAttempts = 0;
     this.orientationFrame = 0;
     this.menuObserver = null;
+    this.fullscreenPromptArmed = false;
     this.fullscreenPromptGestureActive = false;
     this.fullscreenPromptReleaseTimer = 0;
 
@@ -86,10 +87,13 @@ export class MobileExperience {
       this.syncFullscreenPrompt();
     };
     this.onMenuClick = event => {
-      if (!this.fullscreenPromptGestureActive) return;
       const button = event.target?.closest?.('.mode-tab');
       const menu = this.root?.querySelector?.('#menu');
       if (!button || !menu?.contains?.(button)) return;
+      // The click has started delivery to the original mode button. Arm onboarding now, but keep
+      // the overlay suppressed until the event finishes so it can never steal this activation.
+      this.fullscreenPromptArmed = true;
+      this.fullscreenPromptGestureActive = true;
       this.scheduleFullscreenPromptRelease();
     };
     this.onMenuPointerCancel = () => this.scheduleFullscreenPromptRelease();
@@ -418,6 +422,7 @@ export class MobileExperience {
     const menu = this.root.querySelector('#menu');
     const dismissed = readFlag(this.storage, FULLSCREEN_PROMPT_KEY);
     const show =
+      this.fullscreenPromptArmed &&
       this.mobile &&
       !this.portraitBlocked &&
       !this.fullscreen &&

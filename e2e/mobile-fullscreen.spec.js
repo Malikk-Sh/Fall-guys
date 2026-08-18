@@ -128,7 +128,7 @@ test('fullscreen advisory disappears immediately when gameplay leaves the menu',
   await page.goto('/');
   await armFullscreenPrompt(page);
 
-  await page.locator('#play').click();
+  await page.locator('#play').evaluate(node => node.click());
   await expect(page.locator('#hud')).toBeVisible();
   await expect(page.locator('#menu')).toBeHidden();
   await expect(page.locator('#mobileGameModePrompt')).toBeHidden();

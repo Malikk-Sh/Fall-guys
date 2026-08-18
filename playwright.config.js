@@ -6,6 +6,19 @@ import { defineConfig, devices } from '@playwright/test';
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined;
 const launchOptions = executablePath ? { executablePath } : {};
 
+// Обычные mobile E2E моделируют уже сделанный пользователем выбор «продолжить в браузере».
+// Fullscreen/onboarding поведение проверяется отдельно в mobile-landscape.spec.js, где этот флаг
+// намеренно очищается до загрузки приложения.
+const windowedMobileStorage = {
+  cookies: [],
+  origins: [
+    {
+      origin: 'http://127.0.0.1:4173',
+      localStorage: [{ name: 'wobble-fullscreen-prompt-v1', value: '1' }]
+    }
+  ]
+};
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -38,6 +51,7 @@ export default defineConfig({
         // ориентацию. Portrait остаётся отдельным explicit case в mobile-landscape.spec.js.
         viewport: { width: 915, height: 412 },
         screen: { width: 915, height: 412 },
+        storageState: windowedMobileStorage,
         launchOptions,
         extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
       }

@@ -1,8 +1,8 @@
 // Подбор сида для сквозного браузерного теста.
 //
 // Гоняет тот же простой steering policy, что используется e2e/full-match.spec.js, по настоящей
-// физике клиента, но без браузера. Один прогон здесь занимает доли секунды вместо минут, поэтому
-// можно проверить сотни сочетаний FPS, задержек управления и сидов до запуска дорогого E2E.
+// физике клиента, но без браузера. Главная проверка здесь — ПАРА игроков: именно два Chromium,
+// сходящиеся к оси трассы, раньше превращали crowd solver и первый бампер в нестабильность CI.
 //
 // Запуск:
 //   node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
@@ -18,6 +18,7 @@ import { createCourseSpec } from '/shared/courseSpec.js';
 import { Course } from '../client/game/Course.js';
 import { Effects } from '../client/game/Effects.js';
 import { Player } from '../client/game/Player.js';
+import { resolvePlayerCrowd } from '../client/game/PlayerCollisions.js';
 import { STEER_PULSE_MS, steeringAxis } from '../e2e/helpers/full-match-driver.mjs';
 
 // Ровно значения игрового цикла client/main.js: при низком FPS физика делает не более пяти
@@ -28,6 +29,12 @@ const DIFFICULTY = 'easy';
 const SEGMENTS = Number(process.env.SEGMENTS || 3);
 const BUDGET_SECONDS = 150;
 
+// Browser full-match запускает второго водителя чуть позже, чтобы два персонажа не входили в
+// первый узкий участок одним физическим кадром. Сам второй игрок при этом уже существует в мире и
+// участвует в crowd collision — задерживается только его клавиатура.
+const RUNNER_STAGGER_SECONDS = 0.9;
+const START_LANE_X = 0.875;
+
 // 10–15 FPS — диапазон двух Chromium на GitHub runner, 60 FPS — обычная машина.
 const FRAME_RATES = [10, 12, 15, 60];
 // Реальный round-trip Playwright заметно длиннее nominal waitForTimeout(220). Модель проверяет
@@ -36,65 +43,127 @@ const PERIODS_MS = [300, 500, 700, 900, 1200, 1700];
 const LATENCIES_MS = [60, 200];
 const PHASES = 3;
 
-function run(seed, { fps, periodMs, latencyMs, phase }) {
+function driverFor(player, { periodMs, latencyMs, phase }, startsAt) {
+  const state = {
+    player,
+    startsAt,
+    periodMs,
+    latencyMs,
+    inputX: 0,
+    steerUntil: 0,
+    jump: false,
+    nextPoll: startsAt + (phase / PHASES) * (periodMs / 1000),
+    inFlight: []
+  };
+  state.input = {
+    movement: () =>
+      state.active
+        ? { x: state.inputX, forward: 1, magnitude: 1 }
+        : { x: 0, forward: 0, magnitude: 0 },
+    consume: action => (action === 'jump' && state.jump ? ((state.jump = false), true) : false),
+    isHeld: () => false
+  };
+  return state;
+}
+
+function updateDriver(driver, wall) {
+  driver.active = wall >= driver.startsAt;
+  if (!driver.active) return;
+
+  while (wall >= driver.nextPoll) {
+    driver.nextPoll += driver.periodMs / 1000;
+    driver.inFlight.push({
+      at: wall + driver.latencyMs / 1000,
+      axis: steeringAxis({ x: driver.player.position.x, vx: driver.player.velocity.x })
+    });
+  }
+
+  while (driver.inFlight.length && driver.inFlight[0].at <= wall) {
+    const decision = driver.inFlight.shift();
+    driver.inputX = decision.axis;
+    driver.steerUntil = driver.inputX === 0 ? wall : wall + STEER_PULSE_MS / 1000;
+    // В browser driver каждое управляющее решение сопровождается настоящим нажатием Space.
+    driver.jump = true;
+  }
+  if (driver.inputX !== 0 && wall >= driver.steerUntil) driver.inputX = 0;
+}
+
+function remoteSnapshot(player) {
+  return {
+    position: player.position.clone(),
+    velocity: player.velocity.clone(),
+    finished: player.finished,
+    downed: player.downed
+  };
+}
+
+function runPair(seed, mode) {
   const scene = new THREE.Scene();
   const spec = createCourseSpec(seed, DIFFICULTY, SEGMENTS);
   const course = new Course(scene, spec, { quality: 'low' });
   const effects = new Effects(scene, 'low');
-  const player = new Player(scene, course, effects);
+  const host = new Player(scene, course, effects);
+  const guest = new Player(scene, course, effects);
 
-  const frameDt = 1 / fps;
-  let inputX = 0;
-  let steerUntil = 0;
-  let jump = false;
-  let respawns = 0;
+  // В реальном race два участника стоят в соседних стартовых линиях. После respawn сама игровая
+  // физика снова выбирает checkpoint spawn — это намеренно оставляем Player-у, как в браузере.
+  const spawn = course.spawnFor(0);
+  host.teleport(new THREE.Vector3(spawn.x - START_LANE_X, spawn.y, spawn.z));
+  guest.teleport(new THREE.Vector3(spawn.x + START_LANE_X, spawn.y, spawn.z));
+
+  const hostDriver = driverFor(host, mode, 0);
+  const guestDriver = driverFor(guest, { ...mode, phase: (mode.phase + 1) % PHASES }, RUNNER_STAGGER_SECONDS);
+  const frameDt = 1 / mode.fps;
+  let hostRespawns = 0;
+  let guestRespawns = 0;
   let accumulator = 0;
   let wall = 0;
-  let nextPoll = (phase / PHASES) * (periodMs / 1000);
-  const inFlight = [];
 
-  const input = {
-    movement: () => ({ x: inputX, forward: 1, magnitude: 1 }),
-    consume: action => (action === 'jump' && jump ? ((jump = false), true) : false),
-    isHeld: () => false
-  };
-
-  while (wall < BUDGET_SECONDS && !player.finished) {
+  while (wall < BUDGET_SECONDS && (!host.finished || !guest.finished)) {
     wall += frameDt;
-
-    if (wall >= nextPoll) {
-      nextPoll += periodMs / 1000;
-      inFlight.push({
-        at: wall + latencyMs / 1000,
-        axis: steeringAxis({ x: player.position.x, vx: player.velocity.x })
-      });
-    }
-
-    while (inFlight.length && inFlight[0].at <= wall) {
-      const decision = inFlight.shift();
-      inputX = decision.axis;
-      steerUntil = inputX === 0 ? wall : wall + STEER_PULSE_MS / 1000;
-      jump = true;
-    }
-    if (inputX !== 0 && wall >= steerUntil) inputX = 0;
+    updateDriver(hostDriver, wall);
+    updateDriver(guestDriver, wall);
 
     accumulator += frameDt;
     let steps = 0;
     while (accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
       course.update(FIXED_DT, wall);
-      const before = player.respawns;
-      player.step(FIXED_DT, input, 0, wall);
-      if (player.respawns > before) respawns++;
+      const hostBefore = host.respawns;
+      const guestBefore = guest.respawns;
+
+      host.step(FIXED_DT, hostDriver.input, 0, wall);
+      guest.step(FIXED_DT, guestDriver.input, 0, wall);
+
+      // Каждый браузер разрешает столкновение только для своего локального игрока и использует
+      // remote snapshot. Снимаем обе позиции ДО push, чтобы порядок двух вызовов в этой модели не
+      // создавал искусственное преимущество host или guest.
+      const hostView = remoteSnapshot(host);
+      const guestView = remoteSnapshot(guest);
+      resolvePlayerCrowd(host, [['guest', guestView]], FIXED_DT, 'host');
+      resolvePlayerCrowd(guest, [['host', hostView]], FIXED_DT, 'guest');
+
+      if (host.respawns > hostBefore) hostRespawns += host.respawns - hostBefore;
+      if (guest.respawns > guestBefore) guestRespawns += guest.respawns - guestBefore;
       accumulator -= FIXED_DT;
       steps++;
     }
     if (steps === MAX_SUBSTEPS) accumulator = 0;
   }
 
-  const finished = player.finished;
-  player.dispose();
+  const finished = host.finished && guest.finished;
+  const result = {
+    finished,
+    seconds: wall,
+    respawns: hostRespawns + guestRespawns,
+    hostFinished: host.finished,
+    guestFinished: guest.finished,
+    hostRespawns,
+    guestRespawns
+  };
+  host.dispose();
+  guest.dispose();
   course.dispose();
-  return { finished, seconds: wall, respawns };
+  return result;
 }
 
 function modes() {
@@ -113,7 +182,7 @@ if (only !== null) {
   console.log(`сид ${only}: ${spec.segments.map(s => `${s.type}/v${s.variant}`).join(' → ')}`);
   const byFps = new Map(FRAME_RATES.map(fps => [fps, { passed: 0, total: 0, falls: 0, worst: 0 }]));
   for (const mode of modes()) {
-    const attempt = run(only, mode);
+    const attempt = runPair(only, mode);
     const box = byFps.get(mode.fps);
     box.total++;
     box.falls += attempt.respawns;
@@ -124,7 +193,7 @@ if (only !== null) {
   }
   for (const [fps, box] of byFps)
     console.log(
-      `  ${String(fps).padStart(2)} кадров: ${box.passed}/${box.total}, худшее ${box.worst.toFixed(1)}с, падений ${box.falls}`
+      `  ${String(fps).padStart(2)} кадров: пара ${box.passed}/${box.total}, худшее ${box.worst.toFixed(1)}с, падений ${box.falls}`
     );
 } else {
   const seeds = Number(process.env.SEEDS || 200);
@@ -135,7 +204,7 @@ if (only !== null) {
     let worst = 0;
     let falls = 0;
     for (const mode of all) {
-      const attempt = run(seed, mode);
+      const attempt = runPair(seed, mode);
       if (!attempt.finished) {
         ok = false;
         break;
@@ -150,7 +219,7 @@ if (only !== null) {
 
   results.sort((a, b) => a.falls - b.falls || a.worst - b.worst);
   console.log(
-    `годных сидов: ${results.length} из ${seeds} (сегментов ${SEGMENTS}, ${DIFFICULTY}, режимов ${all.length})`
+    `годных сидов: ${results.length} из ${seeds} (пара игроков, сегментов ${SEGMENTS}, ${DIFFICULTY}, режимов ${all.length})`
   );
   for (const item of results.slice(0, 20))
     console.log(

@@ -7,12 +7,17 @@ function mobileOnly(testInfo) {
 async function previewState(page) {
   return page.evaluate(() => {
     const game = window.__WOBBLE_GAME__;
+    const previewRemotes = [...(game?.remotes?.entries?.() || [])]
+      .filter(([id]) => id.startsWith('__menu-preview-'))
+      .map(([id, actor]) => ({ id, x: actor.position.x, z: actor.position.z }));
     return {
       uiMode: game?.ui?.mode,
       gameMode: game?.mode,
       previewMode: document.body.dataset.menuPreviewMode || '',
       chapterId: game?.course?.spec?.chapterId || '',
+      start: game?.course?.spec?.start || null,
       remotes: game?.remotes?.size || 0,
+      previewRemotes,
       networkCreated: Boolean(game?.net)
     };
   });
@@ -39,6 +44,8 @@ test('landscape menu uses a mode rail, contextual panel and network-free live pr
   expect(state.gameMode).toBe('preview');
   expect(state.chapterId).toBe('');
   expect(state.remotes).toBe(3);
+  expect(state.previewRemotes).toHaveLength(3);
+  expect(state.previewRemotes.every(actor => Math.abs(actor.z - state.start.z) <= 3.1)).toBe(true);
   expect(state.networkCreated).toBe(false);
 
   await page.locator('.mode-tab[data-mode="coop"]').click();
@@ -60,7 +67,25 @@ test('landscape menu uses a mode rail, contextual panel and network-free live pr
   expect(state.gameMode).toBe('preview');
   expect(state.chapterId).toBe(targetId);
   expect(state.remotes).toBe(1);
+  expect(state.previewRemotes).toHaveLength(1);
+  expect(Math.abs(state.previewRemotes[0].z - state.start.z)).toBeLessThanOrEqual(1.5);
   expect(state.networkCreated).toBe(false);
+
+  // Core/wardrobe code is allowed to rebuild the neutral solo preview. Reselecting the active tab
+  // must notice that the actual course/remotes no longer match the cached presentation and repair it.
+  await page.evaluate(() => {
+    const game = window.__WOBBLE_GAME__;
+    game.buildPreview(game.previewSpec);
+  });
+  state = await previewState(page);
+  expect(state.chapterId).toBe('');
+  expect(state.remotes).toBe(0);
+
+  await page.locator('.mode-tab[data-mode="coop"]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-menu-preview-chapter', targetId);
+  state = await previewState(page);
+  expect(state.chapterId).toBe(targetId);
+  expect(state.remotes).toBe(1);
 });
 
 test('audio controls live in Settings while the menu keeps a quick mute action', async ({ page }) => {
@@ -104,4 +129,20 @@ test('campaign map and contextual menu remain scroll-free at the tallest target 
   );
   expect(nodes).toHaveLength(10);
   expect(nodes.every((node, index) => index === 0 || node.left >= nodes[index - 1].left)).toBe(true);
+});
+
+test('expanded private-room controls remain reachable on short landscape screens', async ({
+  page
+}, testInfo) => {
+  mobileOnly(testInfo);
+  await page.setViewportSize({ width: 667, height: 375 });
+  await page.goto('/');
+  await page.locator('.mode-tab[data-mode="multi"]').click();
+  await page.locator('#raceFriendsToggle').click();
+  await expect(page.locator('#raceFriendsTogglePanel')).toBeVisible();
+
+  const overflow = await page.locator('.menu-card').evaluate(node => getComputedStyle(node).overflowY);
+  expect(['auto', 'scroll']).toContain(overflow);
+  await page.locator('#raceCreate').scrollIntoViewIfNeeded();
+  await expect(page.locator('#raceCreate')).toBeVisible();
 });

@@ -1,4 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { continueInWindowedMode } from './helpers/windowed-mode.js';
+
+async function createWindowedContext(browser) {
+  const context = await browser.newContext();
+  await continueInWindowedMode(context);
+  return context;
+}
 
 async function openCoop(context) {
   const page = await context.newPage();
@@ -36,8 +43,8 @@ test.describe('быстрый подбор кооперативной пары',
   test('два браузера проходят waiting, автоматически стартуют и восстанавливаются после reload', async ({
     browser
   }) => {
-    const firstContext = await browser.newContext();
-    const secondContext = await browser.newContext();
+    const firstContext = await createWindowedContext(browser);
+    const secondContext = await createWindowedContext(browser);
     const first = await openCoop(firstContext);
     const second = await openCoop(secondContext);
     try {
@@ -58,7 +65,7 @@ test.describe('быстрый подбор кооперативной пары',
   });
 
   test('поиск можно отменить без создания комнаты', async ({ browser }) => {
-    const context = await browser.newContext();
+    const context = await createWindowedContext(browser);
     const page = await openCoop(context);
     try {
       await findPartner(page);
@@ -73,8 +80,8 @@ test.describe('быстрый подбор кооперативной пары',
   });
 
   test('закрытая вкладка удаляется из очереди, а следующий игрок ждёт четвёртого', async ({ browser }) => {
-    const abandonedContext = await browser.newContext();
-    const waitingContext = await browser.newContext();
+    const abandonedContext = await createWindowedContext(browser);
+    const waitingContext = await createWindowedContext(browser);
     const abandoned = await openCoop(abandonedContext);
     const waiting = await openCoop(waitingContext);
     try {
@@ -84,7 +91,7 @@ test.describe('быстрый подбор кооперативной пары',
       await expect(waiting.locator('#coopStatus')).toContainText('Ищем напарника');
       await expect(waiting.locator('#hud')).toBeHidden();
 
-      const fourthContext = await browser.newContext();
+      const fourthContext = await createWindowedContext(browser);
       const fourth = await openCoop(fourthContext);
       try {
         await findPartner(fourth);
@@ -98,7 +105,11 @@ test.describe('быстрый подбор кооперативной пары',
   });
 
   test('третий игрок остаётся в очереди, пока первая пара уже играет', async ({ browser }) => {
-    const contexts = await Promise.all([browser.newContext(), browser.newContext(), browser.newContext()]);
+    const contexts = await Promise.all([
+      createWindowedContext(browser),
+      createWindowedContext(browser),
+      createWindowedContext(browser)
+    ]);
     const [first, second, third] = await Promise.all(contexts.map(openCoop));
     try {
       await findPartner(first);

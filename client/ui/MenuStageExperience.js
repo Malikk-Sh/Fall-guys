@@ -326,7 +326,10 @@ export class MenuStageExperience {
       game.sun.intensity = theme.sunIntensity;
     }
     if (game.renderer) game.renderer.toneMappingExposure = theme.exposure;
-    this.root.documentElement.style.setProperty('--world-accent', hexColor(theme.accent, DEFAULT_SCENE.accent));
+    this.root.documentElement.style.setProperty(
+      '--world-accent',
+      hexColor(theme.accent, DEFAULT_SCENE.accent)
+    );
     this.root.documentElement.style.setProperty(
       '--world-secondary',
       hexColor(theme.secondary, DEFAULT_SCENE.secondary)

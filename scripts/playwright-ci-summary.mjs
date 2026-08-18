@@ -1,9 +1,6 @@
 import { appendFileSync } from 'node:fs';
 
-const clean = value =>
-  String(value || '')
-    .replace(/\u001b\[[0-9;]*m/g, '')
-    .replace(/```/g, '``\u200b`');
+const clean = value => String(value || '').replace(/```/g, '``\u200b`');
 
 class GitHubStepSummaryReporter {
   constructor() {

@@ -505,50 +505,84 @@ body.portrait-accessibility.menu-polish .menu-card {
   body.mobile-landscape.menu-polish #coop .campaign-grid {
     display: flex;
     gap: 4px;
-    padding-bottom: 2px;
+    padding-bottom: 0;
     overflow-x: auto;
     overflow-y: hidden;
-    scrollbar-width: thin;
+    scrollbar-width: none;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-grid::-webkit-scrollbar {
+    display: none;
   }
   body.mobile-landscape.menu-polish #coop .campaign-card {
     flex: 0 0 100px;
-    min-height: 52px;
-    padding: 5px;
-    gap: 2px 4px;
+    height: 46px;
+    min-height: 46px;
+    padding: 4px 5px;
+    gap: 1px 4px;
+    align-content: center;
   }
   body.mobile-landscape.menu-polish #coop .campaign-card.selected {
-    flex-basis: 158px;
+    flex-basis: 142px;
+    height: 46px;
     grid-column: auto;
-    padding: 6px;
+    padding: 4px 5px;
   }
-  body.mobile-landscape.menu-polish #coop .campaign-preview {
-    min-height: 10px;
+  body.mobile-landscape.menu-polish #coop .campaign-number {
+    font-size: 0.82rem;
   }
-  body.mobile-landscape.menu-polish #coop .campaign-preview i {
-    padding: 2px 3px;
-    font-size: 0.4rem;
+  body.mobile-landscape.menu-polish #coop .campaign-card.selected .campaign-copy b {
+    font-size: 0.62rem;
   }
+  body.mobile-landscape.menu-polish #coop .campaign-card.selected .campaign-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-medal,
+  body.mobile-landscape.menu-polish #coop .campaign-preview,
   body.mobile-landscape.menu-polish #coop .campaign-stats {
-    gap: 1px 4px;
-  }
-  body.mobile-landscape.menu-polish #coop .campaign-stats small {
-    font-size: 0.4rem;
+    display: none !important;
   }
   body.mobile-landscape.menu-polish #coop .coop-hint {
-    max-height: 28px;
+    max-height: 18px;
     margin: 0;
-    padding: 4px 6px;
+    padding: 2px 5px;
     overflow: hidden;
     font-size: 8px;
-    line-height: 1.2;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   body.mobile-landscape.menu-polish #coop .toggle-row {
-    min-height: 28px;
+    min-height: 24px;
+    padding-block: 0;
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish #coopFriendsToggle {
+    min-height: 26px;
+    margin-top: -2px;
     padding-block: 2px;
-    font-size: 9px;
+    line-height: 1.1;
+  }
+  body.mobile-landscape.menu-polish #coopStatus {
+    min-height: 0;
+    max-height: 14px;
+    margin: 0;
+    padding: 0 2px;
+    overflow: hidden;
+    font-size: 7px;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   body.mobile-landscape #hud.hud {
     top: calc(5px + var(--safe-top));
+  }
+}
+
+@media (max-height: 370px) and (orientation: landscape) {
+  body.mobile-landscape.menu-polish #coop .coop-hint {
+    display: none;
   }
 }
 

@@ -27,6 +27,15 @@
 // условии, что сам водитель не превращает задержку CI в многосекундно зажатую боковую клавишу.
 
 import { test, expect } from '@playwright/test';
+import { STEER_PULSE_MS, steeringKey } from './helpers/full-match-driver.mjs';
+import {
+  createPollTelemetry,
+  describeRuntimeTelemetry,
+  installFrameProbe,
+  readFrameTelemetry,
+  recordPoll,
+  summarizePollTelemetry
+} from './helpers/full-match-telemetry.mjs';
 
 // Запас на прохождение. Трасса короткая, но потолок взят кратно больше: падение возвращает на
 // чекпоинт и сегмент приходится проходить заново, а физика ограничена пятью подшагами на кадр, то
@@ -88,45 +97,12 @@ async function joinRoom(page, name, code) {
 // Положение читается из window.__WOBBLE_GAME__, который клиент выставляет и без тестов. Никакого
 // обхода правил тут нет: это собственная позиция игрока, которую его же браузер и рисует, а сервер
 // всё равно проверяет каждое присланное состояние.
-// CI #645 дал уже не один случайный кадр, а два одинаковых retry: гость 44/45 раз падал на
-// первом сегменте, пока хост в итоге прорывался. У bumpers/v3 ближайший к центру бампер стоит на
-// |x|=1.4; его hit radius (0.78 * 1.08) вместе с PLAYER_OBSTACLE_RADIUS (0.42 * 0.8) оставляет
-// прямой центральной траектории всего ~0.22 м запаса. Старые ±0.8 считали игрока «по центру» уже
-// внутри зоны удара. Водитель всё так же ничего не знает о препятствиях — он просто действительно
-// держит ось фиксированной тестовой трассы.
-const CENTER_TOLERANCE = 0.16;
-
-// Боковая коррекция — импульс ограниченной длительности, а не клавиша, зажатая до следующего
-// round-trip Playwright. Это различие оказалось критичным именно на CI.
 //
-// В trace красного прогона фактический промежуток между чтениями позиции был не 220 мс из
-// waitForTimeout, а примерно 0.9 с по медиане и доходил до ~1.7 с. Из-за прежнего hold/release A/D
-// боковая клавиша оставалась зажатой ещё дольше: около двух секунд по медиане и до ~7 секунд.
-// После удара бампера/knockdown это превращало устаревшую коррекцию в новый разгон поперёк трассы;
-// в том же trace x гулял примерно от -15 до +15. Это уже поведение тестового водителя, а не матча.
-//
-// 140 мс хватает хотя бы на один кадр даже около 10 FPS, но длительность не зависит от того,
-// насколько занят runner после этого. Клавиша по-прежнему настоящая — проходит через тот же Input,
-// что и у человека.
-const STEER_PULSE_MS = 140;
-// Одной ограниченной длительности недостаточно. Trace CI #643 показал, что при редких чтениях позиции
-// x всё ещё гулял примерно от -15 до +15: водитель продолжал жать в ту же сторону даже после того,
-// как предыдущий импульс уже развернул боковую скорость к центру. Не добавляем второй импульс, пока
-// игрок уже возвращается достаточно быстро; это простой тормоз по скорости, а не знание препятствий.
-const CENTERING_SPEED = 1.4;
-// На #645 чтения приходили примерно раз в секунду. Одного текущего x поэтому мало: игрок может быть
-// ещё внутри узкого центрального коридора, но уже иметь скорость наружу. Короткий прогноз заставляет
-// дать один реальный A/D-импульс до выхода из коридора; после отпускания обычный ground/air damping
-// снова гасит боковую скорость.
-const STEER_LOOKAHEAD_SECONDS = 0.35;
-
-async function steerTowardCenter(page, { x, vx }) {
-  const projectedX = x + vx * STEER_LOOKAHEAD_SECONDS;
-  if (projectedX > CENTER_TOLERANCE && vx > -CENTERING_SPEED) {
-    await page.keyboard.press('KeyA', { delay: STEER_PULSE_MS });
-  } else if (projectedX < -CENTER_TOLERANCE && vx < CENTERING_SPEED) {
-    await page.keyboard.press('KeyD', { delay: STEER_PULSE_MS });
-  }
+// Steering policy живёт в e2e/helpers/full-match-driver.mjs и используется также seed-sweep. Это
+// не даёт дешёвой физической модели снова незаметно разойтись с настоящим browser driver.
+async function steerTowardCenter(page, status) {
+  const key = steeringKey(status);
+  if (key) await page.keyboard.press(key, { delay: STEER_PULSE_MS });
 }
 
 // Сколько строк сейчас в таблице подтверждённых рекордов этой трассы. Сид и сложность фиксированы
@@ -144,6 +120,17 @@ const progress = page =>
   page.evaluate(() => {
     const game = window.__WOBBLE_GAME__;
     const player = game?.player;
+    const remotes =
+      game?.remotes instanceof Map
+        ? [...game.remotes.entries()].slice(0, 3).map(([id, remote]) => ({
+            id,
+            x: remote?.position?.x ?? null,
+            z: remote?.position?.z ?? null,
+            vx: remote?.velocity?.x ?? null,
+            state: remote?.snapshot?.().state ?? null,
+            finished: !!remote?.finished
+          }))
+        : [];
     return {
       x: player?.position?.x ?? null,
       z: player?.position?.z ?? null,
@@ -155,20 +142,39 @@ const progress = page =>
       respawns: player?.respawns ?? null,
       finished: !!player?.finished,
       hud: !document.querySelector('#hud')?.classList.contains('hidden'),
-      results: !document.querySelector('#finish')?.classList.contains('hidden')
+      results: !document.querySelector('#finish')?.classList.contains('hidden'),
+      remotes
     };
   });
 
-const describeRun = report =>
-  report.done
-    ? 'дошёл'
+const describeRun = report => {
+  const result = report.done
+    ? `дошёл за ${(report.seconds ?? 0).toFixed(1)} с, падений ${report.respawns ?? '—'}`
     : `не дошёл за ${(report.seconds ?? 0).toFixed(0)} с: z=${report.z ?? '—'} из ${report.finishZ ?? '—'}, ` +
       `x=${report.x ?? '—'}, vx=${report.vx ?? '—'}, чекпоинт ${report.checkpoint ?? '—'}/${report.segments ?? '—'}, ` +
       `состояние ${report.state ?? '—'}, падений ${report.respawns ?? '—'}, HUD ${report.hud ? 'виден' : 'нет'}`;
+  const remotes = report.remotes?.length ? `; remotes ${JSON.stringify(report.remotes)}` : '';
+  return `${result}; ${describeRuntimeTelemetry(report.telemetry)}${remotes}`;
+};
+
+async function runReport(page, startedAt, telemetry, done) {
+  const [state, frame] = await Promise.all([progress(page), readFrameTelemetry(page)]);
+  return {
+    done,
+    seconds: (Date.now() - startedAt) / 1000,
+    ...state,
+    telemetry: {
+      poll: summarizePollTelemetry(telemetry),
+      frame
+    }
+  };
+}
 
 async function runToFinish(page, budget = RUN_BUDGET_MS) {
   const startedAt = Date.now();
   const deadline = startedAt + budget;
+  const telemetry = createPollTelemetry(startedAt);
+  await installFrameProbe(page);
   await page.keyboard.down('KeyW');
   try {
     while (Date.now() < deadline) {
@@ -181,7 +187,8 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
           results: !document.querySelector('#finish')?.classList.contains('hidden')
         };
       });
-      if (status.finished || status.results) return { done: true, seconds: (Date.now() - startedAt) / 1000 };
+      recordPoll(telemetry, status);
+      if (status.finished || status.results) return runReport(page, startedAt, telemetry, true);
 
       await steerTowardCenter(page, status);
 
@@ -193,7 +200,7 @@ async function runToFinish(page, budget = RUN_BUDGET_MS) {
   } finally {
     await page.keyboard.up('KeyW');
   }
-  return { done: false, seconds: (Date.now() - startedAt) / 1000, ...(await progress(page)) };
+  return runReport(page, startedAt, telemetry, false);
 }
 
 // Два водителя не должны сами превращаться в дополнительное препятствие теста. На старте их x =
@@ -209,7 +216,12 @@ async function runPairToFinish(host, guest) {
     await new Promise(resolve => setTimeout(resolve, RUNNER_STAGGER_MS));
     return runToFinish(guest);
   };
-  return Promise.all([runToFinish(host), guestRun()]);
+  const runs = await Promise.all([runToFinish(host), guestRun()]);
+  if (process.env.WOBBLE_E2E_DIAGNOSTICS === '1') {
+    console.info(`[full-match] хост ${describeRun(runs[0])}`);
+    console.info(`[full-match] гость ${describeRun(runs[1])}`);
+  }
+  return runs;
 }
 
 test.describe('полный матч на двоих', () => {

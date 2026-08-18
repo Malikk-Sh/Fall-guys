@@ -9,16 +9,28 @@ function mobileOnly(testInfo) {
 
 async function installFullscreenMock(
   page,
-  { supported = true, rejectRequest = false, rejectLock = false } = {}
+  {
+    supported = true,
+    rejectRequest = false,
+    rejectLock = false,
+    armOnModePointerDown = false
+  } = {}
 ) {
   await page.addInitScript(
-    ({ supported, rejectRequest, rejectLock }) => {
+    ({ supported, rejectRequest, rejectLock, armOnModePointerDown }) => {
       let fullscreenElement = null;
+      let fullscreenEnabled = supported && !armOnModePointerDown;
       window.__orientationLocks = [];
+
+      // Базовый mobile project хранит явный выбор «продолжить в браузере». Fullscreen-suite
+      // намеренно снимает его до старта приложения, чтобы тестировать настоящий onboarding.
+      try {
+        localStorage.removeItem('wobble-fullscreen-prompt-v1');
+      } catch {}
 
       Object.defineProperty(document, 'fullscreenEnabled', {
         configurable: true,
-        get: () => supported
+        get: () => fullscreenEnabled
       });
       Object.defineProperty(document, 'fullscreenElement', {
         configurable: true,
@@ -38,6 +50,16 @@ async function installFullscreenMock(
       } else {
         Element.prototype.requestFullscreen = undefined;
         document.exitFullscreen = undefined;
+      }
+
+      // Регрессия: capability становится доступной ровно во время pointerdown по mode-tab.
+      // Bubble phase намеренно идёт после capture-guard MobileExperience, но ещё до pointerup/click.
+      if (supported && armOnModePointerDown) {
+        document.addEventListener('pointerdown', event => {
+          if (fullscreenEnabled || !event.target?.closest?.('.mode-tab')) return;
+          fullscreenEnabled = true;
+          document.dispatchEvent(new Event('fullscreenchange'));
+        });
       }
 
       const orientation = {
@@ -61,7 +83,7 @@ async function installFullscreenMock(
         } catch {}
       }
     },
-    { supported, rejectRequest, rejectLock }
+    { supported, rejectRequest, rejectLock, armOnModePointerDown }
   );
 }
 
@@ -199,6 +221,21 @@ test('missing and rejected Fullscreen API never block normal play', async ({ pag
   await expect(rejected.locator('body')).not.toHaveClass(/is-fullscreen/);
   await expect(rejected.locator('#play')).toBeVisible();
   await rejected.close();
+});
+
+test('fullscreen onboarding waits until the mode click has completed', async ({ page }, testInfo) => {
+  mobileOnly(testInfo);
+  await page.setViewportSize({ width: 844, height: 390 });
+  await installFullscreenMock(page, { supported: true, armOnModePointerDown: true });
+  await page.goto('/');
+  await expect(page.locator('#mobileGameModePrompt')).toBeHidden();
+
+  const coopTab = page.locator('.mode-tab[data-mode="coop"]');
+  await coopTab.click();
+
+  await expect(coopTab).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#coop')).toBeVisible();
+  await expect(page.locator('#mobileGameModePrompt')).toBeVisible();
 });
 
 test('fullscreen advisory disappears immediately when gameplay leaves the menu', async ({

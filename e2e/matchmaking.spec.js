@@ -122,9 +122,9 @@ test.describe('быстрый подбор кооперативной пары',
       // MenuStageExperience keeps one local decorative Co-op preview actor in game.remotes while
       // the player is still in the menu. The matchmaking invariant is that no real network remote
       // exists for a queued third player, not that the presentation map is physically empty.
-      const remoteIds = await third.evaluate(() =>
-        Array.from(window.__WOBBLE_GAME__?.remotes?.keys?.() || [])
-      );
+      const remoteIds = await third.evaluate(() => {
+        return Array.from(window.__WOBBLE_GAME__?.remotes?.keys?.() || []);
+      });
       const networkRemoteIds = remoteIds.filter(id => !id.startsWith('__menu-preview-'));
       const previewRemoteIds = remoteIds.filter(id => id.startsWith('__menu-preview-'));
       expect(networkRemoteIds).toEqual([]);

@@ -396,7 +396,7 @@ body.portrait-accessibility.menu-polish .menu-card {
 }
 
 /* Short landscape is a parallel composition, not a vertically scrolling desktop form. */
-@media (max-height: 420px) and (orientation: landscape) {
+@media (max-height: 600px) and (orientation: landscape) {
   body.mobile-landscape .brand-kicker,
   body.mobile-landscape .brand p {
     display: none;

@@ -20,11 +20,7 @@ import { Course } from '../client/game/Course.js';
 import { Effects } from '../client/game/Effects.js';
 import { Player } from '../client/game/Player.js';
 import { resolvePlayerCrowd } from '../client/game/PlayerCollisions.js';
-import {
-  DRIVER_CONTROL_PERIOD_MS,
-  STEER_PULSE_MS,
-  steeringAxis
-} from '../e2e/helpers/full-match-driver.mjs';
+import { DRIVER_CONTROL_PERIOD_MS, STEER_PULSE_MS, steeringAxis } from '../e2e/helpers/full-match-driver.mjs';
 
 // Ровно значения игрового цикла client/main.js: при низком FPS физика делает не более пяти
 // фиксированных подшагов за кадр, а препятствия продолжают жить по настенному времени.

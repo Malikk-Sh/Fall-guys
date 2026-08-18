@@ -57,9 +57,7 @@ function driverFor(player, { periodMs, latencyMs, phase }, startsAt) {
   };
   state.input = {
     movement: () =>
-      state.active
-        ? { x: state.inputX, forward: 1, magnitude: 1 }
-        : { x: 0, forward: 0, magnitude: 0 },
+      state.active ? { x: state.inputX, forward: 1, magnitude: 1 } : { x: 0, forward: 0, magnitude: 0 },
     consume: action => (action === 'jump' && state.jump ? ((state.jump = false), true) : false),
     isHeld: () => false
   };

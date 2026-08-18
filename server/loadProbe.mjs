@@ -12,11 +12,7 @@
 
 import { writeFile } from 'node:fs/promises';
 import { WebSocket } from 'ws';
-import {
-  loadStateMessage,
-  loadTargets,
-  loopbackSourceAddress
-} from './loadProbeConfig.mjs';
+import { loadStateMessage, loadTargets, loopbackSourceAddress } from './loadProbeConfig.mjs';
 
 const { wsUrl, httpUrl } = loadTargets();
 const ROOMS = Math.max(1, Number(process.argv[2] || 12));
@@ -37,9 +33,7 @@ class Client {
     // открытия сокета, иначе быстрый loopback успевает доставить событие между `new Client()` и
     // внешним `client.wait('hello')`, после чего probe восемь секунд ждёт уже прошедшее сообщение.
     this.hello = this.wait('hello');
-    this.ws = sourceAddress
-      ? new WebSocket(wsUrl, { localAddress: sourceAddress })
-      : new WebSocket(wsUrl);
+    this.ws = sourceAddress ? new WebSocket(wsUrl, { localAddress: sourceAddress }) : new WebSocket(wsUrl);
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
       if (message.type === 'hello') this.id = message.id;

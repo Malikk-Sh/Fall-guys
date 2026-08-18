@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { expandNpmScript } from './testScriptGraph.mjs';
 
 const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
@@ -55,6 +56,7 @@ test('Control Plane systemd unit stays independent from gameplay lifecycle', () 
 });
 
 test('standard npm test includes every new Control Plane regression file', () => {
+  const standardTest = expandNpmScript(pkg.scripts, 'test');
   for (const file of [
     'server/controlPlaneGameClient.test.mjs',
     'server/controlPlaneRoutes.test.mjs',
@@ -63,7 +65,7 @@ test('standard npm test includes every new Control Plane regression file', () =>
     'server/telegramAlertDelivery.test.mjs',
     'server/controlPlaneDeploy.test.mjs'
   ]) {
-    assert.ok(pkg.scripts.test.includes(file), `${file} missing from npm test`);
+    assert.ok(standardTest.includes(file), `${file} missing from npm test`);
   }
 });
 

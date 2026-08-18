@@ -39,9 +39,9 @@ module.exports = [
     rules: commonRules
   },
 
-  // Тесты и загрузчик: ESM под Node.
+  // Тесты, загрузчик и CI helpers: ESM под Node.
   {
-    files: ['server/**/*.mjs'],
+    files: ['server/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',

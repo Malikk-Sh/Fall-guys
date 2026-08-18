@@ -14,18 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  quality:
+    name: Fast quality gate
     runs-on: ubuntu-latest
-    # Сквозной тест полного матча идёт в настоящем времени: забег нельзя ускорить, сервер проверяет
-    # скорость так же, как у живого игрока. Подготовительные проверки и браузерный E2E делят один
-    # job, поэтому оставляем запас над обычным временем прогона вместо отмены E2E на самом финише.
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
-      # 22, а не 20: в проекте используется встроенный node:sqlite, он появился в 22.5.
-      # Подпись шага раньше говорила «Node.js 20», хотя ставилась 22, — расходилась с делом.
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -35,34 +31,57 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      # Эти проверки дешёвые и должны падать раньше долгих интеграционных и браузерных сценариев.
-      # Используем grep из базового образа runner: прежний `! rg ...` превращал отсутствие ripgrep
-      # в успешную проверку и фактически отключал защиту от merge markers.
-      - name: Check formatting and merge artifacts
-        run: |
-          npm run format:check
-          if grep -RInE '^(<<<<<<<|=======|>>>>>>>)' \
-            --exclude-dir=node_modules \
-            --exclude-dir=.git \
-            .; then
-            echo "Merge conflict markers found"
-            exit 1
-          fi
+      - name: Run preflight checks
+        run: npm run preflight
 
-      - name: Validate production scripts
-        run: bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh deploy/verify-shared443-config.sh
+  tests:
+    name: Node tests (${{ matrix.suite }})
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [server, client]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Run ${{ matrix.suite }} tests
+        run: npm run test:${{ matrix.suite }}
+
+  production:
+    name: Production smoke
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
 
       - name: Verify shared-443 Nginx configuration
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq nginx libnginx-mod-stream
           bash deploy/verify-shared443-config.sh
-
-      - name: Lint source
-        run: npm run check
-
-      - name: Run gameplay and multiplayer tests
-        run: npm test
 
       - name: Run production backup and deploy smoke
         shell: bash
@@ -106,16 +125,106 @@ jobs:
             exit 1
           fi
 
-      - name: Install Chromium for browser tests
-        run: npx playwright install --with-deps chromium
+  e2e:
+    name: E2E (${{ matrix.name }})
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: desktop
+            command: npm run test:e2e:desktop
+            exclude_full_match: '1'
+            retries: '0'
+            timeout_minutes: 12
+          - name: mobile
+            command: npm run test:e2e:mobile
+            exclude_full_match: '0'
+            retries: '0'
+            timeout_minutes: 12
+          - name: fullscreen
+            command: npm run test:e2e:fullscreen
+            exclude_full_match: '0'
+            retries: '0'
+            timeout_minutes: 12
+          - name: full-match
+            command: npm run test:e2e:full-match
+            exclude_full_match: '0'
+            retries: '1'
+            timeout_minutes: 20
+    env:
+      WOBBLE_E2E_EXCLUDE_FULL_MATCH: ${{ matrix.exclude_full_match }}
+      WOBBLE_E2E_RETRIES: ${{ matrix.retries }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
 
-      - name: Run two-browser multiplayer smoke test
-        run: npm run test:e2e
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install chromium
+
+      - name: Run ${{ matrix.name }} browser tests
+        run: ${{ matrix.command }}
 
       - name: Upload browser test report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.name }}
           path: playwright-report/
           retention-days: 7
+
+  verify:
+    name: CI ready
+    if: always()
+    needs: [quality, tests, production, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Summarize required jobs
+        env:
+          QUALITY: ${{ needs.quality.result }}
+          TESTS: ${{ needs.tests.result }}
+          PRODUCTION: ${{ needs.production.result }}
+          E2E: ${{ needs.e2e.result }}
+        run: |
+          {
+            echo "### Wobble Rush CI"
+            echo
+            echo "| Group | Result |"
+            echo "| --- | --- |"
+            echo "| Fast quality gate | $QUALITY |"
+            echo "| Node tests | $TESTS |"
+            echo "| Production smoke | $PRODUCTION |"
+            echo "| Browser E2E | $E2E |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          for result in "$QUALITY" "$TESTS" "$PRODUCTION" "$E2E"; do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  test:
+    name: test
+    if: always()
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Preserve required status check
+        env:
+          CI_READY: ${{ needs.verify.result }}
+        run: test "$CI_READY" = "success"

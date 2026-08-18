@@ -62,6 +62,566 @@
 #installApp {
   white-space: nowrap;
 }
+
+/* Mobile Landscape Experience ------------------------------------------------ */
+.rotate-device,
+.mobile-game-mode {
+  position: fixed;
+  z-index: 2600;
+  inset: 0;
+  padding: calc(20px + var(--safe-top)) calc(20px + var(--safe-right)) calc(20px + var(--safe-bottom))
+    calc(20px + var(--safe-left));
+}
+.rotate-device {
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  color: #fff;
+  background:
+    radial-gradient(circle at 20% 18%, #7258e580 0 18%, transparent 42%),
+    radial-gradient(circle at 80% 82%, #28d8e84d 0 15%, transparent 38%),
+    linear-gradient(145deg, #171039 0%, #2a1766 52%, #171039 100%);
+}
+.rotate-device-card {
+  width: min(430px, 100%);
+  text-align: center;
+}
+.rotate-device-card h2,
+.mobile-game-mode-card h2 {
+  margin: 10px 0 8px;
+  color: #fff;
+  font-size: clamp(24px, 7vw, 40px);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+}
+.rotate-device-card p,
+.mobile-game-mode-card p {
+  margin: 0 auto 14px;
+  max-width: 42ch;
+  color: #d8d2ff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.rotate-wobbler {
+  position: relative;
+  width: 58px;
+  height: 68px;
+  margin: 0 auto 8px;
+  border-radius: 45% 45% 42% 42%;
+  background: linear-gradient(145deg, #ff6aa9, #ea397f);
+  box-shadow: 0 12px 30px #0b062b75;
+}
+.rotate-wobbler::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  width: 36px;
+  height: 21px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: #dcfbff;
+  box-shadow: inset 0 -5px #9eeaf3;
+}
+.rotate-wobbler::after {
+  content: '';
+  position: absolute;
+  right: 9px;
+  bottom: -11px;
+  width: 10px;
+  height: 20px;
+  border-radius: 8px;
+  background: #ea397f;
+  box-shadow: -24px 0 #ea397f;
+}
+.rotate-phone {
+  position: relative;
+  width: 48px;
+  height: 78px;
+  margin: 8px auto 18px;
+  border: 4px solid #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px #07041e66;
+  animation: wobble-rotate-phone 1.5s cubic-bezier(0.2, 0.8, 0.3, 1) infinite;
+}
+.rotate-phone::before {
+  content: '↻';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #ffdd4c;
+  font-size: 30px;
+  font-weight: 900;
+}
+.rotate-phone i {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 15px;
+  height: 3px;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: #ffffff9c;
+}
+.rotate-device .text-button {
+  display: inline-block;
+  margin: 4px 0 0;
+  color: #cfc7ff;
+}
+.rotate-fallback {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #ffffff26;
+  border-radius: 15px;
+  background: #ffffff0d;
+}
+.rotate-fallback .button {
+  width: 100%;
+  margin: 0;
+}
+
+/* Soft fullscreen suggestion: it never owns the whole viewport and cannot trap the player. */
+.mobile-game-mode {
+  z-index: 2500;
+  inset: auto auto calc(10px + var(--safe-bottom)) calc(10px + var(--safe-left));
+  width: min(300px, 32vw);
+  padding: 0;
+  pointer-events: none;
+}
+.mobile-game-mode-card {
+  width: 100%;
+  padding: 12px;
+  border-radius: 17px;
+  text-align: center;
+  pointer-events: auto;
+}
+.mobile-game-mode-card .eyebrow {
+  font-size: 8px;
+}
+.mobile-game-mode-card h2 {
+  margin: 5px 0;
+  font-size: clamp(15px, 2.2vw, 22px);
+}
+.mobile-game-mode-card p {
+  margin-bottom: 7px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.mobile-game-mode-card .button {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 5px;
+  padding: 7px 8px;
+  font-size: 10px;
+}
+.fullscreen-toggle {
+  min-width: 42px !important;
+  width: 42px;
+  padding-inline: 0 !important;
+  font-size: 17px;
+}
+
+/* Landscape shell: use width for the scene and keep permanent controls at the edges. */
+body.mobile-landscape .screen {
+  padding-top: calc(10px + var(--safe-top));
+  padding-right: calc(12px + var(--safe-right));
+  padding-bottom: calc(10px + var(--safe-bottom));
+  padding-left: calc(12px + var(--safe-left));
+}
+body.mobile-landscape .screen-menu {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 48vw, 472px);
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(10px, 2.5vw, 28px);
+}
+body.mobile-landscape .brand {
+  width: min(39vw, 330px);
+}
+body.mobile-landscape .brand h1 {
+  margin-block: 4px;
+  font-size: clamp(38px, 7vw, 68px);
+}
+body.mobile-landscape .brand p {
+  margin-top: 8px;
+  font-size: 12px;
+}
+body.mobile-landscape.menu-polish .menu-card {
+  width: 100%;
+  max-width: 472px;
+  justify-self: end;
+  max-height: calc(100vh - 18px - var(--safe-top) - var(--safe-bottom));
+  padding: 12px;
+  border-radius: 19px;
+}
+body.mobile-landscape.menu-polish .mode-tabs {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 9px;
+}
+body.mobile-landscape.menu-polish .mode-panel {
+  gap: 8px;
+}
+body.mobile-landscape.menu-polish #raceFind,
+body.mobile-landscape.menu-polish #coopFind {
+  min-height: 50px;
+  padding-block: 10px;
+  font-size: 15px;
+}
+body.mobile-landscape.menu-polish .menu-footer {
+  margin-top: 8px;
+}
+
+/* Compact race/co-op HUD. On common 375–412 px landscape heights it stays around 48–54 px. */
+body.mobile-landscape #hud.hud {
+  top: calc(7px + var(--safe-top));
+  right: calc(9px + var(--safe-right));
+  left: calc(9px + var(--safe-left));
+  width: auto;
+  min-height: 48px;
+  gap: 6px;
+  transform: none;
+  grid-template-columns: auto auto minmax(120px, 1fr) auto auto;
+  align-items: stretch;
+}
+body.mobile-landscape #hud .hud-leave,
+body.mobile-landscape #hud .hud-card,
+body.mobile-landscape #hud .hud-progress {
+  min-height: 46px;
+  border-radius: 13px;
+}
+body.mobile-landscape #hud .hud-leave {
+  min-width: 54px;
+  padding: 7px 9px;
+  font-size: 9px;
+}
+body.mobile-landscape #hud .hud-card {
+  min-width: 68px;
+  padding: 6px 9px;
+}
+body.mobile-landscape #hud .hud-card small {
+  font-size: 7px;
+}
+body.mobile-landscape #hud .hud-card strong {
+  font-size: 14px;
+}
+body.mobile-landscape #hud .hud-progress {
+  min-width: 0;
+  padding: 6px 10px;
+}
+body.mobile-landscape #hud .hud-progress-label {
+  gap: 8px;
+  font-size: 8px;
+}
+body.mobile-landscape #hud .progress-track {
+  margin-top: 5px;
+}
+
+body.mobile-landscape {
+  --action-size: 82px;
+  --dive-size: 64px;
+}
+body.mobile-landscape[data-hand='left'] #stick,
+body.mobile-landscape[data-hand='left'] #stickZone {
+  left: calc(16px + var(--safe-left));
+}
+body.mobile-landscape[data-hand='right'] #stick,
+body.mobile-landscape[data-hand='right'] #stickZone {
+  right: calc(16px + var(--safe-right));
+}
+body.mobile-landscape[data-hand='left'] #jump,
+body.mobile-landscape[data-hand='left'] #recenter,
+body.mobile-landscape[data-hand='left'] #cameraMode,
+body.mobile-landscape[data-hand='left'] #emoteButton {
+  right: calc(16px + var(--safe-right));
+}
+body.mobile-landscape[data-hand='left'] #dive {
+  right: calc(28px + var(--safe-right) + var(--action-size) * var(--ui-scale));
+}
+body.mobile-landscape[data-hand='right'] #jump,
+body.mobile-landscape[data-hand='right'] #recenter,
+body.mobile-landscape[data-hand='right'] #cameraMode,
+body.mobile-landscape[data-hand='right'] #emoteButton {
+  left: calc(16px + var(--safe-left));
+  right: auto;
+}
+body.mobile-landscape[data-hand='right'] #dive {
+  left: calc(28px + var(--safe-left) + var(--action-size) * var(--ui-scale));
+  right: auto;
+}
+body.mobile-landscape #stick,
+body.mobile-landscape #jump {
+  bottom: calc(14px + var(--safe-bottom));
+}
+body.mobile-landscape #dive {
+  bottom: calc(18px + var(--safe-bottom));
+}
+
+/* Accessibility portrait fallback: playable, intentionally simplified and with larger controls. */
+body.portrait-accessibility {
+  --action-size: 104px;
+  --dive-size: 84px;
+}
+body.portrait-accessibility #hud.hud {
+  right: calc(8px + var(--safe-right));
+  left: calc(8px + var(--safe-left));
+  width: auto;
+  transform: none;
+}
+body.portrait-accessibility .brand {
+  display: none;
+}
+body.portrait-accessibility .screen-menu {
+  align-items: center;
+  justify-content: center;
+}
+body.portrait-accessibility.menu-polish .menu-card {
+  width: min(94vw, 480px);
+}
+
+@keyframes wobble-rotate-phone {
+  0%,
+  18% {
+    transform: rotate(0deg) scale(1);
+  }
+  58%,
+  82% {
+    transform: rotate(90deg) scale(0.96);
+  }
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+/* Short landscape is a parallel composition, not a vertically scrolling desktop form. */
+@media (max-height: 600px) and (orientation: landscape) {
+  body.mobile-landscape .brand-kicker,
+  body.mobile-landscape .brand p {
+    display: none;
+  }
+  body.mobile-landscape.menu-polish .menu-card {
+    padding: 8px;
+  }
+  body.mobile-landscape.menu-polish .account-bar {
+    gap: 4px;
+    margin-bottom: 3px;
+  }
+  body.mobile-landscape.menu-polish .account-chip,
+  body.mobile-landscape.menu-polish .profile-chip {
+    min-height: 36px;
+    padding: 4px 7px;
+  }
+  body.mobile-landscape.menu-polish .account-chip small,
+  body.mobile-landscape.menu-polish .profile-chip small {
+    display: none;
+  }
+  body.mobile-landscape.menu-polish .mode-tabs {
+    margin-bottom: 4px;
+    padding: 2px;
+    border-radius: 11px;
+  }
+  body.mobile-landscape.menu-polish .mode-tab {
+    min-height: 36px;
+    padding: 4px 3px;
+    font-size: 9px;
+  }
+  body.mobile-landscape.menu-polish .mode-panel {
+    gap: 4px;
+  }
+  body.mobile-landscape.menu-polish .field-grid {
+    gap: 5px;
+  }
+  body.mobile-landscape.menu-polish .field {
+    gap: 2px;
+  }
+  body.mobile-landscape.menu-polish .field span {
+    font-size: 7px;
+  }
+  body.mobile-landscape.menu-polish .field select,
+  body.mobile-landscape.menu-polish .field input,
+  body.mobile-landscape.menu-polish .join-row input {
+    min-height: 36px;
+    padding: 6px 9px;
+    font-size: 11px;
+  }
+  body.mobile-landscape.menu-polish .run-summary {
+    min-height: 12px;
+    padding: 0 2px;
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish .challenge-rule {
+    min-height: 28px;
+    margin: 0;
+    padding: 4px 7px;
+    gap: 7px;
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish .challenge-rule strong {
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish .challenge-rule span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish #single .button-primary,
+  body.mobile-landscape.menu-polish #raceFind,
+  body.mobile-landscape.menu-polish #coopFind {
+    min-height: 44px;
+    padding: 8px 11px;
+    font-size: 14px;
+  }
+  body.mobile-landscape.menu-polish .menu-disclosure {
+    min-height: 32px;
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish .menu-footer {
+    gap: 4px;
+    margin-top: 3px;
+  }
+  body.mobile-landscape.menu-polish .menu-footer .icon-button {
+    min-height: 34px;
+    padding: 5px 8px;
+  }
+  body.mobile-landscape.menu-polish .legal-links {
+    margin-top: 2px;
+  }
+  body.mobile-landscape.menu-polish .legal-links a {
+    padding: 2px 4px;
+    font-size: 7px;
+  }
+
+  body.mobile-landscape.menu-polish #coop .coop-lead,
+  body.mobile-landscape.menu-polish #coop .campaign-heading {
+    display: none;
+  }
+  body.mobile-landscape.menu-polish #coop .coop-campaign {
+    gap: 3px;
+    margin: 0;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-grid {
+    display: flex;
+    gap: 4px;
+    padding-bottom: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-grid::-webkit-scrollbar {
+    display: none;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-card {
+    flex: 0 0 100px;
+    height: 46px;
+    min-height: 46px;
+    padding: 4px 5px;
+    gap: 1px 4px;
+    align-content: center;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-card.selected {
+    flex-basis: 142px;
+    height: 46px;
+    grid-column: auto;
+    padding: 4px 5px;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-number {
+    font-size: 0.82rem;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-card.selected .campaign-copy b {
+    font-size: 0.62rem;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-card.selected .campaign-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish #coop .campaign-medal,
+  body.mobile-landscape.menu-polish #coop .campaign-preview,
+  body.mobile-landscape.menu-polish #coop .campaign-stats {
+    display: none !important;
+  }
+  body.mobile-landscape.menu-polish #coop .coop-hint {
+    max-height: 18px;
+    margin: 0;
+    padding: 2px 5px;
+    overflow: hidden;
+    font-size: 8px;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish #coop .toggle-row {
+    min-height: 24px;
+    padding-block: 0;
+    font-size: 8px;
+  }
+  body.mobile-landscape.menu-polish #coopFriendsToggle {
+    min-height: 26px;
+    margin-top: -2px;
+    padding-block: 2px;
+    line-height: 1.1;
+  }
+  body.mobile-landscape.menu-polish #coopStatus {
+    min-height: 0;
+    max-height: 14px;
+    margin: 0;
+    padding: 0 2px;
+    overflow: hidden;
+    font-size: 7px;
+    line-height: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape #hud.hud {
+    top: calc(5px + var(--safe-top));
+  }
+}
+
+@media (max-height: 370px) and (orientation: landscape) {
+  body.mobile-landscape.menu-polish #coop .coop-hint {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) and (orientation: landscape) {
+  body.mobile-landscape .brand {
+    width: 30vw;
+  }
+  body.mobile-landscape .brand h1 {
+    font-size: clamp(34px, 7vw, 50px);
+  }
+  body.mobile-landscape.menu-polish .menu-card {
+    width: 100%;
+  }
+  body.mobile-landscape #hud.hud {
+    grid-template-columns: auto auto minmax(90px, 1fr) auto;
+  }
+  body.mobile-landscape #pingBox {
+    display: none !important;
+  }
+  body.mobile-landscape #stageName {
+    max-width: 18vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rotate-phone {
+    animation: none;
+    transform: rotate(90deg);
+  }
+}
+body.reduced-motion .rotate-phone,
+body.mobile-reduced-motion .rotate-phone {
+  animation: none;
+  transform: rotate(90deg);
+}
+
 @media (max-width: 600px) {
   .pwa-update {
     grid-template-columns: 1fr;

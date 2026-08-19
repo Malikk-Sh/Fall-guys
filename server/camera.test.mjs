@@ -168,13 +168,20 @@ test('presentation impulse не переписывает постоянные ya
     assert.equal(withImpulse.yaw, yaw, 'visual impulse не должен менять направление управления');
     assert.equal(withImpulse.pitch, pitch, 'visual impulse не должен менять сохранённый pitch');
     assert.ok(withImpulse.camera.fov > baseline.camera.fov, 'FOV kick должен существовать только в кадре');
-    assert.notEqual(withImpulse.camera.position.x, baseline.camera.position.x, 'yaw kick должен сдвинуть кадр');
+    assert.notEqual(
+      withImpulse.camera.position.x,
+      baseline.camera.position.x,
+      'yaw kick должен сдвинуть кадр'
+    );
   });
 });
 
 test('presentation impulse ограничен и полностью отключается reduced motion', () => {
   withStorage(fakeStorage(), () => {
-    const normal = new CameraController(new THREE.PerspectiveCamera(), { shakeScale: 1, reducedMotion: false });
+    const normal = new CameraController(new THREE.PerspectiveCamera(), {
+      shakeScale: 1,
+      reducedMotion: false
+    });
     assert.equal(normal.addImpulse({ yaw: 99, pitch: -99, fov: 99, shake: 99, duration: 99 }), true);
     assert.equal(normal.impulseYaw, 0.18);
     assert.equal(normal.impulsePitch, -0.12);

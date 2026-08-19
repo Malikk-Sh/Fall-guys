@@ -382,7 +382,8 @@ export class Character {
         limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
     }
 
-    const accelerationLean = grounded && !diving ? -THREE.MathUtils.clamp(acceleration / 18, -1, 1) * 0.11 : 0;
+    const accelerationLean =
+      grounded && !diving ? -THREE.MathUtils.clamp(acceleration / 18, -1, 1) * 0.11 : 0;
     const diveAngle = diving ? -1.24 : recovering ? 0.1 * this.getupPulse : accelerationLean;
     const poseDamping = recovering ? 7 : diving ? 13 : 9;
     this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, poseDamping, dt);

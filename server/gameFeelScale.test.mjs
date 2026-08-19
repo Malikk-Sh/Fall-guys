@@ -80,7 +80,11 @@ test('procedural character lean остаётся visual-only и реагируе
   assert.ok(character.visual.rotation.x < 0, 'разгон должен слегка наклонять корпус вперёд');
   assert.ok(Math.abs(character.visual.rotation.z) > 0.005, 'поворот должен давать читаемый body lean');
   assert.ok(Math.abs(character.faceAnchor.rotation.z) > 0.001, 'лицо должно чуть отставать от корпуса');
-  assert.equal(character.group.scale.x, PLAYER_VISUAL_SCALE, 'presentation не меняет физический scale группы');
+  assert.equal(
+    character.group.scale.x,
+    PLAYER_VISUAL_SCALE,
+    'presentation не меняет физический scale группы'
+  );
   character.dispose();
 });
 
@@ -96,8 +100,14 @@ test('air pose различает подъём и падение без изме
     falling.animate(1 / 60, { speed: 5, grounded: false, vertical: -9 });
   }
 
-  assert.ok(rising.leftArm.rotation.x < falling.leftArm.rotation.x - 0.2, 'на подъёме руки раскрываются сильнее');
-  assert.ok(falling.leftLeg.rotation.x > rising.leftLeg.rotation.x + 0.15, 'на падении ноги подбираются сильнее');
+  assert.ok(
+    rising.leftArm.rotation.x < falling.leftArm.rotation.x - 0.2,
+    'на подъёме руки раскрываются сильнее'
+  );
+  assert.ok(
+    falling.leftLeg.rotation.x > rising.leftLeg.rotation.x + 0.15,
+    'на падении ноги подбираются сильнее'
+  );
   rising.dispose();
   falling.dispose();
 });
@@ -111,7 +121,10 @@ test('get-up получает короткий visual pop, а immunity glow ос
 
   character.setImmunityGlow(true);
   assert.ok(character.bodyMesh.material.emissiveIntensity > 0);
-  assert.ok(character.bodyMesh.material.emissiveIntensity < 0.25, 'glow не должен выглядеть полноценным shield');
+  assert.ok(
+    character.bodyMesh.material.emissiveIntensity < 0.25,
+    'glow не должен выглядеть полноценным shield'
+  );
   character.setImmunityGlow(false);
   assert.equal(character.bodyMesh.material.emissiveIntensity, 0);
   character.dispose();

@@ -10,6 +10,7 @@ import {
 import './contextActionControl.test.mjs';
 import './coopCelebrationPresentation.test.mjs';
 import './resultsPresentation.test.mjs';
+import './loadoutPresetApply.test.mjs';
 
 function classList() {
   const values = new Set(['hidden']);

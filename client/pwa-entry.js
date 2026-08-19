@@ -8,6 +8,7 @@ import { installContextActionControl } from './ui/ContextActionControl.js';
 import { installMenuPolish } from './ui/MenuPolish.js';
 import { installMenuStageExperience } from './ui/MenuStageExperience.js';
 import { MobileExperience } from './ui/MobileExperience.js';
+import { installWardrobePresetPresentation } from './ui/WardrobePresetPresentation.js';
 
 const pwa = new PwaController({
   isSafeToReload: () => !globalThis.__WOBBLE_GAME__?.running
@@ -32,3 +33,5 @@ const coopCelebrationPresentation = installCoopCelebrationPresentation();
 globalThis.__WOBBLE_COOP_CELEBRATION_PRESENTATION__ = coopCelebrationPresentation;
 const resultsPresentation = installResultsPresentation();
 globalThis.__WOBBLE_RESULTS_PRESENTATION__ = resultsPresentation;
+const wardrobePresetPresentation = installWardrobePresetPresentation();
+globalThis.__WOBBLE_WARDROBE_PRESET_PRESENTATION__ = wardrobePresetPresentation;

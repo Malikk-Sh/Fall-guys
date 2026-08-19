@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   isResultsSkipKey,
   primaryResultAction,
+  racePodiumEntries,
+  racePodiumSkin,
   resultsRevealPlan,
   validResultsRevealPlan
 } from '../client/game/ResultsPresentation.js';
@@ -42,6 +44,60 @@ test('one primary result action is chosen from current mode and visible actions'
   assert.equal(primaryResultAction('multi', visible), 'rematch');
   assert.equal(primaryResultAction('multi', { returnLobby: true }), 'returnLobby');
   assert.equal(primaryResultAction('single', {}), null);
+});
+
+test('race podium preserves authoritative board order and enriches only by matching roster id', () => {
+  const board = [
+    { id: 'p2', name: 'Second seed', time: 44000, color: 0x111111 },
+    { id: 'p1', name: 'First seed', time: 41000, color: 0x222222 },
+    { id: 'bot', name: 'BOT-7', time: 47000, bot: true, color: 0x333333 },
+    { id: 'p4', name: 'Fourth', time: 39000, color: 0x444444 }
+  ];
+  const roster = [
+    { id: 'p1', name: 'Roster P1', color: 0xabcdef, loadout: { body: 'sky-hero' } },
+    { id: 'p2', name: 'Roster P2', loadout: { visor: 'clear-visor' } },
+    { id: 'bot', name: 'Roster Bot', bot: true, loadout: { antenna: 'rescue-antenna' } }
+  ];
+
+  const podium = racePodiumEntries(board, roster, 'p1');
+  assert.deepEqual(
+    podium.map(entry => [entry.place, entry.id, entry.name, entry.time]),
+    [
+      [1, 'p2', 'Second seed', 44000],
+      [2, 'p1', 'First seed', 41000],
+      [3, 'bot', 'BOT-7', 47000]
+    ]
+  );
+  assert.equal(podium[0].loadout.visor, 'clear-visor');
+  assert.equal(podium[1].color, 0xabcdef);
+  assert.equal(podium[1].self, true);
+  assert.equal(podium[2].bot, true);
+});
+
+test('race podium falls back safely when roster profile is missing', () => {
+  const [entry] = racePodiumEntries([{ id: 'gone', name: 'Gone', time: 50000, color: 0x123456 }], []);
+  assert.equal(entry.place, 1);
+  assert.equal(entry.name, 'Gone');
+  assert.equal(entry.color, 0x123456);
+  assert.equal(entry.loadout, null);
+  assert.equal(entry.bot, false);
+});
+
+test('race podium skin resolves canonical public loadout instead of trusting visual payloads', () => {
+  const skin = racePodiumSkin(
+    {
+      body: 'sky-hero',
+      visor: 'clear-visor',
+      antenna: 'rescue-antenna'
+    },
+    0x010203
+  );
+  assert.equal(skin.bodyId, 'sky-hero');
+  assert.equal(skin.visorId, 'clear-visor');
+  assert.equal(skin.antennaId, 'rescue-antenna');
+  assert.equal(skin.body, 0x7857ff);
+  assert.equal(skin.visor, 0xffd7fb);
+  assert.equal(skin.antenna, 0x68f4d2);
 });
 
 test('results presentation skips only on explicit confirm keys', () => {

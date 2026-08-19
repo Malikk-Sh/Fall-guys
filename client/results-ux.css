@@ -27,9 +27,133 @@ body.results-presentation-enabled #finish:not(.hidden).results-show-card .finish
   scrollbar-width: thin;
 }
 
+.results-scroll > .results-podium,
 .results-scroll > .finish-highlights,
 .results-scroll > .leaderboard {
   margin-top: 7px;
+}
+
+.results-podium {
+  padding: 7px 8px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 13px;
+  background: rgba(21, 13, 55, 0.44);
+}
+
+.results-podium-label {
+  display: block;
+  margin-bottom: 5px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+}
+
+.results-podium-stage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 6px;
+  min-height: 96px;
+}
+
+.results-podium-slot {
+  display: flex;
+  grid-row: 1;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.results-podium-place-1 {
+  grid-column: 2;
+  min-height: 96px;
+  background: linear-gradient(180deg, rgba(255, 228, 97, 0.2), rgba(255, 255, 255, 0.08));
+}
+
+.results-podium-place-2 {
+  grid-column: 1;
+  min-height: 82px;
+}
+
+.results-podium-place-3 {
+  grid-column: 3;
+  min-height: 76px;
+}
+
+.results-podium-self {
+  outline: 1px solid rgba(89, 226, 255, 0.72);
+  outline-offset: -1px;
+}
+
+.results-podium-rank {
+  height: 16px;
+  color: #ffe76b;
+  font-size: 0.7rem;
+  line-height: 16px;
+}
+
+.results-podium-wobbler {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 39px;
+  margin: 2px 0 4px;
+  border-radius: 46% 46% 42% 42%;
+  background: var(--podium-body, #ff4f91);
+  box-shadow:
+    inset 0 -8px 0 var(--podium-accent, #ffde59),
+    0 4px 9px rgba(8, 5, 28, 0.28);
+}
+
+.results-podium-wobbler::before {
+  position: absolute;
+  top: 9px;
+  left: 7px;
+  width: 20px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--podium-visor, #dffcff);
+  box-shadow: inset 0 -2px 0 rgba(38, 22, 83, 0.18);
+  content: '';
+}
+
+.results-podium-wobbler::after {
+  position: absolute;
+  top: -7px;
+  left: 15px;
+  width: 4px;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--podium-antenna, #ffde59);
+  box-shadow: 0 -2px 0 var(--podium-antenna, #ffde59);
+  content: '';
+}
+
+.results-podium-name {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.61rem;
+  font-weight: 800;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.results-podium-name .bot-badge {
+  margin-left: 3px;
+  font-size: 0.46rem;
+  vertical-align: 1px;
+}
+
+.results-podium-time {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.67);
+  font-size: 0.54rem;
 }
 
 .results-actions {
@@ -77,6 +201,7 @@ body.results-presentation-enabled #finish:not(.hidden).results-show-card .finish
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishTime,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #unrankedNote,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #racePodium,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #board,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishHighlights,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .results-actions > .button,
@@ -90,6 +215,7 @@ body.results-presentation-enabled #finish:not(.results-ready) .results-actions >
 body.results-presentation-enabled #finish:not(.hidden) #finishTime,
 body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
 body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden) #racePodium,
 body.results-presentation-enabled #finish:not(.hidden) #board,
 body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
 body.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,
@@ -103,6 +229,7 @@ body.results-presentation-enabled #finish:not(.hidden) .results-actions > .text-
 body.results-presentation-enabled #finish.results-show-time #finishTime,
 body.results-presentation-enabled #finish.results-show-stats #unrankedNote,
 body.results-presentation-enabled #finish.results-show-stats #finishStats,
+body.results-presentation-enabled #finish.results-show-stats #racePodium,
 body.results-presentation-enabled #finish.results-show-stats #board,
 body.results-presentation-enabled #finish.results-show-highlights #finishHighlights,
 body.results-presentation-enabled #finish.results-show-actions .results-actions > .button:not(.hidden),
@@ -159,6 +286,41 @@ body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #fini
     max-height: min(27dvh, 118px);
   }
 
+  .results-podium {
+    padding: 5px 6px 6px;
+  }
+
+  .results-podium-stage {
+    min-height: 78px;
+  }
+
+  .results-podium-place-1 {
+    min-height: 78px;
+  }
+
+  .results-podium-place-2,
+  .results-podium-place-3 {
+    min-height: 68px;
+  }
+
+  .results-podium-wobbler {
+    width: 28px;
+    height: 32px;
+    margin-bottom: 2px;
+  }
+
+  .results-podium-wobbler::before {
+    top: 7px;
+    left: 6px;
+    width: 16px;
+    height: 8px;
+  }
+
+  .results-podium-wobbler::after {
+    top: -6px;
+    left: 12px;
+  }
+
   .results-actions {
     gap: 5px;
     padding-top: 5px;
@@ -177,6 +339,7 @@ body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .medal,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishTime,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #racePodium,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #board,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
 body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,
@@ -194,6 +357,7 @@ body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .results-a
   body.results-presentation-enabled #finish:not(.hidden) #finishTime,
   body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
   body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+  body.results-presentation-enabled #finish:not(.hidden) #racePodium,
   body.results-presentation-enabled #finish:not(.hidden) #board,
   body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
   body.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,

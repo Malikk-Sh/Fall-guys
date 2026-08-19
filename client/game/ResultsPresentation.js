@@ -1,3 +1,6 @@
+import { formatTime } from '../core/Config.js';
+import { cosmeticLoadoutFromIds } from '../core/cosmetics.js';
+
 const STYLESHEET_ID = 'resultsUxStylesheet';
 const PRESENTATION_CLASS = 'results-presentation-enabled';
 const READY_CLASS = 'results-ready';
@@ -29,6 +32,50 @@ export function primaryResultAction(mode, visible = {}) {
   return RESULT_ACTION_IDS.find(id => visible[id]) || null;
 }
 
+export function racePodiumEntries(board = [], roster = [], selfId = null) {
+  if (!Array.isArray(board)) return [];
+  const rosterById = new Map(
+    (Array.isArray(roster) ? roster : []).filter(player => player?.id).map(player => [player.id, player])
+  );
+  return board.slice(0, 3).map((player, index) => {
+    const member = player?.id ? rosterById.get(player.id) : null;
+    return {
+      place: index + 1,
+      id: player?.id || null,
+      name: player?.name || member?.name || 'Wobbler',
+      time: Number.isFinite(player?.time) ? player.time : null,
+      color: Number.isFinite(member?.color)
+        ? member.color
+        : Number.isFinite(player?.color)
+          ? player.color
+          : 0xff4f91,
+      bot: Boolean(player?.bot || member?.bot),
+      self: Boolean(player?.id && player.id === selfId),
+      loadout: member?.loadout || player?.loadout || null
+    };
+  });
+}
+
+export function racePodiumSkin(loadout, fallbackColor = 0xff4f91) {
+  const resolved = cosmeticLoadoutFromIds(loadout);
+  const body = resolved.body;
+  const visor = resolved.visor;
+  const antenna = resolved.antenna;
+  const bodyColor = body?.colors?.body ?? body?.render?.primary ?? fallbackColor;
+  const accentColor = body?.colors?.accent ?? body?.render?.accent ?? 0xffde59;
+  const visorColor = visor?.color ?? visor?.render?.primary;
+  const antennaColor = antenna?.color ?? antenna?.render?.primary;
+  return {
+    body: Number.isFinite(bodyColor) ? bodyColor : fallbackColor,
+    accent: Number.isFinite(accentColor) ? accentColor : 0xffde59,
+    visor: Number.isFinite(visorColor) ? visorColor : 0xdffcff,
+    antenna: Number.isFinite(antennaColor) ? antennaColor : accentColor,
+    bodyId: body?.id || 'classic',
+    visorId: visor?.id || 'none',
+    antennaId: antenna?.id || 'none'
+  };
+}
+
 export function validResultsRevealPlan(plan) {
   if (!plan) return false;
   const values = [plan.card, plan.time, plan.stats, plan.highlights, plan.actions, plan.complete];
@@ -55,6 +102,13 @@ function visibleResultActions(root) {
   );
 }
 
+function cssColor(value, fallback = 0xff4f91) {
+  return `#${Number(Number.isFinite(value) ? value : fallback)
+    .toString(16)
+    .padStart(6, '0')
+    .slice(-6)}`;
+}
+
 export class ResultsPresentation {
   constructor({
     windowRef = globalThis,
@@ -66,6 +120,7 @@ export class ResultsPresentation {
     this.getGame = getGame;
     this.finish = null;
     this.observer = null;
+    this.boardObserver = null;
     this.timers = [];
     this.visible = false;
     this.presenting = false;
@@ -89,6 +144,11 @@ export class ResultsPresentation {
     if (Observer) {
       this.observer = new Observer(() => this.sync());
       this.observer.observe(this.finish, { attributes: true, attributeFilter: ['class'] });
+      const board = this.root.getElementById('board');
+      if (board) {
+        this.boardObserver = new Observer(() => this.renderPodium());
+        this.boardObserver.observe(board, { childList: true });
+      }
     }
     this.sync();
     return this;
@@ -98,7 +158,9 @@ export class ResultsPresentation {
     this.cancelTimers();
     this.stopVictoryPose();
     this.observer?.disconnect?.();
+    this.boardObserver?.disconnect?.();
     this.observer = null;
+    this.boardObserver = null;
     this.finish?.removeEventListener?.('click', this.onClick, true);
     this.window?.removeEventListener?.('keydown', this.onKeyDown, true);
     this.finish?.classList.remove(READY_CLASS, ...PHASE_CLASSES);
@@ -112,15 +174,24 @@ export class ResultsPresentation {
     const card = this.finish?.querySelector?.('.finish-card');
     if (!card) return;
 
-    if (!this.root.getElementById('resultsScroll')) {
-      const scroll = this.root.createElement('div');
+    let scroll = this.root.getElementById('resultsScroll');
+    if (!scroll) {
+      scroll = this.root.createElement('div');
       scroll.id = 'resultsScroll';
       scroll.className = 'results-scroll';
       const highlights = this.root.getElementById('finishHighlights');
-      const board = this.root.getElementById('board');
       if (highlights) card.insertBefore(scroll, highlights);
       if (highlights) scroll.append(highlights);
+      const board = this.root.getElementById('board');
       if (board) scroll.append(board);
+    }
+
+    if (!this.root.getElementById('racePodium')) {
+      const podium = this.root.createElement('section');
+      podium.id = 'racePodium';
+      podium.className = 'results-podium hidden';
+      podium.setAttribute('aria-label', 'Первые три места');
+      scroll.prepend(podium);
     }
 
     if (!this.root.getElementById('resultsActions')) {
@@ -153,6 +224,7 @@ export class ResultsPresentation {
     this.cancelTimers();
     this.stopVictoryPose();
     this.ensureLayout();
+    this.renderPodium();
     this.refreshActionHierarchy();
     this.presenting = true;
     this.finish.classList.remove(READY_CLASS, ...PHASE_CLASSES);
@@ -168,6 +240,68 @@ export class ResultsPresentation {
     this.schedule('results-show-highlights', plan.highlights);
     this.schedule('results-show-actions', plan.actions);
     this.timers.push(this.window.setTimeout(() => this.complete(false), plan.complete));
+  }
+
+  renderPodium() {
+    const podium = this.root?.getElementById?.('racePodium');
+    if (!podium) return;
+    const game = this.getGame?.();
+    const entries =
+      game?.mode === 'multi'
+        ? racePodiumEntries(game.latestBoard, game.room?.players, game.net?.id)
+        : [];
+    podium.replaceChildren();
+    podium.classList.toggle('hidden', entries.length === 0);
+    if (!entries.length) return;
+
+    const label = this.root.createElement('strong');
+    label.className = 'results-podium-label';
+    label.textContent = 'ПОДИУМ';
+    const stage = this.root.createElement('div');
+    stage.className = 'results-podium-stage';
+
+    for (const entry of entries) {
+      const skin = racePodiumSkin(entry.loadout, entry.color);
+      const slot = this.root.createElement('article');
+      slot.className = `results-podium-slot results-podium-place-${entry.place}`;
+      slot.classList.toggle('results-podium-self', entry.self);
+      if (entry.id) slot.dataset.playerId = entry.id;
+
+      const rank = this.root.createElement('b');
+      rank.className = 'results-podium-rank';
+      rank.textContent = entry.place === 1 ? '♛' : String(entry.place);
+
+      const avatar = this.root.createElement('i');
+      avatar.className = 'results-podium-wobbler';
+      avatar.style.setProperty('--podium-body', cssColor(skin.body));
+      avatar.style.setProperty('--podium-accent', cssColor(skin.accent, 0xffde59));
+      avatar.style.setProperty('--podium-visor', cssColor(skin.visor, 0xdffcff));
+      avatar.style.setProperty('--podium-antenna', cssColor(skin.antenna, skin.accent));
+      avatar.dataset.cosmeticBody = skin.bodyId;
+      avatar.dataset.cosmeticVisor = skin.visorId;
+      avatar.dataset.cosmeticAntenna = skin.antennaId;
+      avatar.setAttribute('aria-hidden', 'true');
+
+      const name = this.root.createElement('span');
+      name.className = 'results-podium-name';
+      name.textContent = `${entry.name}${entry.self ? ' (вы)' : ''}`;
+      if (entry.bot) {
+        const bot = this.root.createElement('b');
+        bot.className = 'bot-badge';
+        bot.textContent = 'БОТ';
+        bot.title = 'Соперник под управлением компьютера';
+        name.append(bot);
+      }
+
+      const time = this.root.createElement('small');
+      time.className = 'results-podium-time';
+      time.textContent = Number.isFinite(entry.time) ? formatTime(entry.time) : '—';
+
+      slot.append(rank, avatar, name, time);
+      stage.append(slot);
+    }
+
+    podium.append(label, stage);
   }
 
   presentFinishMoment(game, reducedMotion) {

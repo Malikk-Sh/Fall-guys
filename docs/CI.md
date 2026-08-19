@@ -97,11 +97,11 @@ The first scheduled GitHub-hosted baseline on commit `550f18ba5f28e1639c05b685ba
 
 PR A intentionally starts with conservative budgets because only one GitHub-hosted scheduled sample exists. The current nightly policy is:
 
-| Metric | Reference | Warning | Hard failure |
-| --- | ---: | ---: | ---: |
-| Good seeds | 99 / 300 | — | fewer than 75 |
-| Event-loop p95 | 20.9 ms | above 45 ms | above 60 ms |
-| RSS | 108 MB | — | above 180 MB |
+| Metric         | Reference |     Warning |  Hard failure |
+| -------------- | --------: | ----------: | ------------: |
+| Good seeds     |  99 / 300 |           — | fewer than 75 |
+| Event-loop p95 |   20.9 ms | above 45 ms |   above 60 ms |
+| RSS            |    108 MB |           — |  above 180 MB |
 
 The seed floor of 75 leaves roughly 24% headroom below the first 99-seed baseline while preventing a catastrophic `99 → 1` regression from staying green. The event-loop hard budget is almost three times the first measured p95 and remains well below the server's overload threshold; 45 ms is a non-failing early warning. The RSS budget leaves substantial headroom for GitHub runner/V8 variation rather than treating ordinary heap growth as a leak.
 

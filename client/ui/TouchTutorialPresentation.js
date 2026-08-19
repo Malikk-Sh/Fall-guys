@@ -74,6 +74,8 @@ export class TouchTutorialPresentation {
     this.currentStep = null;
     this.active = false;
     this.observer = null;
+    this.stateRouter = null;
+    this.unsubscribeState = null;
     this.diveTimer = 0;
     this.diveReady = false;
     this.lookPointerId = null;
@@ -124,6 +126,9 @@ export class TouchTutorialPresentation {
     this.root?.removeEventListener?.('pointercancel', this.boundPointerEnd);
     this.observer?.disconnect?.();
     this.observer = null;
+    this.unsubscribeState?.();
+    this.unsubscribeState = null;
+    this.stateRouter = null;
     this.clearDiveTimer();
     this.clearFocus();
     this.hide();
@@ -140,6 +145,14 @@ export class TouchTutorialPresentation {
     this.root.body.append(node);
   }
 
+  bindStateRouter() {
+    const router = this.getGame?.()?.state;
+    if (!router?.subscribe || router === this.stateRouter) return;
+    this.unsubscribeState?.();
+    this.stateRouter = router;
+    this.unsubscribeState = router.subscribe(() => this.sync());
+  }
+
   gameplayActive() {
     const game = this.getGame?.();
     if (!this.touchMobile || game?.state?.name !== 'race') return false;
@@ -151,6 +164,7 @@ export class TouchTutorialPresentation {
   }
 
   sync() {
+    this.bindStateRouter();
     this.root?.getElementById?.('lookHint')?.classList.add('hidden');
     if (!this.gameplayActive()) {
       this.clearFocus();

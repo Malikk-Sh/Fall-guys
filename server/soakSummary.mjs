@@ -19,7 +19,8 @@ const CRITICAL_ZERO_DELTAS = Object.freeze([
 
 function finiteNumber(value, label) {
   const number = Number(value);
-  if (!Number.isFinite(number)) throw new Error(`${label} must be a finite number, got ${JSON.stringify(value)}`);
+  if (!Number.isFinite(number))
+    throw new Error(`${label} must be a finite number, got ${JSON.stringify(value)}`);
   return number;
 }
 
@@ -36,7 +37,11 @@ function nonNegativeNumber(value, label) {
 }
 
 function boolEnv(value) {
-  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(value || '')
+      .trim()
+      .toLowerCase()
+  );
 }
 
 export function soakBudgetsFromEnv(env = process.env) {
@@ -71,7 +76,10 @@ export function soakBudgetsFromEnv(env = process.env) {
 }
 
 function median(values) {
-  const sorted = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  const sorted = values
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
   if (!sorted.length) return null;
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
@@ -125,7 +133,9 @@ function sameCounts(actual, expected) {
 }
 
 function phasePeak(probe, phaseName, field) {
-  const values = phaseSamples(probe, phaseName).map(sample => Number(sample[field])).filter(Number.isFinite);
+  const values = phaseSamples(probe, phaseName)
+    .map(sample => Number(sample[field]))
+    .filter(Number.isFinite);
   return values.length ? Math.max(...values) : null;
 }
 
@@ -153,7 +163,8 @@ export function evaluateSoak(probe, budgets = soakBudgetsFromEnv({})) {
 
   const baseline = counts(probe?.baseline);
   const final = counts(probe?.final);
-  if (!Object.values(baseline).every(Number.isFinite)) failures.push('missing baseline room/player/session counts');
+  if (!Object.values(baseline).every(Number.isFinite))
+    failures.push('missing baseline room/player/session counts');
   if (!Object.values(final).every(Number.isFinite)) failures.push('missing final room/player/session counts');
   if (
     Object.values(baseline).every(Number.isFinite) &&
@@ -184,7 +195,8 @@ export function evaluateSoak(probe, budgets = soakBudgetsFromEnv({})) {
   const eventLoopValues = samples.map(sample => Number(sample.eventLoopP95Ms)).filter(Number.isFinite);
   const rssValues = samples.map(sample => Number(sample.rssMb)).filter(Number.isFinite);
   const heapValues = samples.map(sample => Number(sample.heapUsedMb)).filter(Number.isFinite);
-  if (eventLoopValues.length !== samples.length) failures.push('one or more samples are missing event-loop p95');
+  if (eventLoopValues.length !== samples.length)
+    failures.push('one or more samples are missing event-loop p95');
   if (rssValues.length !== samples.length) failures.push('one or more samples are missing RSS');
   if (heapValues.length !== samples.length) failures.push('one or more samples are missing heap used');
 
@@ -192,14 +204,13 @@ export function evaluateSoak(probe, budgets = soakBudgetsFromEnv({})) {
   const peakRssMb = rssValues.length ? Math.max(...rssValues) : null;
   const peakHeapUsedMb = heapValues.length ? Math.max(...heapValues) : null;
   if (peakEventLoopP95Ms !== null && peakEventLoopP95Ms > budgets.maxEventLoopP95Ms) {
-    failures.push(
-      `event-loop p95 peak ${peakEventLoopP95Ms} ms > budget ${budgets.maxEventLoopP95Ms} ms`
-    );
+    failures.push(`event-loop p95 peak ${peakEventLoopP95Ms} ms > budget ${budgets.maxEventLoopP95Ms} ms`);
   }
   if (peakRssMb !== null && peakRssMb > budgets.maxRssMb) {
     failures.push(`RSS peak ${peakRssMb} MB > budget ${budgets.maxRssMb} MB`);
   }
-  if (samples.some(sample => sample.overloaded === true)) failures.push('server reported overloaded during soak');
+  if (samples.some(sample => sample.overloaded === true))
+    failures.push('server reported overloaded during soak');
 
   const initialRssMb = rssValues.length ? rssValues[0] : null;
   const endRssMb = rssValues.length ? rssValues.at(-1) : null;

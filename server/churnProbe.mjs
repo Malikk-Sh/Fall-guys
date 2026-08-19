@@ -12,10 +12,7 @@ const { wsUrl, httpUrl } = loadTargets();
 const RESULT_PATH = String(process.env.WOBBLE_CHURN_PROBE_RESULT_PATH || '').trim() || null;
 const WAIT_MS = 8000;
 const BASE_ROOMS = positiveInteger(process.env.WOBBLE_CHURN_ROOMS || 12, 'WOBBLE_CHURN_ROOMS');
-const RAPID_CYCLES = positiveInteger(
-  process.env.WOBBLE_CHURN_RAPID_CYCLES || 3,
-  'WOBBLE_CHURN_RAPID_CYCLES'
-);
+const RAPID_CYCLES = positiveInteger(process.env.WOBBLE_CHURN_RAPID_CYCLES || 3, 'WOBBLE_CHURN_RAPID_CYCLES');
 const STORM_CLIENTS = positiveInteger(
   process.env.WOBBLE_CHURN_STORM_CLIENTS || 24,
   'WOBBLE_CHURN_STORM_CLIENTS'

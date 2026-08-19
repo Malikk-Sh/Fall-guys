@@ -1,5 +1,6 @@
 import { PwaController } from './core/pwa.js';
 import { installCampaignPresentation } from './game/CampaignPresentation.js';
+import { installCoopCelebrationPresentation } from './game/CoopCelebrationPresentation.js';
 import { installCoopPingPresentation } from './game/CoopPingPresentation.js';
 import { installFeedbackController } from './game/FeedbackController.js';
 import { installContextActionControl } from './ui/ContextActionControl.js';
@@ -26,3 +27,5 @@ const contextActionControl = installContextActionControl();
 globalThis.__WOBBLE_CONTEXT_ACTION__ = contextActionControl;
 const coopPingPresentation = installCoopPingPresentation();
 globalThis.__WOBBLE_COOP_PING_PRESENTATION__ = coopPingPresentation;
+const coopCelebrationPresentation = installCoopCelebrationPresentation();
+globalThis.__WOBBLE_COOP_CELEBRATION_PRESENTATION__ = coopCelebrationPresentation;

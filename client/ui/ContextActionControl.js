@@ -21,6 +21,17 @@ export function semanticContextAction(game) {
   return Object.hasOwn(ACTION_PRESENTATION, action) ? action : null;
 }
 
+export function compactSignatureText(text) {
+  if (typeof text !== 'string') return '';
+  if (text.startsWith('ПОДСКАЗЧИК · ПОСЛЕДОВАТЕЛЬНОСТЬ:')) {
+    return text.replace('ПОДСКАЗЧИК · ПОСЛЕДОВАТЕЛЬНОСТЬ:', 'ПОДСКАЗКА ·');
+  }
+  if (text.startsWith('ОПЕРАТОР · ВВЕДИТЕ СИМВОЛЫ НАПАРНИКА ·')) {
+    return text.replace('ОПЕРАТОР · ВВЕДИТЕ СИМВОЛЫ НАПАРНИКА ·', 'ПОВТОРИ ·');
+  }
+  return text;
+}
+
 export function keyCodeLabel(code) {
   if (typeof code !== 'string' || !code) return 'SHIFT';
   const labels = {
@@ -109,6 +120,7 @@ export class ContextActionControl {
     if (action === this.action) {
       this.syncHint(action);
       this.syncSignatureHud(action);
+      this.compactSignatureHud(action);
       return;
     }
 
@@ -116,6 +128,7 @@ export class ContextActionControl {
     this.action = action;
     this.apply(action, !first);
     this.syncSignatureHud(action);
+    this.compactSignatureHud(action);
     if (!first) game?.settings?.vibrate?.(0.12);
   }
 
@@ -154,6 +167,15 @@ export class ContextActionControl {
     if (!signature) return;
     const value = action || '';
     if (signature.dataset.contextAction !== value) signature.dataset.contextAction = value;
+  }
+
+  compactSignatureHud(action) {
+    if (action) return;
+    const signature = this.root?.getElementById?.('signatureHud');
+    const copy = signature?.firstElementChild;
+    if (!copy?.textContent) return;
+    const compact = compactSignatureText(copy.textContent);
+    if (compact !== copy.textContent) copy.textContent = compact;
   }
 
   pop(button) {

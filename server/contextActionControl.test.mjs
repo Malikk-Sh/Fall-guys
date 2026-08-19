@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  compactSignatureText,
   contextActionPresentation,
   keyCodeLabel,
   semanticContextAction
@@ -80,6 +81,21 @@ test('keyboard hint uses the actual configured key code in compact form', () => 
   assert.equal(keyCodeLabel('Digit4'), '4');
   assert.equal(keyCodeLabel('ArrowLeft'), '←');
   assert.equal(keyCodeLabel(''), 'SHIFT');
+});
+
+test('signature presentation сокращает только известные длинные роли без новых gameplay rules', () => {
+  assert.equal(
+    compactSignatureText('ПОДСКАЗЧИК · ПОСЛЕДОВАТЕЛЬНОСТЬ: ◇  ○  △ · 1/3'),
+    'ПОДСКАЗКА · ◇  ○  △ · 1/3'
+  );
+  assert.equal(
+    compactSignatureText('ОПЕРАТОР · ВВЕДИТЕ СИМВОЛЫ НАПАРНИКА · 2/4'),
+    'ПОВТОРИ · 2/4'
+  );
+  assert.equal(
+    compactSignatureText('ЯДРО ПОТЕРЯНО? Его можно вернуть к началу эстафеты.'),
+    'ЯДРО ПОТЕРЯНО? Его можно вернуть к началу эстафеты.'
+  );
 });
 
 test('world ping presentation covers all six existing co-op commands', () => {

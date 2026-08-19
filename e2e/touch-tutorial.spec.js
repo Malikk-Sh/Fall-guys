@@ -46,7 +46,7 @@ test('first touch race teaches one action at a time and remembers completion', a
   });
   await expectTutorialStep(page, 'look');
 
-  await page.locator('canvas').evaluate(canvas => {
+  await page.locator('#game').evaluate(canvas => {
     canvas.setPointerCapture = () => {};
     canvas.releasePointerCapture = () => {};
     canvas.dispatchEvent(

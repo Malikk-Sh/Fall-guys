@@ -43,15 +43,12 @@ test('flow feedback распознаёт только локальные пер�
     tone: 'cyan',
     strength: 0.45
   });
-  assert.deepEqual(
-    flowSignal({ ...base, rolling: true }, { ...base, grounded: false, vertical: 8 }),
-    {
-      id: 'roll-jump',
-      label: 'ПОТОК ×2',
-      tone: 'yellow',
-      strength: 0.62
-    }
-  );
+  assert.deepEqual(flowSignal({ ...base, rolling: true }, { ...base, grounded: false, vertical: 8 }), {
+    id: 'roll-jump',
+    label: 'ПОТОК ×2',
+    tone: 'yellow',
+    strength: 0.62
+  });
   assert.deepEqual(flowSignal(base, { ...base, landingRetention: 0.34 }), {
     id: 'fast-landing',
     label: 'МЯГКО',

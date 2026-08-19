@@ -10,6 +10,7 @@ const APP_SHELL = [
   '/menu-ux.css',
   '/main.js',
   '/pwa-entry.js',
+  '/game/FeedbackController.js',
   '/ui/MenuPolish.js',
   '/ui/MenuStageExperience.js',
   '/ui/ScreenTransitions.js',

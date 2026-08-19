@@ -47,6 +47,15 @@ export class CameraController {
     // Тряска экрана: сила затухает со временем, смещение накладывается на итоговую позицию камеры.
     this.shake = 0;
 
+    // Короткие presentation-only импульсы. Они никогда не записываются в yaw/pitch игрока:
+    // управление и автодоворот продолжают жить в своей системе координат, а эффект существует
+    // только в итоговом кадре и полностью исчезает после duration.
+    this.impulseYaw = 0;
+    this.impulsePitch = 0;
+    this.impulseFov = 0;
+    this.impulseTime = 0;
+    this.impulseDuration = 0;
+
     // Переиспользуемые векторы — чтобы не создавать мусор каждый кадр.
     this._forward = new THREE.Vector3();
     this._direction = new THREE.Vector3();
@@ -79,6 +88,11 @@ export class CameraController {
     this.pitch = 0.08;
     this.manualTimer = 0;
     this.shake = 0;
+    this.impulseYaw = 0;
+    this.impulsePitch = 0;
+    this.impulseFov = 0;
+    this.impulseTime = 0;
+    this.impulseDuration = 0;
     if (instant && player) {
       const p = player.visualPosition;
       this.camera.position.set(p.x, p.y + 4.7, p.z + 8.2);
@@ -98,6 +112,32 @@ export class CameraController {
     const scale = this.shakeScale;
     if (scale <= 0) return;
     this.shake = Math.min(1, this.shake + strength * scale);
+  }
+
+  // Короткий visual-only толчок камеры для уже случившегося gameplay-события.
+  //
+  // Важное ограничение: yaw/pitch здесь — только временные смещения кадра. Они не могут изменить
+  // направление управления, режим follow/free или положение персонажа. Сильные значения режутся,
+  // а reduced motion отключает весь пространственный импульс. Компонент shake дополнительно проходит
+  // через обычный пользовательский регулятор тряски в addShake().
+  addImpulse({ yaw = 0, pitch = 0, fov = 0, shake = 0, duration = 0.15 } = {}) {
+    if (this.settings?.reducedMotion) return false;
+    const finite = value => (Number.isFinite(value) ? value : 0);
+    const life = THREE.MathUtils.clamp(finite(duration) || 0.15, 0.05, 0.5);
+    const nextYaw = THREE.MathUtils.clamp(this.impulseYaw + finite(yaw), -0.18, 0.18);
+    const nextPitch = THREE.MathUtils.clamp(this.impulsePitch + finite(pitch), -0.12, 0.12);
+    const nextFov = THREE.MathUtils.clamp(this.impulseFov + finite(fov), -3.5, 3.5);
+    const changed = nextYaw !== 0 || nextPitch !== 0 || nextFov !== 0 || finite(shake) > 0;
+    if (!changed) return false;
+
+    this.impulseYaw = nextYaw;
+    this.impulsePitch = nextPitch;
+    this.impulseFov = nextFov;
+    const remaining = Math.max(this.impulseTime, life);
+    this.impulseTime = remaining;
+    this.impulseDuration = remaining;
+    if (finite(shake) > 0) this.addShake(finite(shake));
+    return true;
   }
 
   // `partner` — позиция напарника в кооп-режиме либо null.
@@ -134,9 +174,17 @@ export class CameraController {
       this.yaw += delta * (1 - Math.exp(-1.8 * dt));
     }
 
+    // Presentation impulse затухает квадратично: начало читается ясно, хвост быстро растворяется.
+    // Базовые yaw/pitch не меняются, поэтому после эффекта камере не из чего «возвращаться».
+    const impulseLife =
+      this.impulseTime > 0 && this.impulseDuration > 0 ? this.impulseTime / this.impulseDuration : 0;
+    const impulseWeight = impulseLife * impulseLife;
+    const renderYaw = this.yaw + this.impulseYaw * impulseWeight;
+    const renderPitch = this.pitch + this.impulsePitch * impulseWeight;
+
     const portrait = (globalThis.innerHeight || 800) > (globalThis.innerWidth || 1280);
     let wantedDistance = this.mobile ? (portrait ? 8.9 : 8.2) : 8.2;
-    const height = (portrait ? 5.25 : 4.65) + this.pitch * 4.6;
+    const height = (portrait ? 5.25 : 4.65) + renderPitch * 4.6;
 
     // Камера следит за ПОЗИЦИЕЙ ОТРИСОВКИ, а не физики: физика идёт фиксированным шагом, и слежение
     // за ней вернуло бы в кадр то самое дрожание, ради устранения которого сделана интерполяция.
@@ -162,15 +210,15 @@ export class CameraController {
     // Куда смещать точку взгляда. В режиме слежения — вперёд по направлению ПЕРСОНАЖА (кадр
     // «ведёт» бегущего). В свободном — вперёд по направлению КАМЕРЫ: иначе поворот персонажа
     // утаскивал бы точку взгляда вбок, и камера, формально свободная, всё равно ходила бы за ним.
-    const rotation = this.mode === 'follow' ? player.character.group.rotation.y : this.yaw;
+    const rotation = this.mode === 'follow' ? player.character.group.rotation.y : renderYaw;
     this._forward.set(-Math.sin(rotation), 0, -Math.cos(rotation));
     this.target
       .set(this._focus.x, this._focus.y + 1.05, this._focus.z)
       .addScaledVector(this._forward, 1.7 + lead);
     this.desired.set(
-      this._focus.x + Math.sin(this.yaw) * this.distance,
+      this._focus.x + Math.sin(renderYaw) * this.distance,
       this._focus.y + height,
-      this._focus.z + Math.cos(this.yaw) * this.distance
+      this._focus.z + Math.cos(renderYaw) * this.distance
     );
 
     // Защита от заслонов: если между точкой взгляда и желаемым местом камеры есть геометрия,
@@ -198,8 +246,19 @@ export class CameraController {
     this.camera.lookAt(this.target);
 
     // Поле зрения слегка расширяется на скорости — дешёвый и очень действенный способ передать разгон.
-    const wantedFov = (this.mobile ? (portrait ? 66 : 61) : 58) + Math.min(7, speed * 0.55);
+    const wantedFov =
+      (this.mobile ? (portrait ? 66 : 61) : 58) + Math.min(7, speed * 0.55) + this.impulseFov * impulseWeight;
     this.camera.fov = THREE.MathUtils.damp(this.camera.fov, wantedFov, 5, dt);
     this.camera.updateProjectionMatrix();
+
+    if (this.impulseTime > 0) {
+      this.impulseTime = Math.max(0, this.impulseTime - dt);
+      if (this.impulseTime === 0) {
+        this.impulseYaw = 0;
+        this.impulsePitch = 0;
+        this.impulseFov = 0;
+        this.impulseDuration = 0;
+      }
+    }
   }
 }

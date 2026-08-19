@@ -1,5 +1,6 @@
 import { PwaController } from './core/pwa.js';
 import { installCampaignPresentation } from './game/CampaignPresentation.js';
+import { installFeedbackController } from './game/FeedbackController.js';
 import { installMenuPolish } from './ui/MenuPolish.js';
 import { installMenuStageExperience } from './ui/MenuStageExperience.js';
 import { MobileExperience } from './ui/MobileExperience.js';
@@ -17,3 +18,5 @@ mobileExperience.init();
 installCampaignPresentation();
 installMenuPolish();
 installMenuStageExperience();
+const feedbackController = installFeedbackController();
+globalThis.__WOBBLE_FEEDBACK__ = feedbackController;

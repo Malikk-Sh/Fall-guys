@@ -95,7 +95,9 @@ function stageLabel(stage) {
 export function stagedMarkdownSummary(records, stages) {
   const complete = records.length === stages.length && records.every(record => record.status === 'PASS');
   const firstFailure = records.find(record => record.status === 'FAIL') || null;
-  const warnings = records.flatMap(record => record.warnings.map(warning => `Stage ${record.stage}: ${warning}`));
+  const warnings = records.flatMap(record =>
+    record.warnings.map(warning => `Stage ${record.stage}: ${warning}`)
+  );
   const resultLabel = complete ? (warnings.length ? `PASS (${warnings.length} warning)` : 'PASS') : 'FAIL';
   const lines = [
     '### Server WebSocket staged load',
@@ -202,7 +204,7 @@ async function main() {
       ok: complete,
       stagesRequested: stages,
       stagesRun: records,
-      stoppedAfterStage: complete ? null : records.at(-1)?.stage ?? null
+      stoppedAfterStage: complete ? null : (records.at(-1)?.stage ?? null)
     };
 
     if (RESULT_PATH) await writeFile(RESULT_PATH, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf8');

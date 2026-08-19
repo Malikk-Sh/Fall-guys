@@ -10,6 +10,7 @@ import { installMenuPolish } from './ui/MenuPolish.js';
 import { installMenuStageExperience } from './ui/MenuStageExperience.js';
 import { MobileExperience } from './ui/MobileExperience.js';
 import { installRewardRevealQueue } from './ui/RewardRevealQueue.js';
+import { installTouchTutorialPresentation } from './ui/TouchTutorialPresentation.js';
 import { installWardrobeMilestonePresentation } from './ui/WardrobeMilestonePresentation.js';
 import { installWardrobePresetPresentation } from './ui/WardrobePresetPresentation.js';
 
@@ -28,6 +29,8 @@ installMenuPolish();
 installMenuStageExperience();
 const campaignUiTheme = installCampaignUiTheme();
 globalThis.__WOBBLE_CAMPAIGN_UI_THEME__ = campaignUiTheme;
+const touchTutorial = installTouchTutorialPresentation();
+globalThis.__WOBBLE_TOUCH_TUTORIAL__ = touchTutorial;
 const feedbackController = installFeedbackController();
 globalThis.__WOBBLE_FEEDBACK__ = feedbackController;
 const contextActionControl = installContextActionControl();

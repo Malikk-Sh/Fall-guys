@@ -7,12 +7,29 @@ export class StateRouter {
     this.states = new Map(Object.entries(states));
     this.name = null;
     this.current = null;
+    this.listeners = new Set();
   }
 
   add(name, state) {
     if (!name || !state) throw new TypeError('StateRouter: нужны имя и состояние');
     this.states.set(name, state);
     return this;
+  }
+
+  subscribe(listener) {
+    if (typeof listener !== 'function') throw new TypeError('StateRouter: listener должен быть функцией');
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  notifyTransition(name, previous, payload) {
+    for (const listener of this.listeners) {
+      try {
+        listener({ name, previous, payload });
+      } catch (error) {
+        console.error('StateRouter transition listener failed', error);
+      }
+    }
   }
 
   transition(name, payload) {
@@ -28,6 +45,7 @@ export class StateRouter {
     this.name = name;
     this.current = next;
     next.enter?.call(next, this.context, payload, previous);
+    this.notifyTransition(name, previous, payload);
     return true;
   }
 
@@ -47,5 +65,6 @@ export class StateRouter {
     this.current?.exit?.call(this.current, this.context, null);
     this.current = null;
     this.name = null;
+    this.listeners.clear();
   }
 }

@@ -187,14 +187,14 @@ Reconnect/churn is still a short daily stress lane. Longer repeated-load and lea
 
 The six default five-minute phases are:
 
-| Phase | Base rooms | Additional churn |
-| --- | ---: | --- |
-| `base-24` | 24 | no |
-| `base-48` | 48 | no |
-| `load-24-churn` | 24 | periodic real reconnect/room-churn pulses |
-| `load-48-churn` | 48 | periodic real reconnect/room-churn pulses |
-| `burst-96` | 96 | no |
-| `recovery-24` | 24 | no |
+| Phase           | Base rooms | Additional churn                          |
+| --------------- | ---------: | ----------------------------------------- |
+| `base-24`       |         24 | no                                        |
+| `base-48`       |         48 | no                                        |
+| `load-24-churn` |         24 | periodic real reconnect/room-churn pulses |
+| `load-48-churn` |         48 | periodic real reconnect/room-churn pulses |
+| `burst-96`      |         96 | no                                        |
+| `recovery-24`   |         24 | no                                        |
 
 Every base-load phase reuses the normal `loadGate.mjs`, so it still exercises real `HELLO → CREATE → JOIN → READY → START → PLAYER_STATE`, loopback source sharding and the established `60 ms` event-loop / `180 MB` RSS hard budgets. Churn phases run smaller deterministic `churnProbe.mjs` pulses concurrently with the base load, exercising real network-style disconnect, session resume, stale-socket handling and create/join/start/leave lifecycle without disabling reconnect grace, rate limits or capacity protections.
 

@@ -1,0 +1,89 @@
+.wardrobe-milestone-track {
+  position: relative;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px !important;
+  padding-top: 8px;
+}
+
+.wardrobe-milestone-track::before {
+  content: '';
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 20px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+
+.wardrobe-milestone-node {
+  position: relative;
+  z-index: 1;
+  min-height: 54px;
+  padding: 24px 6px 6px !important;
+  border-radius: 11px;
+  text-align: center !important;
+  font-size: 0.54rem;
+}
+
+.wardrobe-milestone-node::before {
+  content: attr(data-threshold);
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 2px solid rgba(255, 255, 255, 0.24);
+  border-radius: 50%;
+  background: #2b1b57;
+  transform: translateX(-50%);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.wardrobe-milestone-node[data-milestone-state='reached']::before {
+  border-color: var(--mint);
+  background: rgba(88, 235, 184, 0.2);
+  box-shadow: 0 0 0 3px rgba(88, 235, 184, 0.08);
+}
+
+.wardrobe-milestone-node[data-milestone-state='new']::before {
+  border-color: var(--yellow);
+  background: rgba(255, 217, 75, 0.2);
+  box-shadow: 0 0 0 4px rgba(255, 217, 75, 0.1);
+}
+
+.wardrobe-milestone-node[data-milestone-state='new']::after {
+  content: 'NEW';
+  position: absolute;
+  right: 4px;
+  top: 3px;
+  color: var(--yellow);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+
+.wardrobe-milestone-node[data-milestone-state='locked'] {
+  opacity: 0.62;
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .wardrobe-milestone-node {
+    min-height: 46px;
+    padding-top: 21px !important;
+    font-size: 0.49rem;
+  }
+
+  .wardrobe-milestone-node::before {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+body.reduced-motion .wardrobe-milestone-node,
+body.reduced-motion .wardrobe-milestone-node::before {
+  transition: none;
+}

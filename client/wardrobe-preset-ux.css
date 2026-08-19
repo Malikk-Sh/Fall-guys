@@ -1,0 +1,200 @@
+.wardrobe-presets-enhanced {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wardrobe-preset-title {
+  font-weight: 850;
+  letter-spacing: 0.11em;
+  opacity: 0.76;
+}
+
+.wardrobe-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.wardrobe-preset-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 13px;
+  background: rgba(20, 11, 55, 0.28);
+}
+
+.wardrobe-preset-card.is-applied {
+  border-color: rgba(88, 235, 184, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(88, 235, 184, 0.22);
+}
+
+.wardrobe-preset-card.is-failed {
+  border-color: rgba(255, 79, 145, 0.65);
+}
+
+.wardrobe-preset-apply,
+.wardrobe-preset-save {
+  width: 100%;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.wardrobe-preset-apply {
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: 5px 8px;
+  align-items: center;
+  padding: 9px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
+  text-align: left;
+}
+
+.wardrobe-preset-apply:disabled {
+  opacity: 0.5;
+}
+
+.wardrobe-preset-avatar {
+  position: relative;
+  grid-row: 1 / 3;
+  width: 46px;
+  height: 54px;
+  display: block;
+}
+
+.wardrobe-preset-avatar::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 2px;
+  height: 42px;
+  border-radius: 48% 48% 42% 42%;
+  background: linear-gradient(145deg, var(--preset-primary), var(--preset-accent));
+  box-shadow:
+    inset -7px -7px rgba(32, 16, 70, 0.18),
+    0 5px 12px rgba(10, 5, 35, 0.26);
+}
+
+.wardrobe-preset-avatar i {
+  position: absolute;
+  z-index: 1;
+  left: 12px;
+  top: 15px;
+  width: 23px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.68);
+  border-radius: 50%;
+  background: var(--preset-visor);
+  box-shadow: inset 0 -4px rgba(72, 220, 218, 0.18);
+}
+
+.wardrobe-preset-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.wardrobe-preset-copy strong,
+.wardrobe-preset-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wardrobe-preset-copy strong {
+  font-size: 0.72rem;
+}
+
+.wardrobe-preset-copy small {
+  color: rgba(255, 255, 255, 0.64);
+  font-size: 0.52rem;
+  letter-spacing: 0.04em;
+}
+
+.wardrobe-preset-card.is-applied .wardrobe-preset-copy small {
+  color: var(--mint);
+}
+
+.wardrobe-preset-card.is-failed .wardrobe-preset-copy small {
+  color: var(--pink);
+}
+
+.wardrobe-preset-icons {
+  display: flex;
+  min-width: 0;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.wardrobe-preset-icons i {
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.wardrobe-preset-save {
+  min-height: 32px;
+  padding: 5px 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.54rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.wardrobe-preset-save:not(:disabled):active,
+.wardrobe-preset-apply:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .wardrobe-preset-grid {
+    gap: 5px;
+  }
+
+  .wardrobe-preset-apply {
+    min-height: 82px;
+    grid-template-columns: 38px minmax(0, 1fr);
+    padding: 6px;
+  }
+
+  .wardrobe-preset-avatar {
+    width: 38px;
+    height: 45px;
+  }
+
+  .wardrobe-preset-avatar::before {
+    height: 35px;
+  }
+
+  .wardrobe-preset-avatar i {
+    left: 10px;
+    top: 13px;
+    width: 19px;
+    height: 10px;
+  }
+}
+
+body.reduced-motion .wardrobe-preset-save,
+body.reduced-motion .wardrobe-preset-apply {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wardrobe-preset-save,
+  .wardrobe-preset-apply {
+    transition: none;
+  }
+}

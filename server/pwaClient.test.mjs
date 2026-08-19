@@ -9,6 +9,9 @@ import {
 } from '../client/ui/MobileExperience.js';
 import './contextActionControl.test.mjs';
 import './coopCelebrationPresentation.test.mjs';
+import './resultsPresentation.test.mjs';
+import './loadoutPresetApply.test.mjs';
+import './rewardPresentation.test.mjs';
 
 function classList() {
   const values = new Set(['hidden']);

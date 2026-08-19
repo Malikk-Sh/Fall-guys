@@ -1,0 +1,370 @@
+body.results-presentation-enabled #finish:not(.hidden) .finish-card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform-origin: 50% 48%;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-show-card) .finish-card {
+  opacity: 0;
+  transform: translateY(16px) scale(0.97);
+  pointer-events: none;
+}
+
+body.results-presentation-enabled #finish:not(.hidden).results-show-card .finish-card {
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 180ms ease-out,
+    transform 220ms cubic-bezier(0.18, 0.9, 0.3, 1.08);
+}
+
+.results-scroll {
+  min-height: 0;
+  max-height: min(31dvh, 210px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.results-scroll > .results-podium,
+.results-scroll > .finish-highlights,
+.results-scroll > .leaderboard {
+  margin-top: 7px;
+}
+
+.results-podium {
+  padding: 7px 8px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 13px;
+  background: rgba(21, 13, 55, 0.44);
+}
+
+.results-podium-label {
+  display: block;
+  margin-bottom: 5px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+}
+
+.results-podium-stage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+  gap: 6px;
+  min-height: 96px;
+}
+
+.results-podium-slot {
+  display: flex;
+  grid-row: 1;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: 6px 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.results-podium-place-1 {
+  grid-column: 2;
+  min-height: 96px;
+  background: linear-gradient(180deg, rgba(255, 228, 97, 0.2), rgba(255, 255, 255, 0.08));
+}
+
+.results-podium-place-2 {
+  grid-column: 1;
+  min-height: 82px;
+}
+
+.results-podium-place-3 {
+  grid-column: 3;
+  min-height: 76px;
+}
+
+.results-podium-self {
+  outline: 1px solid rgba(89, 226, 255, 0.72);
+  outline-offset: -1px;
+}
+
+.results-podium-rank {
+  height: 16px;
+  color: #ffe76b;
+  font-size: 0.7rem;
+  line-height: 16px;
+}
+
+.results-podium-wobbler {
+  position: relative;
+  display: block;
+  width: 34px;
+  height: 39px;
+  margin: 2px 0 4px;
+  border-radius: 46% 46% 42% 42%;
+  background: var(--podium-body, #ff4f91);
+  box-shadow:
+    inset 0 -8px 0 var(--podium-accent, #ffde59),
+    0 4px 9px rgba(8, 5, 28, 0.28);
+}
+
+.results-podium-wobbler::before {
+  position: absolute;
+  top: 9px;
+  left: 7px;
+  width: 20px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--podium-visor, #dffcff);
+  box-shadow: inset 0 -2px 0 rgba(38, 22, 83, 0.18);
+  content: '';
+}
+
+.results-podium-wobbler::after {
+  position: absolute;
+  top: -7px;
+  left: 15px;
+  width: 4px;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--podium-antenna, #ffde59);
+  box-shadow: 0 -2px 0 var(--podium-antenna, #ffde59);
+  content: '';
+}
+
+.results-podium-name {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: #fff;
+  font-size: 0.61rem;
+  font-weight: 800;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.results-podium-name .bot-badge {
+  margin-left: 3px;
+  font-size: 0.46rem;
+  vertical-align: 1px;
+}
+
+.results-podium-time {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.67);
+  font-size: 0.54rem;
+}
+
+.results-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  flex: none;
+  padding-top: 7px;
+}
+
+.results-actions > .button {
+  width: 100%;
+  min-height: 42px;
+  margin: 0;
+  padding: 9px 11px;
+  font-size: 0.72rem;
+}
+
+.results-actions > .results-primary {
+  grid-column: 1 / -1;
+  color: #3b2450;
+  background: linear-gradient(180deg, #ffe96d, #ffc83d);
+  box-shadow:
+    0 5px 0 #d98625,
+    0 8px 16px #160c3f44;
+  font-size: 0.82rem;
+}
+
+.results-actions > .results-tertiary,
+.results-actions > .text-button.back {
+  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+}
+
+.results-actions > #resultsTimer,
+.results-actions > .text-button.back {
+  grid-column: 1 / -1;
+}
+
+.results-actions > #resultsTimer {
+  margin-top: 0;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishTime,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #unrankedNote,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #racePodium,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #board,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishHighlights,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .results-actions > .button,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #resultsTimer,
+body.results-presentation-enabled #finish:not(.results-ready) .results-actions > .text-button.back {
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  pointer-events: none;
+}
+
+body.results-presentation-enabled #finish:not(.hidden) #finishTime,
+body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden) #racePodium,
+body.results-presentation-enabled #finish:not(.hidden) #board,
+body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+body.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,
+body.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+body.results-presentation-enabled #finish:not(.hidden) .results-actions > .text-button.back {
+  transition:
+    opacity 160ms ease,
+    transform 190ms cubic-bezier(0.18, 0.9, 0.3, 1.08);
+}
+
+body.results-presentation-enabled #finish.results-show-time #finishTime,
+body.results-presentation-enabled #finish.results-show-stats #unrankedNote,
+body.results-presentation-enabled #finish.results-show-stats #finishStats,
+body.results-presentation-enabled #finish.results-show-stats #racePodium,
+body.results-presentation-enabled #finish.results-show-stats #board,
+body.results-presentation-enabled #finish.results-show-highlights #finishHighlights,
+body.results-presentation-enabled #finish.results-show-actions .results-actions > .button:not(.hidden),
+body.results-presentation-enabled #finish.results-show-actions #resultsTimer,
+body.results-presentation-enabled #finish.results-show-actions .results-actions > .text-button.back {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .medal {
+  animation-duration: 520ms;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishTitle {
+  animation: results-title-in 420ms cubic-bezier(0.18, 0.9, 0.3, 1.08) both;
+}
+
+@keyframes results-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  body.results-presentation-enabled #finish .finish-card {
+    width: min(620px, calc(100vw - 28px));
+    max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 14px);
+    padding: 12px 18px;
+  }
+
+  body.results-presentation-enabled #finish .medal {
+    width: 52px;
+    height: 52px;
+    font-size: 26px;
+  }
+
+  body.results-presentation-enabled #finish .finish-card h2 {
+    margin-top: 3px;
+    font-size: 25px;
+  }
+
+  body.results-presentation-enabled #finish .finish-card > p {
+    margin-bottom: 5px;
+    font-size: 22px;
+  }
+
+  .results-scroll {
+    max-height: min(27dvh, 118px);
+  }
+
+  .results-podium {
+    padding: 5px 6px 6px;
+  }
+
+  .results-podium-stage {
+    min-height: 78px;
+  }
+
+  .results-podium-place-1 {
+    min-height: 78px;
+  }
+
+  .results-podium-place-2,
+  .results-podium-place-3 {
+    min-height: 68px;
+  }
+
+  .results-podium-wobbler {
+    width: 28px;
+    height: 32px;
+    margin-bottom: 2px;
+  }
+
+  .results-podium-wobbler::before {
+    top: 7px;
+    left: 6px;
+    width: 16px;
+    height: 8px;
+  }
+
+  .results-podium-wobbler::after {
+    top: -6px;
+    left: 12px;
+  }
+
+  .results-actions {
+    gap: 5px;
+    padding-top: 5px;
+  }
+
+  .results-actions > .button {
+    min-height: 36px;
+    padding: 6px 9px;
+    font-size: 0.62rem;
+  }
+}
+
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .finish-card,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishTitle,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .medal,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishTime,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #racePodium,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #board,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .results-actions > .text-button.back {
+  animation: none;
+  transform: none;
+  transition-duration: 40ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.results-presentation-enabled #finish:not(.hidden) .finish-card,
+  body.results-presentation-enabled #finish:not(.hidden) #finishTitle,
+  body.results-presentation-enabled #finish:not(.hidden) .medal,
+  body.results-presentation-enabled #finish:not(.hidden) #finishTime,
+  body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+  body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+  body.results-presentation-enabled #finish:not(.hidden) #racePodium,
+  body.results-presentation-enabled #finish:not(.hidden) #board,
+  body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+  body.results-presentation-enabled #finish:not(.hidden) .results-actions > .button,
+  body.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+  body.results-presentation-enabled #finish:not(.hidden) .results-actions > .text-button.back {
+    animation: none;
+    transform: none;
+    transition-duration: 40ms;
+  }
+}

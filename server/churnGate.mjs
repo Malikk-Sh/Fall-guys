@@ -79,7 +79,12 @@ export function evaluateChurnResult(result, budgets = churnBudgets({})) {
   const failures = [];
   const warnings = [];
   if (!result || typeof result !== 'object') {
-    return { ok: false, failures: ['churn probe did not produce a machine-readable result'], warnings, budgets };
+    return {
+      ok: false,
+      failures: ['churn probe did not produce a machine-readable result'],
+      warnings,
+      budgets
+    };
   }
 
   if (Array.isArray(result.failures)) failures.push(...result.failures.map(item => `probe: ${item}`));

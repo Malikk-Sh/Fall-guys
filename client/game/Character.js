@@ -380,10 +380,30 @@ export class Character {
       const sideKick = this.wallBounceSide * wallKick;
       const arm = -0.72 - rise * 0.38 + fall * 0.36 - this.jumpPulse * 0.22;
       const leg = 0.18 + fall * 0.42;
-      this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, arm - sideKick * 0.32, 10, dt);
-      this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, arm + sideKick * 0.32, 10, dt);
-      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, leg + sideKick * 0.22, 10, dt);
-      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -leg + sideKick * 0.22, 10, dt);
+      this.leftArm.rotation.x = THREE.MathUtils.damp(
+        this.leftArm.rotation.x,
+        arm - sideKick * 0.32,
+        10,
+        dt
+      );
+      this.rightArm.rotation.x = THREE.MathUtils.damp(
+        this.rightArm.rotation.x,
+        arm + sideKick * 0.32,
+        10,
+        dt
+      );
+      this.leftLeg.rotation.x = THREE.MathUtils.damp(
+        this.leftLeg.rotation.x,
+        leg + sideKick * 0.22,
+        10,
+        dt
+      );
+      this.rightLeg.rotation.x = THREE.MathUtils.damp(
+        this.rightLeg.rotation.x,
+        -leg + sideKick * 0.22,
+        10,
+        dt
+      );
     } else {
       for (const limb of [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg])
         limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);

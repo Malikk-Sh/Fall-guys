@@ -45,29 +45,29 @@ export function keyCodeLabel(code) {
 }
 
 const STYLE = `
-#dive.context-action {
+#dive.context-action-control {
   transition:
     transform 150ms ease,
     border-color 150ms ease,
     box-shadow 150ms ease,
     background 150ms ease;
 }
-#dive.context-action[data-context='pickup'] {
+#dive.context-action-control[data-context='pickup'] {
   border-color: rgba(95, 235, 255, 0.9);
   background: linear-gradient(145deg, rgba(44, 192, 224, 0.96), rgba(52, 113, 213, 0.96));
   box-shadow: 0 8px 26px rgba(65, 216, 255, 0.26);
 }
-#dive.context-action[data-context='throw'] {
+#dive.context-action-control[data-context='throw'] {
   border-color: rgba(255, 222, 92, 0.92);
   background: linear-gradient(145deg, rgba(239, 174, 52, 0.96), rgba(218, 98, 61, 0.96));
   box-shadow: 0 8px 26px rgba(255, 191, 68, 0.26);
 }
-#dive.context-action[data-context='insert'] {
+#dive.context-action-control[data-context='insert'] {
   border-color: rgba(119, 255, 196, 0.92);
   background: linear-gradient(145deg, rgba(45, 201, 150, 0.96), rgba(48, 142, 170, 0.96));
   box-shadow: 0 8px 26px rgba(90, 255, 196, 0.24);
 }
-#dive.context-action.context-action-pop {
+#dive.context-action-control.context-action-pop {
   transform: scale(1.07);
 }
 #signatureHud[data-context-action]:not([data-context-action='']) {
@@ -107,8 +107,8 @@ const STYLE = `
 body[data-input='touch'] .context-action-hint {
   display: none !important;
 }
-body.reduced-motion #dive.context-action,
-body.reduced-motion #dive.context-action.context-action-pop {
+body.reduced-motion #dive.context-action-control,
+body.reduced-motion #dive.context-action-control.context-action-pop {
   transition-duration: 0ms !important;
   transform: none !important;
 }
@@ -163,6 +163,7 @@ export class ContextActionControl {
       hint.append(key, label);
       this.root.body.append(hint);
     }
+    this.root.getElementById('dive')?.classList.add('context-action-control');
   }
 
   schedule() {
@@ -178,6 +179,7 @@ export class ContextActionControl {
     const game = this.getGame?.();
     const action = semanticContextAction(game);
     if (action === this.action) {
+      this.syncHint(action);
       this.syncSignatureHud(action);
       return;
     }
@@ -190,33 +192,41 @@ export class ContextActionControl {
 
   apply(action, animate = true) {
     const button = this.root?.getElementById?.('dive');
-    const hint = this.root?.getElementById?.('contextActionHint');
     const presentation = contextActionPresentation(action);
 
     if (button) {
       const icon = button.querySelector('i');
       const label = button.querySelector('span');
-      if (icon) icon.textContent = presentation.icon;
-      if (label) label.textContent = presentation.label;
-      button.classList.toggle('context-action', Boolean(action));
+      if (icon?.textContent !== presentation.icon) icon.textContent = presentation.icon;
+      if (label?.textContent !== presentation.label) label.textContent = presentation.label;
       button.dataset.context = action || '';
       button.setAttribute('aria-label', action ? presentation.label : 'Рывок');
       if (animate && action) this.pop(button);
     }
 
+    this.syncHint(action);
+  }
+
+  syncHint(action) {
+    const hint = this.root?.getElementById?.('contextActionHint');
     if (!hint) return;
     hint.classList.toggle('hidden', !action);
     if (!action) return;
+
     const game = this.getGame?.();
-    const key = game?.settings?.get?.('keys')?.dive?.[0];
-    hint.querySelector('kbd').textContent = keyCodeLabel(key);
-    hint.querySelector('strong').textContent = presentation.label;
+    const presentation = contextActionPresentation(action);
+    const key = keyCodeLabel(game?.settings?.get?.('keys')?.dive?.[0]);
+    const keyNode = hint.querySelector('kbd');
+    const labelNode = hint.querySelector('strong');
+    if (keyNode?.textContent !== key) keyNode.textContent = key;
+    if (labelNode?.textContent !== presentation.label) labelNode.textContent = presentation.label;
   }
 
   syncSignatureHud(action) {
     const signature = this.root?.getElementById?.('signatureHud');
     if (!signature) return;
-    signature.dataset.contextAction = action || '';
+    const value = action || '';
+    if (signature.dataset.contextAction !== value) signature.dataset.contextAction = value;
   }
 
   pop(button) {

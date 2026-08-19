@@ -17,6 +17,18 @@ export function loadTargets(env = process.env) {
   };
 }
 
+// A real server intentionally limits concurrent sockets and room operations per source IP. A
+// localhost load generator would otherwise hit that abuse protection before it reached the process
+// capacity we actually want to measure. Linux treats the whole 127/8 range as loopback, so local
+// CI can give each simulated room its own source address without weakening production limits.
+// External targets are never spoofed/sharded here: they keep the machine's real source address.
+export function loopbackSourceAddress(wsUrl, roomIndex) {
+  const url = new URL(wsUrl);
+  if (url.hostname !== '127.0.0.1') return null;
+  const index = Number.isSafeInteger(roomIndex) && roomIndex >= 0 ? roomIndex : 0;
+  return `127.0.0.${2 + (index % 253)}`;
+}
+
 export function loadStateMessage({ matchId, sequence, z, vz = -7 }) {
   return {
     type: 'state',

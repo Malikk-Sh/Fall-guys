@@ -47,8 +47,18 @@ function preloadBots() {
   if (runtime) return Promise.resolve(runtime);
   if (loading) return loading;
   enableClientModules();
-  loading = Promise.all([import('./raceBot.mjs'), import('../client/game/Course.js'), import('three')])
-    .then(([bots, course, three]) => {
+
+  // Не начинаем ESM import в том же синхронном tick, в котором index.js ещё загружает CommonJS
+  // модули. В Node 24 одновременные import()/require() одного ESM-графа могут попасть в состояние
+  // "module not yet fully loaded". В нашем графе бот через CosmeticRenderer импортирует
+  // shared/cosmetics.js, а серверная SocialCosmetics требует тот же файл во время startup.
+  // Микрозадача даёт index.js закончить синхронные require, после чего зависимости импортируются
+  // последовательно — без нескольких конкурирующих loader requests одного графа.
+  loading = Promise.resolve()
+    .then(async () => {
+      const bots = await import('./raceBot.mjs');
+      const course = await import('../client/game/Course.js');
+      const three = await import('three');
       runtime = {
         RaceBot: bots.RaceBot,
         BotField: bots.BotField,

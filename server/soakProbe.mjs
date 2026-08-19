@@ -14,7 +14,10 @@ import { loadTargets } from './loadProbeConfig.mjs';
 const { wsUrl, httpUrl } = loadTargets();
 const PROBE_RESULT_PATH = String(process.env.WOBBLE_SOAK_PROBE_RESULT_PATH || '').trim() || null;
 const CSV_PATH = String(process.env.WOBBLE_SOAK_CSV_PATH || '').trim() || null;
-const PHASE_SECONDS = positiveInteger(process.env.WOBBLE_SOAK_PHASE_SECONDS || 300, 'WOBBLE_SOAK_PHASE_SECONDS');
+const PHASE_SECONDS = positiveInteger(
+  process.env.WOBBLE_SOAK_PHASE_SECONDS || 300,
+  'WOBBLE_SOAK_PHASE_SECONDS'
+);
 const SAMPLE_MS = boundedInteger(
   process.env.WOBBLE_SOAK_SAMPLE_MS || 20000,
   'WOBBLE_SOAK_SAMPLE_MS',
@@ -428,8 +431,7 @@ async function runPhase(phase) {
       WOBBLE_HTTP_URL: httpUrl,
       WOBBLE_LOAD_RESULT_PATH: loadResultPath,
       WOBBLE_LOAD_SUMMARY_PATH: loadSummaryPath,
-      WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS:
-        process.env.WOBBLE_SOAK_BASELINE_EVENT_LOOP_P95_MS || '20.9',
+      WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS: process.env.WOBBLE_SOAK_BASELINE_EVENT_LOOP_P95_MS || '20.9',
       WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS: process.env.WOBBLE_SOAK_WARN_EVENT_LOOP_P95_MS || '45',
       WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS: process.env.WOBBLE_SOAK_MAX_EVENT_LOOP_P95_MS || '60',
       WOBBLE_LOAD_BASELINE_RSS_MB: process.env.WOBBLE_SOAK_BASELINE_RSS_MB || '108',

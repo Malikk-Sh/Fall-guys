@@ -65,9 +65,7 @@ function validateInitialCounts(initial, expectedBaseline, failures) {
       continue;
     }
     if (expectedBaseline && value !== expectedBaseline[name]) {
-      failures.push(
-        `stage started with ${value} ${name}; expected clean baseline ${expectedBaseline[name]}`
-      );
+      failures.push(`stage started with ${value} ${name}; expected clean baseline ${expectedBaseline[name]}`);
     }
   }
 }

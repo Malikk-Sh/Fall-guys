@@ -79,10 +79,7 @@ test('churn thresholds are configurable and validated', () => {
       minResumeSuccessRate: 0.98
     }
   );
-  assert.throws(
-    () => churnBudgets({ WOBBLE_CHURN_MIN_RESUME_SUCCESS_RATE: '1.1' }),
-    /between 0 and 1/
-  );
+  assert.throws(() => churnBudgets({ WOBBLE_CHURN_MIN_RESUME_SUCCESS_RATE: '1.1' }), /between 0 and 1/);
   assert.throws(() => churnBudgets({ WOBBLE_CHURN_MAX_RSS_MB: '0' }), /positive finite number/);
 });
 

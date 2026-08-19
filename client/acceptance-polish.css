@@ -1,0 +1,165 @@
+/* Final UX acceptance polish -------------------------------------------------- */
+
+body[data-campaign-ui-theme] #hud .hud-progress-label b {
+  color: var(--world-secondary);
+}
+
+body[data-campaign-ui-theme] #hud .progress-track i {
+  background: linear-gradient(90deg, var(--world-accent), var(--world-secondary));
+  box-shadow: 0 0 10px var(--world-glow);
+}
+
+body[data-campaign-ui-theme] .checkpoint-banner {
+  border-color: var(--world-accent);
+  box-shadow:
+    0 0 0 2px var(--world-glow),
+    0 12px 30px #26165d66;
+}
+
+body[data-campaign-ui-theme] .checkpoint-banner small {
+  color: var(--world-accent);
+}
+
+body[data-campaign-ui-theme] .checkpoint-banner strong {
+  color: var(--world-secondary);
+}
+
+body[data-campaign-ui-theme]
+  .partner-hud:not([data-state='down']):not([data-state='away'])
+  .partner-arrow {
+  border-bottom-color: var(--world-accent);
+  filter: drop-shadow(0 2px 8px var(--world-glow));
+}
+
+/* The default-size mobile lobby uses width instead of turning the whole card into a vertical
+   scroller. Variable-length player/leaderboard data own their local scroll regions; room actions
+   stay reachable at the edge of every target landscape viewport. Large UI deliberately keeps the
+   existing accessibility scroll fallback because preserving readable/tappable scale is higher
+   priority than the scroll-free composition. */
+@media (orientation: landscape) and (max-height: 600px) {
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-card {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.82fr) minmax(280px, 1.18fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto auto;
+    gap: 5px 12px;
+    width: min(860px, calc(100vw - 24px - var(--safe-left) - var(--safe-right)));
+    height: calc(100dvh - 16px - var(--safe-top) - var(--safe-bottom));
+    max-height: none;
+    padding: 10px 14px;
+    overflow: hidden;
+    text-align: left;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-card > .eyebrow {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .room-heading {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .room-heading h2 {
+    margin: 1px 0 3px;
+    font-size: 30px;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .copy-button {
+    padding: 6px;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-course {
+    grid-column: 1;
+    grid-row: 3;
+    align-self: start;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    min-height: 0;
+    margin: 0;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-course > div,
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-course > label {
+    gap: 3px;
+    padding: 6px 8px;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #players {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    overflow-y: auto;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #verifiedTop {
+    display: grid;
+    grid-column: 2;
+    grid-row: 4 / 8;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    min-height: 0;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #verifiedTopList {
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #ready {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #addBots {
+    grid-column: 1;
+    grid-row: 5;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #start {
+    grid-column: 1;
+    grid-row: 6;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby #lobbyHint {
+    grid-column: 1;
+    grid-row: 7;
+    align-self: center;
+    min-height: 0;
+    margin: 0;
+    font-size: 9px;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-card > .button {
+    min-height: 34px;
+    margin-top: 0;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+}
+
+@media (orientation: landscape) and (max-height: 600px) and (max-width: 720px) {
+  body.mobile-landscape:not(.large-ui) #lobby .lobby-card {
+    grid-template-columns: minmax(208px, 0.78fr) minmax(270px, 1.22fr);
+    gap: 4px 8px;
+    padding-inline: 10px;
+  }
+
+  body.mobile-landscape:not(.large-ui) #lobby .room-heading h2 {
+    font-size: 27px;
+  }
+}
+
+body.reduced-motion[data-campaign-ui-theme] .checkpoint-banner,
+body.reduced-motion[data-campaign-ui-theme] #hud .progress-track i,
+body.reduced-motion[data-campaign-ui-theme] .partner-arrow {
+  transition: none !important;
+}

@@ -5,6 +5,7 @@ import {
   campaignChapterNumber,
   campaignThemeFor
 } from '../client/game/CampaignPresentation.js';
+import { campaignUiTokens } from '../client/ui/CampaignUiTheme.js';
 
 test('campaign chapters map to four presentation worlds', () => {
   for (const id of ['ch1', 'ch2', 'ch3']) assert.equal(campaignThemeFor(id)?.id, 'cloud-factory');
@@ -34,4 +35,25 @@ test('every world defines a distinct valid scene palette', () => {
     assert.ok(theme.sunIntensity > 0);
     assert.ok(theme.exposure > 0);
   }
+});
+
+test('campaign gameplay UI tokens follow the authoritative presentation world palette', () => {
+  assert.deepEqual(campaignUiTokens('ch1'), {
+    id: 'cloud-factory',
+    accent: '#ffd54d',
+    secondary: '#5fe6ff',
+    glow: '#ffd54d4d'
+  });
+  assert.deepEqual(campaignUiTokens('ch7'), {
+    id: 'reactor',
+    accent: '#4dffcf',
+    secondary: '#45bfff',
+    glow: '#4dffcf4d'
+  });
+  assert.deepEqual(campaignUiTokens(null), {
+    id: null,
+    accent: '#4ce0df',
+    secondary: '#ffdd4c',
+    glow: '#4ce0df4d'
+  });
 });

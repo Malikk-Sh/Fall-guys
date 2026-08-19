@@ -35,9 +35,7 @@ export function primaryResultAction(mode, visible = {}) {
 export function racePodiumEntries(board = [], roster = [], selfId = null) {
   if (!Array.isArray(board)) return [];
   const rosterById = new Map(
-    (Array.isArray(roster) ? roster : [])
-      .filter(player => player?.id)
-      .map(player => [player.id, player])
+    (Array.isArray(roster) ? roster : []).filter(player => player?.id).map(player => [player.id, player])
   );
   return board.slice(0, 3).map((player, index) => {
     const member = player?.id ? rosterById.get(player.id) : null;
@@ -249,9 +247,7 @@ export class ResultsPresentation {
     if (!podium) return;
     const game = this.getGame?.();
     const entries =
-      game?.mode === 'multi'
-        ? racePodiumEntries(game.latestBoard, game.room?.players, game.net?.id)
-        : [];
+      game?.mode === 'multi' ? racePodiumEntries(game.latestBoard, game.room?.players, game.net?.id) : [];
     podium.replaceChildren();
     podium.classList.toggle('hidden', entries.length === 0);
     if (!entries.length) return;

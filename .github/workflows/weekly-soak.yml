@@ -34,11 +34,6 @@ jobs:
       WOBBLE_SOAK_WARN_RECOVERY_HEAP_GROWTH_MB: '24'
       WOBBLE_SOAK_MAX_RECOVERY_HEAP_GROWTH_MB: '48'
       WOBBLE_SOAK_MIN_DURATION_SECONDS: '1800'
-      WOBBLE_SOAK_PROBE_RESULT_PATH: ${{ runner.temp }}/wobble-soak-probe.json
-      WOBBLE_SOAK_RESULT_PATH: ${{ runner.temp }}/wobble-soak-result.json
-      WOBBLE_SOAK_CSV_PATH: ${{ runner.temp }}/wobble-soak-timeseries.csv
-      WOBBLE_SOAK_SUMMARY_PATH: ${{ runner.temp }}/wobble-soak-summary.md
-      WOBBLE_SOAK_SERVER_LOG: ${{ runner.temp }}/wobble-soak-server.log
 
     steps:
       - name: Check out source
@@ -55,6 +50,12 @@ jobs:
 
       - name: Run weekly soak against one gameplay server
         shell: bash
+        env:
+          WOBBLE_SOAK_PROBE_RESULT_PATH: ${{ runner.temp }}/wobble-soak-probe.json
+          WOBBLE_SOAK_RESULT_PATH: ${{ runner.temp }}/wobble-soak-result.json
+          WOBBLE_SOAK_CSV_PATH: ${{ runner.temp }}/wobble-soak-timeseries.csv
+          WOBBLE_SOAK_SUMMARY_PATH: ${{ runner.temp }}/wobble-soak-summary.md
+          WOBBLE_SOAK_SERVER_LOG: ${{ runner.temp }}/wobble-soak-server.log
         run: |
           set -u -o pipefail
 
@@ -122,10 +123,10 @@ jobs:
         with:
           name: weekly-soak-telemetry-${{ github.run_id }}
           path: |
-            ${{ env.WOBBLE_SOAK_PROBE_RESULT_PATH }}
-            ${{ env.WOBBLE_SOAK_RESULT_PATH }}
-            ${{ env.WOBBLE_SOAK_CSV_PATH }}
-            ${{ env.WOBBLE_SOAK_SUMMARY_PATH }}
+            ${{ runner.temp }}/wobble-soak-probe.json
+            ${{ runner.temp }}/wobble-soak-result.json
+            ${{ runner.temp }}/wobble-soak-timeseries.csv
+            ${{ runner.temp }}/wobble-soak-summary.md
           if-no-files-found: warn
           retention-days: 21
 
@@ -134,6 +135,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: weekly-soak-server-log-${{ github.run_id }}
-          path: ${{ env.WOBBLE_SOAK_SERVER_LOG }}
+          path: ${{ runner.temp }}/wobble-soak-server.log
           if-no-files-found: warn
           retention-days: 21

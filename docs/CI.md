@@ -84,6 +84,7 @@ The nightly workflow runs these groups after its own quality gate:
 - a 300-seed alternate physics sweep with a meaningful baseline-aware floor;
 - reliability-sensitive server tests three times;
 - a staged local multi-room WebSocket load gate using real co-op clients and `PLAYER_STATE` traffic;
+- deterministic reconnect/churn stress using real session resume and room lifecycle paths;
 - matchmaking and multiplayer browser scenarios three times on desktop and mobile;
 - the real-time two-browser full-match suite three times with **zero retries**.
 
@@ -137,7 +138,48 @@ The GitHub Step Summary contains a compact table like:
 | Stage | Rooms | Clients | p95 | RSS | Snapshot skips Δ | Result |
 ```
 
-The staged job keeps the existing 10-minute job timeout. The normal three-stage plan should take roughly tens of seconds of traffic plus room setup, not turn daily nightly into a long soak test. Reconnect/churn and longer endurance testing belong to separate Nightly 2.0 work.
+The staged job keeps the existing 10-minute job timeout. The normal three-stage plan should take roughly tens of seconds of traffic plus room setup, not turn daily nightly into a long soak test.
+
+### Reconnect / churn stress
+
+The daily reconnect/churn lane is a separate deterministic real-WebSocket scenario rather than another steady load stage. Its default profile is:
+
+- 12 active co-op rooms / 24 clients;
+- three rapid disconnect/resume cycles while state traffic continues;
+- four stale-old-socket races where a new socket resumes before the old socket closes;
+- a 24-client reconnect storm with a small deterministic stagger;
+- 100 create/join/start/explicit-leave room churn iterations in bounded batches.
+
+The probe uses `terminate()` to model an actual network drop and resumes with the real session token. The stale-socket scenario then toggles real presence state after the old socket closes and verifies that the resumed player remains online. Room churn uses the production `leave` message so the test measures lifecycle cleanup without weakening reconnect grace, session TTL, capacity or per-IP protection.
+
+The reconnect/churn gate requires:
+
+- every attempted resume to preserve player identity and succeed;
+- `resumeFailed`, `handlerErrors`, `socketSendFailures`, `invalidMessages`, and `capacityRejected` deltas to stay zero;
+- no duplicate-player or room/player/session count mismatch observations;
+- the 20–40 client storm to leave `/health/ready` healthy;
+- peak rooms, players, and sessions to remain inside the expected base-load bound;
+- all churn rooms to be reclaimed and final rooms/players/sessions to return to the pre-test baseline;
+- the established server safety budgets (`60 ms` event-loop p95 and `180 MB` RSS) to remain intact.
+
+The churn tool writes machine-readable JSON through `WOBBLE_CHURN_RESULT_PATH` and a compact Step Summary through `WOBBLE_CHURN_SUMMARY_PATH`. A failure names the concrete invariant or metric rather than relying on a bare exit code.
+
+Useful local reconnect/churn check:
+
+```bash
+WOBBLE_CHURN_ROOMS=12 \
+WOBBLE_CHURN_RAPID_CYCLES=3 \
+WOBBLE_CHURN_STORM_CLIENTS=24 \
+WOBBLE_CHURN_ROOM_ITERATIONS=100 \
+WOBBLE_CHURN_MIN_RESUME_SUCCESS_RATE=1 \
+WOBBLE_CHURN_BASELINE_EVENT_LOOP_P95_MS=20.9 \
+WOBBLE_CHURN_MAX_EVENT_LOOP_P95_MS=60 \
+WOBBLE_CHURN_BASELINE_RSS_MB=108 \
+WOBBLE_CHURN_MAX_RSS_MB=180 \
+npm run churn:gate
+```
+
+Reconnect/churn is still a short daily stress lane. Longer repeated-load and leak/degradation testing belongs to the separate weekly soak/endurance work, not to retries or a larger daily timeout.
 
 Useful local load checks:
 
@@ -162,7 +204,7 @@ WOBBLE_LOAD_MAX_RSS_MB=180 \
 npm run load:staged
 ```
 
-Start one local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. The staged gate intentionally reuses that same server process across all stages. Do not use the automated load gate against production by default.
+Start one local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. The staged and churn gates intentionally reuse the real gameplay server path. Do not use the automated load or churn gates against production by default.
 
 The nightly full-match lane disables retries deliberately: nightly stress should expose any intermittent failure as a red run.
 

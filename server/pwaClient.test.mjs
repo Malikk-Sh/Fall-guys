@@ -7,6 +7,8 @@ import {
   isTouchMobile,
   mobileOrientationState
 } from '../client/ui/MobileExperience.js';
+import './contextActionControl.test.mjs';
+import './coopCelebrationPresentation.test.mjs';
 
 function classList() {
   const values = new Set(['hidden']);

@@ -63,13 +63,19 @@ test.describe('одиночная игра и меню', () => {
   test('меню переключает режимы, трассы и открывает окно аккаунта', async ({ page }) => {
     await openMenu(page);
 
-    // Испытание дня и случайная трасса — разные трассы, и меню обязано это показывать.
+    // Переключение daily → random проверяем по реальному preview seed и daily-only правилу.
+    // Display name содержит всего 64 комбинации и законно может совпасть у двух разных seed,
+    // поэтому сравнивать названия здесь было флейковым ожиданием, а не проверкой поведения меню.
     await page.locator('#runType').selectOption('daily');
     await expect(page.locator('#challengeRule')).toBeVisible();
-    const daily = (await page.locator('#courseName').textContent()).trim();
+    const dailySeed = await page.evaluate(() => window.__WOBBLE_GAME__?.previewSpec?.seed ?? null);
     await page.locator('#runType').selectOption('random');
-    const random = (await page.locator('#courseName').textContent()).trim();
-    expect(random, 'у случайной трассы своё название').not.toBe(daily);
+    await expect(page.locator('#challengeRule')).toBeHidden();
+    const randomSeed = await page.evaluate(() => window.__WOBBLE_GAME__?.previewSpec?.seed ?? null);
+    expect(dailySeed).not.toBeNull();
+    expect(randomSeed).not.toBeNull();
+    expect(randomSeed, 'случайный preview должен использовать другой seed').not.toBe(dailySeed);
+    await expect(page.locator('#courseName')).not.toBeEmpty();
 
     // Вкладки режимов показывают свои панели и прячут чужие.
     await page.locator('[data-mode="multi"]').click();

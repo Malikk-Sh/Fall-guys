@@ -24,9 +24,7 @@ body[data-campaign-ui-theme] .checkpoint-banner strong {
   color: var(--world-secondary);
 }
 
-body[data-campaign-ui-theme]
-  .partner-hud:not([data-state='down']):not([data-state='away'])
-  .partner-arrow {
+body[data-campaign-ui-theme] .partner-hud:not([data-state='down']):not([data-state='away']) .partner-arrow {
   border-bottom-color: var(--world-accent);
   filter: drop-shadow(0 2px 8px var(--world-glow));
 }

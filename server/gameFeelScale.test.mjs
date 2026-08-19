@@ -77,14 +77,14 @@ test('procedural character lean остаётся visual-only и реагируе
   character.group.rotation.y = 0.32;
   character.animate(1 / 60, { speed: 7, grounded: true });
 
-  assert.ok(character.visual.rotation.x < 0, 'разгон должен слегка наклонять корпус вперёд');
-  assert.ok(Math.abs(character.visual.rotation.z) > 0.005, 'поворот должен давать читаемый body lean');
-  assert.ok(Math.abs(character.faceAnchor.rotation.z) > 0.001, 'лицо должно чуть отставать от корпуса');
-  assert.equal(
-    character.group.scale.x,
-    PLAYER_VISUAL_SCALE,
-    'presentation не меняет физический scale группы'
-  );
+  const forwardLean = character.visual.rotation.x;
+  const turnLean = Math.abs(character.visual.rotation.z);
+  const faceLag = Math.abs(character.faceAnchor.rotation.z);
+  const visualScale = character.group.scale.x;
+  assert.ok(forwardLean < 0);
+  assert.ok(turnLean > 0.005);
+  assert.ok(faceLag > 0.001);
+  assert.equal(visualScale, PLAYER_VISUAL_SCALE);
   character.dispose();
 });
 
@@ -100,14 +100,12 @@ test('air pose различает подъём и падение без изме
     falling.animate(1 / 60, { speed: 5, grounded: false, vertical: -9 });
   }
 
-  assert.ok(
-    rising.leftArm.rotation.x < falling.leftArm.rotation.x - 0.2,
-    'на подъёме руки раскрываются сильнее'
-  );
-  assert.ok(
-    falling.leftLeg.rotation.x > rising.leftLeg.rotation.x + 0.15,
-    'на падении ноги подбираются сильнее'
-  );
+  const risingArm = rising.leftArm.rotation.x;
+  const fallingArm = falling.leftArm.rotation.x;
+  const risingLeg = rising.leftLeg.rotation.x;
+  const fallingLeg = falling.leftLeg.rotation.x;
+  assert.ok(risingArm < fallingArm - 0.2);
+  assert.ok(fallingLeg > risingLeg + 0.15);
   rising.dispose();
   falling.dispose();
 });
@@ -117,14 +115,12 @@ test('get-up получает короткий visual pop, а immunity glow ос
   const character = new Character(scene);
   character.animate(1 / 60, { speed: 0, grounded: true, knockedDown: true });
   character.animate(1 / 60, { speed: 0, grounded: true, recovering: true });
-  assert.ok(character.getupPulse > 0, 'переход из knockdown должен запустить presentation pulse');
+  assert.ok(character.getupPulse > 0);
 
   character.setImmunityGlow(true);
-  assert.ok(character.bodyMesh.material.emissiveIntensity > 0);
-  assert.ok(
-    character.bodyMesh.material.emissiveIntensity < 0.25,
-    'glow не должен выглядеть полноценным shield'
-  );
+  const glow = character.bodyMesh.material.emissiveIntensity;
+  assert.ok(glow > 0);
+  assert.ok(glow < 0.25);
   character.setImmunityGlow(false);
   assert.equal(character.bodyMesh.material.emissiveIntensity, 0);
   character.dispose();

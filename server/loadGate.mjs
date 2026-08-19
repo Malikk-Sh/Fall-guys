@@ -128,9 +128,7 @@ export function evaluateLoadResult(result, budgets = {}) {
     failures.push('event-loop p95 metric is missing');
   } else {
     if (finiteNumber(budgets.maxEventLoopP95Ms) && eventLoopP95Ms > budgets.maxEventLoopP95Ms) {
-      failures.push(
-        `event-loop p95 ${eventLoopP95Ms} ms > hard budget ${budgets.maxEventLoopP95Ms} ms`
-      );
+      failures.push(`event-loop p95 ${eventLoopP95Ms} ms > hard budget ${budgets.maxEventLoopP95Ms} ms`);
     } else if (
       finiteNumber(budgets.warningEventLoopP95Ms) &&
       eventLoopP95Ms > budgets.warningEventLoopP95Ms

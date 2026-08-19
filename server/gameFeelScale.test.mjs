@@ -43,12 +43,15 @@ test('flow feedback распознаёт только локальные пер�
     tone: 'cyan',
     strength: 0.45
   });
-  assert.deepEqual(flowSignal({ ...base, rolling: true }, { ...base, grounded: false, vertical: 8 }), {
-    id: 'roll-jump',
-    label: 'ПОТОК ×2',
-    tone: 'yellow',
-    strength: 0.62
-  });
+  assert.deepEqual(
+    flowSignal({ ...base, rolling: true }, { ...base, grounded: false, vertical: 8 }),
+    {
+      id: 'roll-jump',
+      label: 'ПОТОК ×2',
+      tone: 'yellow',
+      strength: 0.62
+    }
+  );
   assert.deepEqual(flowSignal(base, { ...base, landingRetention: 0.34 }), {
     id: 'fast-landing',
     label: 'МЯГКО',
@@ -64,4 +67,52 @@ test('place feedback различает обгон и потерю позици�
   assert.equal(placeDirection(3, 3), null);
   assert.equal(placeDirection(null, 3), null);
   assert.equal(placeDirection(3, 0), null);
+});
+
+test('procedural character lean остаётся visual-only и реагирует на разгон и поворот', () => {
+  const scene = new THREE.Scene();
+  const character = new Character(scene);
+  character.phase = 0;
+  character.animate(1 / 60, { speed: 0, grounded: true });
+  character.group.rotation.y = 0.32;
+  character.animate(1 / 60, { speed: 7, grounded: true });
+
+  assert.ok(character.visual.rotation.x < 0, 'разгон должен слегка наклонять корпус вперёд');
+  assert.ok(Math.abs(character.visual.rotation.z) > 0.005, 'поворот должен давать читаемый body lean');
+  assert.ok(Math.abs(character.faceAnchor.rotation.z) > 0.001, 'лицо должно чуть отставать от корпуса');
+  assert.equal(character.group.scale.x, PLAYER_VISUAL_SCALE, 'presentation не меняет физический scale группы');
+  character.dispose();
+});
+
+test('air pose различает подъём и падение без изменения gameplay state', () => {
+  const scene = new THREE.Scene();
+  const rising = new Character(scene);
+  const falling = new Character(scene);
+  rising.phase = 0;
+  falling.phase = 0;
+
+  for (let i = 0; i < 20; i++) {
+    rising.animate(1 / 60, { speed: 5, grounded: false, vertical: 8 });
+    falling.animate(1 / 60, { speed: 5, grounded: false, vertical: -9 });
+  }
+
+  assert.ok(rising.leftArm.rotation.x < falling.leftArm.rotation.x - 0.2, 'на подъёме руки раскрываются сильнее');
+  assert.ok(falling.leftLeg.rotation.x > rising.leftLeg.rotation.x + 0.15, 'на падении ноги подбираются сильнее');
+  rising.dispose();
+  falling.dispose();
+});
+
+test('get-up получает короткий visual pop, а immunity glow остаётся слабым и обратимым', () => {
+  const scene = new THREE.Scene();
+  const character = new Character(scene);
+  character.animate(1 / 60, { speed: 0, grounded: true, knockedDown: true });
+  character.animate(1 / 60, { speed: 0, grounded: true, recovering: true });
+  assert.ok(character.getupPulse > 0, 'переход из knockdown должен запустить presentation pulse');
+
+  character.setImmunityGlow(true);
+  assert.ok(character.bodyMesh.material.emissiveIntensity > 0);
+  assert.ok(character.bodyMesh.material.emissiveIntensity < 0.25, 'glow не должен выглядеть полноценным shield');
+  character.setImmunityGlow(false);
+  assert.equal(character.bodyMesh.material.emissiveIntensity, 0);
+  character.dispose();
 });

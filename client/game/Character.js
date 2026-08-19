@@ -45,6 +45,15 @@ export class Character {
     this.baseColor = color;
     this.baseAccent = accent;
 
+    // Presentation-only память между кадрами. Скорость и heading уже существуют в gameplay;
+    // здесь хранится только их прошлое значение, чтобы получить acceleration/turn lean без нового
+    // состояния физики и без allocations на каждый animate().
+    this.motionSpeed = 0;
+    this.motionYaw = 0;
+    this.motionReady = false;
+    this.jumpPulse = 0;
+    this.getupPulse = 0;
+
     const bodyColor = cosmetics?.body?.render?.primary ?? cosmetics?.body?.colors?.body ?? color;
     const accentColor = cosmetics?.body?.render?.accent ?? cosmetics?.body?.colors?.accent ?? accent;
     const body = capsule(0.48, 0.58, bodyColor, 14);
@@ -250,6 +259,16 @@ export class Character {
     this.bellyMesh.material.color.setHex(accent);
   }
 
+  // Слабая подсветка окна иммунитета после подъёма. Она существует только на базовом корпусе,
+  // не подменяет косметику и намеренно значительно слабее shield-like эффектов.
+  setImmunityGlow(active) {
+    const intensity = active ? 0.16 : 0;
+    for (const mesh of [this.bodyMesh, this.bellyMesh]) {
+      mesh.material.emissive.setHex(0x72efff);
+      mesh.material.emissiveIntensity = intensity;
+    }
+  }
+
   /** Эмоция. Возвращает false, если ID не проигрался, — тогда и в сеть его отправлять незачем. */
   playEmote(emoteId) {
     return Boolean(this.cosmetics?.playEmote(emoteId));
@@ -259,6 +278,20 @@ export class Character {
     dt,
     { speed = 0, grounded = true, vertical = 0, diving = false, knockedDown = false, recovering = false } = {}
   ) {
+    const safeDt = Math.max(1 / 240, dt);
+    const previousState = this.state;
+    const acceleration = THREE.MathUtils.clamp((speed - this.motionSpeed) / safeDt, -18, 18);
+    this.motionSpeed = speed;
+
+    let turnRate = 0;
+    if (this.motionReady) {
+      let delta = ((this.group.rotation.y - this.motionYaw + Math.PI) % (Math.PI * 2)) - Math.PI;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      turnRate = THREE.MathUtils.clamp(delta / safeDt, -5, 5);
+    }
+    this.motionYaw = this.group.rotation.y;
+    this.motionReady = true;
+
     this.phase += dt * (4 + speed * 1.25);
     const run = Math.min(1, speed / 7),
       swing = Math.sin(this.phase) * run;
@@ -272,6 +305,13 @@ export class Character {
           : run > 0.08
             ? 'run'
             : 'idle';
+
+    // Прыжок уже произошёл в физике; pulse только делает первые кадры перехода визуально
+    // «собранными», не задерживая импульс ни на миллисекунду.
+    if (this.state === 'air' && previousState !== 'air' && vertical > 1.5) this.jumpPulse = 1;
+    this.jumpPulse = Math.max(0, this.jumpPulse - dt * 10.5);
+    if (recovering && previousState === 'knockdown') this.getupPulse = 1;
+    this.getupPulse = Math.max(0, this.getupPulse - dt * 4.4);
 
     // Эмоция прерывается сменой состояния движения: прыжок, подкат и сбивание важнее позы, а поза,
     // пережившая их, выглядела бы как застрявшая анимация. Сбивание тут особенно: поза эмоции,
@@ -307,6 +347,9 @@ export class Character {
       this.visual.rotation.z = THREE.MathUtils.damp(this.visual.rotation.z, side * 0.38, 9, dt);
       this.visual.position.y = THREE.MathUtils.damp(this.visual.position.y, -0.24, 11, dt);
       this.visual.scale.set(1.04, 0.94, 1.04);
+      this.baseVisor.rotation.z = THREE.MathUtils.damp(this.baseVisor.rotation.z, 0, 10, dt);
+      this.faceAnchor.rotation.z = THREE.MathUtils.damp(this.faceAnchor.rotation.z, 0, 10, dt);
+      this.headAnchor.rotation.z = THREE.MathUtils.damp(this.headAnchor.rotation.z, 0, 10, dt);
       this.antenna.rotation.z = THREE.MathUtils.damp(this.antenna.rotation.z, side * 0.72, 8, dt);
       this.landPulse = Math.max(0, this.landPulse - dt * 4.4);
       // След и эффекты продолжают жить и на лежащем: сбивание отнимает управление, а не косметику.
@@ -314,37 +357,67 @@ export class Character {
       return;
     }
 
-    if (this.state === 'run') {
+    if (recovering) {
+      const gather = 0.28 * this.getupPulse;
+      this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, gather, 12, dt);
+      this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, -gather, 12, dt);
+      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, -gather * 0.7, 12, dt);
+      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, gather * 0.7, 12, dt);
+    } else if (this.state === 'run') {
       this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, swing * 0.82, 13, dt);
       this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, -swing * 0.82, 13, dt);
       this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, -swing * 0.68, 15, dt);
       this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, swing * 0.68, 15, dt);
     } else if (this.state === 'air') {
-      const arm = -0.9 - Math.max(0, vertical) * 0.025;
+      const rise = THREE.MathUtils.clamp(vertical / 8, 0, 1);
+      const fall = THREE.MathUtils.clamp(-vertical / 10, 0, 1);
+      const arm = -0.72 - rise * 0.38 + fall * 0.36 - this.jumpPulse * 0.22;
+      const leg = 0.18 + fall * 0.42;
       this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, arm, 10, dt);
       this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, arm, 10, dt);
-      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, 0.28, 10, dt);
-      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -0.28, 10, dt);
+      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, leg, 10, dt);
+      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -leg, 10, dt);
     } else {
       for (const limb of [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg])
         limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
     }
-    const diveAngle = diving ? -1.24 : 0;
-    const poseDamping = recovering ? 5 : diving ? 13 : 9;
+
+    const accelerationLean = grounded && !diving ? -THREE.MathUtils.clamp(acceleration / 18, -1, 1) * 0.11 : 0;
+    const diveAngle = diving ? -1.24 : recovering ? 0.1 * this.getupPulse : accelerationLean;
+    const poseDamping = recovering ? 7 : diving ? 13 : 9;
     this.visual.rotation.x = THREE.MathUtils.damp(this.visual.rotation.x, diveAngle, poseDamping, dt);
     const targetY =
-      Math.sin(this.phase * 0.5) * 0.025 * (1 - run) + Math.abs(Math.sin(this.phase)) * run * 0.055;
-    this.visual.position.y = THREE.MathUtils.damp(this.visual.position.y, targetY, recovering ? 5 : 14, dt);
+      Math.sin(this.phase * 0.5) * 0.025 * (1 - run) +
+      Math.abs(Math.sin(this.phase)) * run * 0.055 -
+      (recovering ? 0.055 * this.getupPulse : 0);
+    this.visual.position.y = THREE.MathUtils.damp(this.visual.position.y, targetY, recovering ? 8 : 14, dt);
+
+    // Наклон корпуса берётся только из уже случившегося изменения heading. На hitbox и направление
+    // движения он не влияет; visor/head чуть отстают, antenna переигрывает поворот вторичным движением.
+    const turnLean = -THREE.MathUtils.clamp(turnRate / 5, -1, 1) * 0.14 * Math.max(0.35, run);
+    const idleSway = Math.sin(this.phase * 0.5) * 0.018 * (1 - run);
     this.visual.rotation.z = THREE.MathUtils.damp(
       this.visual.rotation.z,
-      Math.sin(this.phase * 0.5) * 0.018 * (1 - run),
-      recovering ? 5 : 12,
+      idleSway + turnLean,
+      recovering ? 7 : 12,
       dt
     );
-    this.antenna.rotation.z = Math.sin(this.phase * 0.85) * 0.14;
+    const visorLag = -turnLean * 0.42;
+    this.baseVisor.rotation.z = THREE.MathUtils.damp(this.baseVisor.rotation.z, visorLag, 10, dt);
+    this.faceAnchor.rotation.z = THREE.MathUtils.damp(this.faceAnchor.rotation.z, visorLag, 10, dt);
+    this.headAnchor.rotation.z = THREE.MathUtils.damp(this.headAnchor.rotation.z, visorLag * 0.7, 9, dt);
+    this.antenna.rotation.z = Math.sin(this.phase * 0.85) * 0.14 - turnLean * 2.2;
+
     this.landPulse = Math.max(0, this.landPulse - dt * 4.4);
-    const squash = Math.sin(this.landPulse * Math.PI) * 0.16;
-    this.visual.scale.set(1 + squash * 0.55, 1 - squash, 1 + squash * 0.55);
+    const landingSquash = Math.sin(this.landPulse * Math.PI) * 0.16;
+    const jumpSquash = this.jumpPulse * 0.1;
+    const getupPop = this.getupPulse > 0 ? Math.sin((1 - this.getupPulse) * Math.PI) * 0.08 : 0;
+    const squash = landingSquash + jumpSquash;
+    this.visual.scale.set(
+      1 + squash * 0.55 + getupPop * 0.35,
+      1 - squash + getupPop * 0.2,
+      1 + squash * 0.55 + getupPop * 0.35
+    );
 
     this.cosmetics?.update(dt, { speed, grounded, vertical, diving, state: this.state });
   }

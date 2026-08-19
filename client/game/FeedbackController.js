@@ -1,6 +1,12 @@
 const FLOW_COOLDOWN_MS = 650;
 const PLACE_COOLDOWN_MS = 420;
 
+const FLOW_IMPULSES = Object.freeze({
+  'dive-roll': { pitch: 0.012, fov: 0.8, shake: 0.035, duration: 0.12 },
+  'roll-jump': { pitch: -0.018, fov: 1.2, shake: 0.025, duration: 0.15 },
+  'fast-landing': { pitch: 0.01, fov: -0.45, shake: 0.02, duration: 0.1 }
+});
+
 export function flowSignal(previous, current) {
   if (!previous || !current) return null;
 
@@ -39,6 +45,7 @@ function playerPresentationState(player) {
     grounded: Boolean(player.grounded),
     vertical: Number(player.velocity?.y) || 0,
     knockedDown: player.knockdownTimer > 0,
+    immunity: player.knockdownImmunityTimer > 0,
     respawns: Number(player.respawns) || 0
   };
 }
@@ -188,6 +195,7 @@ export class FeedbackController {
     this.active = false;
     if (this.frame) this.window?.cancelAnimationFrame?.(this.frame);
     this.frame = 0;
+    this.resetTracking();
   }
 
   installMarkup() {
@@ -240,14 +248,17 @@ export class FeedbackController {
     }
 
     if (this.player !== player) {
+      this.resetTracking();
       this.player = player;
       this.previous = playerPresentationState(player);
       this.lastPlace = parsePlace(this.root);
       this.lastMode = game.mode;
+      player.character?.setImmunityGlow?.(this.previous.immunity);
       return;
     }
 
     const current = playerPresentationState(player);
+    player.character?.setImmunityGlow?.(current.immunity);
     if (!this.previous.knockedDown && current.knockedDown) this.presentKnockdown(game);
     if (current.respawns > this.previous.respawns) this.presentRespawn(game);
 
@@ -268,6 +279,7 @@ export class FeedbackController {
   }
 
   resetTracking() {
+    this.player?.character?.setImmunityGlow?.(false);
     this.player = null;
     this.previous = null;
     this.lastPlace = null;
@@ -277,13 +289,15 @@ export class FeedbackController {
   presentFlow(game, flow) {
     this.showChip(flow.label, flow.tone);
     game.settings?.vibrate?.(flow.strength * 0.45);
+    const impulse = FLOW_IMPULSES[flow.id];
+    if (impulse) game.cameraController?.addImpulse?.(impulse);
   }
 
   presentKnockdown(game) {
     const player = game.player;
     const reduced = Boolean(game.settings?.reducedMotion);
     game.effects?.burst?.(player.position, 0xffdd76, reduced ? 5 : 12, reduced ? 0.42 : 0.78);
-    game.cameraController?.addShake?.(reduced ? 0 : 0.34);
+    game.cameraController?.addImpulse?.({ pitch: 0.035, fov: -1.1, shake: 0.34, duration: 0.16 });
     game.settings?.vibrate?.(0.7);
     this.restartAnimation(this.root.getElementById('gameFeelImpact'), 'active');
   }
@@ -292,6 +306,7 @@ export class FeedbackController {
     const player = game.player;
     const reduced = Boolean(game.settings?.reducedMotion);
     game.effects?.burst?.(player.position, 0x54e0ff, reduced ? 6 : 16, reduced ? 0.45 : 0.7);
+    game.cameraController?.addImpulse?.({ pitch: -0.012, fov: 1.1, duration: 0.18 });
     this.restartAnimation(this.root.getElementById('gameFeelRespawn'), 'active');
   }
 

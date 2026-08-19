@@ -151,3 +151,43 @@ test('переключение режима кнопкой меняет режи
     assert.equal(controller.mode, 'free');
   });
 });
+
+test('presentation impulse не переписывает постоянные yaw/pitch и временно меняет кадр', () => {
+  withStorage(fakeStorage(), () => {
+    const settings = { shakeScale: 1, reducedMotion: false };
+    const withImpulse = new CameraController(new THREE.PerspectiveCamera(58, 1, 0.1, 190), settings);
+    const baseline = new CameraController(new THREE.PerspectiveCamera(58, 1, 0.1, 190), settings);
+    const player = makePlayer(0);
+    const yaw = withImpulse.yaw;
+    const pitch = withImpulse.pitch;
+
+    assert.equal(withImpulse.addImpulse({ yaw: 0.08, pitch: 0.04, fov: 2, duration: 0.2 }), true);
+    withImpulse.update(1 / 60, player, makeInput(), course, null);
+    baseline.update(1 / 60, player, makeInput(), course, null);
+
+    assert.equal(withImpulse.yaw, yaw, 'visual impulse не должен менять направление управления');
+    assert.equal(withImpulse.pitch, pitch, 'visual impulse не должен менять сохранённый pitch');
+    assert.ok(withImpulse.camera.fov > baseline.camera.fov, 'FOV kick должен существовать только в кадре');
+    assert.notEqual(withImpulse.camera.position.x, baseline.camera.position.x, 'yaw kick должен сдвинуть кадр');
+  });
+});
+
+test('presentation impulse ограничен и полностью отключается reduced motion', () => {
+  withStorage(fakeStorage(), () => {
+    const normal = new CameraController(new THREE.PerspectiveCamera(), { shakeScale: 1, reducedMotion: false });
+    assert.equal(normal.addImpulse({ yaw: 99, pitch: -99, fov: 99, shake: 99, duration: 99 }), true);
+    assert.equal(normal.impulseYaw, 0.18);
+    assert.equal(normal.impulsePitch, -0.12);
+    assert.equal(normal.impulseFov, 3.5);
+    assert.equal(normal.impulseTime, 0.5);
+    assert.ok(normal.shake <= 1);
+
+    const reduced = new CameraController(new THREE.PerspectiveCamera(), {
+      shakeScale: 0,
+      reducedMotion: true
+    });
+    assert.equal(reduced.addImpulse({ yaw: 0.1, pitch: 0.1, fov: 2, shake: 1 }), false);
+    assert.equal(reduced.impulseTime, 0);
+    assert.equal(reduced.shake, 0);
+  });
+});

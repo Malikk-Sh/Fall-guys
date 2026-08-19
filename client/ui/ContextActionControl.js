@@ -35,7 +35,10 @@ export function keyCodeLabel(code) {
   if (labels[code]) return labels[code];
   if (/^Key[A-Z]$/.test(code)) return code.slice(3);
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);
-  return code.replace(/Left$|Right$/, '').toUpperCase().slice(0, 10);
+  return code
+    .replace(/Left$|Right$/, '')
+    .toUpperCase()
+    .slice(0, 10);
 }
 
 function installStylesheet(root) {

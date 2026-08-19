@@ -4,6 +4,7 @@ import { installCoopCelebrationPresentation } from './game/CoopCelebrationPresen
 import { installCoopPingPresentation } from './game/CoopPingPresentation.js';
 import { installFeedbackController } from './game/FeedbackController.js';
 import { installResultsPresentation } from './game/ResultsPresentation.js';
+import { installCampaignUiTheme } from './ui/CampaignUiTheme.js';
 import { installContextActionControl } from './ui/ContextActionControl.js';
 import { installMenuPolish } from './ui/MenuPolish.js';
 import { installMenuStageExperience } from './ui/MenuStageExperience.js';
@@ -25,6 +26,8 @@ mobileExperience.init();
 installCampaignPresentation();
 installMenuPolish();
 installMenuStageExperience();
+const campaignUiTheme = installCampaignUiTheme();
+globalThis.__WOBBLE_CAMPAIGN_UI_THEME__ = campaignUiTheme;
 const feedbackController = installFeedbackController();
 globalThis.__WOBBLE_FEEDBACK__ = feedbackController;
 const contextActionControl = installContextActionControl();

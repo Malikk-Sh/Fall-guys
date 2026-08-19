@@ -1,0 +1,349 @@
+const FLOW_COOLDOWN_MS = 650;
+const PLACE_COOLDOWN_MS = 420;
+
+export function flowSignal(previous, current) {
+  if (!previous || !current) return null;
+
+  if (previous.diving && !current.diving && current.rolling) {
+    return { id: 'dive-roll', label: 'ЧИСТО', tone: 'cyan', strength: 0.45 };
+  }
+
+  if (previous.rolling && !current.rolling && !current.grounded && current.vertical > 1.5) {
+    return { id: 'roll-jump', label: 'ПОТОК ×2', tone: 'yellow', strength: 0.62 };
+  }
+
+  if (
+    previous.landingRetention <= 0 &&
+    current.landingRetention > 0 &&
+    !current.rolling &&
+    current.grounded
+  ) {
+    return { id: 'fast-landing', label: 'МЯГКО', tone: 'mint', strength: 0.34 };
+  }
+
+  return null;
+}
+
+export function placeDirection(previous, current) {
+  if (!Number.isInteger(previous) || !Number.isInteger(current) || previous <= 0 || current <= 0)
+    return null;
+  if (current < previous) return 'up';
+  if (current > previous) return 'down';
+  return null;
+}
+
+function playerPresentationState(player) {
+  return {
+    diving: player.diveTimer > 0,
+    rolling: player.rollTimer > 0,
+    landingRetention: player.landingRetention || 0,
+    grounded: Boolean(player.grounded),
+    vertical: Number(player.velocity?.y) || 0,
+    knockedDown: player.knockdownTimer > 0,
+    respawns: Number(player.respawns) || 0
+  };
+}
+
+function parsePlace(root) {
+  const value = Number.parseInt(root?.getElementById?.('place')?.textContent || '', 10);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+const STYLE = `
+.game-feel-feedback {
+  position: fixed;
+  z-index: 1450;
+  left: 50%;
+  bottom: max(calc(118px + env(safe-area-inset-bottom)), 20vh);
+  transform: translateX(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  pointer-events: none;
+}
+.game-feel-chip {
+  min-width: 92px;
+  padding: 7px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(31, 18, 76, 0.78);
+  box-shadow: 0 8px 24px rgba(24, 15, 65, 0.24);
+  font-size: clamp(10px, 1.45vw, 14px);
+  font-weight: 950;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-shadow: 0 1px 8px rgba(8, 5, 35, 0.45);
+  backdrop-filter: blur(8px);
+  animation: game-feel-chip 720ms cubic-bezier(0.16, 0.9, 0.28, 1) both;
+}
+.game-feel-chip[data-tone='cyan'] { box-shadow: 0 8px 28px rgba(76, 224, 223, 0.28); }
+.game-feel-chip[data-tone='yellow'] { box-shadow: 0 8px 28px rgba(255, 221, 76, 0.28); }
+.game-feel-chip[data-tone='mint'] { box-shadow: 0 8px 28px rgba(110, 255, 199, 0.24); }
+.game-feel-impact {
+  position: fixed;
+  z-index: 1420;
+  inset: 50% auto auto 50%;
+  width: 78px;
+  height: 78px;
+  margin: -39px 0 0 -39px;
+  border: 5px solid rgba(255, 235, 118, 0.88);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+}
+.game-feel-impact.active {
+  animation: game-feel-impact 360ms cubic-bezier(0.12, 0.75, 0.24, 1) both;
+}
+.game-feel-respawn {
+  position: fixed;
+  z-index: 1410;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at center, transparent 0 8%, rgba(68, 231, 255, 0.2) 34%, transparent 68%);
+}
+.game-feel-respawn.active {
+  animation: game-feel-respawn 420ms ease-out both;
+}
+#placeBox.place-gain strong,
+#placeBox.place-loss strong {
+  display: inline-block;
+}
+#placeBox.place-gain strong { animation: game-feel-place-up 320ms cubic-bezier(0.18, 0.9, 0.3, 1.18); }
+#placeBox.place-loss strong { animation: game-feel-place-down 260ms ease-out; }
+@keyframes game-feel-chip {
+  0% { opacity: 0; transform: translateY(8px) scale(0.9); }
+  24% { opacity: 1; transform: translateY(-2px) scale(1.05); }
+  68% { opacity: 1; transform: none; }
+  100% { opacity: 0; transform: translateY(-5px); }
+}
+@keyframes game-feel-impact {
+  0% { opacity: 0.95; transform: scale(0.32); }
+  100% { opacity: 0; transform: scale(2.6); }
+}
+@keyframes game-feel-respawn {
+  0% { opacity: 0; transform: scale(0.82); }
+  28% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.12); }
+}
+@keyframes game-feel-place-up {
+  0% { transform: translateY(0) scale(1); }
+  42% { transform: translateY(-4px) scale(1.18); }
+  100% { transform: none; }
+}
+@keyframes game-feel-place-down {
+  0% { transform: translateY(0); }
+  45% { transform: translateY(3px); }
+  100% { transform: none; }
+}
+body.reduced-motion .game-feel-chip,
+body.reduced-motion .game-feel-impact.active,
+body.reduced-motion .game-feel-respawn.active,
+body.reduced-motion #placeBox.place-gain strong,
+body.reduced-motion #placeBox.place-loss strong {
+  animation-duration: 80ms !important;
+  transform: none !important;
+}
+@media (max-height: 420px) {
+  .game-feel-feedback {
+    bottom: max(calc(88px + env(safe-area-inset-bottom)), 18vh);
+  }
+  .game-feel-chip {
+    padding: 6px 10px;
+    font-size: 10px;
+  }
+}
+`;
+
+export class FeedbackController {
+  constructor({
+    windowRef = globalThis,
+    root = globalThis.document,
+    getGame = () => globalThis.__WOBBLE_GAME__
+  } = {}) {
+    this.window = windowRef;
+    this.root = root;
+    this.getGame = getGame;
+    this.frame = 0;
+    this.active = false;
+    this.player = null;
+    this.previous = null;
+    this.lastFlowAt = -Infinity;
+    this.lastPlaceAt = -Infinity;
+    this.lastPlace = null;
+    this.lastMode = null;
+    this.placeTimer = 0;
+  }
+
+  init() {
+    if (this.active || !this.root?.body) return this;
+    this.active = true;
+    this.installMarkup();
+    this.schedule();
+    return this;
+  }
+
+  destroy() {
+    this.active = false;
+    if (this.frame) this.window?.cancelAnimationFrame?.(this.frame);
+    this.frame = 0;
+  }
+
+  installMarkup() {
+    if (!this.root.getElementById('gameFeelStyle')) {
+      const style = this.root.createElement('style');
+      style.id = 'gameFeelStyle';
+      style.textContent = STYLE;
+      this.root.head?.append(style);
+    }
+    if (!this.root.getElementById('gameFeelFeedback')) {
+      const layer = this.root.createElement('div');
+      layer.id = 'gameFeelFeedback';
+      layer.className = 'game-feel-feedback';
+      layer.setAttribute('aria-live', 'polite');
+      layer.setAttribute('aria-atomic', 'true');
+      this.root.body.append(layer);
+    }
+    if (!this.root.getElementById('gameFeelImpact')) {
+      const impact = this.root.createElement('div');
+      impact.id = 'gameFeelImpact';
+      impact.className = 'game-feel-impact';
+      impact.setAttribute('aria-hidden', 'true');
+      this.root.body.append(impact);
+    }
+    if (!this.root.getElementById('gameFeelRespawn')) {
+      const respawn = this.root.createElement('div');
+      respawn.id = 'gameFeelRespawn';
+      respawn.className = 'game-feel-respawn';
+      respawn.setAttribute('aria-hidden', 'true');
+      this.root.body.append(respawn);
+    }
+  }
+
+  schedule() {
+    if (!this.active || this.frame) return;
+    this.frame = this.window?.requestAnimationFrame?.(time => {
+      this.frame = 0;
+      this.tick(Number(time) || 0);
+      this.schedule();
+    });
+  }
+
+  tick(now) {
+    const game = this.getGame?.();
+    const player = game?.player;
+    const activeGameplay = Boolean(game?.running && player && game.mode !== 'preview');
+    if (!activeGameplay) {
+      this.resetTracking();
+      return;
+    }
+
+    if (this.player !== player) {
+      this.player = player;
+      this.previous = playerPresentationState(player);
+      this.lastPlace = parsePlace(this.root);
+      this.lastMode = game.mode;
+      return;
+    }
+
+    const current = playerPresentationState(player);
+    if (!this.previous.knockedDown && current.knockedDown) this.presentKnockdown(game);
+    if (current.respawns > this.previous.respawns) this.presentRespawn(game);
+
+    const flow = flowSignal(this.previous, current);
+    if (flow && now - this.lastFlowAt >= FLOW_COOLDOWN_MS) {
+      this.lastFlowAt = now;
+      this.presentFlow(game, flow);
+    }
+
+    if (this.lastMode !== game.mode) {
+      this.lastMode = game.mode;
+      this.lastPlace = parsePlace(this.root);
+    }
+    if (game.mode === 'multi' && !game.spectating) this.trackPlace(now);
+    else this.lastPlace = null;
+
+    this.previous = current;
+  }
+
+  resetTracking() {
+    this.player = null;
+    this.previous = null;
+    this.lastPlace = null;
+    this.lastMode = null;
+  }
+
+  presentFlow(game, flow) {
+    this.showChip(flow.label, flow.tone);
+    game.settings?.vibrate?.(flow.strength * 0.45);
+  }
+
+  presentKnockdown(game) {
+    const player = game.player;
+    const reduced = Boolean(game.settings?.reducedMotion);
+    game.effects?.burst?.(player.position, 0xffdd76, reduced ? 5 : 12, reduced ? 0.42 : 0.78);
+    game.cameraController?.addShake?.(reduced ? 0 : 0.34);
+    game.settings?.vibrate?.(0.7);
+    this.restartAnimation(this.root.getElementById('gameFeelImpact'), 'active');
+  }
+
+  presentRespawn(game) {
+    const player = game.player;
+    const reduced = Boolean(game.settings?.reducedMotion);
+    game.effects?.burst?.(player.position, 0x54e0ff, reduced ? 6 : 16, reduced ? 0.45 : 0.7);
+    this.restartAnimation(this.root.getElementById('gameFeelRespawn'), 'active');
+  }
+
+  trackPlace(now) {
+    const current = parsePlace(this.root);
+    if (!current) return;
+    if (!this.lastPlace) {
+      this.lastPlace = current;
+      return;
+    }
+    const direction = placeDirection(this.lastPlace, current);
+    this.lastPlace = current;
+    if (!direction || now - this.lastPlaceAt < PLACE_COOLDOWN_MS) return;
+    this.lastPlaceAt = now;
+
+    const box = this.root.getElementById('placeBox');
+    if (!box) return;
+    const className = direction === 'up' ? 'place-gain' : 'place-loss';
+    box.classList.remove('place-gain', 'place-loss');
+    void box.offsetWidth;
+    box.classList.add(className);
+    const clear = this.window?.setTimeout || globalThis.setTimeout;
+    clear?.(() => box.classList.remove(className), 360);
+  }
+
+  showChip(label, tone = 'cyan') {
+    const layer = this.root.getElementById('gameFeelFeedback');
+    if (!layer) return;
+    const chip = this.root.createElement('div');
+    chip.className = 'game-feel-chip';
+    chip.dataset.tone = tone;
+    chip.textContent = label;
+    layer.replaceChildren(chip);
+    const remove = this.window?.setTimeout || globalThis.setTimeout;
+    remove?.(() => {
+      if (chip.isConnected) chip.remove();
+    }, 760);
+  }
+
+  restartAnimation(node, className) {
+    if (!node) return;
+    node.classList.remove(className);
+    void node.offsetWidth;
+    node.classList.add(className);
+    const clear = this.window?.setTimeout || globalThis.setTimeout;
+    clear?.(() => node.classList.remove(className), 460);
+  }
+}
+
+export function installFeedbackController(options = {}) {
+  const controller = new FeedbackController(options);
+  controller.init();
+  return controller;
+}

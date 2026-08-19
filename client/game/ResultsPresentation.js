@@ -21,10 +21,9 @@ export function isResultsSkipKey(code) {
 export function validResultsRevealPlan(plan) {
   if (!plan) return false;
   const values = [plan.time, plan.stats, plan.highlights, plan.actions, plan.complete];
-  return (
-    values.every(Number.isFinite) &&
-    values.every((value, index) => index === 0 || value >= values[index - 1])
-  );
+  const finite = values.every(Number.isFinite);
+  const ordered = values.every((value, index) => index === 0 || value >= values[index - 1]);
+  return finite && ordered;
 }
 
 function installStylesheet(root) {

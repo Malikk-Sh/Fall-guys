@@ -1,8 +1,8 @@
 // Deterministic reconnect/churn generator for Nightly Reliability 2.0.
 //
-// Uses the real production WebSocket protocol: create/join/start, network-style terminate(),
-// session resume, presence broadcasts, state traffic, and explicit leave for deterministic cleanup.
-// The probe records facts; churnGate.mjs owns pass/fail policy and performance budgets.
+// Uses the real production WebSocket path: create/join/start, network-style terminate(), session
+// resume, presence broadcasts, state traffic, and explicit leave for deterministic cleanup.
+// This file records facts; churnGate.mjs owns assertion policy and performance budgets.
 
 import { writeFile } from 'node:fs/promises';
 import { WebSocket } from 'ws';
@@ -10,6 +10,7 @@ import { loadStateMessage, loadTargets, loopbackSourceAddress } from './loadProb
 
 const { wsUrl, httpUrl } = loadTargets();
 const RESULT_PATH = String(process.env.WOBBLE_CHURN_PROBE_RESULT_PATH || '').trim() || null;
+const WAIT_MS = 8000;
 const BASE_ROOMS = positiveInteger(process.env.WOBBLE_CHURN_ROOMS || 12, 'WOBBLE_CHURN_ROOMS');
 const RAPID_CYCLES = positiveInteger(
   process.env.WOBBLE_CHURN_RAPID_CYCLES || 3,
@@ -24,15 +25,12 @@ const ROOM_ITERATIONS = positiveInteger(
   'WOBBLE_CHURN_ROOM_ITERATIONS'
 );
 const CHURN_BATCH = Math.min(10, ROOM_ITERATIONS);
-const WAIT_MS = 8000;
 
 if (STORM_CLIENTS < 20 || STORM_CLIENTS > 40) {
-  throw new Error(`WOBBLE_CHURN_STORM_CLIENTS must stay in the Nightly 2.0 range 20..40, got ${STORM_CLIENTS}`);
+  throw new Error(`WOBBLE_CHURN_STORM_CLIENTS must be in 20..40, got ${STORM_CLIENTS}`);
 }
 if (STORM_CLIENTS > BASE_ROOMS * 2) {
-  throw new Error(
-    `WOBBLE_CHURN_STORM_CLIENTS ${STORM_CLIENTS} exceeds the ${BASE_ROOMS * 2} base clients`
-  );
+  throw new Error(`storm clients ${STORM_CLIENTS} exceed base clients ${BASE_ROOMS * 2}`);
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -52,19 +50,16 @@ class Client {
     this.waiters = [];
     this.sequence = 0;
     this.matchId = null;
-    this.token = null;
     this.id = null;
+    this.token = null;
     this.lastError = null;
 
+    // HELLO is often delivered within the same local event-loop turn. Register first.
     this.hello = this.wait('hello');
     this.ws = sourceAddress ? new WebSocket(wsUrl, { localAddress: sourceAddress }) : new WebSocket(wsUrl);
     this.ws.on('message', raw => {
       const message = JSON.parse(raw);
-      if (message.type === 'hello') {
-        this.id = message.id;
-        this.token = message.token;
-      }
-      if (message.type === 'resumed') {
+      if (message.type === 'hello' || message.type === 'resumed') {
         this.id = message.id;
         this.token = message.token;
       }
@@ -100,11 +95,9 @@ class Client {
   }
 
   send(type, data = {}) {
-    if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type, ...data }));
-      return true;
-    }
-    return false;
+    if (this.ws.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(JSON.stringify({ type, ...data }));
+    return true;
   }
 
   sendState(z, vz = -7) {
@@ -141,7 +134,7 @@ async function readiness() {
   try {
     body = await response.json();
   } catch {
-    // HTTP status still carries useful diagnostics.
+    // Status is still useful if a proxy returns a non-JSON error body.
   }
   return { ok: response.ok && body?.ok === true, status: response.status };
 }
@@ -157,16 +150,20 @@ function compactHealth(value) {
   };
 }
 
-function metricDelta(before, after, name) {
-  return Number(after.metrics?.[name] || 0) - Number(before.metrics?.[name] || 0);
-}
-
 function counts(value) {
-  return { rooms: Number(value.rooms), players: Number(value.players), sessions: Number(value.sessions) };
+  return {
+    rooms: Number(value.rooms),
+    players: Number(value.players),
+    sessions: Number(value.sessions)
+  };
 }
 
 function sameCounts(actual, expected) {
   return ['rooms', 'players', 'sessions'].every(name => actual[name] === expected[name]);
+}
+
+function metricDelta(before, after, name) {
+  return Number(after.metrics?.[name] || 0) - Number(before.metrics?.[name] || 0);
 }
 
 async function waitForCounts(expected, ms = 3000) {
@@ -182,7 +179,7 @@ async function waitForCounts(expected, ms = 3000) {
   );
 }
 
-async function createStartedRoom(index, prefix = 'base') {
+async function createStartedRoom(index, prefix) {
   const sourceAddress = loopbackSourceAddress(wsUrl, index);
   const host = new Client(sourceAddress, `${prefix}-${index}-host`);
   const guest = new Client(sourceAddress, `${prefix}-${index}-guest`);
@@ -234,7 +231,7 @@ function allClients(pairs) {
   return pairs.flatMap(pair => [pair.host, pair.guest]);
 }
 
-async function stateTraffic(pairs, ms = 600) {
+async function stateTraffic(pairs, ms) {
   let z = -8;
   let direction = -1;
   const timer = setInterval(() => {
@@ -256,7 +253,6 @@ async function explicitCleanup(pairs) {
 
 const initial = await health();
 const baseline = counts(initial);
-const sourceSharded = loopbackSourceAddress(wsUrl, 0) !== null;
 const result = {
   config: {
     baseRooms: BASE_ROOMS,
@@ -266,12 +262,16 @@ const result = {
     roomIterations: ROOM_ITERATIONS,
     churnBatch: CHURN_BATCH
   },
-  targets: { wsUrl, httpUrl, sourceSharded },
+  targets: {
+    wsUrl,
+    httpUrl,
+    sourceSharded: loopbackSourceAddress(wsUrl, 0) !== null
+  },
   baseline,
   scenarios: {
-    rapid: { cycles: RAPID_CYCLES, attempts: 0, succeeded: 0 },
-    staleSocket: { cases: 0, passed: 0 },
-    storm: { clients: STORM_CLIENTS, attempts: 0, succeeded: 0 },
+    rapid: { cycles: RAPID_CYCLES, attempts: 0, succeeded: 0, readiness: null },
+    staleSocket: { cases: 0, passed: 0, readiness: null },
+    storm: { clients: STORM_CLIENTS, attempts: 0, succeeded: 0, readiness: null },
     roomChurn: { iterations: ROOM_ITERATIONS, reclaimed: 0 }
   },
   observations: [],
@@ -289,8 +289,7 @@ let peakEventLoopP95Ms = Number(initial.load?.eventLoopP95Ms || 0);
 let peakRssMb = Number(initial.load?.rssMb || 0);
 
 function observe(label, value) {
-  const snapshot = compactHealth(value);
-  result.observations.push({ label, ...snapshot });
+  result.observations.push({ label, ...compactHealth(value) });
   peakRooms = Math.max(peakRooms, Number(value.rooms || 0));
   peakPlayers = Math.max(peakPlayers, Number(value.players || 0));
   peakSessions = Math.max(peakSessions, Number(value.sessions || 0));
@@ -305,19 +304,23 @@ function requireBaseCounts(label, value) {
     sessions: baseline.sessions + BASE_ROOMS * 2
   };
   const actual = counts(value);
-  if (!sameCounts(actual, expected)) {
-    result.roomCountMismatches += 1;
-    if (actual.players > expected.players) result.duplicatePlayerObservations += 1;
-    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-  }
+  if (sameCounts(actual, expected)) return;
+  result.roomCountMismatches += 1;
+  if (actual.players > expected.players) result.duplicatePlayerObservations += 1;
+  throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+}
+
+function assertResumedOnline(lobby, id, label) {
+  const player = lobby.players.find(entry => entry.id === id);
+  if (!player?.online) throw new Error(`${label}: resumed player is offline after old socket close`);
 }
 
 console.log(`target ws:   ${wsUrl}`);
 console.log(`target http: ${httpUrl}`);
-if (sourceSharded) console.log('source IPs: loopback-sharded per room');
+if (result.targets.sourceSharded) console.log('source IPs: loopback-sharded per room');
 console.log(
-  `churn plan: ${BASE_ROOMS} rooms / ${BASE_ROOMS * 2} clients, ${RAPID_CYCLES} rapid cycles, ` +
-    `${STORM_CLIENTS}-client storm, ${ROOM_ITERATIONS} room iterations`
+  `churn plan: ${BASE_ROOMS} rooms / ${BASE_ROOMS * 2} clients · ${RAPID_CYCLES} rapid cycles · ` +
+    `${STORM_CLIENTS}-client storm · ${ROOM_ITERATIONS} room iterations`
 );
 
 try {
@@ -354,6 +357,7 @@ try {
     observe(`rapid-cycle-${cycle + 1}`, current);
     requireBaseCounts(`rapid-cycle-${cycle + 1}`, current);
   }
+  result.scenarios.rapid.readiness = await readiness();
 
   console.log('\n=== Scenario 2: stale old socket closes after resume ===');
   const staleCases = Math.min(4, BASE_ROOMS);
@@ -366,31 +370,33 @@ try {
     old.terminate();
     await sleep(60);
 
-    const lobbyWait = pair.guest.wait('lobby', message => message.players.length === 2);
+    let lobbyWait = pair.guest.wait('lobby', message => message.players.length === 2);
+    next.send('presence', { away: true });
+    let lobby = await lobbyWait;
+    assertResumedOnline(lobby, next.id, `stale-${index}-away`);
+
+    lobbyWait = pair.guest.wait('lobby', message => message.players.length === 2);
     next.send('presence', { away: false });
-    const lobby = await lobbyWait;
-    const resumedPlayer = lobby.players.find(player => player.id === next.id);
-    if (!resumedPlayer?.online) {
-      throw new Error(`stale-${index}: old socket close marked resumed player offline`);
-    }
+    lobby = await lobbyWait;
+    assertResumedOnline(lobby, next.id, `stale-${index}-back`);
     result.scenarios.staleSocket.passed += 1;
   }
   await stateTraffic(basePairs, 500);
   current = await health();
   observe('stale-old-socket', current);
   requireBaseCounts('stale-old-socket', current);
+  result.scenarios.staleSocket.readiness = await readiness();
 
   console.log('\n=== Scenario 3: reconnect storm ===');
-  const stormEntries = allClients(basePairs)
-    .slice(0, STORM_CLIENTS)
-    .map(client => ({
-      client,
-      pair: basePairs.find(pair => pair.host === client || pair.guest === client),
-      role: basePairs.find(pair => pair.host === client)?.host === client ? 'host' : 'guest'
-    }));
+  const stormEntries = [];
+  for (const pair of basePairs) {
+    stormEntries.push({ pair, role: 'host', client: pair.host });
+    stormEntries.push({ pair, role: 'guest', client: pair.guest });
+  }
+  stormEntries.length = STORM_CLIENTS;
   for (const entry of stormEntries) entry.client.terminate();
   await sleep(40);
-  const stormReplacements = await Promise.all(
+  const replacements = await Promise.all(
     stormEntries.map((entry, index) => {
       result.scenarios.storm.attempts += 1;
       return resumeClient(entry.client, entry.pair.sourceAddress, `storm-${index}`, {
@@ -402,7 +408,7 @@ try {
       });
     })
   );
-  for (const entry of stormReplacements) entry.pair[entry.role] = entry.next;
+  for (const entry of replacements) entry.pair[entry.role] = entry.next;
   await stateTraffic(basePairs, 700);
   current = await health();
   observe('reconnect-storm', current);
@@ -425,29 +431,12 @@ try {
     current = await health();
     observe(`room-churn-batch-${Math.floor(start / CHURN_BATCH) + 1}-peak`, current);
     await explicitCleanup(batch);
-    current = await waitForCounts(baseline);
+    await waitForCounts(baseline);
     result.scenarios.roomChurn.reclaimed += count;
   }
-
-  const final = await health();
-  observe('final', final);
-  result.final = compactHealth(final);
-  result.readiness = await readiness();
-  result.deltas = Object.fromEntries(
-    [
-      'invalidMessages',
-      'socketSendFailures',
-      'handlerErrors',
-      'capacityRejected',
-      'resumeSucceeded',
-      'resumeFailed',
-      'snapshotsSkippedForLoad',
-      'verificationFailed',
-      'latePacketsDropped'
-    ].map(name => [name, metricDelta(initial, final, name)])
-  );
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('identity changed')) result.identityMismatches += 1;
   result.failures.push(message);
   console.error(`CHURN PROBE FAIL: ${message}`);
 } finally {
@@ -455,8 +444,10 @@ try {
     await explicitCleanup(basePairs).catch(() => {});
     basePairs = [];
   }
+
   try {
     const final = await waitForCounts(baseline);
+    observe('final', final);
     result.final = compactHealth(final);
     result.readiness = await readiness();
     result.deltas = Object.fromEntries(
@@ -479,9 +470,10 @@ try {
   }
 
   result.peaks = { peakRooms, peakPlayers, peakSessions, peakEventLoopP95Ms, peakRssMb };
-  result.resumeAttempts = result.scenarios.rapid.attempts + result.scenarios.storm.attempts + result.scenarios.staleSocket.cases;
+  result.resumeAttempts =
+    result.scenarios.rapid.attempts + result.scenarios.staleSocket.cases + result.scenarios.storm.attempts;
   result.resumeSucceededObserved =
-    result.scenarios.rapid.succeeded + result.scenarios.storm.succeeded + result.scenarios.staleSocket.passed;
+    result.scenarios.rapid.succeeded + result.scenarios.staleSocket.passed + result.scenarios.storm.succeeded;
   result.resumeSuccessRate = result.resumeAttempts
     ? result.resumeSucceededObserved / result.resumeAttempts
     : 0;
@@ -492,15 +484,15 @@ try {
   console.log(`resume attempts:       ${result.resumeAttempts}`);
   console.log(`resume succeeded:      ${result.resumeSucceededObserved}`);
   console.log(`resume success rate:   ${(result.resumeSuccessRate * 100).toFixed(1)}%`);
-  console.log(`stale socket cases:    ${result.scenarios.staleSocket.passed}/${result.scenarios.staleSocket.cases}`);
+  console.log(
+    `stale socket cases:    ${result.scenarios.staleSocket.passed}/${result.scenarios.staleSocket.cases}`
+  );
   console.log(`storm clients:         ${result.scenarios.storm.succeeded}/${result.scenarios.storm.clients}`);
   console.log(`rooms reclaimed:       ${result.scenarios.roomChurn.reclaimed}/${ROOM_ITERATIONS}`);
   console.log(`peak sessions:         ${result.peaks.peakSessions}`);
   console.log(`event-loop p95 max:    ${result.peaks.peakEventLoopP95Ms} ms`);
   console.log(`RSS max:               ${result.peaks.peakRssMb} MB`);
   console.log(`ready after cleanup:   ${result.readiness?.ok ? 'yes' : 'no'}`);
-  if (result.failures.length) {
-    for (const failure of result.failures) console.error(`FAIL: ${failure}`);
-    process.exitCode = 1;
-  }
+  for (const failure of result.failures) console.error(`FAIL: ${failure}`);
+  if (result.failures.length) process.exitCode = 1;
 }

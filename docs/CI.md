@@ -83,7 +83,7 @@ The nightly workflow runs these groups after its own quality gate:
 - the fixed full-match seed across modeled FPS/poll/latency combinations;
 - a 300-seed alternate physics sweep with a meaningful baseline-aware floor;
 - reliability-sensitive server tests three times;
-- a local multi-room WebSocket load gate using real co-op clients and `PLAYER_STATE` traffic;
+- a staged local multi-room WebSocket load gate using real co-op clients and `PLAYER_STATE` traffic;
 - matchmaking and multiplayer browser scenarios three times on desktop and mobile;
 - the real-time two-browser full-match suite three times with **zero retries**.
 
@@ -95,7 +95,9 @@ The first scheduled GitHub-hosted baseline on commit `550f18ba5f28e1639c05b685ba
 - `20.9 ms` server event-loop p95 during the 24-room WebSocket load;
 - `108 MB` server RSS during the same load.
 
-PR A intentionally starts with conservative budgets because only one GitHub-hosted scheduled sample exists. The current nightly policy is:
+A post-merge manual Nightly 2.0 run on commit `a4c5b8b9d7c086b4a688ddc85466e027e925f6a8` confirmed the baseline with `99 / 300` good seeds, `21 ms` event-loop p95, and `97 MB` RSS at the original 24-room stage.
+
+The current nightly policy is:
 
 | Metric         | Reference |     Warning |  Hard failure |
 | -------------- | --------: | ----------: | ------------: |
@@ -115,12 +117,33 @@ These values are workflow configuration, not hidden assertion constants. The loa
 
 The physics sweep continues to use `MIN_GOOD_SEEDS`; nightly sets it to `75` and records the reference baseline separately for its Step Summary. The budgets should be revisited after several more scheduled GitHub-hosted runs, not loosened by increasing retries or timeouts.
 
-The WebSocket load lane starts a real local gameplay server, waits for `/health/ready`, creates 24 co-op rooms (48 clients), sends state traffic for 12 seconds, and records a machine-readable before/after result. It fails when the server stops being ready, the expected rooms/players are missing, `invalidMessages`, `socketSendFailures`, `handlerErrors`, or `capacityRejected` increase, or a configured hard event-loop/RSS budget is exceeded. Event-loop warning breaches remain green but are called out explicitly. The Step Summary shows current value, reference/delta, budget, and PASS/WARN/FAIL status.
+### Staged WebSocket load
+
+The daily WebSocket load lane keeps one real local gameplay server process alive and runs the existing load gate sequentially at these concurrency levels:
+
+| Stage | Rooms | Clients | Traffic duration |
+| ----: | ----: | ------: | ---------------: |
+|     1 |    24 |      48 |              12s |
+|     2 |    48 |      96 |              12s |
+|     3 |    96 |     192 |              12s |
+
+Every stage follows the real WebSocket flow (`HELLO → CREATE → JOIN → READY → START → PLAYER_STATE`) and keeps localhost loopback source sharding instead of disabling production per-IP protections. A stage must pass before the next one starts. The sequence stops on the first failure, so a broken 48-room stage does not waste runner time attempting 96 rooms.
+
+The existing hard gates apply independently to each stage: readiness, expected rooms/players, zero `invalidMessages`, `socketSendFailures`, `handlerErrors`, and `capacityRejected`, plus the configured event-loop p95 and RSS budgets. The staged summary also records sessions, snapshot load skips, movement verification failures, and late-packet drops so scaling behavior is visible without opening the full logs.
+
+The GitHub Step Summary contains a compact table like:
+
+```text
+| Stage | Rooms | Clients | p95 | RSS | Snapshot skips Δ | Result |
+```
+
+The staged job keeps the existing 10-minute job timeout. The normal three-stage plan should take roughly tens of seconds of traffic plus room setup, not turn daily nightly into a long soak test. Reconnect/churn and longer endurance testing belong to separate Nightly 2.0 work.
 
 Useful local load checks:
 
 ```bash
 node server/loadGate.mjs 24 12
+
 WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS=20.9 \
 WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS=45 \
 WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS=60 \
@@ -129,9 +152,17 @@ WOBBLE_LOAD_MAX_RSS_MB=180 \
 WOBBLE_LOAD_RESULT_PATH=/tmp/wobble-load.json \
 WOBBLE_LOAD_SUMMARY_PATH=/tmp/wobble-load.md \
 node server/loadGate.mjs 24 12
+
+WOBBLE_LOAD_STAGES=24:12,48:12,96:12 \
+WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS=20.9 \
+WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS=45 \
+WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS=60 \
+WOBBLE_LOAD_BASELINE_RSS_MB=108 \
+WOBBLE_LOAD_MAX_RSS_MB=180 \
+npm run load:staged
 ```
 
-Start the local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. Do not use the automated load gate against production by default.
+Start one local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. The staged gate intentionally reuses that same server process across all stages. Do not use the automated load gate against production by default.
 
 The nightly full-match lane disables retries deliberately: nightly stress should expose any intermittent failure as a red run.
 

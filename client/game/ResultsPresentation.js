@@ -35,7 +35,9 @@ export function primaryResultAction(mode, visible = {}) {
 export function racePodiumEntries(board = [], roster = [], selfId = null) {
   if (!Array.isArray(board)) return [];
   const rosterById = new Map(
-    (Array.isArray(roster) ? roster : []).filter(player => player?.id).map(player => [player.id, player])
+    (Array.isArray(roster) ? roster : [])
+      .filter(player => player?.id)
+      .map(player => [player.id, player])
   );
   return board.slice(0, 3).map((player, index) => {
     const member = player?.id ? rosterById.get(player.id) : null;

@@ -24,8 +24,5 @@ test('milestone presentation distinguishes locked, reached and newly reached rew
   reward.owned = true;
   assert.equal(milestonePresentationState(reward, new Set(['reward-a']), new Set()), 'reached');
   assert.equal(milestonePresentationState(reward, new Set(), new Set()), 'new');
-  assert.equal(
-    milestonePresentationState(reward, new Set(['reward-a']), new Set(['reward-a'])),
-    'new'
-  );
+  assert.equal(milestonePresentationState(reward, new Set(['reward-a']), new Set(['reward-a'])), 'new');
 });

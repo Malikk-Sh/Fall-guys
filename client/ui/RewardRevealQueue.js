@@ -12,11 +12,7 @@ export function freshRewardIds(ownedIds = [], seen = readSeenCosmetics()) {
 }
 
 export class RewardRevealQueue {
-  constructor({
-    windowRef = globalThis,
-    getGame = () => globalThis.__WOBBLE_GAME__,
-    pollMs = 180
-  } = {}) {
+  constructor({ windowRef = globalThis, getGame = () => globalThis.__WOBBLE_GAME__, pollMs = 180 } = {}) {
     this.window = windowRef;
     this.getGame = getGame;
     this.pollMs = pollMs;

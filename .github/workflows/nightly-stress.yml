@@ -227,6 +227,97 @@ jobs:
           fi
           exit "$gate_status"
 
+  server-churn:
+    name: Server reconnect / churn stress
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Run deterministic reconnect and room churn gate
+        shell: bash
+        env:
+          WOBBLE_CHURN_ROOMS: '12'
+          WOBBLE_CHURN_RAPID_CYCLES: '3'
+          WOBBLE_CHURN_STORM_CLIENTS: '24'
+          WOBBLE_CHURN_ROOM_ITERATIONS: '100'
+          WOBBLE_CHURN_MIN_RESUME_SUCCESS_RATE: '1'
+          WOBBLE_CHURN_BASELINE_EVENT_LOOP_P95_MS: '20.9'
+          WOBBLE_CHURN_MAX_EVENT_LOOP_P95_MS: '60'
+          WOBBLE_CHURN_BASELINE_RSS_MB: '108'
+          WOBBLE_CHURN_MAX_RSS_MB: '180'
+          WOBBLE_CHURN_RESULT_PATH: ${{ runner.temp }}/wobble-churn-result.json
+          WOBBLE_CHURN_SUMMARY_PATH: ${{ runner.temp }}/wobble-churn-summary.md
+        run: |
+          set -euo pipefail
+
+          server_log="$RUNNER_TEMP/wobble-churn-server.log"
+          node server/bootstrap.js >"$server_log" 2>&1 &
+          server_pid=$!
+
+          cleanup() {
+            if kill -0 "$server_pid" 2>/dev/null; then
+              kill "$server_pid" 2>/dev/null || true
+              for _ in $(seq 1 20); do
+                if ! kill -0 "$server_pid" 2>/dev/null; then
+                  return
+                fi
+                sleep 0.1
+              done
+              kill -9 "$server_pid" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 40); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "Gameplay server exited before reconnect/churn readiness"
+              tail -n 120 "$server_log" || true
+              exit 1
+            fi
+            if curl --fail --silent --show-error http://127.0.0.1:3000/health/ready >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            {
+              echo "### Server reconnect / churn stress"
+              echo
+              echo "**Result:** FAIL — local gameplay server did not become ready"
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail -n 120 "$server_log" || true
+            exit 1
+          fi
+
+          set +e
+          node server/churnGate.mjs
+          gate_status=$?
+          set -e
+
+          if [ -f "$WOBBLE_CHURN_SUMMARY_PATH" ]; then
+            cat "$WOBBLE_CHURN_SUMMARY_PATH" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$gate_status" -ne 0 ]; then
+            echo "--- local gameplay server log ---"
+            tail -n 120 "$server_log" || true
+          fi
+          exit "$gate_status"
+
   network-e2e:
     name: Network E2E (${{ matrix.name }})
     needs: quality
@@ -313,7 +404,7 @@ jobs:
   summary:
     name: Nightly reliability ready
     if: always()
-    needs: [quality, seed-sweep, server-stress, server-load, network-e2e, full-match]
+    needs: [quality, seed-sweep, server-stress, server-load, server-churn, network-e2e, full-match]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -323,6 +414,7 @@ jobs:
           SEEDS: ${{ needs.seed-sweep.result }}
           SERVER: ${{ needs.server-stress.result }}
           SERVER_LOAD: ${{ needs.server-load.result }}
+          SERVER_CHURN: ${{ needs.server-churn.result }}
           NETWORK: ${{ needs.network-e2e.result }}
           FULL_MATCH: ${{ needs.full-match.result }}
         shell: bash
@@ -336,12 +428,13 @@ jobs:
             echo "| Physics seed stress | $SEEDS |"
             echo "| Server reliability | $SERVER |"
             echo "| Server WebSocket staged load | $SERVER_LOAD |"
+            echo "| Server reconnect / churn | $SERVER_CHURN |"
             echo "| Network browser E2E | $NETWORK |"
             echo "| Full-match stress | $FULL_MATCH |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           failed=0
-          for result in "$QUALITY" "$SEEDS" "$SERVER" "$SERVER_LOAD" "$NETWORK" "$FULL_MATCH"; do
+          for result in "$QUALITY" "$SEEDS" "$SERVER" "$SERVER_LOAD" "$SERVER_CHURN" "$NETWORK" "$FULL_MATCH"; do
             if [ "$result" != "success" ]; then
               failed=1
             fi

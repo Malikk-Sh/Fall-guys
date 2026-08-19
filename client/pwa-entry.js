@@ -8,6 +8,8 @@ import { installContextActionControl } from './ui/ContextActionControl.js';
 import { installMenuPolish } from './ui/MenuPolish.js';
 import { installMenuStageExperience } from './ui/MenuStageExperience.js';
 import { MobileExperience } from './ui/MobileExperience.js';
+import { installRewardRevealQueue } from './ui/RewardRevealQueue.js';
+import { installWardrobeMilestonePresentation } from './ui/WardrobeMilestonePresentation.js';
 import { installWardrobePresetPresentation } from './ui/WardrobePresetPresentation.js';
 
 const pwa = new PwaController({
@@ -35,3 +37,7 @@ const resultsPresentation = installResultsPresentation();
 globalThis.__WOBBLE_RESULTS_PRESENTATION__ = resultsPresentation;
 const wardrobePresetPresentation = installWardrobePresetPresentation();
 globalThis.__WOBBLE_WARDROBE_PRESET_PRESENTATION__ = wardrobePresetPresentation;
+const rewardReveal = installRewardRevealQueue();
+globalThis.__WOBBLE_REWARD_REVEAL__ = rewardReveal;
+const wardrobeMilestones = installWardrobeMilestonePresentation();
+globalThis.__WOBBLE_WARDROBE_MILESTONES__ = wardrobeMilestones;

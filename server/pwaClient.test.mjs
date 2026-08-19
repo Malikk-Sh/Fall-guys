@@ -9,6 +9,7 @@ import {
 } from '../client/ui/MobileExperience.js';
 import './contextActionControl.test.mjs';
 import './coopCelebrationPresentation.test.mjs';
+import './resultsPresentation.test.mjs';
 
 function classList() {
   const values = new Set(['hidden']);

@@ -1,0 +1,97 @@
+body.results-presentation-enabled #finish:not(.hidden) .finish-card {
+  transform-origin: 50% 48%;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishTime,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #unrankedNote,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #board,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishHighlights,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .finish-card > .button,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #resultsTimer,
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .finish-card > .text-button.back {
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  pointer-events: none;
+}
+
+body.results-presentation-enabled #finish:not(.hidden) #finishTime,
+body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.results-presentation-enabled #finish:not(.hidden) #board,
+body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+body.results-presentation-enabled #finish:not(.hidden) .finish-card > .button,
+body.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+body.results-presentation-enabled #finish:not(.hidden) .finish-card > .text-button.back {
+  transition:
+    opacity 160ms ease,
+    transform 190ms cubic-bezier(0.18, 0.9, 0.3, 1.08);
+}
+
+body.results-presentation-enabled #finish.results-show-time #finishTime,
+body.results-presentation-enabled #finish.results-show-stats #unrankedNote,
+body.results-presentation-enabled #finish.results-show-stats #finishStats,
+body.results-presentation-enabled #finish.results-show-stats #board,
+body.results-presentation-enabled #finish.results-show-highlights #finishHighlights,
+body.results-presentation-enabled #finish.results-show-actions .finish-card > .button:not(.hidden),
+body.results-presentation-enabled #finish.results-show-actions #resultsTimer,
+body.results-presentation-enabled #finish.results-show-actions .finish-card > .text-button.back {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .medal {
+  animation-duration: 520ms;
+}
+
+body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishTitle {
+  animation: results-title-in 420ms cubic-bezier(0.18, 0.9, 0.3, 1.08) both;
+}
+
+@keyframes results-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishTitle,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .medal {
+  animation: none;
+}
+
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishTime,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishStats,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #board,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .finish-card > .button,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+body.reduced-motion.results-presentation-enabled #finish:not(.hidden) .finish-card > .text-button.back {
+  transform: none;
+  transition-duration: 40ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.results-presentation-enabled #finish:not(.hidden) #finishTitle,
+  body.results-presentation-enabled #finish:not(.hidden) .medal {
+    animation: none;
+  }
+
+  body.results-presentation-enabled #finish:not(.hidden) #finishTime,
+  body.results-presentation-enabled #finish:not(.hidden) #unrankedNote,
+  body.results-presentation-enabled #finish:not(.hidden) #finishStats,
+  body.results-presentation-enabled #finish:not(.hidden) #board,
+  body.results-presentation-enabled #finish:not(.hidden) #finishHighlights,
+  body.results-presentation-enabled #finish:not(.hidden) .finish-card > .button,
+  body.results-presentation-enabled #finish:not(.hidden) #resultsTimer,
+  body.results-presentation-enabled #finish:not(.hidden) .finish-card > .text-button.back {
+    transform: none;
+    transition-duration: 40ms;
+  }
+}

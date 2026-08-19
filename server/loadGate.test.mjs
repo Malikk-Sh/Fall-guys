@@ -71,7 +71,10 @@ test('event-loop warning is visible but does not fail the gate', () => {
   assert.deepEqual(evaluation.failures, []);
   assert.deepEqual(evaluation.warnings, ['event-loop p95 50 ms > warning budget 45 ms']);
   const summary = markdownSummary(result, evaluation);
-  assert.match(summary, /Event-loop p95 \| 50 ms \| 20\.9 ms \(Δ \+29\.1 ms\) \| warn 45 ms \/ fail 60 ms \| WARN/);
+  assert.match(
+    summary,
+    /Event-loop p95 \| 50 ms \| 20\.9 ms \(Δ \+29\.1 ms\) \| warn 45 ms \/ fail 60 ms \| WARN/
+  );
 });
 
 test('event-loop p95 above the hard budget fails with the measured value', () => {

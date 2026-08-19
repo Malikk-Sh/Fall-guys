@@ -25,7 +25,6 @@ async function expectTutorialStep(page, step) {
 
 test('first touch race teaches one action at a time and remembers completion', async ({ page }, testInfo) => {
   mobileOnly(testInfo);
-  await page.addInitScript(() => localStorage.removeItem('wobble-touch-tutorial-v1'));
   await startSoloRace(page);
 
   await expect(page.locator('#lookHint')).toBeHidden();

@@ -11,6 +11,7 @@ const APP_SHELL = [
   '/main.js',
   '/pwa-entry.js',
   '/game/FeedbackController.js',
+  '/ui/ContextActionControl.js',
   '/ui/MenuPolish.js',
   '/ui/MenuStageExperience.js',
   '/ui/ScreenTransitions.js',

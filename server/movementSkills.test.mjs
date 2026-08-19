@@ -85,10 +85,7 @@ test('jump buffer bounces only from an explicitly supported wall', () => {
   );
   assert.ok(supported.velocity.z > 8);
   assert.ok(supported.velocity.y > 6);
-  assert.ok(
-    supported.character.wallBouncePulse > 0,
-    'подтверждённый wall-bounce должен дать visual pulse'
-  );
+  assert.ok(supported.character.wallBouncePulse > 0, 'подтверждённый wall-bounce должен дать visual pulse');
   assert.ok(supported.impact > 0, 'подтверждённый wall-bounce должен дать bounded camera impact');
 
   const ordinary = makePlayer(flatCourse());

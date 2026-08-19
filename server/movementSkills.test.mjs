@@ -85,7 +85,10 @@ test('jump buffer bounces only from an explicitly supported wall', () => {
   );
   assert.ok(supported.velocity.z > 8);
   assert.ok(supported.velocity.y > 6);
-  assert.ok(supported.character.wallBouncePulse > 0, 'подтверждённый wall-bounce должен дать visual pulse');
+  assert.ok(
+    supported.character.wallBouncePulse > 0,
+    'подтверждённый wall-bounce должен дать visual pulse'
+  );
   assert.ok(supported.impact > 0, 'подтверждённый wall-bounce должен дать bounded camera impact');
 
   const ordinary = makePlayer(flatCourse());
@@ -102,6 +105,10 @@ test('jump buffer bounces only from an explicitly supported wall', () => {
     0
   );
   assert.ok(ordinary.velocity.z < 0, 'обычная поверхность не должна давать скрытый отскок');
-  assert.equal(ordinary.character.wallBouncePulse, 0, 'обычная поверхность не должна запускать wall-bounce pose');
+  assert.equal(
+    ordinary.character.wallBouncePulse,
+    0,
+    'обычная поверхность не должна запускать wall-bounce pose'
+  );
   assert.equal(ordinary.impact, 0, 'обычная поверхность не должна трясти камеру как wall-bounce');
 });

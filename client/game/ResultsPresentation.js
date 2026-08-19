@@ -10,8 +10,8 @@ const PHASE_CLASSES = Object.freeze([
 
 export function resultsRevealPlan(reducedMotion = false) {
   return reducedMotion
-    ? { time: 0, stats: 24, highlights: 48, actions: 72, complete: 96 }
-    : { time: 180, stats: 340, highlights: 540, actions: 760, complete: 920 };
+    ? { time: 0, stats: 24, highlights: 48, actions: 72, complete: 72 }
+    : { time: 180, stats: 340, highlights: 540, actions: 760, complete: 760 };
 }
 
 export function isResultsSkipKey(code) {

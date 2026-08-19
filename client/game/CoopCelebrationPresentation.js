@@ -54,13 +54,8 @@ export function coopCelebrationMoments(previous, current) {
 }
 
 export function gestureWeight(startedAt, now, duration = GESTURE_DURATION_MS) {
-  if (
-    !Number.isFinite(startedAt) ||
-    !Number.isFinite(now) ||
-    !Number.isFinite(duration) ||
-    duration <= 0
-  )
-    return 0;
+  if (!Number.isFinite(startedAt) || !Number.isFinite(now)) return 0;
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
   const progress = (now - startedAt) / duration;
   if (progress <= 0 || progress >= 1) return 0;
   return Math.sin(progress * Math.PI);
@@ -173,7 +168,9 @@ export class CoopCelebrationPresentation {
       return;
     }
 
-    for (const moment of coopCelebrationMoments(this.previous, current)) this.present(game, moment, now);
+    for (const moment of coopCelebrationMoments(this.previous, current)) {
+      this.present(game, moment, now);
+    }
     this.previous = current;
     this.updateGesture(game, now);
   }
@@ -184,9 +181,13 @@ export class CoopCelebrationPresentation {
 
     const partner = game.remotes?.values?.().next?.().value || null;
     const reduced = Boolean(game.settings?.reducedMotion);
-    game.effects?.burst?.(game.player.position, presentation.color, reduced ? 5 : 9, reduced ? 0.38 : 0.62);
+    const localParticles = reduced ? 5 : 9;
+    const localSpread = reduced ? 0.38 : 0.62;
+    const partnerParticles = reduced ? 3 : 6;
+    const partnerSpread = reduced ? 0.32 : 0.52;
+    game.effects?.burst?.(game.player.position, presentation.color, localParticles, localSpread);
     if (partner?.position) {
-      game.effects?.burst?.(partner.position, presentation.color, reduced ? 3 : 6, reduced ? 0.32 : 0.52);
+      game.effects?.burst?.(partner.position, presentation.color, partnerParticles, partnerSpread);
     }
     game.settings?.vibrate?.(presentation.haptic);
     game.cameraController?.addImpulse?.({

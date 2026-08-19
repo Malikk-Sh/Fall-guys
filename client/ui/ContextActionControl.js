@@ -3,8 +3,8 @@ const ACTION_PRESENTATION = Object.freeze({
   throw: { label: 'БРОСИТЬ', icon: '↗', tone: 'throw' },
   insert: { label: 'ВСТАВИТЬ', icon: '◆', tone: 'insert' }
 });
-
 const BASE_PRESENTATION = Object.freeze({ label: 'РЫВОК', icon: '➤', tone: 'dive' });
+const STYLESHEET_ID = 'coopUxStylesheet';
 
 export function contextActionPresentation(action) {
   return ACTION_PRESENTATION[action] || BASE_PRESENTATION;
@@ -38,75 +38,14 @@ export function keyCodeLabel(code) {
   return code.replace(/Left$|Right$/, '').toUpperCase().slice(0, 10);
 }
 
-const STYLE = `
-#dive.context-action-control {
-  transition:
-    transform 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease,
-    background 150ms ease;
+function installStylesheet(root) {
+  if (!root?.head || root.getElementById(STYLESHEET_ID)) return;
+  const link = root.createElement('link');
+  link.id = STYLESHEET_ID;
+  link.rel = 'stylesheet';
+  link.href = '/coop-ux.css';
+  root.head.append(link);
 }
-#dive.context-action-control[data-context='pickup'] {
-  border-color: rgba(95, 235, 255, 0.9);
-  background: linear-gradient(145deg, rgba(44, 192, 224, 0.96), rgba(52, 113, 213, 0.96));
-  box-shadow: 0 8px 26px rgba(65, 216, 255, 0.26);
-}
-#dive.context-action-control[data-context='throw'] {
-  border-color: rgba(255, 222, 92, 0.92);
-  background: linear-gradient(145deg, rgba(239, 174, 52, 0.96), rgba(218, 98, 61, 0.96));
-  box-shadow: 0 8px 26px rgba(255, 191, 68, 0.26);
-}
-#dive.context-action-control[data-context='insert'] {
-  border-color: rgba(119, 255, 196, 0.92);
-  background: linear-gradient(145deg, rgba(45, 201, 150, 0.96), rgba(48, 142, 170, 0.96));
-  box-shadow: 0 8px 26px rgba(90, 255, 196, 0.24);
-}
-#dive.context-action-control.context-action-pop {
-  transform: scale(1.07);
-}
-#signatureHud[data-context-action]:not([data-context-action='']) {
-  display: none !important;
-}
-.context-action-hint {
-  position: fixed;
-  z-index: 32;
-  left: 50%;
-  bottom: max(calc(34px + env(safe-area-inset-bottom)), 8vh);
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 11px;
-  border: 1px solid rgba(255, 255, 255, 0.42);
-  border-radius: 999px;
-  background: rgba(31, 18, 76, 0.78);
-  box-shadow: 0 8px 24px rgba(23, 14, 66, 0.22);
-  color: #fff;
-  pointer-events: none;
-  backdrop-filter: blur(8px);
-}
-.context-action-hint kbd {
-  min-width: 38px;
-  padding: 3px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.12);
-  font: 900 10px/1 system-ui, sans-serif;
-  text-align: center;
-}
-.context-action-hint strong {
-  font: 950 11px/1 system-ui, sans-serif;
-  letter-spacing: 0.08em;
-}
-body[data-input='touch'] .context-action-hint {
-  display: none !important;
-}
-body.reduced-motion #dive.context-action-control,
-body.reduced-motion #dive.context-action-control.context-action-pop {
-  transition-duration: 0ms !important;
-  transform: none !important;
-}
-`;
 
 export class ContextActionControl {
   constructor({
@@ -126,7 +65,9 @@ export class ContextActionControl {
   init() {
     if (this.active || !this.root?.body) return this;
     this.active = true;
-    this.installMarkup();
+    installStylesheet(this.root);
+    this.installHint();
+    this.root.getElementById('dive')?.classList.add('context-action-control');
     this.schedule();
     return this;
   }
@@ -140,24 +81,14 @@ export class ContextActionControl {
     this.apply(null, false);
   }
 
-  installMarkup() {
-    if (!this.root.getElementById('contextActionStyle')) {
-      const style = this.root.createElement('style');
-      style.id = 'contextActionStyle';
-      style.textContent = STYLE;
-      this.root.head?.append(style);
-    }
-    if (!this.root.getElementById('contextActionHint')) {
-      const hint = this.root.createElement('div');
-      hint.id = 'contextActionHint';
-      hint.className = 'context-action-hint hidden';
-      hint.setAttribute('aria-hidden', 'true');
-      const key = this.root.createElement('kbd');
-      const label = this.root.createElement('strong');
-      hint.append(key, label);
-      this.root.body.append(hint);
-    }
-    this.root.getElementById('dive')?.classList.add('context-action-control');
+  installHint() {
+    if (this.root.getElementById('contextActionHint')) return;
+    const hint = this.root.createElement('div');
+    hint.id = 'contextActionHint';
+    hint.className = 'context-action-hint hidden';
+    hint.setAttribute('aria-hidden', 'true');
+    hint.append(this.root.createElement('kbd'), this.root.createElement('strong'));
+    this.root.body.append(hint);
   }
 
   schedule() {
@@ -177,6 +108,7 @@ export class ContextActionControl {
       this.syncSignatureHud(action);
       return;
     }
+
     const first = this.action === undefined;
     this.action = action;
     this.apply(action, !first);
@@ -187,7 +119,6 @@ export class ContextActionControl {
   apply(action, animate = true) {
     const button = this.root?.getElementById?.('dive');
     const presentation = contextActionPresentation(action);
-
     if (button) {
       const icon = button.querySelector('i');
       const label = button.querySelector('span');
@@ -197,7 +128,6 @@ export class ContextActionControl {
       button.setAttribute('aria-label', action ? presentation.label : 'Рывок');
       if (animate && action) this.pop(button);
     }
-
     this.syncHint(action);
   }
 

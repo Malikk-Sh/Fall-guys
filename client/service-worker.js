@@ -8,6 +8,7 @@ const APP_SHELL = [
   '/styles.css',
   '/pwa.css',
   '/menu-ux.css',
+  '/coop-ux.css',
   '/main.js',
   '/pwa-entry.js',
   '/game/FeedbackController.js',

@@ -1,0 +1,31 @@
+name: Diagnostic Prettier
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install exact dependencies
+        run: npm ci
+
+      - name: Print canonical Prettier diff
+        run: |
+          ./node_modules/.bin/prettier --write client/ui/ContextActionControl.js client/coop-ux.css
+          git diff -- client/ui/ContextActionControl.js client/coop-ux.css
+          test -z "$(git status --porcelain -- client/ui/ContextActionControl.js client/coop-ux.css)"

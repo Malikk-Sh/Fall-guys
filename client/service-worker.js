@@ -11,6 +11,7 @@ const APP_SHELL = [
   '/coop-ux.css',
   '/main.js',
   '/pwa-entry.js',
+  '/game/CoopPingPresentation.js',
   '/game/FeedbackController.js',
   '/ui/ContextActionControl.js',
   '/ui/MenuPolish.js',

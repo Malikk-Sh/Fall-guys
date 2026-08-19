@@ -79,3 +79,32 @@ body.reduced-motion #dive.context-action-control.context-action-pop {
   transition-duration: 0ms !important;
   transform: none !important;
 }
+
+.partner-hud[data-ping-command='help'] {
+  filter: drop-shadow(0 0 10px rgba(255, 79, 145, 0.78));
+  animation: coop-help-priority 620ms ease-in-out infinite alternate;
+}
+
+.partner-hud[data-ping-command='help'] .partner-arrow {
+  border-bottom-color: #ff4f91;
+  filter: drop-shadow(0 2px 8px rgba(255, 79, 145, 0.7));
+}
+
+.partner-hud[data-ping-command='help']:not([data-state='down']) span::after {
+  content: ' · ПОМОГИ';
+  color: #ffb7d3;
+}
+
+@keyframes coop-help-priority {
+  from {
+    opacity: 0.88;
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+}
+
+body.reduced-motion .partner-hud[data-ping-command='help'] {
+  animation: none;
+}

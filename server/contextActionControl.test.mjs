@@ -5,6 +5,11 @@ import {
   keyCodeLabel,
   semanticContextAction
 } from '../client/ui/ContextActionControl.js';
+import {
+  partnerPingCommand,
+  pingIdentity,
+  pingPresentation
+} from '../client/game/CoopPingPresentation.js';
 
 test('context action presentation maps only known gameplay semantics', () => {
   assert.deepEqual(contextActionPresentation('pickup'), {
@@ -79,4 +84,30 @@ test('keyboard hint uses the actual configured key code in compact form', () => 
   assert.equal(keyCodeLabel('Digit4'), '4');
   assert.equal(keyCodeLabel('ArrowLeft'), '←');
   assert.equal(keyCodeLabel(''), 'SHIFT');
+});
+
+test('world ping presentation covers all six existing co-op commands', () => {
+  assert.equal(pingPresentation('here')?.anchor, 'ground');
+  assert.equal(pingPresentation('here')?.beam, true);
+  assert.equal(pingPresentation('wait')?.label, 'ЖДИ');
+  assert.equal(pingPresentation('go')?.glyph, '➤');
+  assert.equal(pingPresentation('help')?.urgent, true);
+  assert.equal(pingPresentation('ready')?.label, 'ГОТОВ');
+  assert.equal(pingPresentation('thanks')?.glyph, '♥');
+  assert.equal(pingPresentation('unknown'), null);
+});
+
+test('ping identity is match-scoped and rejects expired or malformed presentation state', () => {
+  const ping = { id: 'partner', command: 'help', until: 5000 };
+  assert.equal(pingIdentity('match-a', ping, 4000), 'match-a:partner:help:5000');
+  assert.equal(pingIdentity('match-a', ping, 5000), null);
+  assert.equal(pingIdentity(null, ping, 4000), null);
+  assert.equal(pingIdentity('match-a', { ...ping, command: 'unknown' }, 4000), null);
+});
+
+test('partner ping priority never treats the local player or expired ping as partner urgency', () => {
+  const ping = { id: 'partner', command: 'help', until: 5000 };
+  assert.equal(partnerPingCommand('self', ping, 4000), 'help');
+  assert.equal(partnerPingCommand('partner', ping, 4000), null);
+  assert.equal(partnerPingCommand('self', ping, 5000), null);
 });

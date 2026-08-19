@@ -135,7 +135,7 @@ test('near miss использует внешний halo spinner и не пут�
   const near = nearMissSample(spinner, { x: 0, y: 1, z: 0.8 });
   assert.equal(near?.key, 'spinner');
   assert.ok(near.gap > 0 && near.gap < 0.48);
-  assert.equal(nearMissSample(spinner, { x: 0, y: 1, z: 0.7 }), null);
+  assert.equal(nearMissSample(spinner, { x: 0, y: 1, z: 0.7 })?.inside, true);
   assert.equal(nearMissSample(spinner, { x: 0, y: 1, z: 1.4 }), null);
 });
 

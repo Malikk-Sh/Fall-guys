@@ -44,8 +44,8 @@ export function placeDirection(previous, current) {
 }
 
 // Дистанция до уже существующего collision envelope движущегося препятствия.
-// Ноль и отрицательные значения намеренно НЕ считаются near miss: это уже зона попадания, решение
-// о котором принадлежит Course.interact(). Presentation слой смотрит только на тонкий внешний halo.
+// `inside` отделён от внешнего halo намеренно: решение о попадании принадлежит Course.interact(),
+// а presentation нужен этот флаг только для того, чтобы никогда не наградить фактический контакт.
 export function nearMissSample(obstacle, position, radius = PLAYER_OBSTACLE_RADIUS) {
   if (!obstacle || !position || !Number.isFinite(radius) || radius < 0) return null;
 
@@ -59,12 +59,14 @@ export function nearMissSample(obstacle, position, radius = PLAYER_OBSTACLE_RADI
     const sin = Math.sin(angle);
     const along = dx * cos - dz * sin;
     const cross = dx * sin + dz * cos;
+    const key = obstacle.mesh?.uuid || null;
+    const side = Math.sign(cross) || Math.sign(along) || 1;
     const outsideAlong = Math.max(0, Math.abs(along) - (obstacle.length / 2 + radius));
     const outsideCross = Math.max(0, Math.abs(cross) - (obstacle.width / 2 + radius));
-    if (outsideAlong === 0 && outsideCross === 0) return null;
+    if (outsideAlong === 0 && outsideCross === 0) return { key, gap: 0, side, inside: true };
     const gap = Math.hypot(outsideAlong, outsideCross);
     if (gap > NEAR_MISS_MARGIN) return null;
-    return { key: obstacle.mesh?.uuid || null, gap, side: Math.sign(cross) || Math.sign(along) || 1 };
+    return { key, gap, side, inside: false };
   }
 
   if (obstacle.type === 'puncher') {
@@ -72,12 +74,14 @@ export function nearMissSample(obstacle, position, radius = PLAYER_OBSTACLE_RADI
     if (!mesh?.position || Math.abs(position.y - mesh.position.y) >= 1.62) return null;
     const dx = position.x - mesh.position.x;
     const dz = position.z - mesh.position.z;
+    const key = mesh.uuid || null;
+    const side = Math.sign(dx) || 1;
     const outsideX = Math.max(0, Math.abs(dx) - (obstacle.w / 2 + radius));
     const outsideZ = Math.max(0, Math.abs(dz) - (obstacle.d / 2 + radius));
-    if (outsideX === 0 && outsideZ === 0) return null;
+    if (outsideX === 0 && outsideZ === 0) return { key, gap: 0, side, inside: true };
     const gap = Math.hypot(outsideX, outsideZ);
     if (gap > NEAR_MISS_MARGIN) return null;
-    return { key: mesh.uuid || null, gap, side: Math.sign(dx) || 1 };
+    return { key, gap, side, inside: false };
   }
 
   return null;
@@ -390,13 +394,19 @@ export class FeedbackController {
       const key = sample?.key || obstacle.mesh?.uuid;
       if (!key) continue;
       const candidate = this.nearMissCandidates.get(key);
+      if (sample?.inside) {
+        this.nearMissCandidates.delete(key);
+        continue;
+      }
       if (sample) {
         if (candidate) {
           candidate.gap = Math.min(candidate.gap, sample.gap);
           candidate.side = sample.side;
+          candidate.exitedAt = 0;
         } else {
           this.nearMissCandidates.set(key, {
             enteredAt: now,
+            exitedAt: 0,
             hits: Number(player.hits) || 0,
             gap: sample.gap,
             side: sample.side
@@ -405,8 +415,14 @@ export class FeedbackController {
         continue;
       }
       if (!candidate) continue;
+      if (!candidate.exitedAt) {
+        candidate.exitedAt = now;
+        continue;
+      }
+      if (now - candidate.exitedAt < NEAR_MISS_SCAN_MS) continue;
+
       this.nearMissCandidates.delete(key);
-      const dwell = now - candidate.enteredAt;
+      const dwell = candidate.exitedAt - candidate.enteredAt;
       const cleanPass = dwell >= NEAR_MISS_SCAN_MS && dwell <= NEAR_MISS_MAX_DWELL_MS;
       const noHit = (Number(player.hits) || 0) === candidate.hits;
       if (cleanPass && noHit && now - this.lastNearMissAt >= NEAR_MISS_COOLDOWN_MS) {

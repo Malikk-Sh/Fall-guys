@@ -55,7 +55,57 @@ jobs:
         run: ONLY=130 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
 
       - name: Sweep alternate seeds and timing modes
-        run: MIN_GOOD_SEEDS=1 SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+        shell: bash
+        env:
+          MIN_GOOD_SEEDS: '75'
+          SEEDS: '300'
+          WOBBLE_SEED_BASELINE_GOOD_SEEDS: '99'
+        run: |
+          set -euo pipefail
+
+          seed_log="$RUNNER_TEMP/wobble-seed-sweep.log"
+          set +e
+          node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs 2>&1 | tee "$seed_log"
+          sweep_status=${PIPESTATUS[0]}
+          set -e
+
+          seed_line=$(grep '^годных сидов:' "$seed_log" | tail -n 1 || true)
+          good_seeds=$(sed -n 's/^годных сидов: \([0-9][0-9]*\) из \([0-9][0-9]*\).*/\1/p' <<<"$seed_line")
+          total_seeds=$(sed -n 's/^годных сидов: \([0-9][0-9]*\) из \([0-9][0-9]*\).*/\2/p' <<<"$seed_line")
+
+          if [[ "$good_seeds" =~ ^[0-9]+$ && "$total_seeds" =~ ^[0-9]+$ ]]; then
+            delta=$((good_seeds - WOBBLE_SEED_BASELINE_GOOD_SEEDS))
+            if [ "$delta" -ge 0 ]; then
+              delta_label="+$delta"
+            else
+              delta_label="$delta"
+            fi
+            if [ "$sweep_status" -eq 0 ]; then
+              seed_status="PASS"
+            else
+              seed_status="FAIL"
+            fi
+            {
+              echo "### Physics seed sweep budget"
+              echo
+              echo "**Result:** $seed_status"
+              echo
+              echo "| Metric | Current | Reference / delta | Budget | Status |"
+              echo "| --- | --- | --- | --- | --- |"
+              echo "| Good seeds | $good_seeds / $total_seeds | $WOBBLE_SEED_BASELINE_GOOD_SEEDS (Δ $delta_label) | minimum $MIN_GOOD_SEEDS | $seed_status |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Physics seed sweep budget"
+              echo
+              echo "**Result:** FAIL — sweep result could not be parsed"
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [ "$sweep_status" -eq 0 ]; then
+              sweep_status=1
+            fi
+          fi
+
+          exit "$sweep_status"
 
   server-stress:
     name: Server reliability stress
@@ -112,6 +162,11 @@ jobs:
         env:
           WOBBLE_LOAD_RESULT_PATH: ${{ runner.temp }}/wobble-load-result.json
           WOBBLE_LOAD_SUMMARY_PATH: ${{ runner.temp }}/wobble-load-summary.md
+          WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS: '20.9'
+          WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS: '45'
+          WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS: '60'
+          WOBBLE_LOAD_BASELINE_RSS_MB: '108'
+          WOBBLE_LOAD_MAX_RSS_MB: '180'
         run: |
           set -euo pipefail
 

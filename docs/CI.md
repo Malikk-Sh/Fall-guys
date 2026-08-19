@@ -81,18 +81,51 @@ A failed finish assertion includes these values directly in the error message. N
 The nightly workflow runs these groups after its own quality gate:
 
 - the fixed full-match seed across modeled FPS/poll/latency combinations;
-- a 300-seed alternate physics sweep with at least one valid seed required;
+- a 300-seed alternate physics sweep with a meaningful baseline-aware floor;
 - reliability-sensitive server tests three times;
 - a local multi-room WebSocket load gate using real co-op clients and `PLAYER_STATE` traffic;
 - matchmaking and multiplayer browser scenarios three times on desktop and mobile;
 - the real-time two-browser full-match suite three times with **zero retries**.
 
-The WebSocket load lane starts a real local gameplay server, waits for `/health/ready`, creates 24 co-op rooms (48 clients), sends state traffic for 12 seconds, and records a machine-readable before/after result. It fails when the server stops being ready, the expected rooms/players are missing, or `invalidMessages`, `socketSendFailures`, `handlerErrors`, or `capacityRejected` increase. Event-loop p95, RSS, snapshot load skips, and other counters are written to the GitHub Step Summary as baseline telemetry. The first gate deliberately does not add a new hard event-loop or RSS budget before several GitHub runner samples exist; readiness still enforces the server's existing overload threshold.
+### Nightly 2.0 baseline-aware budgets
+
+The first scheduled GitHub-hosted baseline on commit `550f18ba5f28e1639c05b685ba3fa348c3a31524` produced:
+
+- `99 / 300` good alternate physics seeds;
+- `20.9 ms` server event-loop p95 during the 24-room WebSocket load;
+- `108 MB` server RSS during the same load.
+
+PR A intentionally starts with conservative budgets because only one GitHub-hosted scheduled sample exists. The current nightly policy is:
+
+| Metric         | Reference |     Warning |  Hard failure |
+| -------------- | --------: | ----------: | ------------: |
+| Good seeds     |  99 / 300 |           — | fewer than 75 |
+| Event-loop p95 |   20.9 ms | above 45 ms |   above 60 ms |
+| RSS            |    108 MB |           — |  above 180 MB |
+
+The seed floor of 75 leaves roughly 24% headroom below the first 99-seed baseline while preventing a catastrophic `99 → 1` regression from staying green. The event-loop hard budget is almost three times the first measured p95 and remains well below the server's overload threshold; 45 ms is a non-failing early warning. The RSS budget leaves substantial headroom for GitHub runner/V8 variation rather than treating ordinary heap growth as a leak.
+
+These values are workflow configuration, not hidden assertion constants. The load gate reads:
+
+- `WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS`
+- `WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS`
+- `WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS`
+- `WOBBLE_LOAD_BASELINE_RSS_MB`
+- `WOBBLE_LOAD_MAX_RSS_MB`
+
+The physics sweep continues to use `MIN_GOOD_SEEDS`; nightly sets it to `75` and records the reference baseline separately for its Step Summary. The budgets should be revisited after several more scheduled GitHub-hosted runs, not loosened by increasing retries or timeouts.
+
+The WebSocket load lane starts a real local gameplay server, waits for `/health/ready`, creates 24 co-op rooms (48 clients), sends state traffic for 12 seconds, and records a machine-readable before/after result. It fails when the server stops being ready, the expected rooms/players are missing, `invalidMessages`, `socketSendFailures`, `handlerErrors`, or `capacityRejected` increase, or a configured hard event-loop/RSS budget is exceeded. Event-loop warning breaches remain green but are called out explicitly. The Step Summary shows current value, reference/delta, budget, and PASS/WARN/FAIL status.
 
 Useful local load checks:
 
 ```bash
 node server/loadGate.mjs 24 12
+WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS=20.9 \
+WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS=45 \
+WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS=60 \
+WOBBLE_LOAD_BASELINE_RSS_MB=108 \
+WOBBLE_LOAD_MAX_RSS_MB=180 \
 WOBBLE_LOAD_RESULT_PATH=/tmp/wobble-load.json \
 WOBBLE_LOAD_SUMMARY_PATH=/tmp/wobble-load.md \
 node server/loadGate.mjs 24 12
@@ -106,7 +139,7 @@ Useful local seed checks:
 
 ```bash
 ONLY=130 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
-MIN_GOOD_SEEDS=1 SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
+MIN_GOOD_SEEDS=75 SEEDS=300 node --experimental-loader ./server/client-loader.mjs tools/e2eSeedSweep.mjs
 ```
 
 `ONLY=<seed>` exits non-zero when any modeled timing mode cannot finish. `MIN_GOOD_SEEDS` makes the wider sweep usable as an automated reliability threshold.

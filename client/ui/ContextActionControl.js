@@ -14,13 +14,7 @@ export function contextActionPresentation(action) {
 // расстояний до socket или любых других gameplay rules — если gameplay ничего не разрешил,
 // UI показывает обычный рывок.
 export function semanticContextAction(game) {
-  if (
-    !game?.running ||
-    game.mode !== 'coop' ||
-    game.spectating ||
-    !game.player ||
-    game.player.downed
-  ) {
+  if (!game?.running || game.mode !== 'coop' || game.spectating || !game.player || game.player.downed) {
     return null;
   }
   const action = game.coopControl?.coreAction?.() || null;

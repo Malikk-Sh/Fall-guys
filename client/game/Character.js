@@ -53,6 +53,10 @@ export class Character {
     this.motionReady = false;
     this.jumpPulse = 0;
     this.getupPulse = 0;
+    // Wall-bounce приходит только после подтверждённого физикой контакта со специальной стеной.
+    // Pulse и side принадлежат исключительно ригу: они не участвуют ни в скорости, ни в hitbox.
+    this.wallBouncePulse = 0;
+    this.wallBounceSide = 1;
 
     const bodyColor = cosmetics?.body?.render?.primary ?? cosmetics?.body?.colors?.body ?? color;
     const accentColor = cosmetics?.body?.render?.accent ?? cosmetics?.body?.colors?.accent ?? accent;
@@ -312,6 +316,7 @@ export class Character {
     this.jumpPulse = Math.max(0, this.jumpPulse - dt * 10.5);
     if (recovering && previousState === 'knockdown') this.getupPulse = 1;
     this.getupPulse = Math.max(0, this.getupPulse - dt * 4.4);
+    this.wallBouncePulse = Math.max(0, this.wallBouncePulse - dt * 7.2);
 
     // Эмоция прерывается сменой состояния движения: прыжок, подкат и сбивание важнее позы, а поза,
     // пережившая их, выглядела бы как застрявшая анимация. Сбивание тут особенно: поза эмоции,
@@ -371,12 +376,24 @@ export class Character {
     } else if (this.state === 'air') {
       const rise = THREE.MathUtils.clamp(vertical / 8, 0, 1);
       const fall = THREE.MathUtils.clamp(-vertical / 10, 0, 1);
+      const wallKick = this.wallBouncePulse;
+      const sideKick = this.wallBounceSide * wallKick;
       const arm = -0.72 - rise * 0.38 + fall * 0.36 - this.jumpPulse * 0.22;
       const leg = 0.18 + fall * 0.42;
-      this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, arm, 10, dt);
-      this.rightArm.rotation.x = THREE.MathUtils.damp(this.rightArm.rotation.x, arm, 10, dt);
-      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, leg, 10, dt);
-      this.rightLeg.rotation.x = THREE.MathUtils.damp(this.rightLeg.rotation.x, -leg, 10, dt);
+      this.leftArm.rotation.x = THREE.MathUtils.damp(this.leftArm.rotation.x, arm - sideKick * 0.32, 10, dt);
+      this.rightArm.rotation.x = THREE.MathUtils.damp(
+        this.rightArm.rotation.x,
+        arm + sideKick * 0.32,
+        10,
+        dt
+      );
+      this.leftLeg.rotation.x = THREE.MathUtils.damp(this.leftLeg.rotation.x, leg + sideKick * 0.22, 10, dt);
+      this.rightLeg.rotation.x = THREE.MathUtils.damp(
+        this.rightLeg.rotation.x,
+        -leg + sideKick * 0.22,
+        10,
+        dt
+      );
     } else {
       for (const limb of [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg])
         limb.rotation.x = THREE.MathUtils.damp(limb.rotation.x, 0, 8, dt);
@@ -397,9 +414,10 @@ export class Character {
     // движения он не влияет; visor/head чуть отстают, antenna переигрывает поворот вторичным движением.
     const turnLean = -THREE.MathUtils.clamp(turnRate / 5, -1, 1) * 0.14 * Math.max(0.35, run);
     const idleSway = Math.sin(this.phase * 0.5) * 0.018 * (1 - run);
+    const wallBounceLean = this.wallBounceSide * this.wallBouncePulse * 0.2;
     this.visual.rotation.z = THREE.MathUtils.damp(
       this.visual.rotation.z,
-      idleSway + turnLean,
+      idleSway + turnLean + wallBounceLean,
       recovering ? 7 : 12,
       dt
     );
@@ -422,6 +440,17 @@ export class Character {
 
     this.cosmetics?.update(dt, { speed, grounded, vertical, diving, state: this.state });
   }
+  // Точный сигнал wall-bounce приходит из Player только после успешной физической ветки.
+  // Сторона считается в локальных координатах рига, поэтому поза остаётся читаемой при любом yaw.
+  wallBounced(normal) {
+    const x = Number(normal?.x) || 0;
+    const z = Number(normal?.z) || 0;
+    const yaw = this.group.rotation.y;
+    const localSide = x * Math.cos(yaw) - z * Math.sin(yaw);
+    this.wallBounceSide = localSide < 0 ? -1 : 1;
+    this.wallBouncePulse = 1;
+    this.jumpPulse = Math.max(this.jumpPulse, 0.72);
+  }
   landed(strength = 1) {
     this.landPulse = Math.min(1, 0.45 + strength * 0.4);
     this.cosmetics?.landed(strength);
@@ -438,6 +467,8 @@ export class Character {
   resetPose() {
     this.visual.rotation.set(0, 0, 0);
     this.visual.position.set(0, 0, 0);
+    this.wallBouncePulse = 0;
+    this.wallBounceSide = 1;
   }
   dispose() {
     this.cosmetics?.dispose();

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { Character } from '../client/game/Character.js';
-import { flowSignal, placeDirection } from '../client/game/FeedbackController.js';
+import { flowSignal, nearMissSample, placeDirection } from '../client/game/FeedbackController.js';
 import { PLAYER_RADIUS } from '../client/game/PlayerCollisions.js';
 import {
   PLAYER_VISUAL_SCALE,
@@ -121,4 +121,33 @@ test('get-up получает короткий visual pop, а immunity glow ос
   character.setImmunityGlow(false);
   assert.equal(character.bodyMesh.material.emissiveIntensity, 0);
   character.dispose();
+});
+
+test('near miss использует внешний halo spinner и не путает его с попаданием', () => {
+  const spinner = {
+    type: 'spinner',
+    angle: 0,
+    length: 4,
+    width: 0.8,
+    center: { x: 0, y: 1, z: 0 },
+    mesh: { uuid: 'spinner' }
+  };
+  const near = nearMissSample(spinner, { x: 0, y: 1, z: 0.8 });
+  assert.equal(near?.key, 'spinner');
+  assert.ok(near.gap > 0 && near.gap < 0.48);
+  assert.equal(nearMissSample(spinner, { x: 0, y: 1, z: 0.7 }), null);
+  assert.equal(nearMissSample(spinner, { x: 0, y: 1, z: 1.4 }), null);
+});
+
+test('near miss поддерживает puncher и игнорирует неподходящие препятствия', () => {
+  const puncher = {
+    type: 'puncher',
+    w: 1,
+    d: 1,
+    mesh: { uuid: 'puncher', position: { x: 0, y: 1, z: 0 } }
+  };
+  const near = nearMissSample(puncher, { x: 0.95, y: 1, z: 0 });
+  assert.equal(near?.key, 'puncher');
+  assert.equal(near?.side, 1);
+  assert.equal(nearMissSample({ type: 'bumper' }, { x: 0, y: 0, z: 0 }), null);
 });

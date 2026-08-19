@@ -1,5 +1,11 @@
+import { PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
+
 const FLOW_COOLDOWN_MS = 650;
 const PLACE_COOLDOWN_MS = 420;
+const NEAR_MISS_COOLDOWN_MS = 900;
+const NEAR_MISS_SCAN_MS = 70;
+const NEAR_MISS_MARGIN = 0.48;
+const NEAR_MISS_MAX_DWELL_MS = 720;
 
 const FLOW_IMPULSES = Object.freeze({
   'dive-roll': { pitch: 0.012, fov: 0.8, shake: 0.035, duration: 0.12 },
@@ -37,6 +43,46 @@ export function placeDirection(previous, current) {
   return null;
 }
 
+// Дистанция до уже существующего collision envelope движущегося препятствия.
+// Ноль и отрицательные значения намеренно НЕ считаются near miss: это уже зона попадания, решение
+// о котором принадлежит Course.interact(). Presentation слой смотрит только на тонкий внешний halo.
+export function nearMissSample(obstacle, position, radius = PLAYER_OBSTACLE_RADIUS) {
+  if (!obstacle || !position || !Number.isFinite(radius) || radius < 0) return null;
+
+  if (obstacle.type === 'spinner') {
+    const center = obstacle.center;
+    if (!center || Math.abs(position.y - center.y) >= 1.18) return null;
+    const dx = position.x - center.x;
+    const dz = position.z - center.z;
+    const angle = Number(obstacle.angle) || 0;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const along = dx * cos - dz * sin;
+    const cross = dx * sin + dz * cos;
+    const outsideAlong = Math.max(0, Math.abs(along) - (obstacle.length / 2 + radius));
+    const outsideCross = Math.max(0, Math.abs(cross) - (obstacle.width / 2 + radius));
+    if (outsideAlong === 0 && outsideCross === 0) return null;
+    const gap = Math.hypot(outsideAlong, outsideCross);
+    if (gap > NEAR_MISS_MARGIN) return null;
+    return { key: obstacle.mesh?.uuid || null, gap, side: Math.sign(cross) || Math.sign(along) || 1 };
+  }
+
+  if (obstacle.type === 'puncher') {
+    const mesh = obstacle.mesh;
+    if (!mesh?.position || Math.abs(position.y - mesh.position.y) >= 1.62) return null;
+    const dx = position.x - mesh.position.x;
+    const dz = position.z - mesh.position.z;
+    const outsideX = Math.max(0, Math.abs(dx) - (obstacle.w / 2 + radius));
+    const outsideZ = Math.max(0, Math.abs(dz) - (obstacle.d / 2 + radius));
+    if (outsideX === 0 && outsideZ === 0) return null;
+    const gap = Math.hypot(outsideX, outsideZ);
+    if (gap > NEAR_MISS_MARGIN) return null;
+    return { key: mesh.uuid || null, gap, side: Math.sign(dx) || 1 };
+  }
+
+  return null;
+}
+
 function playerPresentationState(player) {
   return {
     diving: player.diveTimer > 0,
@@ -46,7 +92,9 @@ function playerPresentationState(player) {
     vertical: Number(player.velocity?.y) || 0,
     knockedDown: player.knockdownTimer > 0,
     immunity: player.knockdownImmunityTimer > 0,
-    respawns: Number(player.respawns) || 0
+    respawns: Number(player.respawns) || 0,
+    checkpoint: Number(player.checkpoint) || 0,
+    finished: Boolean(player.finished)
   };
 }
 
@@ -87,6 +135,7 @@ const STYLE = `
 .game-feel-chip[data-tone='cyan'] { box-shadow: 0 8px 28px rgba(76, 224, 223, 0.28); }
 .game-feel-chip[data-tone='yellow'] { box-shadow: 0 8px 28px rgba(255, 221, 76, 0.28); }
 .game-feel-chip[data-tone='mint'] { box-shadow: 0 8px 28px rgba(110, 255, 199, 0.24); }
+.game-feel-chip[data-tone='pink'] { box-shadow: 0 8px 28px rgba(255, 102, 184, 0.3); }
 .game-feel-impact {
   position: fixed;
   z-index: 1420;
@@ -178,9 +227,11 @@ export class FeedbackController {
     this.previous = null;
     this.lastFlowAt = -Infinity;
     this.lastPlaceAt = -Infinity;
+    this.lastNearMissAt = -Infinity;
+    this.nextNearMissScanAt = 0;
+    this.nearMissCandidates = new Map();
     this.lastPlace = null;
     this.lastMode = null;
-    this.placeTimer = 0;
   }
 
   init() {
@@ -261,12 +312,17 @@ export class FeedbackController {
     player.character?.setImmunityGlow?.(current.immunity);
     if (!this.previous.knockedDown && current.knockedDown) this.presentKnockdown(game);
     if (current.respawns > this.previous.respawns) this.presentRespawn(game);
+    if (current.checkpoint > this.previous.checkpoint) this.presentCheckpoint(game, current.checkpoint);
+    if (!this.previous.finished && current.finished) this.presentFinish(game);
 
     const flow = flowSignal(this.previous, current);
     if (flow && now - this.lastFlowAt >= FLOW_COOLDOWN_MS) {
       this.lastFlowAt = now;
       this.presentFlow(game, flow);
     }
+
+    if (!current.knockedDown && !player.downed) this.trackNearMiss(game, now);
+    else this.nearMissCandidates.clear();
 
     if (this.lastMode !== game.mode) {
       this.lastMode = game.mode;
@@ -284,6 +340,8 @@ export class FeedbackController {
     this.previous = null;
     this.lastPlace = null;
     this.lastMode = null;
+    this.nextNearMissScanAt = 0;
+    this.nearMissCandidates.clear();
   }
 
   presentFlow(game, flow) {
@@ -308,6 +366,65 @@ export class FeedbackController {
     game.effects?.burst?.(player.position, 0x54e0ff, reduced ? 6 : 16, reduced ? 0.45 : 0.7);
     game.cameraController?.addImpulse?.({ pitch: -0.012, fov: 1.1, duration: 0.18 });
     this.restartAnimation(this.root.getElementById('gameFeelRespawn'), 'active');
+  }
+
+  presentCheckpoint(game, checkpoint) {
+    this.showChip(`ЧЕКПОИНТ ${checkpoint}`, 'mint');
+    game.cameraController?.addImpulse?.({ pitch: -0.012, fov: 0.75, duration: 0.14 });
+  }
+
+  presentFinish(game) {
+    this.showChip('ФИНИШ!', 'yellow');
+    game.cameraController?.addImpulse?.({ pitch: -0.02, fov: 1.7, duration: 0.22 });
+  }
+
+  trackNearMiss(game, now) {
+    if (now < this.nextNearMissScanAt) return;
+    this.nextNearMissScanAt = now + NEAR_MISS_SCAN_MS;
+    const player = game.player;
+    const obstacles = game.course?.obstacles;
+    if (!Array.isArray(obstacles)) return;
+
+    for (const obstacle of obstacles) {
+      const sample = nearMissSample(obstacle, player.position);
+      const key = sample?.key || obstacle.mesh?.uuid;
+      if (!key) continue;
+      const candidate = this.nearMissCandidates.get(key);
+      if (sample) {
+        if (candidate) {
+          candidate.gap = Math.min(candidate.gap, sample.gap);
+          candidate.side = sample.side;
+        } else {
+          this.nearMissCandidates.set(key, {
+            enteredAt: now,
+            hits: Number(player.hits) || 0,
+            gap: sample.gap,
+            side: sample.side
+          });
+        }
+        continue;
+      }
+      if (!candidate) continue;
+      this.nearMissCandidates.delete(key);
+      const dwell = now - candidate.enteredAt;
+      const cleanPass = dwell >= NEAR_MISS_SCAN_MS && dwell <= NEAR_MISS_MAX_DWELL_MS;
+      const noHit = (Number(player.hits) || 0) === candidate.hits;
+      if (cleanPass && noHit && now - this.lastNearMissAt >= NEAR_MISS_COOLDOWN_MS) {
+        this.lastNearMissAt = now;
+        this.presentNearMiss(game, candidate);
+      }
+    }
+  }
+
+  presentNearMiss(game, candidate) {
+    this.showChip('НА ГРАНИ', 'pink');
+    game.settings?.vibrate?.(0.16);
+    game.cameraController?.addImpulse?.({
+      yaw: candidate.side * 0.018,
+      fov: 0.65,
+      shake: 0.02,
+      duration: 0.12
+    });
   }
 
   trackPlace(now) {

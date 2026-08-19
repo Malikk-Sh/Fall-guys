@@ -140,7 +140,7 @@ jobs:
           done
 
   server-load:
-    name: Server WebSocket load
+    name: Server WebSocket staged load
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -157,11 +157,12 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Run local WebSocket load gate
+      - name: Run staged local WebSocket load gate
         shell: bash
         env:
-          WOBBLE_LOAD_RESULT_PATH: ${{ runner.temp }}/wobble-load-result.json
-          WOBBLE_LOAD_SUMMARY_PATH: ${{ runner.temp }}/wobble-load-summary.md
+          WOBBLE_LOAD_STAGES: '24:12,48:12,96:12'
+          WOBBLE_STAGED_LOAD_RESULT_PATH: ${{ runner.temp }}/wobble-staged-load-result.json
+          WOBBLE_STAGED_LOAD_SUMMARY_PATH: ${{ runner.temp }}/wobble-staged-load-summary.md
           WOBBLE_LOAD_BASELINE_EVENT_LOOP_P95_MS: '20.9'
           WOBBLE_LOAD_WARN_EVENT_LOOP_P95_MS: '45'
           WOBBLE_LOAD_MAX_EVENT_LOOP_P95_MS: '60'
@@ -204,7 +205,7 @@ jobs:
 
           if [ "$ready" -ne 1 ]; then
             {
-              echo "### Server WebSocket load gate"
+              echo "### Server WebSocket staged load"
               echo
               echo "**Result:** FAIL — local gameplay server did not become ready"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -213,12 +214,12 @@ jobs:
           fi
 
           set +e
-          node server/loadGate.mjs 24 12
+          node server/stagedLoadGate.mjs
           gate_status=$?
           set -e
 
-          if [ -f "$WOBBLE_LOAD_SUMMARY_PATH" ]; then
-            cat "$WOBBLE_LOAD_SUMMARY_PATH" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$WOBBLE_STAGED_LOAD_SUMMARY_PATH" ]; then
+            cat "$WOBBLE_STAGED_LOAD_SUMMARY_PATH" >> "$GITHUB_STEP_SUMMARY"
           fi
           if [ "$gate_status" -ne 0 ]; then
             echo "--- local gameplay server log ---"
@@ -334,7 +335,7 @@ jobs:
             echo "| Quality | $QUALITY |"
             echo "| Physics seed stress | $SEEDS |"
             echo "| Server reliability | $SERVER |"
-            echo "| Server WebSocket load | $SERVER_LOAD |"
+            echo "| Server WebSocket staged load | $SERVER_LOAD |"
             echo "| Network browser E2E | $NETWORK |"
             echo "| Full-match stress | $FULL_MATCH |"
           } >> "$GITHUB_STEP_SUMMARY"

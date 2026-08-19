@@ -80,6 +80,10 @@ class Client {
     }
   }
 
+  leave() {
+    this.send('leave');
+  }
+
   close() {
     if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
       this.ws.close();
@@ -231,5 +235,10 @@ try {
   console.log(`отказов по capacity:    ${deltas.capacityRejected}`);
   console.log(`snapshot skip по load:  ${deltas.snapshotsSkippedForLoad}`);
 } finally {
+  // A staged load must measure distinct concurrency levels. Plain WebSocket close is intentionally
+  // treated by production as a reconnectable network drop, so those players remain in rooms for
+  // RECONNECT_GRACE_MS and their sessions live even longer. Send the real protocol leave first so
+  // test cleanup follows the normal explicit-exit path without weakening reconnect protections.
+  for (const client of clients) client.leave();
   for (const client of clients) client.close();
 }

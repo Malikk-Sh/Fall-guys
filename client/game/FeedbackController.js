@@ -25,8 +25,7 @@ export function flowSignal(previous, current) {
 }
 
 export function placeDirection(previous, current) {
-  if (!Number.isInteger(previous) || !Number.isInteger(current) || previous <= 0 || current <= 0)
-    return null;
+  if (!Number.isInteger(previous) || !Number.isInteger(current) || previous <= 0 || current <= 0) return null;
   if (current < previous) return 'up';
   if (current > previous) return 'down';
   return null;

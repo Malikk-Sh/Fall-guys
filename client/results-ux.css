@@ -81,7 +81,7 @@ body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #boar
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #finishHighlights,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .results-actions > .button,
 body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) #resultsTimer,
-body.results-presentation-enabled #finish:not(.hidden):not(.results-ready) .results-actions > .text-button.back {
+body.results-presentation-enabled #finish:not(.results-ready) .results-actions > .text-button.back {
   opacity: 0;
   transform: translateY(8px) scale(0.985);
   pointer-events: none;

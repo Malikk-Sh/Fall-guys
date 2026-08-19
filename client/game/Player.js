@@ -295,6 +295,10 @@ export class Player {
       this.diveTimer = 0;
       this.rollTimer = 0;
       this.recoveryWindow = 0;
+      // Presentation запускается здесь, а не по скорости или близости к стене: только физика знает,
+      // что wall-bounce действительно состоялся. На gameplay-state этот сигнал не влияет.
+      this.character.wallBounced?.(wallNormal);
+      this.impact = Math.max(this.impact, 0.12);
       this.effects.burst(this.physics, COLORS.cyan, 10, 0.8);
       this.sfx?.jump();
       this.haptics?.vibrate(0.42);

@@ -5,11 +5,7 @@ import {
   keyCodeLabel,
   semanticContextAction
 } from '../client/ui/ContextActionControl.js';
-import {
-  partnerPingCommand,
-  pingIdentity,
-  pingPresentation
-} from '../client/game/CoopPingPresentation.js';
+import { partnerPingCommand, pingIdentity, pingPresentation } from '../client/game/CoopPingPresentation.js';
 
 test('context action presentation maps only known gameplay semantics', () => {
   assert.deepEqual(contextActionPresentation('pickup'), {

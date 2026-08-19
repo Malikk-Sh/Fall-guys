@@ -181,6 +181,63 @@ npm run churn:gate
 
 Reconnect/churn is still a short daily stress lane. Longer repeated-load and leak/degradation testing belongs to the separate weekly soak/endurance work, not to retries or a larger daily timeout.
 
+### Weekly multiplayer soak
+
+`.github/workflows/weekly-soak.yml` is deliberately separate from the daily reliability workflow. It runs once per week at `04:47 UTC` on Sunday and supports `workflow_dispatch` for an explicit manual run. The normal plan is **30 minutes** of workload on one gameplay server process; the job timeout is 45 minutes only to cover npm setup, room setup/cleanup, summary generation and artifact upload around that fixed 30-minute workload.
+
+The six default five-minute phases are:
+
+| Phase | Base rooms | Additional churn |
+| --- | ---: | --- |
+| `base-24` | 24 | no |
+| `base-48` | 48 | no |
+| `load-24-churn` | 24 | periodic real reconnect/room-churn pulses |
+| `load-48-churn` | 48 | periodic real reconnect/room-churn pulses |
+| `burst-96` | 96 | no |
+| `recovery-24` | 24 | no |
+
+Every base-load phase reuses the normal `loadGate.mjs`, so it still exercises real `HELLO → CREATE → JOIN → READY → START → PLAYER_STATE`, loopback source sharding and the established `60 ms` event-loop / `180 MB` RSS hard budgets. Churn phases run smaller deterministic `churnProbe.mjs` pulses concurrently with the base load, exercising real network-style disconnect, session resume, stale-socket handling and create/join/start/leave lifecycle without disabling reconnect grace, rate limits or capacity protections.
+
+`soakProbe.mjs` samples `/health` every 20 seconds by default and writes JSON plus CSV time-series data. Each row records event-loop p95, RSS, heap used, rooms, players, sessions, active sockets, active matches and the main reliability counters. The workflow preserves:
+
+- raw probe JSON;
+- final gate JSON;
+- CSV time series;
+- Markdown summary;
+
+for 21 days. The gameplay server log is uploaded only when the soak job fails.
+
+Weekly memory checking intentionally does **not** require `RSS end == RSS start`. V8 can retain committed memory after load. The gate instead checks:
+
+- the established hard p95/RSS budgets and `/health/ready`;
+- zero critical error deltas including `handlerErrors`, `socketSendFailures`, `resumeFailed`, `capacityRejected` and snapshot load skips;
+- rooms/players/sessions return to the pre-soak baseline;
+- the final `recovery-24` phase for strongly monotonic RSS/heap growth.
+
+Recovery growth above `32 MB` RSS or `24 MB` heap is an early warning when at least 80% of recovery samples are non-decreasing. Strong growth above `64 MB` RSS or `48 MB` heap under the same monotonic condition is a hard leak/degradation signal. These recovery thresholds are configurable and intentionally conservative until several GitHub-hosted weekly runs establish a trend; the raw artifact remains the source for later tightening.
+
+The weekly workflow has no retry mechanism and does not change any existing daily timeout. It is local GitHub-runner stress only; it must not be pointed at production automatically.
+
+For a shortened local orchestration smoke check, keep the explicit short-run opt-in so the production weekly minimum cannot be weakened accidentally:
+
+```bash
+WOBBLE_SOAK_PHASE_SECONDS=30 \
+WOBBLE_SOAK_SAMPLE_MS=5000 \
+WOBBLE_SOAK_CHURN_PULSE_MS=10000 \
+WOBBLE_SOAK_ALLOW_SHORT=1 \
+WOBBLE_SOAK_PROBE_RESULT_PATH=/tmp/wobble-soak-probe.json \
+WOBBLE_SOAK_CSV_PATH=/tmp/wobble-soak.csv \
+npm run soak:probe
+
+WOBBLE_SOAK_ALLOW_SHORT=1 \
+WOBBLE_SOAK_PROBE_RESULT_PATH=/tmp/wobble-soak-probe.json \
+WOBBLE_SOAK_RESULT_PATH=/tmp/wobble-soak-result.json \
+WOBBLE_SOAK_SUMMARY_PATH=/tmp/wobble-soak-summary.md \
+npm run soak:summary
+```
+
+Start one local gameplay server first (`npm start`) for the commands above. A real scheduled/manual weekly workflow does not set `WOBBLE_SOAK_ALLOW_SHORT`; its planned duration must remain at least 1800 seconds.
+
 Useful local load checks:
 
 ```bash
@@ -204,7 +261,7 @@ WOBBLE_LOAD_MAX_RSS_MB=180 \
 npm run load:staged
 ```
 
-Start one local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. The staged and churn gates intentionally reuse the real gameplay server path. Do not use the automated load or churn gates against production by default.
+Start one local gameplay server first (`npm start`) unless `WOBBLE_WS_URL` and `WOBBLE_HTTP_URL` point at another explicitly approved target. The staged, churn and soak gates intentionally reuse the real gameplay server path. Do not use the automated load, churn or soak gates against production by default.
 
 The nightly full-match lane disables retries deliberately: nightly stress should expose any intermittent failure as a red run.
 

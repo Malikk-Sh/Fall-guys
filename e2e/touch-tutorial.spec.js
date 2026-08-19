@@ -23,9 +23,7 @@ async function expectTutorialStep(page, step) {
   await expect(page.locator('.touch-tutorial-focus')).toHaveCount(step === 'look' ? 0 : 1);
 }
 
-test('first touch race teaches one action at a time and remembers completion', async ({
-  page
-}, testInfo) => {
+test('first touch race teaches one action at a time and remembers completion', async ({ page }, testInfo) => {
   mobileOnly(testInfo);
   await page.addInitScript(() => localStorage.removeItem('wobble-touch-tutorial-v1'));
   await startSoloRace(page);
@@ -102,9 +100,12 @@ test('first touch race teaches one action at a time and remembers completion', a
     pointerId: 34
   });
   await expect(page.locator('#touchTutorial')).toBeHidden();
-  expect(
-    await page.evaluate(() => JSON.parse(localStorage.getItem('wobble-touch-tutorial-v1')))
-  ).toEqual({ move: true, look: true, jump: true, dive: true });
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('wobble-touch-tutorial-v1')))).toEqual({
+    move: true,
+    look: true,
+    jump: true,
+    dive: true
+  });
 
   await page.reload();
   await expect(page.locator('#menu')).toBeVisible();

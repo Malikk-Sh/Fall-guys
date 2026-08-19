@@ -13,6 +13,7 @@ const STEP_COPY = Object.freeze({
   jump: ['ПРЫЖОК', 'Коснитесь кнопки прыжка'],
   dive: ['РЫВОК', 'В полёте используйте рывок']
 });
+const STEP_TARGET = Object.freeze({ move: 'stick', jump: 'jump', dive: 'dive' });
 
 export function normalizeTouchTutorialSeen(value = {}) {
   const source = value && typeof value === 'object' ? value : {};
@@ -84,11 +85,10 @@ export class TouchTutorialPresentation {
   }
 
   get touchMobile() {
-    return isTouchMobile({
-      coarse: this.window?.matchMedia?.('(pointer: coarse)').matches === true,
-      hoverNone: this.window?.matchMedia?.('(hover: none)').matches === true,
-      maxTouchPoints: this.window?.navigator?.maxTouchPoints || 0
-    });
+    const coarse = this.window?.matchMedia?.('(pointer: coarse)').matches === true;
+    const hoverNone = this.window?.matchMedia?.('(hover: none)').matches === true;
+    const maxTouchPoints = this.window?.navigator?.maxTouchPoints || 0;
+    return isTouchMobile({ coarse, hoverNone, maxTouchPoints });
   }
 
   init() {
@@ -142,16 +142,12 @@ export class TouchTutorialPresentation {
 
   gameplayActive() {
     const game = this.getGame?.();
+    if (!this.touchMobile || game?.state?.name !== 'race') return false;
     const hud = this.root?.getElementById?.('hud');
     const touch = this.root?.getElementById?.('touch');
-    return Boolean(
-      this.touchMobile &&
-        game?.state?.name === 'race' &&
-        hud &&
-        !hud.classList.contains('hidden') &&
-        touch &&
-        !touch.classList.contains('hidden')
-    );
+    if (!hud || hud.classList.contains('hidden')) return false;
+    if (!touch || touch.classList.contains('hidden')) return false;
+    return true;
   }
 
   sync() {
@@ -235,26 +231,20 @@ export class TouchTutorialPresentation {
 
   applyFocus(step) {
     this.clearFocus();
-    const target =
-      step === 'move'
-        ? this.root.getElementById('stick')
-        : step === 'jump'
-          ? this.root.getElementById('jump')
-          : step === 'dive'
-            ? this.root.getElementById('dive')
-            : null;
+    const targetId = STEP_TARGET[step];
+    const target = targetId ? this.root.getElementById(targetId) : null;
     target?.classList.add('touch-tutorial-focus');
-    if (step === 'move' && target && !target.querySelector('.touch-tutorial-thumb')) {
-      const thumb = this.root.createElement('i');
-      thumb.className = 'touch-tutorial-thumb';
-      thumb.setAttribute('aria-hidden', 'true');
-      target.append(thumb);
-    }
+    if (step !== 'move' || !target || target.querySelector('.touch-tutorial-thumb')) return;
+    const thumb = this.root.createElement('i');
+    thumb.className = 'touch-tutorial-thumb';
+    thumb.setAttribute('aria-hidden', 'true');
+    target.append(thumb);
   }
 
   clearFocus() {
-    for (const node of this.root?.querySelectorAll?.('.touch-tutorial-focus') || [])
+    for (const node of this.root?.querySelectorAll?.('.touch-tutorial-focus') || []) {
       node.classList.remove('touch-tutorial-focus');
+    }
     for (const node of this.root?.querySelectorAll?.('.touch-tutorial-thumb') || []) node.remove();
   }
 

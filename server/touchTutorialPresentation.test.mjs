@@ -1,9 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  nextTouchTutorialStep,
-  normalizeTouchTutorialSeen
-} from '../client/ui/TouchTutorialPresentation.js';
+import { nextTouchTutorialStep, normalizeTouchTutorialSeen } from '../client/ui/TouchTutorialPresentation.js';
 
 test('touch tutorial normalizes only explicit completed flags', () => {
   assert.deepEqual(normalizeTouchTutorialSeen({ move: true, look: 1, jump: false, dive: 'true' }), {
@@ -25,10 +22,7 @@ test('touch tutorial always exposes one next step in the documented order', () =
   assert.equal(nextTouchTutorialStep({ move: true }), 'look');
   assert.equal(nextTouchTutorialStep({ move: true, look: true }), 'jump');
   assert.equal(nextTouchTutorialStep({ move: true, look: true, jump: true }), 'dive');
-  assert.equal(
-    nextTouchTutorialStep({ move: true, look: true, jump: true, dive: true }),
-    null
-  );
+  assert.equal(nextTouchTutorialStep({ move: true, look: true, jump: true, dive: true }), null);
 });
 
 test('touch tutorial cannot skip an earlier unseen action', () => {

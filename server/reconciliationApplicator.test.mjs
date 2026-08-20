@@ -7,7 +7,22 @@ import {
   normalizeMovementAuthoritySource
 } from '../client/net/ReconciliationApplicator.js';
 import { RECONCILIATION_APPLICATION_MODE } from '../client/net/ReconciliationApplicationPolicy.js';
+import { ClientInputShadowSender } from '../client/net/clientInputShadowBridge.js';
 import { createPlayerSimulationState } from '../shared/playerSimulation.js';
+
+class MemoryStorage {
+  constructor() {
+    this.values = new Map();
+  }
+
+  getItem(key) {
+    return this.values.has(key) ? this.values.get(key) : null;
+  }
+
+  setItem(key, value) {
+    this.values.set(key, String(value));
+  }
+}
 
 function player(overrides = {}) {
   return {
@@ -169,4 +184,27 @@ test('hard reconciliation rejects implausible snaps instead of applying an unbou
     velocityApplied: 0
   });
   assert.deepEqual(local, before);
+});
+
+test('sender applies a shadow movement proposal once at the local fixed-step boundary', () => {
+  const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => 100 });
+  sender.beginMatch('match-a');
+  const local = player();
+  assert.equal(sender.observeLocalPlayer(local, 90), true);
+
+  const baseline = createPlayerSimulationState({
+    position: { x: 1, y: 0, z: 0 },
+    velocity: { x: 2, y: 0, z: 0 },
+    grounded: true
+  });
+  assert.equal(sender.replayFromShadow('match-a', baseline, 4, -1, 'shadow', 'shadow'), true);
+  const replay = sender.shadowReplayState();
+  assert.equal(replay.application.apply, true);
+  assert.equal(replay.movementAuthoritySource, 'shadow');
+
+  assert.equal(sender.applyPendingReconciliation(local), true);
+  const afterFirst = structuredClone(local);
+  assert.equal(sender.applyPendingReconciliation(local), false, 'one server tick is never applied twice');
+  assert.deepEqual(local, afterFirst);
+  assert.equal(sender.shadowReplayState().applicationResult.applied, true);
 });

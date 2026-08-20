@@ -5,6 +5,7 @@ const { validateMessage, RateLimiter } = require('../shared/validation.js');
 const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
 const { createShadowRaceProgressDiagnostics } = require('./shadowRaceProgressDiagnostics');
+const { evaluateShadowRaceAuthorityReadiness } = require('./shadowRaceAuthorityReadiness');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -151,6 +152,7 @@ function createBridge() {
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
     const coreProgress = progressDiagnostics.metrics();
+    const authorityReadiness = evaluateShadowRaceAuthorityReadiness(coreProgress);
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
     if (!hasSimulationTraffic && !coreProgress.boundarySamples) return;
     process.stdout.write(
@@ -159,7 +161,8 @@ function createBridge() {
         event: 'shadow_simulation_metrics',
         ts: new Date().toISOString(),
         ...metrics,
-        coreProgress
+        coreProgress,
+        authorityReadiness
       })}\n`
     );
   }

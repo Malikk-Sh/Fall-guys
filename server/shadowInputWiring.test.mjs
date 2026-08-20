@@ -75,7 +75,7 @@ async function waitFor(predicate, timeout = WAIT_MS) {
   return false;
 }
 
-test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy player state', async t => {
+test('live shadow bridge follows the socket while legacy gameplay remains default authority', async t => {
   resetRateLimits();
   rooms.clear();
   await listen();
@@ -181,4 +181,66 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
     true,
     'replayed input is diagnostic-only and rejected by ordering'
   );
+
+  first.send('create', {
+    name: 'Shadow Race',
+    mode: 'race',
+    protocolVersion: PROTOCOL_VERSION
+  });
+  const raceLobby = await first.wait(
+    'lobby',
+    message => message.mode === 'race' && message.players.length === 1
+  );
+  const raceRoom = rooms.get(raceLobby.code);
+  const racePlayer = raceRoom.players.get(firstHello.id);
+  assert.ok(racePlayer, 'same socket identity enters the new race room');
+
+  first.send('ready', { ready: true });
+  await first.wait(
+    'lobby',
+    message =>
+      message.code === raceLobby.code &&
+      message.players.some(item => item.id === firstHello.id && item.ready)
+  );
+  first.send('start');
+  const raceStart = await first.wait(
+    'start',
+    message => message.mode === 'race' && message.matchId !== firstStart.matchId
+  );
+  assert.equal(raceRoom.matchId, raceStart.matchId);
+
+  const checkpointMetricsBefore = bridge.checkpointAuthorityApplier.metrics();
+  await sleep(Math.max(0, raceStart.at - Date.now() - 250));
+  const state = racePlayer.last;
+  first.send('state', {
+    matchId: raceStart.matchId,
+    sequence: 0,
+    state: {
+      x: state.x,
+      y: state.y,
+      z: state.z,
+      ry: state.ry,
+      vx: state.vx,
+      vy: state.vy || 0,
+      vz: state.vz,
+      state: state.state
+    }
+  });
+
+  assert.equal(
+    await waitFor(() => racePlayer.lastSequence === 0),
+    true,
+    'core accepts a state after the socket moves to a new room'
+  );
+  assert.equal(
+    await waitFor(
+      () => bridge.checkpointAuthorityApplier.metrics().attempts > checkpointMetricsBefore.attempts
+    ),
+    true,
+    'post-core checkpoint authority runs for the current race player on the reused socket'
+  );
+  const checkpointMetrics = bridge.checkpointAuthorityApplier.metrics();
+  assert.ok(checkpointMetrics.legacyDecisions > checkpointMetricsBefore.legacyDecisions);
+  assert.equal(checkpointMetrics.appliedAdvances, checkpointMetricsBefore.appliedAdvances);
+  assert.equal(racePlayer.checkpoint, 0, 'default authority never rewrites the legacy checkpoint');
 });

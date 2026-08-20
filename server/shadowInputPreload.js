@@ -8,14 +8,17 @@ const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
+const raceCheckpointAuthorityCoreBridge = require('./raceCheckpointAuthorityCoreBridge');
 const raceServerCheckpointAdvance = require('./raceServerCheckpointAdvance');
 const raceFinishAuthorityCoreBridge = require('./raceFinishAuthorityCoreBridge');
 const raceServerAutoFinish = require('./raceServerAutoFinish');
 const gameRules = require('./gameRules');
 
-// Boundary diagnostics above intentionally captured the original legacy canFinish. The live core is
-// loaded later by this preload and receives the guarded bridge instead, so migration comparison
-// continues to measure the untouched legacy outcome while the production finish gate can cut over.
+// Boundary diagnostics above intentionally captured the original legacy validateState/canFinish.
+// The live core is loaded later by this preload and receives guarded checkpoint/finish bridges, so
+// migration comparison continues to measure the untouched legacy outcome while production can cut
+// over one authority boundary at a time.
+raceCheckpointAuthorityCoreBridge.installGameRules(gameRules);
 raceFinishAuthorityCoreBridge.installGameRules(gameRules);
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
@@ -30,6 +33,7 @@ function createBridge() {
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
+  const checkpointAuthorityCoreBridge = raceCheckpointAuthorityCoreBridge;
   const serverCheckpointAdvance = raceServerCheckpointAdvance;
   const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
   const finishAuthorityCoreVerification = authorityService.finishCoreVerification;
@@ -119,13 +123,14 @@ function createBridge() {
     });
   }
 
-  function attachPlayer(player) {
+  function attachPlayer(player, room) {
     const ws = player?.ws;
     if (!ws || typeof ws.on !== 'function' || typeof ws.prependListener !== 'function') return false;
 
     // A WebSocket may leave co-op and later point at a different race player object. Listener
-    // attachment is socket-scoped, but authoritative finish timing is player-scoped, so install
-    // the time seam before the socket idempotency guard.
+    // attachment is socket-scoped, but authoritative checkpoint/finish seams are player-scoped, so
+    // install them before the socket idempotency guard.
+    checkpointAuthorityCoreBridge.attachPlayer(player, room);
     finishAuthorityCoreBridge.attachPlayer(player);
     if (ws[SOCKET_KEY]) return false;
 
@@ -314,7 +319,7 @@ function createBridge() {
     for (const room of core.rooms.values()) {
       if (!ACTIVE_STATES.has(room.state)) continue;
       for (const player of room.players.values()) {
-        if (!player.bot) attachPlayer(player);
+        if (!player.bot) attachPlayer(player, room);
       }
     }
   }
@@ -343,6 +348,7 @@ function createBridge() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
     const checkpointAuthority = checkpointAuthorityApplier.metrics();
+    const checkpointCoreAuthority = checkpointAuthorityCoreBridge.metrics();
     const serverCheckpoint = serverCheckpointAdvance.metrics();
     const finishAuthority = finishAuthorityCoreBridge.metrics();
     const autoFinish = serverAutoFinish.metrics();
@@ -358,6 +364,7 @@ function createBridge() {
       !hasSimulationTraffic &&
       !coreProgress.boundarySamples &&
       !authorityBoundary.samples &&
+      !checkpointCoreAuthority.calls &&
       !finishAuthority.attempts &&
       !serverCheckpoint.attempts &&
       !autoFinish.candidates
@@ -376,6 +383,7 @@ function createBridge() {
         authorityBoundaryVerification: authorityVerification,
         finishCoreVerification,
         checkpointAuthority,
+        checkpointCoreAuthority,
         serverCheckpoint,
         finishAuthority,
         autoFinish
@@ -422,6 +430,7 @@ function createBridge() {
     authorityBoundaryProbe,
     authorityBoundaryVerification,
     checkpointAuthorityApplier,
+    checkpointAuthorityCoreBridge,
     serverCheckpointAdvance,
     finishAuthorityCoreBridge,
     finishAuthorityCoreVerification,

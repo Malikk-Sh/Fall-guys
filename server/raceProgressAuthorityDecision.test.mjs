@@ -7,6 +7,7 @@ const {
   AUTHORITY_ENV,
   authoritySource,
   candidateProgress,
+  legacyProgressFor,
   createRaceProgressAuthorityDecision
 } = require('./raceProgressAuthorityDecision');
 const { AUTHORITY_SOURCE, FALLBACK_REASON } = require('./raceProgressAuthoritySelector');
@@ -62,6 +63,15 @@ test('candidate progress strips runtime metadata before selector use', () => {
   assert.equal(candidateProgress(null), null);
 });
 
+test('legacy progress defaults to player state but accepts an explicit proposed outcome', () => {
+  const current = player();
+  const proposed = { checkpoint: 2, finished: false, extra: 'ignored-by-selector' };
+
+  assert.deepEqual(legacyProgressFor(current, undefined), { checkpoint: 1, finished: false });
+  assert.equal(legacyProgressFor(current, proposed), proposed);
+  assert.equal(legacyProgressFor(current, null), null);
+});
+
 test('legacy source returns legacy progress without reading readiness or candidate', () => {
   const { decision, calls } = fixture({ requestedSource: AUTHORITY_SOURCE.LEGACY });
   const result = decision.decide({ player: player() });
@@ -69,6 +79,20 @@ test('legacy source returns legacy progress without reading readiness or candida
   assert.equal(result.ok, true);
   assert.equal(result.source, AUTHORITY_SOURCE.LEGACY);
   assert.deepEqual(result.progress, { checkpoint: 1, finished: false });
+  assert.deepEqual(calls, []);
+});
+
+test('legacy source can select a proposed outcome before player mutation', () => {
+  const { decision, calls } = fixture({ requestedSource: AUTHORITY_SOURCE.LEGACY });
+  const current = player({ checkpoint: 1 });
+  const result = decision.decide({
+    player: current,
+    legacyProgress: { checkpoint: 2, finished: false, source: 'validated-state' }
+  });
+
+  assert.equal(current.checkpoint, 1);
+  assert.equal(result.source, AUTHORITY_SOURCE.LEGACY);
+  assert.deepEqual(result.progress, { checkpoint: 2, finished: false });
   assert.deepEqual(calls, []);
 });
 
@@ -87,6 +111,19 @@ test('shadow source selects a valid candidate only after readiness allows it', (
   assert.equal(result.source, AUTHORITY_SOURCE.SHADOW);
   assert.deepEqual(result.progress, { checkpoint: 2, finished: false });
   assert.deepEqual(calls, ['readiness', 'candidate']);
+});
+
+test('shadow source uses proposed legacy outcome only as its fail-closed fallback', () => {
+  const { decision, calls } = fixture({ readiness: blocked });
+  const result = decision.decide({
+    player: player({ checkpoint: 1 }),
+    legacyProgress: { checkpoint: 2, finished: false }
+  });
+
+  assert.equal(result.source, AUTHORITY_SOURCE.LEGACY);
+  assert.equal(result.fallbackReason, FALLBACK_REASON.SHADOW_NOT_READY);
+  assert.deepEqual(result.progress, { checkpoint: 2, finished: false });
+  assert.deepEqual(calls, ['readiness']);
 });
 
 test('blocked readiness falls back before any candidate snapshot is read', () => {
@@ -117,16 +154,30 @@ test('missing or failing candidate falls back to legacy after readiness passes',
   }
 });
 
-test('invalid legacy progress fails before readiness or candidate access', () => {
+test('invalid explicit legacy progress fails before readiness or candidate access', () => {
   const { decision, calls } = fixture({
     candidate: { checkpoint: 2, finished: false }
   });
-  const result = decision.decide({ player: player({ checkpoint: -1 }) });
+  const current = player();
+  const result = decision.decide({
+    player: current,
+    legacyProgress: { checkpoint: -1, finished: false }
+  });
 
+  assert.equal(current.checkpoint, 1);
   assert.equal(result.ok, false);
   assert.equal(result.source, AUTHORITY_SOURCE.LEGACY);
   assert.equal(result.fallbackReason, FALLBACK_REASON.INVALID_LEGACY);
   assert.equal(result.progress, null);
+  assert.deepEqual(calls, []);
+});
+
+test('invalid player progress still fails when no explicit proposal is supplied', () => {
+  const { decision, calls } = fixture();
+  const result = decision.decide({ player: player({ checkpoint: -1 }) });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.fallbackReason, FALLBACK_REASON.INVALID_LEGACY);
   assert.deepEqual(calls, []);
 });
 

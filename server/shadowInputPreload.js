@@ -27,21 +27,21 @@ function createBridge() {
   let core = null;
   let stopped = false;
 
-  function currentPlayerFor(player, ws) {
+  function currentPlayerFor(ws) {
     const room = core?.rooms.get(ws.room);
     const currentPlayer = room?.players.get(ws.id);
-    if (!room || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return null;
+    if (!room || !currentPlayer || currentPlayer.ws !== ws) return null;
     return { room, player: currentPlayer };
   }
 
-  function observeCoreOutcomePayload(payload, player, ws) {
+  function observeCoreOutcomePayload(payload, ws) {
     if (typeof payload !== 'string') return;
     const isFinishOutcome =
       payload.includes(`"type":"${S2C.PLAYER_FINISHED}"`) ||
       payload.includes(`"type":"${S2C.FINISH_REJECTED}"`);
     if (!isFinishOutcome) return;
 
-    const current = currentPlayerFor(player, ws);
+    const current = currentPlayerFor(ws);
     if (!current) return;
     try {
       authorityBoundaryVerification.observeOutcomePayload({
@@ -64,7 +64,7 @@ function createBridge() {
     }
   }
 
-  function enrichSnapshotPayload(payload, player, ws) {
+  function enrichSnapshotPayload(payload, ws) {
     if (typeof payload !== 'string' || !payload.includes('"type":"snapshot"')) return payload;
     let message;
     try {
@@ -74,7 +74,7 @@ function createBridge() {
     }
     if (message?.type !== S2C.SNAPSHOT) return payload;
 
-    const current = currentPlayerFor(player, ws);
+    const current = currentPlayerFor(ws);
     if (!current || message.matchId !== current.room.matchId) return payload;
 
     const shadow = shadowRuntimeService.snapshot(current.player);
@@ -106,7 +106,7 @@ function createBridge() {
       const validation = validateMessage(message);
       if (!validation.ok) return;
 
-      const current = currentPlayerFor(player, ws);
+      const current = currentPlayerFor(ws);
       if (!current || !ACTIVE_STATES.has(current.room.state)) return;
       if (message.matchId && message.matchId !== current.room.matchId) return;
 
@@ -142,7 +142,7 @@ function createBridge() {
       const validation = validateMessage(message);
       if (!validation.ok) return;
 
-      const current = currentPlayerFor(player, ws);
+      const current = currentPlayerFor(ws);
       if (!current || !ACTIVE_STATES.has(current.room.state)) return;
       if (message.matchId && message.matchId !== current.room.matchId) return;
 
@@ -205,8 +205,8 @@ function createBridge() {
     const wrappedSend = function shadowAcknowledgedSend(payload, ...args) {
       // PLAYER_FINISHED and FINISH_REJECTED are emitted only after core has made its legacy
       // authority decision. Reading that outcome here cannot alter the decision or its payload.
-      observeCoreOutcomePayload(payload, player, ws);
-      return originalSend.call(this, enrichSnapshotPayload(payload, player, ws), ...args);
+      observeCoreOutcomePayload(payload, ws);
+      return originalSend.call(this, enrichSnapshotPayload(payload, ws), ...args);
     };
     Object.defineProperty(ws, SOCKET_KEY, { value: true, configurable: true });
     Object.defineProperty(ws, SEND_KEY, { value: originalSend, configurable: true });

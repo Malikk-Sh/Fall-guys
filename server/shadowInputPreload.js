@@ -8,6 +8,13 @@ const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
+const raceFinishAuthorityCoreBridge = require('./raceFinishAuthorityCoreBridge');
+const gameRules = require('./gameRules');
+
+// Boundary diagnostics above intentionally captured the original legacy canFinish. The live core is
+// loaded later by this preload and receives the guarded bridge instead, so migration comparison
+// continues to measure the untouched legacy outcome while the production finish gate can cut over.
+raceFinishAuthorityCoreBridge.installGameRules(gameRules);
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -21,6 +28,7 @@ function createBridge() {
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
+  const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -89,8 +97,14 @@ function createBridge() {
 
   function attachPlayer(player) {
     const ws = player?.ws;
-    if (!ws || ws[SOCKET_KEY] || typeof ws.on !== 'function' || typeof ws.prependListener !== 'function')
-      return false;
+    if (!ws || typeof ws.on !== 'function' || typeof ws.prependListener !== 'function') return false;
+
+    // A WebSocket may leave co-op and later point at a different race player object. Listener
+    // attachment is socket-scoped, but authoritative finish timing is player-scoped, so install
+    // the time seam before the socket idempotency guard.
+    finishAuthorityCoreBridge.attachPlayer(player);
+    if (ws[SOCKET_KEY]) return false;
+
     const limiter = new RateLimiter();
     let observedMatchId = null;
     let lastObservedLegacySequence = -1;
@@ -129,6 +143,21 @@ function createBridge() {
       } catch {
         // Diagnostic-only migration seam: fail open to the unchanged legacy core path.
       }
+
+      // FINISH remains a client intent, but when this match is latched to shadow authority the
+      // core canFinish call must consume the server decision instead of falling through to the
+      // client-derived finish state. Legacy matches are left byte-for-byte on their old gate.
+      if (
+        message.type === C2S.FINISH &&
+        !current.player.finished &&
+        message.sequence > (current.player.lastSequence ?? -1)
+      ) {
+        try {
+          finishAuthorityCoreBridge.prepare({ room: current.room, player: current.player });
+        } catch {
+          finishAuthorityCoreBridge.clear(current.player);
+        }
+      }
     };
 
     const listener = raw => {
@@ -138,13 +167,28 @@ function createBridge() {
       } catch {
         return;
       }
-      if (message?.type !== C2S.CLIENT_INPUT && message?.type !== C2S.PLAYER_STATE) return;
+      if (
+        message?.type !== C2S.CLIENT_INPUT &&
+        message?.type !== C2S.PLAYER_STATE &&
+        message?.type !== C2S.FINISH
+      )
+        return;
       const validation = validateMessage(message);
       if (!validation.ok) return;
 
       const current = currentPlayerFor(ws);
-      if (!current || !ACTIVE_STATES.has(current.room.state)) return;
+      if (!current) return;
       if (message.matchId && message.matchId !== current.room.matchId) return;
+
+      // This listener runs after core. Consume the one-message finish lease even when core moved
+      // the room to RESULTS, rejected the finish, or returned early after handling it. Without the
+      // cleanup, a later lifecycle assignment such as time=null could inherit stale shadow timing.
+      if (message.type === C2S.FINISH) {
+        finishAuthorityCoreBridge.clear(current.player);
+        return;
+      }
+
+      if (!ACTIVE_STATES.has(current.room.state)) return;
 
       if (message.type === C2S.CLIENT_INPUT) {
         if (!limiter.allow(C2S.CLIENT_INPUT)) return;
@@ -203,8 +247,8 @@ function createBridge() {
 
     const originalSend = ws.send;
     const wrappedSend = function shadowAcknowledgedSend(payload, ...args) {
-      // PLAYER_FINISHED and FINISH_REJECTED are emitted only after core has made its legacy
-      // authority decision. Reading that outcome here cannot alter the decision or its payload.
+      // PLAYER_FINISHED and FINISH_REJECTED are emitted only after core has made its authority
+      // decision. Reading that outcome here cannot alter the decision or its payload.
       observeCoreOutcomePayload(payload, ws);
       return originalSend.call(this, enrichSnapshotPayload(payload, ws), ...args);
     };
@@ -240,10 +284,17 @@ function createBridge() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
     const checkpointAuthority = checkpointAuthorityApplier.metrics();
+    const finishAuthority = finishAuthorityCoreBridge.metrics();
     const { coreProgress, authorityVerification, authorityReadiness, authorityProbe } =
       authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
-    if (!hasSimulationTraffic && !coreProgress.boundarySamples && !authorityBoundary.samples) return;
+    if (
+      !hasSimulationTraffic &&
+      !coreProgress.boundarySamples &&
+      !authorityBoundary.samples &&
+      !finishAuthority.attempts
+    )
+      return;
     process.stdout.write(
       `${JSON.stringify({
         level: 'info',
@@ -255,7 +306,8 @@ function createBridge() {
         authorityProbe,
         authorityBoundary,
         authorityBoundaryVerification: authorityVerification,
-        checkpointAuthority
+        checkpointAuthority,
+        finishAuthority
       })}\n`
     );
   }
@@ -299,6 +351,7 @@ function createBridge() {
     authorityBoundaryProbe,
     authorityBoundaryVerification,
     checkpointAuthorityApplier,
+    finishAuthorityCoreBridge,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

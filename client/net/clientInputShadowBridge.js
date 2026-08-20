@@ -3,6 +3,10 @@ import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
 import { reconciliationApplicationProposal } from './ReconciliationApplicationPolicy.js';
+import {
+  applyReconciliationProposal,
+  normalizeMovementAuthoritySource
+} from './ReconciliationApplicator.js';
 import { reconciliationDecision } from './ReconciliationPolicy.js';
 import { ReconciliationTelemetry } from './ReconciliationTelemetry.js';
 
@@ -128,6 +132,8 @@ export class ClientInputShadowSender {
     this.lastShadowReplay = null;
     this.latestLocalState = null;
     this.latestLocalSampleAt = null;
+    this.lastApplicationAttemptServerTick = -1;
+    this.lastApplicationResult = null;
     this.telemetry = new ReconciliationTelemetry({ sampleLimit: telemetrySampleLimit });
   }
 
@@ -179,6 +185,8 @@ export class ClientInputShadowSender {
     this.lastShadowReplay = null;
     this.latestLocalState = null;
     this.latestLocalSampleAt = null;
+    this.lastApplicationAttemptServerTick = -1;
+    this.lastApplicationResult = null;
     this.telemetry.reset(nextMatchId);
     if (nextMatchId && !cursor) this.persistCursor();
     return true;
@@ -240,7 +248,14 @@ export class ClientInputShadowSender {
     return true;
   }
 
-  replayFromShadow(matchId, shadowState, serverTick, lastProcessedInput, raceAuthoritySource = null) {
+  replayFromShadow(
+    matchId,
+    shadowState,
+    serverTick,
+    lastProcessedInput,
+    raceAuthoritySource = null,
+    movementAuthoritySource = null
+  ) {
     if (matchId !== this.activeMatchId || !validShadowState(shadowState)) return false;
     if (!Number.isSafeInteger(serverTick) || serverTick < 0) return false;
     if (!Number.isSafeInteger(lastProcessedInput) || lastProcessedInput < -1) return false;
@@ -264,6 +279,7 @@ export class ClientInputShadowSender {
     const localError = prediction ? simulationStateError(prediction, this.latestLocalState) : null;
     const correction = reconciliationDecision({ error: localError, historyGap });
     const normalizedAuthoritySource = normalizeRaceAuthoritySource(raceAuthoritySource);
+    const normalizedMovementAuthoritySource = normalizeMovementAuthoritySource(movementAuthoritySource);
     const application = reconciliationApplicationProposal({
       raceAuthoritySource: normalizedAuthoritySource,
       correction,
@@ -274,6 +290,7 @@ export class ClientInputShadowSender {
       serverTick,
       lastProcessedInput,
       raceAuthoritySource: normalizedAuthoritySource,
+      movementAuthoritySource: normalizedMovementAuthoritySource,
       historyGap,
       replayedInputs,
       baseline,
@@ -281,10 +298,22 @@ export class ClientInputShadowSender {
       localSampleAt: this.latestLocalSampleAt,
       localError,
       correction,
-      application
+      application,
+      applicationResult: null
     };
     this.telemetry.record({ serverTick, historyGap, error: localError, correction });
     return !historyGap;
+  }
+
+  applyPendingReconciliation(player) {
+    const replay = this.lastShadowReplay;
+    if (!replay || replay.serverTick === this.lastApplicationAttemptServerTick) return false;
+    this.lastApplicationAttemptServerTick = replay.serverTick;
+    this.lastApplicationResult = applyReconciliationProposal(player, replay.application, {
+      movementAuthoritySource: replay.movementAuthoritySource
+    });
+    replay.applicationResult = this.lastApplicationResult;
+    return this.lastApplicationResult.applied === true;
   }
 
   shadowReplayState() {
@@ -304,6 +333,9 @@ export class ClientInputShadowSender {
               ? createPlayerSimulationState(this.lastShadowReplay.application.state)
               : null
           }
+        : null,
+      applicationResult: this.lastShadowReplay.applicationResult
+        ? { ...this.lastShadowReplay.applicationResult }
         : null
     };
   }
@@ -320,7 +352,9 @@ export class ClientInputShadowSender {
       pendingCount: this.pendingInputs.length,
       oldestPendingInput: this.pendingInputs[0]?.sequence ?? null,
       latestPendingInput: this.pendingInputs.at(-1)?.sequence ?? null,
-      historyDropped: this.historyDropped
+      historyDropped: this.historyDropped,
+      lastApplicationAttemptServerTick: this.lastApplicationAttemptServerTick,
+      lastApplicationResult: this.lastApplicationResult ? { ...this.lastApplicationResult } : null
     };
   }
 
@@ -363,7 +397,10 @@ export function installClientInputShadowBridge({
     Object.defineProperty(PlayerClass.prototype, PLAYER_PATCH, { value: originalStep });
     PlayerClass.prototype.step = function clientInputShadowStep(dt, input, cameraYaw, elapsed) {
       const trackLocal = this.finished !== true && this.remote !== true;
-      if (trackLocal) sender.capture(input, cameraYaw);
+      if (trackLocal) {
+        sender.applyPendingReconciliation(this);
+        sender.capture(input, cameraYaw);
+      }
       const result = originalStep.call(this, dt, input, cameraYaw, elapsed);
       if (trackLocal) sender.observeLocalPlayer(this);
       return result;
@@ -384,7 +421,8 @@ export function installClientInputShadowBridge({
           message.shadowPlayerState,
           message.serverTick,
           message.lastProcessedInput,
-          message.raceAuthoritySource
+          message.raceAuthoritySource,
+          message.movementAuthoritySource
         );
       }
       const result = originalHandleMessage.call(this, message);

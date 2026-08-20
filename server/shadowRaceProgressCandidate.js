@@ -28,9 +28,7 @@ function finishTimingFor(room, shadow) {
   const finished = shadow?.progress?.finished === true;
   const finishServerTime = shadow?.finishServerTime;
   if (!finished) {
-    return finishServerTime === null
-      ? Object.freeze({ finishServerTime: null, finishTimeMs: null })
-      : null;
+    return finishServerTime === null ? Object.freeze({ finishServerTime: null, finishTimeMs: null }) : null;
   }
 
   if (!Number.isSafeInteger(room?.startedAt) || room.startedAt < 0) return null;

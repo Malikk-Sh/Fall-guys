@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { supportIndexAt, supportTop } from '/shared/courseCollision.js';
 import { COLORS } from '../core/Config.js';
 import { PLAYER_BODY_RADIUS, PLAYER_FOOT } from './PlayerDimensions.js';
 
@@ -12,22 +13,9 @@ import { PLAYER_BODY_RADIUS, PLAYER_FOOT } from './PlayerDimensions.js';
 
 export { PLAYER_FOOT } from './PlayerDimensions.js';
 
-// Запас по краю опоры.
-//
-// Раньше здесь стоял отступ ВНУТРЬ (−0.12), и это была едва ли не самая дорогая ошибка проекта.
-// Отрезки трассы кладутся вплотную друг к другу, а опора у каждого считалась на 0.12 у́же с каждой
-// стороны — значит на каждом стыке зияла щель шириной 0.24, где пола не было ни у одного из
-// соседей. Игрок, бегущий по ровному полу, время от времени проваливался посреди него: на границе
-// сегментов, то есть в местах, где визуально нет вообще ничего.
-//
-// Найти это глазами было невозможно — щель уже персонажа и невидима, а проваливается он не всегда,
-// а только когда шаг физики приходится ровно на неё. Нашли боты, которым щель попадалась на каждом
-// прогоне.
-//
-// Знак теперь противоположный: край опоры чуть шире геометрии. Стыки заведомо перекрываются, а
-// прыжок с самого края становится прощающим — в игре про неуклюжих персонажей это ровно то
-// ощущение, которое нужно. На ширину пропастей это не влияет: они на два порядка больше запаса.
-const EDGE_TOLERANCE = 0.12;
+// Игрок, стоящий на неподвижной опоре, не получает переноса. Вектор общий и только читается —
+// иначе каждый шаг физики на статичной платформе выделял бы новый Vector3.
+const ZERO_DELTA = Object.freeze(new THREE.Vector3());
 
 export class CourseBuilder {
   constructor(scene, { quality = 'high' } = {}) {
@@ -38,6 +26,9 @@ export class CourseBuilder {
 
     // Опоры, на которые можно встать.
     this.platforms = [];
+    // Плоское описание тех же опор для общей проверки пола. Живёт ровно столько же, сколько
+    // platforms, и обновляется на месте — см. syncColliders().
+    this.colliders = [];
     // Препятствия, реагирующие на касание.
     this.obstacles = [];
     // Платформы с собственным движением: их сдвиг за шаг переносит стоящего игрока.
@@ -148,30 +139,41 @@ export class CourseBuilder {
 
   // Поиск опоры под ногами.
   //
-  // Это свип-тест, а не проверка пересечения: сравниваются положения ступни до и после шага. Иначе
-  // на скорости игрок за один шаг проскакивал бы тонкую платформу насквозь, ни разу не оказавшись
-  // внутри неё. Условие velocityY > 2.2 не даёт «приземлиться» на платформу, сквозь которую игрок
-  // как раз пролетает вверх — например, выпрыгивая из-под неё.
+  // Сама проверка живёт в shared/courseCollision.js: это чистая арифметика над коробками и
+  // цилиндрами, и серверная симуляция обязана спрашивать про пол по той же формуле. Здесь остаётся
+  // только перенос текущих позиций мешей в плоское описание опор — по одному объекту на платформу,
+  // созданному один раз, чтобы физический шаг ничего не выделял.
   surfaceAt(position, previousY, velocityY) {
-    let best = null;
-    for (const p of this.platforms) {
-      if (p.disabled) continue;
-      const m = p.mesh;
-      const dx = Math.abs(position.x - m.position.x);
-      const dz = Math.abs(position.z - m.position.z);
-      const inside =
-        p.type === 'cylinder'
-          ? Math.hypot(position.x - m.position.x, position.z - m.position.z) < p.r + EDGE_TOLERANCE
-          : dx < p.w / 2 + EDGE_TOLERANCE && dz < p.d / 2 + EDGE_TOLERANCE;
-      if (!inside) continue;
+    const colliders = this.syncColliders();
+    const index = supportIndexAt(colliders, position, previousY, velocityY, PLAYER_FOOT);
+    if (index < 0) return null;
+    const platform = this.platforms[index];
+    return { y: supportTop(colliders[index]), platform, delta: platform.delta || ZERO_DELTA };
+  }
 
-      const top = m.position.y + p.h / 2;
-      const foot = position.y - PLAYER_FOOT;
-      const previousFoot = previousY - PLAYER_FOOT;
-      if (foot > top + 0.45 || previousFoot < top - PLAYER_FOOT || velocityY > 2.2) continue;
-      if (!best || top > best.y) best = { y: top, platform: p, delta: p.delta || new THREE.Vector3() };
+  // Плоское описание опор, отражающее текущее положение мешей.
+  syncColliders() {
+    const colliders = this.colliders;
+    colliders.length = this.platforms.length;
+    for (let index = 0; index < this.platforms.length; index++) {
+      const platform = this.platforms[index];
+      const meshPosition = platform.mesh.position;
+      let collider = colliders[index];
+      if (!collider) {
+        collider = { x: 0, y: 0, z: 0, w: 0, h: 0, d: 0, r: 0, type: 'box', disabled: false };
+        colliders[index] = collider;
+      }
+      collider.x = meshPosition.x;
+      collider.y = meshPosition.y;
+      collider.z = meshPosition.z;
+      collider.w = platform.w;
+      collider.h = platform.h;
+      collider.d = platform.d;
+      collider.r = platform.r || 0;
+      collider.type = platform.type;
+      collider.disabled = platform.disabled === true;
     }
-    return best;
+    return colliders;
   }
 
   // Возвращает нормаль специальной стены, пересечённой за текущий физический шаг.
@@ -214,6 +216,7 @@ export class CourseBuilder {
     for (const material of this.materials.values()) material.dispose();
     this.materials.clear();
     this.platforms.length = 0;
+    this.colliders.length = 0;
     this.obstacles.length = 0;
     this.dynamic.length = 0;
     this.cameraMeshes.length = 0;

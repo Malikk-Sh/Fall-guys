@@ -23,7 +23,7 @@
     "check": "eslint .",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --write server/raceCheckpointAuthorityCoreBridge.test.mjs && git diff -- server/raceCheckpointAuthorityCoreBridge.test.mjs && exit 1",
     "check:merge-markers": "node scripts/check-merge-markers.mjs",
     "check:shell": "bash -n deploy/install.sh deploy/backup.sh deploy/restore.sh deploy/check-backup.sh deploy/smoke.sh deploy/verify-shared443-config.sh .githooks/pre-push",
     "preflight": "npm run format:check && npm run check:merge-markers && npm run check:shell && npm run check",

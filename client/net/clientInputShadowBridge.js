@@ -349,9 +349,7 @@ export class ClientInputShadowSender {
       pendingCount: this.pendingInputs.length,
       oldestPendingInput: this.pendingInputs[0]?.sequence ?? null,
       latestPendingInput: this.pendingInputs.at(-1)?.sequence ?? null,
-      historyDropped: this.historyDropped,
-      lastApplicationAttemptServerTick: this.lastApplicationAttemptServerTick,
-      lastApplicationResult: this.lastApplicationResult ? { ...this.lastApplicationResult } : null
+      historyDropped: this.historyDropped
     };
   }
 

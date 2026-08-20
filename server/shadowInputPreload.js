@@ -5,6 +5,7 @@ const { validateMessage, RateLimiter } = require('../shared/validation.js');
 const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
 const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
+const raceProgressAuthorityMatchGuard = require('./raceProgressAuthorityMatchGuard');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
@@ -30,6 +31,7 @@ const METRICS_INTERVAL_MS = 60_000;
 function createBridge() {
   const runtime = shadowRuntimeService.runtime;
   const authorityService = shadowRaceAuthorityService;
+  const authorityMatchGuard = raceProgressAuthorityMatchGuard;
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
@@ -115,11 +117,19 @@ function createBridge() {
 
     const shadow = shadowRuntimeService.snapshot(current.player);
     if (!shadow || shadow.matchId !== message.matchId) return payload;
+    let raceAuthoritySource = null;
+    try {
+      raceAuthoritySource = authorityMatchGuard.sourceFor(current.room);
+    } catch {
+      // Missing authority evidence must never make a client believe shadow state is authoritative.
+      raceAuthoritySource = null;
+    }
     return JSON.stringify({
       ...message,
       serverTick: shadow.lastServerTick >= 0 ? shadow.lastServerTick : runtime.serverTick,
       lastProcessedInput: shadow.lastProcessedInput,
-      shadowPlayerState: shadow.state
+      shadowPlayerState: shadow.state,
+      raceAuthoritySource
     });
   }
 
@@ -427,6 +437,7 @@ function createBridge() {
     runtime,
     runtimeService: shadowRuntimeService,
     authorityService,
+    authorityMatchGuard,
     authorityBoundaryProbe,
     authorityBoundaryVerification,
     checkpointAuthorityApplier,

@@ -158,6 +158,11 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   assert.ok(Number.isSafeInteger(acknowledgement.serverTick));
   assert.ok(acknowledgement.serverTick >= shadow.lastServerTick);
   assert.ok(acknowledgement.shadowPlayerState);
+  assert.equal(
+    acknowledgement.raceAuthoritySource,
+    null,
+    'co-op never advertises an authoritative race reconciliation source'
+  );
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.x));
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.y));
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.z));
@@ -169,10 +174,12 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     second.messages.some(
       message =>
         message.type === 'snapshot' &&
-        (message.lastProcessedInput !== undefined || message.shadowPlayerState !== undefined)
+        (message.lastProcessedInput !== undefined ||
+          message.shadowPlayerState !== undefined ||
+          message.raceAuthoritySource !== undefined)
     ),
     false,
-    'shadow acknowledgement and simulation state stay personalized to their owner'
+    'shadow acknowledgement, simulation state and authority marker stay personalized to their owner'
   );
 
   const staleBefore = bridge.runtime.metrics().rejected.staleSequence;
@@ -256,4 +263,34 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   assert.ok(checkpointMetrics.legacyDecisions > checkpointMetricsBefore.legacyDecisions);
   assert.equal(checkpointMetrics.appliedAdvances, checkpointMetricsBefore.appliedAdvances);
   assert.equal(racePlayer.checkpoint, 0, 'default authority never rewrites the legacy checkpoint');
+
+  first.send('input', {
+    matchId: raceStart.matchId,
+    sequence: 0,
+    clientTick: 0,
+    moveX: 0,
+    moveZ: 0,
+    jumpPressed: false,
+    jumpHeld: false,
+    divePressed: false,
+    cameraYaw: 0
+  });
+  assert.equal(
+    await waitFor(() => {
+      const raceShadow = bridge.runtime.snapshot(racePlayer);
+      return raceShadow?.matchId === raceStart.matchId && raceShadow.lastProcessedInput === 0;
+    }),
+    true,
+    'new race input creates a match-scoped owner shadow snapshot'
+  );
+
+  const legacyAuthoritySnapshot = await first.wait(
+    'snapshot',
+    message => message.matchId === raceStart.matchId && message.raceAuthoritySource === 'legacy'
+  );
+  assert.equal(
+    legacyAuthoritySnapshot.raceAuthoritySource,
+    'legacy',
+    'owner snapshot exposes the match-scoped authority lease before reconciliation can cut over'
+  );
 });

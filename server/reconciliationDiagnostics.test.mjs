@@ -12,6 +12,7 @@ import { S2C } from '../shared/protocol.js';
 import {
   ClientInputShadowSender,
   installClientInputShadowBridge,
+  normalizeRaceAuthoritySource,
   simulationStateError
 } from '../client/net/clientInputShadowBridge.js';
 
@@ -90,6 +91,15 @@ test('simulation state error reports correction deltas without mutating either s
   assert.deepEqual(predicted, predictedBefore);
   assert.deepEqual(local, localBefore);
   assert.equal(simulationStateError({ position: {} }, local), null);
+});
+
+test('race authority source marker accepts only explicit legacy or shadow leases', () => {
+  assert.equal(normalizeRaceAuthoritySource('legacy'), 'legacy');
+  assert.equal(normalizeRaceAuthoritySource('shadow'), 'shadow');
+  assert.equal(normalizeRaceAuthoritySource(null), null);
+  assert.equal(normalizeRaceAuthoritySource(undefined), null);
+  assert.equal(normalizeRaceAuthoritySource('server'), null);
+  assert.equal(normalizeRaceAuthoritySource({ source: 'shadow' }), null);
 });
 
 test('reconciliation policy separates tolerated, soft and hard divergence', () => {
@@ -240,8 +250,9 @@ test('shadow replay compares prediction against the latest sampled local physics
     velocity: { x: 1.5, y: 0, z: 0.5 },
     grounded: false
   });
-  assert.equal(sender.replayFromShadow('match-a', baseline, 7, -1), true);
+  assert.equal(sender.replayFromShadow('match-a', baseline, 7, -1, 'shadow'), true);
   const replay = sender.shadowReplayState();
+  assert.equal(replay.raceAuthoritySource, 'shadow');
   assert.equal(replay.localSampleAt, 48);
   assert.deepEqual(replay.localError.positionDelta, { x: 1, y: 2, z: 0 });
   assert.equal(replay.localError.positionError, Math.sqrt(5));
@@ -324,10 +335,12 @@ test('prototype bridge samples local state after the existing player step and ne
     lastProcessedInput: 0,
     serverTick: 9,
     shadowPlayerState,
+    raceAuthoritySource: 'legacy',
     players: []
   });
 
   const replay = sender.shadowReplayState();
+  assert.equal(replay.raceAuthoritySource, 'legacy');
   assert.deepEqual(replay.localError.positionDelta, { x: 1, y: 0, z: 0 });
   assert.deepEqual(replay.localError.velocityDelta, { x: 1, y: 0, z: 0 });
   assert.equal(replay.localError.positionError, 1);

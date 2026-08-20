@@ -244,7 +244,14 @@ test('client keeps the IPC connection alive until a slow allowlisted operation r
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const client = new AdminOperationsClient({ socketPath, timeoutMs: 500 });
+  // The invariant here is that the client holds the connection open for an operation that outlives
+  // the helper's request-read guard, not that the round trip fits in a given wall-clock budget.
+  // Before replying, the helper commits queued and running to the durable journal, and each commit
+  // fsyncs the journal file and its parent directory synchronously. Under parallel test files on a
+  // contended CI disk those four fsyncs alone can block the helper for longer than half a second,
+  // which made a 500 ms budget fail on a healthy helper. Production allows 135 s for the same call,
+  // so bound the test well above realistic journal I/O instead of just above the executor delay.
+  const client = new AdminOperationsClient({ socketPath, timeoutMs: 30_000 });
   assert.equal(client.available(), true);
   const result = await client.run('backup.verify');
   assert.equal(result.ok, true);

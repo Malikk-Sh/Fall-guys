@@ -273,9 +273,7 @@ export class ClientInputShadowSender {
       predicted: this.lastShadowReplay.predicted
         ? createPlayerSimulationState(this.lastShadowReplay.predicted)
         : null,
-      localError: this.lastShadowReplay.localError
-        ? structuredClone(this.lastShadowReplay.localError)
-        : null
+      localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null
     };
   }
 

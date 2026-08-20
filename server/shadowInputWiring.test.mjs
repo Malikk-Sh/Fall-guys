@@ -187,26 +187,21 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     mode: 'race',
     protocolVersion: PROTOCOL_VERSION
   });
-  const raceLobby = await first.wait(
-    'lobby',
-    message => message.mode === 'race' && message.players.length === 1
-  );
+  const isRaceLobby = message => message.mode === 'race' && message.players.length === 1;
+  const raceLobby = await first.wait('lobby', isRaceLobby);
   const raceRoom = rooms.get(raceLobby.code);
   const racePlayer = raceRoom.players.get(firstHello.id);
   assert.ok(racePlayer, 'same socket identity enters the new race room');
 
   first.send('ready', { ready: true });
-  await first.wait(
-    'lobby',
-    message =>
-      message.code === raceLobby.code &&
-      message.players.some(item => item.id === firstHello.id && item.ready)
-  );
+  const raceReady = message => {
+    if (message.code !== raceLobby.code) return false;
+    return message.players.some(item => item.id === firstHello.id && item.ready);
+  };
+  await first.wait('lobby', raceReady);
   first.send('start');
-  const raceStart = await first.wait(
-    'start',
-    message => message.mode === 'race' && message.matchId !== firstStart.matchId
-  );
+  const isNewRaceStart = message => message.mode === 'race' && message.matchId !== firstStart.matchId;
+  const raceStart = await first.wait('start', isNewRaceStart);
   assert.equal(raceRoom.matchId, raceStart.matchId);
 
   const checkpointMetricsBefore = bridge.checkpointAuthorityApplier.metrics();
@@ -232,10 +227,12 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     true,
     'core accepts a state after the socket moves to a new room'
   );
+  const checkpointAuthorityObserved = () => {
+    const current = bridge.checkpointAuthorityApplier.metrics();
+    return current.attempts > checkpointMetricsBefore.attempts;
+  };
   assert.equal(
-    await waitFor(
-      () => bridge.checkpointAuthorityApplier.metrics().attempts > checkpointMetricsBefore.attempts
-    ),
+    await waitFor(checkpointAuthorityObserved),
     true,
     'post-core checkpoint authority runs for the current race player on the reused socket'
   );

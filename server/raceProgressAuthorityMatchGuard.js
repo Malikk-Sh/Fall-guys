@@ -26,7 +26,8 @@ function legacyResult(progress, fallbackReason) {
 
 function guardedResult(result) {
   if (!result || !validProgress(result.progress)) return null;
-  const source = result.source === AUTHORITY_SOURCE.SHADOW ? AUTHORITY_SOURCE.SHADOW : AUTHORITY_SOURCE.LEGACY;
+  let source = AUTHORITY_SOURCE.LEGACY;
+  if (result.source === AUTHORITY_SOURCE.SHADOW) source = AUTHORITY_SOURCE.SHADOW;
   return Object.freeze({
     ok: result.ok === true,
     source,
@@ -81,18 +82,15 @@ function createRaceProgressAuthorityMatchGuard({ decision = raceProgressAuthorit
         return candidate;
       }
       lock(room, AUTHORITY_SOURCE.LEGACY);
-      return candidate?.source === AUTHORITY_SOURCE.LEGACY && candidate.progress
-        ? candidate
-        : legacyResult(legacyProgress, MATCH_FALLBACK_REASON.LEGACY_LOCKED);
+      if (candidate?.source === AUTHORITY_SOURCE.LEGACY && candidate.progress) return candidate;
+      return legacyResult(legacyProgress, MATCH_FALLBACK_REASON.LEGACY_LOCKED);
     }
 
     if (candidate?.ok && candidate.source === AUTHORITY_SOURCE.SHADOW) return candidate;
 
     lock(room, AUTHORITY_SOURCE.LEGACY);
-    return legacyResult(
-      legacyProgress,
-      candidate?.fallbackReason || MATCH_FALLBACK_REASON.SHADOW_REVOKED
-    );
+    const fallbackReason = candidate?.fallbackReason || MATCH_FALLBACK_REASON.SHADOW_REVOKED;
+    return legacyResult(legacyProgress, fallbackReason);
   }
 
   function reset() {

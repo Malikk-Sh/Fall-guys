@@ -129,10 +129,7 @@ test('default movement parity evidence locks an established race to legacy', () 
   const decision = guard.decide({ room, player });
   assert.equal(decision.source, MOVEMENT_AUTHORITY_SOURCE.LEGACY);
   assert.equal(decision.fallbackReason, MATCH_FALLBACK_REASON.LEGACY_LOCKED);
-  assert.deepEqual(decision.reasons, [
-    REASON.COLLISION_PARITY_UNVERIFIED,
-    REASON.OBSTACLE_PARITY_UNVERIFIED
-  ]);
+  assert.deepEqual(decision.reasons, [REASON.COLLISION_PARITY_UNVERIFIED, REASON.OBSTACLE_PARITY_UNVERIFIED]);
   assert.equal(guard.sourceFor(room), MOVEMENT_AUTHORITY_SOURCE.LEGACY);
 });
 

@@ -26,13 +26,12 @@ function healthyMetrics(overrides = {}) {
   };
 }
 
-test('default policy stays advisory-false until both state and finish evidence are sufficient', () => {
-  const result = evaluateShadowRaceAuthorityReadiness(
-    healthyMetrics({
-      stateSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples - 1,
-      finishComparableSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minFinishSamples - 1
-    })
-  );
+test('default policy needs enough state and finish evidence', () => {
+  const metrics = healthyMetrics({
+    stateSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples - 1,
+    finishComparableSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minFinishSamples - 1
+  });
+  const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
   assert.equal(result.ready, false);
   assert.deepEqual(result.reasons, [
@@ -44,7 +43,7 @@ test('default policy stays advisory-false until both state and finish evidence a
   assert.equal(Object.isFrozen(result.policy), true);
 });
 
-test('clean evidence above the default policy produces a read-only ready signal', () => {
+test('clean default evidence is advisory-ready', () => {
   const metrics = healthyMetrics();
   const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
@@ -64,18 +63,17 @@ test('clean evidence above the default policy produces a read-only ready signal'
   assert.deepEqual(metrics, healthyMetrics(), 'the evaluator never mutates observed diagnostics');
 });
 
-test('each migration risk keeps authority readiness false with an explicit reason', () => {
-  const result = evaluateShadowRaceAuthorityReadiness(
-    healthyMetrics({
-      availabilityRate: 0.9,
-      invalidLegacySamples: 1,
-      checkpointMismatchRate: 0.2,
-      maxCheckpointDelta: 2,
-      finishMismatchRate: 0.1,
-      acceptedButShadowUnfinishedSamples: 1,
-      rejectedButShadowFinishedSamples: 1
-    })
-  );
+test('each migration risk blocks readiness explicitly', () => {
+  const metrics = healthyMetrics({
+    availabilityRate: 0.9,
+    invalidLegacySamples: 1,
+    checkpointMismatchRate: 0.2,
+    maxCheckpointDelta: 2,
+    finishMismatchRate: 0.1,
+    acceptedButShadowUnfinishedSamples: 1,
+    rejectedButShadowFinishedSamples: 1
+  });
+  const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
   assert.equal(result.ready, false);
   assert.deepEqual(result.reasons, [
@@ -89,13 +87,14 @@ test('each migration risk keeps authority readiness false with an explicit reaso
   ]);
 });
 
-test('invalid metrics fail closed instead of manufacturing a positive readiness signal', () => {
-  for (const metrics of [
+test('malformed metrics fail closed', () => {
+  const cases = [
     null,
     {},
     healthyMetrics({ availabilityRate: 2 }),
     healthyMetrics({ stateSamples: -1 })
-  ]) {
+  ];
+  for (const metrics of cases) {
     assert.equal(validMetrics(metrics), false);
     const result = evaluateShadowRaceAuthorityReadiness(metrics);
     assert.equal(result.ready, false);
@@ -103,7 +102,7 @@ test('invalid metrics fail closed instead of manufacturing a positive readiness 
   }
 });
 
-test('tests and later rollout stages can supply a stricter or looser policy without changing defaults', () => {
+test('policy overrides can be stricter or looser', () => {
   const policy = normalizePolicy({
     minStateSamples: 2,
     minFinishSamples: 1,
@@ -112,24 +111,22 @@ test('tests and later rollout stages can supply a stricter or looser policy with
     maxFinishMismatchRate: 0.5,
     maxCheckpointDelta: 3
   });
-  const result = evaluateShadowRaceAuthorityReadiness(
-    healthyMetrics({
-      stateSamples: 2,
-      finishComparableSamples: 1,
-      availabilityRate: 0.5,
-      checkpointMismatchRate: 0.5,
-      finishMismatchRate: 0.5,
-      maxCheckpointDelta: 3
-    }),
-    policy
-  );
+  const metrics = healthyMetrics({
+    stateSamples: 2,
+    finishComparableSamples: 1,
+    availabilityRate: 0.5,
+    checkpointMismatchRate: 0.5,
+    finishMismatchRate: 0.5,
+    maxCheckpointDelta: 3
+  });
+  const result = evaluateShadowRaceAuthorityReadiness(metrics, policy);
 
   assert.equal(result.ready, true);
   assert.equal(DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples, 300);
   assert.equal(DEFAULT_SHADOW_AUTHORITY_POLICY.minFinishSamples, 30);
 });
 
-test('invalid policy overrides fall back to the conservative default policy', () => {
+test('invalid policy overrides use conservative defaults', () => {
   const normalized = normalizePolicy({ minStateSamples: -1, minAvailabilityRate: 2 });
   assert.equal(normalized, DEFAULT_SHADOW_AUTHORITY_POLICY);
 

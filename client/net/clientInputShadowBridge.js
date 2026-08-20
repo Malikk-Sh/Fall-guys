@@ -23,10 +23,15 @@ function browserStorage() {
 }
 
 export class ClientInputShadowSender {
-  constructor({ storage = browserStorage(), now = () => performance.now(), historyLimit = CLIENT_INPUT_HISTORY_LIMIT } = {}) {
+  constructor({
+    storage = browserStorage(),
+    now = () => performance.now(),
+    historyLimit = CLIENT_INPUT_HISTORY_LIMIT
+  } = {}) {
     this.storage = storage;
     this.now = now;
-    this.historyLimit = Number.isSafeInteger(historyLimit) && historyLimit > 0 ? historyLimit : CLIENT_INPUT_HISTORY_LIMIT;
+    this.historyLimit =
+      Number.isSafeInteger(historyLimit) && historyLimit > 0 ? historyLimit : CLIENT_INPUT_HISTORY_LIMIT;
     this.activeMatchId = null;
     this.sequence = 0;
     this.clientTick = 0;

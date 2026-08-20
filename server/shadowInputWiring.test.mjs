@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const bridge = require('./shadowInputPreload');
 const WebSocket = require('ws');
 const { PROTOCOL_VERSION } = require('../shared/protocol.js');
+const gameRules = require('./gameRules');
 const { server, rooms, resetRateLimits } = require('./index');
 
 const WAIT_MS = 10_000;
@@ -78,6 +79,11 @@ async function waitFor(predicate, timeout = WAIT_MS) {
 test('live shadow bridge follows the socket while legacy gameplay remains default authority', async t => {
   resetRateLimits();
   rooms.clear();
+  assert.equal(
+    gameRules.canFinish,
+    bridge.finishAuthorityCoreBridge.canFinish,
+    'preload installs the guarded finish gate before core captures gameRules'
+  );
   await listen();
   const url = `ws://127.0.0.1:${server.address().port}/ws`;
   const first = new TestClient(url);
@@ -110,6 +116,11 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     await waitFor(() => bridge.attachedCount() >= 2),
     true,
     'bridge attaches to active player sockets before input is sampled'
+  );
+  assert.equal(
+    bridge.finishAuthorityCoreBridge.managesPlayer(player),
+    true,
+    'active human player receives the bounded authoritative finish-time seam'
   );
 
   const legacyBefore = structuredClone(player.last);
@@ -203,6 +214,11 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   const isNewRaceStart = message => message.mode === 'race' && message.matchId !== firstStart.matchId;
   const raceStart = await first.wait('start', isNewRaceStart);
   assert.equal(raceRoom.matchId, raceStart.matchId);
+  assert.equal(
+    await waitFor(() => bridge.finishAuthorityCoreBridge.managesPlayer(racePlayer)),
+    true,
+    'reused socket installs finish timing on the current race player object'
+  );
 
   const checkpointMetricsBefore = bridge.checkpointAuthorityApplier.metrics();
   await sleep(Math.max(0, raceStart.at - Date.now() - 250));

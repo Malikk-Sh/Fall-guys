@@ -8,6 +8,7 @@ const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
+const raceServerCheckpointAdvance = require('./raceServerCheckpointAdvance');
 const raceFinishAuthorityCoreBridge = require('./raceFinishAuthorityCoreBridge');
 const raceServerAutoFinish = require('./raceServerAutoFinish');
 const gameRules = require('./gameRules');
@@ -29,6 +30,7 @@ function createBridge() {
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
+  const serverCheckpointAdvance = raceServerCheckpointAdvance;
   const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
   const finishAuthorityCoreVerification = authorityService.finishCoreVerification;
   const serverAutoFinish = raceServerAutoFinish;
@@ -323,13 +325,16 @@ function createBridge() {
     shadowRuntimeService.tick(core.rooms);
 
     // Shadow progress is computed on the fixed server tick. Once a match was explicitly latched to
-    // shadow authority, the server no longer waits for the browser to notice the finish plane: it
-    // injects the canonical FINISH shape into the already-hardened core message pipeline. Legacy
-    // and not-yet-latched matches remain completely client-triggered.
+    // shadow authority, checkpoint progress advances directly from that server-owned simulation and
+    // finish no longer waits for the browser to notice the finish plane. Legacy and not-yet-latched
+    // matches keep their existing client-triggered behavior.
+    const now = Date.now();
     for (const room of core.rooms.values()) {
       if (room.state !== ROOM_STATE.PLAYING) continue;
       for (const player of room.players.values()) {
-        if (!player.bot) serverAutoFinish.apply({ room, player });
+        if (player.bot) continue;
+        serverCheckpointAdvance.apply({ room, player, now });
+        serverAutoFinish.apply({ room, player });
       }
     }
   }
@@ -338,6 +343,7 @@ function createBridge() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
     const checkpointAuthority = checkpointAuthorityApplier.metrics();
+    const serverCheckpoint = serverCheckpointAdvance.metrics();
     const finishAuthority = finishAuthorityCoreBridge.metrics();
     const autoFinish = serverAutoFinish.metrics();
     const {
@@ -353,6 +359,7 @@ function createBridge() {
       !coreProgress.boundarySamples &&
       !authorityBoundary.samples &&
       !finishAuthority.attempts &&
+      !serverCheckpoint.attempts &&
       !autoFinish.candidates
     )
       return;
@@ -369,6 +376,7 @@ function createBridge() {
         authorityBoundaryVerification: authorityVerification,
         finishCoreVerification,
         checkpointAuthority,
+        serverCheckpoint,
         finishAuthority,
         autoFinish
       })}\n`
@@ -414,6 +422,7 @@ function createBridge() {
     authorityBoundaryProbe,
     authorityBoundaryVerification,
     checkpointAuthorityApplier,
+    serverCheckpointAdvance,
     finishAuthorityCoreBridge,
     finishAuthorityCoreVerification,
     serverAutoFinish,

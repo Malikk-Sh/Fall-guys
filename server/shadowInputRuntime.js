@@ -2,10 +2,7 @@
 
 const { ClientInputQueue } = require('./clientInputQueue');
 const { ROOM_STATE } = require('../shared/protocol.js');
-const {
-  createPlayerSimulationState,
-  stepPlayerMotion
-} = require('../shared/playerSimulation.js');
+const { createPlayerSimulationState, stepPlayerMotion } = require('../shared/playerSimulation.js');
 
 const SERVER_SIMULATION_HZ = 30;
 const SERVER_SIMULATION_DT = 1 / SERVER_SIMULATION_HZ;
@@ -206,7 +203,12 @@ class ShadowInputRuntime {
     this.simulatedSteps += 1;
 
     const legacy = player.last;
-    if (legacy && Number.isFinite(legacy.x) && Number.isFinite(legacy.y) && Number.isFinite(legacy.z)) {
+    if (
+      legacy &&
+      Number.isFinite(legacy.x) &&
+      Number.isFinite(legacy.y) &&
+      Number.isFinite(legacy.z)
+    ) {
       const dx = controller.state.position.x - legacy.x;
       const dy = controller.state.position.y - legacy.y;
       const dz = controller.state.position.z - legacy.z;
@@ -223,10 +225,17 @@ class ShadowInputRuntime {
     this.serverTick += 1;
     for (const room of rooms.values()) {
       if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
-      const advance = room.state === ROOM_STATE.PLAYING || (room.startedAt && now >= room.startedAt);
+      const advance =
+        room.state === ROOM_STATE.PLAYING || (room.startedAt && now >= room.startedAt);
       for (const player of room.players.values()) {
         const controller = this.controllers.get(player);
-        if (!controller || controller.matchId !== room.matchId || player.bot || player.finished) continue;
+        if (
+          !controller ||
+          controller.matchId !== room.matchId ||
+          player.bot ||
+          player.finished
+        )
+          continue;
         this.consume(controller, player, { advance });
       }
     }

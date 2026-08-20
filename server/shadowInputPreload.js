@@ -56,8 +56,8 @@ function createBridge() {
   function observeCoreOutcomePayload(payload, ws) {
     if (typeof payload !== 'string') return;
     const isFinishOutcome =
-      payload.includes(`\"type\":\"${S2C.PLAYER_FINISHED}\"`) ||
-      payload.includes(`\"type\":\"${S2C.FINISH_REJECTED}\"`);
+      payload.includes(`"type":"${S2C.PLAYER_FINISHED}"`) ||
+      payload.includes(`"type":"${S2C.FINISH_REJECTED}"`);
     if (!isFinishOutcome) return;
 
     const current = currentPlayerFor(ws);
@@ -103,7 +103,7 @@ function createBridge() {
   }
 
   function enrichSnapshotPayload(payload, ws) {
-    if (typeof payload !== 'string' || !payload.includes('\"type\":\"snapshot\"')) return payload;
+    if (typeof payload !== 'string' || !payload.includes('"type":"snapshot"')) return payload;
     let message;
     try {
       message = JSON.parse(payload);

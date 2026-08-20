@@ -26,8 +26,7 @@ function legacyResult(progress, fallbackReason) {
 
 function guardedResult(result) {
   if (!result || !validProgress(result.progress)) return null;
-  const source =
-    result.source === AUTHORITY_SOURCE.SHADOW ? AUTHORITY_SOURCE.SHADOW : AUTHORITY_SOURCE.LEGACY;
+  const source = result.source === AUTHORITY_SOURCE.SHADOW ? AUTHORITY_SOURCE.SHADOW : AUTHORITY_SOURCE.LEGACY;
   return Object.freeze({
     ok: result.ok === true,
     source,

@@ -2,6 +2,7 @@ import { createPlayerSimulationState, stepPlayerMotion } from '/shared/playerSim
 import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
+import { ReconciliationTelemetry } from './ReconciliationTelemetry.js';
 
 export const CLIENT_INPUT_INTERVAL_MS = 1000 / 30;
 export const CLIENT_INPUT_REPLAY_DT = CLIENT_INPUT_INTERVAL_MS / 1000;
@@ -100,7 +101,8 @@ export class ClientInputShadowSender {
   constructor({
     storage = browserStorage(),
     now = () => performance.now(),
-    historyLimit = CLIENT_INPUT_HISTORY_LIMIT
+    historyLimit = CLIENT_INPUT_HISTORY_LIMIT,
+    telemetrySampleLimit
   } = {}) {
     this.storage = storage;
     this.now = now;
@@ -120,6 +122,7 @@ export class ClientInputShadowSender {
     this.lastShadowReplay = null;
     this.latestLocalState = null;
     this.latestLocalSampleAt = null;
+    this.telemetry = new ReconciliationTelemetry({ sampleLimit: telemetrySampleLimit });
   }
 
   readCursor(matchId) {
@@ -170,6 +173,7 @@ export class ClientInputShadowSender {
     this.lastShadowReplay = null;
     this.latestLocalState = null;
     this.latestLocalSampleAt = null;
+    this.telemetry.reset(nextMatchId);
     if (nextMatchId && !cursor) this.persistCursor();
     return true;
   }
@@ -251,6 +255,7 @@ export class ClientInputShadowSender {
     }
 
     const prediction = historyGap ? null : predicted;
+    const localError = prediction ? simulationStateError(prediction, this.latestLocalState) : null;
     this.lastShadowReplay = {
       matchId,
       serverTick,
@@ -260,8 +265,9 @@ export class ClientInputShadowSender {
       baseline,
       predicted: prediction,
       localSampleAt: this.latestLocalSampleAt,
-      localError: prediction ? simulationStateError(prediction, this.latestLocalState) : null
+      localError
     };
+    this.telemetry.record({ serverTick, historyGap, error: localError });
     return !historyGap;
   }
 
@@ -275,6 +281,10 @@ export class ClientInputShadowSender {
         : null,
       localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null
     };
+  }
+
+  reconciliationDiagnostics() {
+    return this.telemetry.snapshot();
   }
 
   reconciliationState() {

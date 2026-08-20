@@ -45,9 +45,12 @@ function legacyProgressProposal({
   return Object.freeze({ checkpoint: projected.checkpoint ?? 0, finished });
 }
 
-function createRaceProgressAuthorityBoundaryProbe({ decision = raceProgressAuthorityDecision } = {}) {
-  if (!decision || typeof decision.decide !== 'function') {
-    throw new TypeError('race progress authority boundary probe requires a decision adapter');
+function createRaceProgressAuthorityBoundaryProbe({
+  decision = raceProgressAuthorityDecision,
+  proposalFor = legacyProgressProposal
+} = {}) {
+  if (!decision || typeof decision.decide !== 'function' || typeof proposalFor !== 'function') {
+    throw new TypeError('race progress authority boundary probe requires decision and proposal functions');
   }
 
   const counters = {
@@ -61,7 +64,7 @@ function createRaceProgressAuthorityBoundaryProbe({ decision = raceProgressAutho
   };
 
   function observe({ room, player, message, now } = {}) {
-    const legacyProgress = legacyProgressProposal({ room, player, message, now });
+    const legacyProgress = proposalFor({ room, player, message, now });
     if (!legacyProgress) return null;
 
     const result = decision.decide({ room, player, legacyProgress });

@@ -29,6 +29,12 @@ function createBridge() {
   }
 
   function observeCoreOutcomePayload(payload, player, ws) {
+    if (typeof payload !== 'string') return;
+    const isFinishOutcome =
+      payload.includes(`"type":"${S2C.PLAYER_FINISHED}"`) ||
+      payload.includes(`"type":"${S2C.FINISH_REJECTED}"`);
+    if (!isFinishOutcome) return;
+
     const current = currentPlayerFor(player, ws);
     if (!current) return;
     progressDiagnostics.observeOutcomePayload({

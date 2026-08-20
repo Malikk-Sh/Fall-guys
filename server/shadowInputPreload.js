@@ -5,6 +5,7 @@ const { validateMessage, RateLimiter } = require('../shared/validation.js');
 const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
 const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
+const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -15,6 +16,7 @@ const METRICS_INTERVAL_MS = 60_000;
 function createBridge() {
   const runtime = shadowRuntimeService.runtime;
   const authorityService = shadowRaceAuthorityService;
+  const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -70,10 +72,42 @@ function createBridge() {
 
   function attachPlayer(player) {
     const ws = player?.ws;
-    if (!ws || ws[SOCKET_KEY] || typeof ws.on !== 'function') return false;
+    if (
+      !ws ||
+      ws[SOCKET_KEY] ||
+      typeof ws.on !== 'function' ||
+      typeof ws.prependListener !== 'function'
+    )
+      return false;
     const limiter = new RateLimiter();
     let observedMatchId = null;
     let lastObservedLegacySequence = -1;
+
+    const authorityListener = raw => {
+      let message;
+      try {
+        message = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      if (message?.type !== C2S.PLAYER_STATE && message?.type !== C2S.FINISH) return;
+      const validation = validateMessage(message);
+      if (!validation.ok) return;
+
+      const current = currentPlayerFor(player, ws);
+      if (!current || !ACTIVE_STATES.has(current.room.state)) return;
+      if (message.matchId && message.matchId !== current.room.matchId) return;
+
+      // prependListener places this probe before the core socket listener. It can therefore
+      // exercise the same authority selector with a projected legacy outcome before core mutates
+      // player.checkpoint/player.finished. The result is intentionally ignored in this PR.
+      authorityBoundaryProbe.observe({
+        message,
+        room: current.room,
+        player: current.player
+      });
+    };
+
     const listener = raw => {
       let message;
       try {
@@ -124,8 +158,9 @@ function createBridge() {
     Object.defineProperty(ws, SOCKET_KEY, { value: true, configurable: true });
     Object.defineProperty(ws, SEND_KEY, { value: originalSend, configurable: true });
     ws.send = wrappedSend;
+    ws.prependListener('message', authorityListener);
     ws.on('message', listener);
-    attached.set(ws, { listener, originalSend, wrappedSend });
+    attached.set(ws, { authorityListener, listener, originalSend, wrappedSend });
     ws.once('close', () => {
       attached.delete(ws);
     });
@@ -150,9 +185,10 @@ function createBridge() {
 
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
+    const authorityBoundary = authorityBoundaryProbe.metrics();
     const { coreProgress, authorityReadiness, authorityProbe } = authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
-    if (!hasSimulationTraffic && !coreProgress.boundarySamples) return;
+    if (!hasSimulationTraffic && !coreProgress.boundarySamples && !authorityBoundary.samples) return;
     process.stdout.write(
       `${JSON.stringify({
         level: 'info',
@@ -161,7 +197,8 @@ function createBridge() {
         ...metrics,
         coreProgress,
         authorityReadiness,
-        authorityProbe
+        authorityProbe,
+        authorityBoundary
       })}\n`
     );
   }
@@ -184,6 +221,7 @@ function createBridge() {
     clearInterval(tickTimer);
     clearInterval(metricsTimer);
     for (const [ws, entry] of attached) {
+      ws.off?.('message', entry.authorityListener);
       ws.off?.('message', entry.listener);
       if (ws.send === entry.wrappedSend) ws.send = entry.originalSend;
       try {
@@ -201,6 +239,7 @@ function createBridge() {
     runtime,
     runtimeService: shadowRuntimeService,
     authorityService,
+    authorityBoundaryProbe,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

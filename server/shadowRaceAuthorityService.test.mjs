@@ -8,6 +8,15 @@ const { createShadowRaceAuthorityService } = require('./shadowRaceAuthorityServi
 function serviceFixture({ stateSample = { available: true }, outcomeSample = { available: true } } = {}) {
   const calls = [];
   const progressMetrics = { stateSamples: 1 };
+  const verificationMetrics = {
+    remembered: 1,
+    stateComparisons: 1,
+    stateMismatches: 0,
+    finishComparisons: 0,
+    finishMismatches: 0,
+    stalePending: 0,
+    missingPending: 0
+  };
   const progressDiagnostics = {
     observeAcceptedState: options => {
       calls.push(['state', options]);
@@ -34,16 +43,28 @@ function serviceFixture({ stateSample = { available: true }, outcomeSample = { a
     },
     reset: () => calls.push(['probeReset'])
   };
-  const readinessFor = metrics => {
-    calls.push(['readiness', metrics]);
+  const boundaryVerification = {
+    metrics: () => {
+      calls.push(['verificationMetrics']);
+      return verificationMetrics;
+    },
+    reset: () => calls.push(['verificationReset'])
+  };
+  const readinessFor = (metrics, _policy, verification) => {
+    calls.push(['readiness', metrics, verification]);
     return Object.freeze({ ready: true, reasons: Object.freeze([]) });
   };
-  const service = createShadowRaceAuthorityService({ progressDiagnostics, authorityProbe, readinessFor });
-  return { service, calls, progressMetrics };
+  const service = createShadowRaceAuthorityService({
+    progressDiagnostics,
+    authorityProbe,
+    boundaryVerification,
+    readinessFor
+  });
+  return { service, calls, progressMetrics, verificationMetrics };
 }
 
-test('accepted state is diagnosed before readiness and probe evaluation', () => {
-  const { service, calls, progressMetrics } = serviceFixture();
+test('accepted state is diagnosed before verification-aware readiness and probe evaluation', () => {
+  const { service, calls, progressMetrics, verificationMetrics } = serviceFixture();
   const player = { checkpoint: 0, finished: false };
   const result = service.observeAcceptedState({ player, message: { sequence: 1 } });
 
@@ -53,12 +74,13 @@ test('accepted state is diagnosed before readiness and probe evaluation', () => 
   assert.equal(result.probeDecision.source, 'legacy');
   assert.deepEqual(
     calls.map(([name]) => name),
-    ['state', 'progressMetrics', 'readiness', 'probe']
+    ['state', 'progressMetrics', 'verificationMetrics', 'readiness', 'probe']
   );
-  assert.equal(calls[2][1], progressMetrics);
-  assert.equal(calls[3][1].player, player);
-  assert.equal(calls[3][1].sample, result.sample);
-  assert.equal(calls[3][1].readiness, result.authorityReadiness);
+  assert.equal(calls[3][1], progressMetrics);
+  assert.equal(calls[3][2], verificationMetrics);
+  assert.equal(calls[4][1].player, player);
+  assert.equal(calls[4][1].sample, result.sample);
+  assert.equal(calls[4][1].readiness, result.authorityReadiness);
 });
 
 test('unobserved boundaries do not manufacture readiness or probe decisions', () => {
@@ -72,7 +94,7 @@ test('unobserved boundaries do not manufacture readiness or probe decisions', ()
   );
 });
 
-test('finish outcomes use the same shared diagnostics and probe pipeline', () => {
+test('finish outcomes use the same shared diagnostics and verification-aware probe pipeline', () => {
   const { service, calls } = serviceFixture();
   const player = { checkpoint: 3, finished: true };
   const result = service.observeOutcomePayload({ player, payload: '{"type":"playerFinished"}' });
@@ -80,31 +102,32 @@ test('finish outcomes use the same shared diagnostics and probe pipeline', () =>
   assert.equal(result.sample.available, true);
   assert.deepEqual(
     calls.map(([name]) => name),
-    ['outcome', 'progressMetrics', 'readiness', 'probe']
+    ['outcome', 'progressMetrics', 'verificationMetrics', 'readiness', 'probe']
   );
-  assert.equal(calls[3][1].player, player);
+  assert.equal(calls[4][1].player, player);
 });
 
-test('metrics expose one coherent progress, readiness and probe snapshot', () => {
-  const { service, calls, progressMetrics } = serviceFixture();
+test('metrics expose one coherent progress, verification, readiness and probe snapshot', () => {
+  const { service, calls, progressMetrics, verificationMetrics } = serviceFixture();
   const metrics = service.metrics();
 
   assert.equal(Object.isFrozen(metrics), true);
   assert.equal(metrics.coreProgress, progressMetrics);
+  assert.equal(metrics.authorityVerification, verificationMetrics);
   assert.equal(metrics.authorityReadiness.ready, true);
   assert.deepEqual(metrics.authorityProbe, { decisions: 1 });
   assert.deepEqual(
     calls.map(([name]) => name),
-    ['progressMetrics', 'readiness', 'probeMetrics']
+    ['progressMetrics', 'verificationMetrics', 'readiness', 'probeMetrics']
   );
 });
 
-test('reset clears both shared diagnostic components', () => {
+test('reset clears progress, probe and boundary verification diagnostics', () => {
   const { service, calls } = serviceFixture();
   service.reset();
   assert.deepEqual(
     calls.map(([name]) => name),
-    ['progressReset', 'probeReset']
+    ['progressReset', 'probeReset', 'verificationReset']
   );
 });
 
@@ -121,6 +144,22 @@ test('factory rejects incomplete collaborators instead of creating a partial ser
         },
         authorityProbe: {}
       }),
+    TypeError
+  );
+
+  const progressDiagnostics = {
+    observeAcceptedState() {},
+    observeOutcomePayload() {},
+    metrics() {},
+    reset() {}
+  };
+  const authorityProbe = {
+    observe() {},
+    metrics() {},
+    reset() {}
+  };
+  assert.throws(
+    () => createShadowRaceAuthorityService({ progressDiagnostics, authorityProbe, boundaryVerification: {} }),
     TypeError
   );
 });

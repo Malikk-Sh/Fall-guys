@@ -6,6 +6,7 @@ const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
 const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
+const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -17,6 +18,7 @@ function createBridge() {
   const runtime = shadowRuntimeService.runtime;
   const authorityService = shadowRaceAuthorityService;
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
+  const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -45,6 +47,15 @@ function createBridge() {
       player: current.player,
       runtimeService: shadowRuntimeService
     });
+    try {
+      authorityBoundaryVerification.observeOutcomePayload({
+        payload,
+        room: current.room,
+        player: current.player
+      });
+    } catch {
+      // Verification is diagnostic-only and must never block the actual finish payload.
+    }
   }
 
   function enrichSnapshotPayload(payload, player, ws) {
@@ -95,13 +106,19 @@ function createBridge() {
 
       // prependListener places this probe before the core socket listener. It can therefore
       // exercise the same authority selector with a projected legacy outcome before core mutates
-      // player.checkpoint/player.finished. The result is intentionally ignored in this PR, and an
-      // audit failure must never prevent the legacy core listener from processing the message.
+      // player.checkpoint/player.finished. The result remains diagnostic-only, and the verifier
+      // later checks that this projection exactly matches the real legacy core outcome.
       try {
-        authorityBoundaryProbe.observe({
+        const probeResult = authorityBoundaryProbe.observe({
           message,
           room: current.room,
           player: current.player
+        });
+        authorityBoundaryVerification.remember({
+          message,
+          room: current.room,
+          player: current.player,
+          probeResult
         });
       } catch {
         // Diagnostic-only migration seam: fail open to the unchanged legacy core path.
@@ -146,6 +163,15 @@ function createBridge() {
         player: current.player,
         runtimeService: shadowRuntimeService
       });
+      try {
+        authorityBoundaryVerification.observeAcceptedState({
+          message,
+          room: current.room,
+          player: current.player
+        });
+      } catch {
+        // Post-core verification must not turn diagnostics into a transport failure.
+      }
     };
 
     const originalSend = ws.send;
@@ -186,6 +212,7 @@ function createBridge() {
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
+    const authorityBoundaryVerificationMetrics = authorityBoundaryVerification.metrics();
     const { coreProgress, authorityReadiness, authorityProbe } = authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
     if (!hasSimulationTraffic && !coreProgress.boundarySamples && !authorityBoundary.samples) return;
@@ -198,7 +225,8 @@ function createBridge() {
         coreProgress,
         authorityReadiness,
         authorityProbe,
-        authorityBoundary
+        authorityBoundary,
+        authorityBoundaryVerification: authorityBoundaryVerificationMetrics
       })}\n`
     );
   }
@@ -240,6 +268,7 @@ function createBridge() {
     runtimeService: shadowRuntimeService,
     authorityService,
     authorityBoundaryProbe,
+    authorityBoundaryVerification,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

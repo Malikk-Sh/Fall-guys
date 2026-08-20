@@ -96,9 +96,7 @@ function evaluateShadowRaceAuthorityReadiness(metrics, policyOverrides = {}) {
   }
   if (metrics.maxCheckpointDelta > policy.maxCheckpointDelta) reasons.push(REASON.CHECKPOINT_DELTA);
   if (metrics.finishMismatchRate > policy.maxFinishMismatchRate) reasons.push(REASON.FINISH_MISMATCH);
-  if (
-    metrics.acceptedButShadowUnfinishedSamples > policy.maxAcceptedButShadowUnfinishedSamples
-  ) {
+  if (metrics.acceptedButShadowUnfinishedSamples > policy.maxAcceptedButShadowUnfinishedSamples) {
     reasons.push(REASON.ACCEPTED_SHADOW_UNFINISHED);
   }
   if (metrics.rejectedButShadowFinishedSamples > policy.maxRejectedButShadowFinishedSamples) {

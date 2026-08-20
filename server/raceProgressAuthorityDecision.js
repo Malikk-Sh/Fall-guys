@@ -24,6 +24,14 @@ function candidateProgress(candidate) {
   };
 }
 
+function legacyProgressFor(player, proposed) {
+  if (proposed !== undefined) return proposed;
+  return {
+    checkpoint: player?.checkpoint,
+    finished: player?.finished
+  };
+}
+
 function createRaceProgressAuthorityDecision({
   requestedSource = authoritySource(process.env[AUTHORITY_ENV]),
   candidateFor = shadowRaceProgressCandidate,
@@ -39,11 +47,8 @@ function createRaceProgressAuthorityDecision({
     throw new TypeError('race progress authority decision requires authority readiness service');
   }
 
-  function decide({ room, player } = {}) {
-    const legacy = {
-      checkpoint: player?.checkpoint,
-      finished: player?.finished
-    };
+  function decide({ room, player, legacyProgress } = {}) {
+    const legacy = legacyProgressFor(player, legacyProgress);
     if (!validProgress(legacy)) {
       return selector({ requestedSource: source, legacy });
     }
@@ -88,5 +93,6 @@ module.exports = Object.freeze({
   AUTHORITY_ENV,
   authoritySource,
   candidateProgress,
+  legacyProgressFor,
   createRaceProgressAuthorityDecision
 });

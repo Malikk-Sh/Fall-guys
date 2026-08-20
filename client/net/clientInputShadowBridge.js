@@ -18,6 +18,10 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, Number.isFinite(v
 const safeCursor = value =>
   Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER ? value : 0;
 
+export function normalizeRaceAuthoritySource(value) {
+  return value === 'legacy' || value === 'shadow' ? value : null;
+}
+
 function validShadowState(state) {
   const position = state?.position;
   const velocity = state?.velocity;
@@ -235,7 +239,7 @@ export class ClientInputShadowSender {
     return true;
   }
 
-  replayFromShadow(matchId, shadowState, serverTick, lastProcessedInput) {
+  replayFromShadow(matchId, shadowState, serverTick, lastProcessedInput, raceAuthoritySource = null) {
     if (matchId !== this.activeMatchId || !validShadowState(shadowState)) return false;
     if (!Number.isSafeInteger(serverTick) || serverTick < 0) return false;
     if (!Number.isSafeInteger(lastProcessedInput) || lastProcessedInput < -1) return false;
@@ -262,6 +266,7 @@ export class ClientInputShadowSender {
       matchId,
       serverTick,
       lastProcessedInput,
+      raceAuthoritySource: normalizeRaceAuthoritySource(raceAuthoritySource),
       historyGap,
       replayedInputs,
       baseline,
@@ -362,7 +367,8 @@ export function installClientInputShadowBridge({
           message.matchId,
           message.shadowPlayerState,
           message.serverTick,
-          message.lastProcessedInput
+          message.lastProcessedInput,
+          message.raceAuthoritySource
         );
       }
       const result = originalHandleMessage.call(this, message);

@@ -111,7 +111,12 @@ test('clean boundary verification preserves advisory readiness', () => {
 
 test('clean finish core verification preserves readiness and is exposed read-only', () => {
   const verification = healthyFinishCoreVerification();
-  const result = evaluateShadowRaceAuthorityReadiness(healthyMetrics(), {}, healthyVerification(), verification);
+  const result = evaluateShadowRaceAuthorityReadiness(
+    healthyMetrics(),
+    {},
+    healthyVerification(),
+    verification
+  );
 
   assert.equal(validFinishCoreVerificationMetrics(verification), true);
   assert.equal(result.ready, true);

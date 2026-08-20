@@ -13,7 +13,12 @@ const legacy = checkpoint => ({ checkpoint, finished: false });
 const shadow = checkpoint => ({ checkpoint, finished: false });
 
 function result(source, progress, fallbackReason = null) {
-  return Object.freeze({ ok: true, source, fallbackReason, progress: Object.freeze({ ...progress }) });
+  return Object.freeze({
+    ok: true,
+    source,
+    fallbackReason,
+    progress: Object.freeze({ ...progress })
+  });
 }
 
 function decisionFixture(results) {
@@ -74,7 +79,7 @@ test('shadow remains selected while every boundary stays shadow-ready', () => {
 test('shadow fallback permanently locks the current match to legacy', () => {
   const fixture = decisionFixture([
     result(AUTHORITY_SOURCE.SHADOW, shadow(0)),
-    result(AUTHORITY_SOURCE.LEGACY, legacy(1), 'boundary-state-mismatch'),
+    result(AUTHORITY_SOURCE.LEGACY, legacy(1), 'shadow-not-ready'),
     result(AUTHORITY_SOURCE.SHADOW, shadow(2))
   ]);
   const guard = createRaceProgressAuthorityMatchGuard({ decision: fixture.decision });
@@ -85,7 +90,7 @@ test('shadow fallback permanently locks the current match to legacy', () => {
   const later = guard.decide({ room, player: {}, legacyProgress: legacy(2) });
 
   assert.equal(fallback.source, AUTHORITY_SOURCE.LEGACY);
-  assert.equal(fallback.fallbackReason, 'boundary-state-mismatch');
+  assert.equal(fallback.fallbackReason, 'shadow-not-ready');
   assert.deepEqual(fallback.progress, legacy(1));
   assert.equal(later.source, AUTHORITY_SOURCE.LEGACY);
   assert.equal(later.fallbackReason, MATCH_FALLBACK_REASON.LEGACY_LOCKED);

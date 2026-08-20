@@ -32,6 +32,62 @@ function validShadowState(state) {
   );
 }
 
+function localSimulationState(player) {
+  if (!player?.physics || !player?.velocity) return null;
+  if (
+    !Number.isFinite(player.physics.x) ||
+    !Number.isFinite(player.physics.y) ||
+    !Number.isFinite(player.physics.z) ||
+    !Number.isFinite(player.velocity.x) ||
+    !Number.isFinite(player.velocity.y) ||
+    !Number.isFinite(player.velocity.z)
+  ) {
+    return null;
+  }
+  return createPlayerSimulationState({
+    position: player.physics,
+    velocity: player.velocity,
+    grounded: player.grounded === true,
+    coyoteTime: player.coyote,
+    jumpBuffer: player.jumpBuffer,
+    diveTimer: player.diveTimer,
+    diveCooldown: player.diveCooldown,
+    rollTimer: player.rollTimer,
+    landingRetention: player.landingRetention,
+    recoveryWindow: player.recoveryWindow,
+    knockdownTimer: player.knockdownTimer,
+    knockdownImmunity: player.knockdownImmunityTimer,
+    getupTimer: player.getupTimer,
+    slamming: player.slamming,
+    gliding: player.gliding,
+    finished: player.finished,
+    dashes: player.dashes
+  });
+}
+
+export function simulationStateError(predicted, local) {
+  if (!validShadowState(predicted) || !validShadowState(local)) return null;
+  const positionDelta = {
+    x: predicted.position.x - local.position.x,
+    y: predicted.position.y - local.position.y,
+    z: predicted.position.z - local.position.z
+  };
+  const velocityDelta = {
+    x: predicted.velocity.x - local.velocity.x,
+    y: predicted.velocity.y - local.velocity.y,
+    z: predicted.velocity.z - local.velocity.z
+  };
+  return {
+    positionDelta,
+    velocityDelta,
+    positionError: Math.hypot(positionDelta.x, positionDelta.y, positionDelta.z),
+    horizontalPositionError: Math.hypot(positionDelta.x, positionDelta.z),
+    verticalPositionError: Math.abs(positionDelta.y),
+    velocityError: Math.hypot(velocityDelta.x, velocityDelta.y, velocityDelta.z),
+    groundedMismatch: predicted.grounded !== local.grounded
+  };
+}
+
 function browserStorage() {
   try {
     return globalThis.sessionStorage || null;
@@ -62,6 +118,8 @@ export class ClientInputShadowSender {
     this.lastAcknowledgedServerTick = -1;
     this.historyDropped = 0;
     this.lastShadowReplay = null;
+    this.latestLocalState = null;
+    this.latestLocalSampleAt = null;
   }
 
   readCursor(matchId) {
@@ -110,6 +168,8 @@ export class ClientInputShadowSender {
     this.lastAcknowledgedServerTick = -1;
     this.historyDropped = 0;
     this.lastShadowReplay = null;
+    this.latestLocalState = null;
+    this.latestLocalSampleAt = null;
     if (nextMatchId && !cursor) this.persistCursor();
     return true;
   }
@@ -127,6 +187,14 @@ export class ClientInputShadowSender {
     // is actually emitted so a press between two network ticks cannot disappear.
     this.jumpPressed ||= input.jumpQueued === true;
     this.divePressed ||= input.diveQueued === true;
+    return true;
+  }
+
+  observeLocalPlayer(player, sampledAt = this.now()) {
+    const state = localSimulationState(player);
+    if (!state) return false;
+    this.latestLocalState = state;
+    this.latestLocalSampleAt = Number.isFinite(sampledAt) ? sampledAt : null;
     return true;
   }
 
@@ -182,6 +250,7 @@ export class ClientInputShadowSender {
       }
     }
 
+    const prediction = historyGap ? null : predicted;
     this.lastShadowReplay = {
       matchId,
       serverTick,
@@ -189,7 +258,9 @@ export class ClientInputShadowSender {
       historyGap,
       replayedInputs,
       baseline,
-      predicted: historyGap ? null : predicted
+      predicted: prediction,
+      localSampleAt: this.latestLocalSampleAt,
+      localError: prediction ? simulationStateError(prediction, this.latestLocalState) : null
     };
     return !historyGap;
   }
@@ -201,7 +272,8 @@ export class ClientInputShadowSender {
       baseline: createPlayerSimulationState(this.lastShadowReplay.baseline),
       predicted: this.lastShadowReplay.predicted
         ? createPlayerSimulationState(this.lastShadowReplay.predicted)
-        : null
+        : null,
+      localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null
     };
   }
 
@@ -255,8 +327,11 @@ export function installClientInputShadowBridge({
     const originalStep = PlayerClass.prototype.step;
     Object.defineProperty(PlayerClass.prototype, PLAYER_PATCH, { value: originalStep });
     PlayerClass.prototype.step = function clientInputShadowStep(dt, input, cameraYaw, elapsed) {
-      if (this.finished !== true && this.remote !== true) sender.capture(input, cameraYaw);
-      return originalStep.call(this, dt, input, cameraYaw, elapsed);
+      const trackLocal = this.finished !== true && this.remote !== true;
+      if (trackLocal) sender.capture(input, cameraYaw);
+      const result = originalStep.call(this, dt, input, cameraYaw, elapsed);
+      if (trackLocal) sender.observeLocalPlayer(this);
+      return result;
     };
   }
 

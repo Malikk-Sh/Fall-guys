@@ -1,8 +1,10 @@
+import { createPlayerSimulationState, stepPlayerMotion } from '/shared/playerSimulation.js';
 import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
 
 export const CLIENT_INPUT_INTERVAL_MS = 1000 / 30;
+export const CLIENT_INPUT_REPLAY_DT = CLIENT_INPUT_INTERVAL_MS / 1000;
 export const CLIENT_INPUT_CURSOR_KEY = 'wobble-client-input-shadow-cursor';
 export const CLIENT_INPUT_HISTORY_LIMIT = 240;
 
@@ -13,6 +15,22 @@ const NETWORK_MESSAGE_PATCH = Symbol.for('wobble.client-input-shadow.network-mes
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number.isFinite(value) ? value : 0));
 const safeCursor = value =>
   Number.isSafeInteger(value) && value >= 0 && value < Number.MAX_SAFE_INTEGER ? value : 0;
+
+function validShadowState(state) {
+  const position = state?.position;
+  const velocity = state?.velocity;
+  return (
+    !!state &&
+    typeof state === 'object' &&
+    Number.isFinite(position?.x) &&
+    Number.isFinite(position?.y) &&
+    Number.isFinite(position?.z) &&
+    Number.isFinite(velocity?.x) &&
+    Number.isFinite(velocity?.y) &&
+    Number.isFinite(velocity?.z) &&
+    typeof state.grounded === 'boolean'
+  );
+}
 
 function browserStorage() {
   try {
@@ -43,6 +61,7 @@ export class ClientInputShadowSender {
     this.lastAcknowledgedInput = -1;
     this.lastAcknowledgedServerTick = -1;
     this.historyDropped = 0;
+    this.lastShadowReplay = null;
   }
 
   readCursor(matchId) {
@@ -90,6 +109,7 @@ export class ClientInputShadowSender {
     this.lastAcknowledgedInput = -1;
     this.lastAcknowledgedServerTick = -1;
     this.historyDropped = 0;
+    this.lastShadowReplay = null;
     if (nextMatchId && !cursor) this.persistCursor();
     return true;
   }
@@ -140,6 +160,49 @@ export class ClientInputShadowSender {
       this.pendingInputs.shift();
     }
     return true;
+  }
+
+  replayFromShadow(matchId, shadowState, serverTick, lastProcessedInput) {
+    if (matchId !== this.activeMatchId || !validShadowState(shadowState)) return false;
+    if (!Number.isSafeInteger(serverTick) || serverTick < 0) return false;
+    if (!Number.isSafeInteger(lastProcessedInput) || lastProcessedInput < -1) return false;
+    if (lastProcessedInput !== this.lastAcknowledgedInput) return false;
+    if (this.lastShadowReplay && serverTick < this.lastShadowReplay.serverTick) return false;
+
+    const baseline = createPlayerSimulationState(shadowState);
+    const oldestPending = this.pendingInputs[0]?.sequence ?? null;
+    const historyGap = oldestPending !== null && oldestPending > lastProcessedInput + 1;
+    let predicted = baseline;
+    let replayedInputs = 0;
+
+    if (!historyGap) {
+      for (const command of this.pendingInputs) {
+        predicted = stepPlayerMotion(predicted, command, {}, CLIENT_INPUT_REPLAY_DT).state;
+        replayedInputs += 1;
+      }
+    }
+
+    this.lastShadowReplay = {
+      matchId,
+      serverTick,
+      lastProcessedInput,
+      historyGap,
+      replayedInputs,
+      baseline,
+      predicted: historyGap ? null : predicted
+    };
+    return !historyGap;
+  }
+
+  shadowReplayState() {
+    if (!this.lastShadowReplay) return null;
+    return {
+      ...this.lastShadowReplay,
+      baseline: createPlayerSimulationState(this.lastShadowReplay.baseline),
+      predicted: this.lastShadowReplay.predicted
+        ? createPlayerSimulationState(this.lastShadowReplay.predicted)
+        : null
+    };
   }
 
   reconciliationState() {
@@ -206,6 +269,12 @@ export function installClientInputShadowBridge({
       if (message?.type === S2C.MATCH_START) sender.beginMatch(message.matchId);
       if (message?.type === S2C.SNAPSHOT && message.matchId === this.matchId) {
         sender.acknowledge(message.matchId, message.lastProcessedInput, message.serverTick);
+        sender.replayFromShadow(
+          message.matchId,
+          message.shadowPlayerState,
+          message.serverTick,
+          message.lastProcessedInput
+        );
       }
       const result = originalHandleMessage.call(this, message);
       if (message?.type === S2C.RESUME_FAILED || message?.type === S2C.SERVER_SHUTDOWN) {

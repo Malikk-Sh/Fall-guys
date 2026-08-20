@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { createPlayerSimulationState, stepPlayerMotion } from '../shared/playerSimulation.js';
 import { C2S, S2C } from '../shared/protocol.js';
 import {
   CLIENT_INPUT_INTERVAL_MS,
+  CLIENT_INPUT_REPLAY_DT,
   ClientInputShadowSender,
   installClientInputShadowBridge
 } from '../client/net/clientInputShadowBridge.js';
@@ -139,6 +141,7 @@ test('cursor survives reload-style recreation for the same match and resets for 
     latestPendingInput: 0,
     historyDropped: 0
   });
+  assert.equal(reloadedSender.shadowReplayState(), null);
 });
 
 test('server acknowledgement prunes only the confirmed input prefix', () => {
@@ -208,6 +211,97 @@ test('unacknowledged input history stays bounded when acknowledgements stall', (
   );
 });
 
+test('shadow replay deterministically reapplies only unacknowledged input commands', () => {
+  let now = 0;
+  const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => now });
+  const net = network();
+  sender.beginMatch(net.matchId);
+
+  for (const controls of [
+    { moveZ: 1 },
+    { moveX: 0.4, moveZ: 0.8, jump: true, jumpHeld: true },
+    { moveX: -0.2, moveZ: 1, dive: true }
+  ]) {
+    sender.capture(input(controls), 0.25);
+    sender.flush(net);
+    now += CLIENT_INPUT_INTERVAL_MS + 1;
+  }
+
+  assert.equal(sender.acknowledge(net.matchId, 0, 20), true);
+  const baseline = createPlayerSimulationState({
+    position: { x: 1, y: 2, z: 3 },
+    velocity: { x: 0.5, y: 0, z: -0.25 },
+    grounded: true
+  });
+  const baselineBefore = structuredClone(baseline);
+  let expected = createPlayerSimulationState(baseline);
+  for (const command of sender.pendingInputs) {
+    expected = stepPlayerMotion(expected, command, {}, CLIENT_INPUT_REPLAY_DT).state;
+  }
+
+  assert.equal(sender.replayFromShadow(net.matchId, baseline, 20, 0), true);
+  const replay = sender.shadowReplayState();
+  assert.equal(replay.serverTick, 20);
+  assert.equal(replay.lastProcessedInput, 0);
+  assert.equal(replay.historyGap, false);
+  assert.equal(replay.replayedInputs, 2);
+  assert.deepEqual(replay.predicted, expected);
+  assert.deepEqual(replay.baseline, baselineBefore);
+  assert.deepEqual(baseline, baselineBefore, 'replay never mutates the server baseline object');
+  assert.deepEqual(
+    sender.pendingInputs.map(command => command.sequence),
+    [1, 2],
+    'replay is read-only with respect to pending history'
+  );
+
+  assert.equal(sender.replayFromShadow(net.matchId, baseline, 20, 0), true);
+  assert.deepEqual(
+    sender.shadowReplayState().predicted,
+    expected,
+    'replaying the same snapshot is deterministic'
+  );
+  assert.equal(
+    sender.replayFromShadow(net.matchId, baseline, 19, 0),
+    false,
+    'older server state cannot rewind replay'
+  );
+  assert.equal(sender.replayFromShadow('other-match', baseline, 21, 0), false);
+  assert.equal(sender.replayFromShadow(net.matchId, { grounded: true }, 21, 0), false);
+});
+
+test('shadow replay refuses incomplete bounded history until server acknowledgement closes the gap', () => {
+  let now = 0;
+  const sender = new ClientInputShadowSender({
+    storage: new MemoryStorage(),
+    now: () => now,
+    historyLimit: 2
+  });
+  const net = network();
+  sender.beginMatch(net.matchId);
+
+  for (let sequence = 0; sequence < 3; sequence++) {
+    sender.capture(input({ moveZ: 1 }), 0);
+    sender.flush(net);
+    now += CLIENT_INPUT_INTERVAL_MS + 1;
+  }
+
+  const baseline = createPlayerSimulationState({
+    position: { x: 0, y: 1, z: 0 },
+    velocity: { x: 0, y: 0, z: 0 },
+    grounded: true
+  });
+  assert.equal(sender.replayFromShadow(net.matchId, baseline, 10, -1), false);
+  assert.equal(sender.shadowReplayState().historyGap, true);
+  assert.equal(sender.shadowReplayState().predicted, null);
+  assert.equal(sender.shadowReplayState().replayedInputs, 0);
+
+  assert.equal(sender.acknowledge(net.matchId, 0, 11), true);
+  assert.equal(sender.replayFromShadow(net.matchId, baseline, 11, 0), true);
+  assert.equal(sender.shadowReplayState().historyGap, false);
+  assert.equal(sender.shadowReplayState().replayedInputs, 2);
+  assert.ok(sender.shadowReplayState().predicted);
+});
+
 test('prototype bridge captures input before Player consumes it and applies snapshot acknowledgement', () => {
   const now = 0;
   const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => now });
@@ -253,14 +347,24 @@ test('prototype bridge captures input before Player consumes it and applies snap
   assert.equal(net.sent[0].cameraYaw, 0.3);
   assert.equal(sender.reconciliationState().pendingCount, 1);
 
+  const shadowPlayerState = createPlayerSimulationState({
+    position: { x: 2, y: 1, z: -4 },
+    velocity: { x: 0, y: 0, z: 0 },
+    grounded: true
+  });
   net.handleMessage({
     type: S2C.SNAPSHOT,
     matchId: 'match-live',
     lastProcessedInput: 0,
     serverTick: 12,
+    shadowPlayerState,
     players: []
   });
   assert.equal(sender.reconciliationState().pendingCount, 0);
   assert.equal(sender.reconciliationState().lastAcknowledgedInput, 0);
   assert.equal(sender.reconciliationState().lastAcknowledgedServerTick, 12);
+  assert.equal(sender.shadowReplayState().serverTick, 12);
+  assert.equal(sender.shadowReplayState().historyGap, false);
+  assert.equal(sender.shadowReplayState().replayedInputs, 0);
+  assert.deepEqual(sender.shadowReplayState().predicted, shadowPlayerState);
 });

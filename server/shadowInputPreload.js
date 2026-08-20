@@ -9,6 +9,7 @@ const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBound
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
 const raceFinishAuthorityCoreBridge = require('./raceFinishAuthorityCoreBridge');
+const raceServerAutoFinish = require('./raceServerAutoFinish');
 const gameRules = require('./gameRules');
 
 // Boundary diagnostics above intentionally captured the original legacy canFinish. The live core is
@@ -30,6 +31,7 @@ function createBridge() {
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
   const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
   const finishAuthorityCoreVerification = authorityService.finishCoreVerification;
+  const serverAutoFinish = raceServerAutoFinish;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -163,9 +165,9 @@ function createBridge() {
         // Diagnostic-only migration seam: fail open to the unchanged core path.
       }
 
-      // FINISH remains a client intent, but when this match is latched to shadow authority the
-      // core canFinish call consumes the server decision instead of falling through to the
-      // client-derived finish state. Legacy matches remain on the original gate.
+      // FINISH remains a valid client intent, but when this match is latched to shadow authority
+      // this same path may also be entered by the server-generated finish message emitted after the
+      // fixed-step runtime crosses the finish plane. Both paths consume the same guarded decision.
       if (
         message.type === C2S.FINISH &&
         !current.player.finished &&
@@ -319,6 +321,17 @@ function createBridge() {
     if (!core || stopped) return;
     scan();
     shadowRuntimeService.tick(core.rooms);
+
+    // Shadow progress is computed on the fixed server tick. Once a match was explicitly latched to
+    // shadow authority, the server no longer waits for the browser to notice the finish plane: it
+    // injects the canonical FINISH shape into the already-hardened core message pipeline. Legacy
+    // and not-yet-latched matches remain completely client-triggered.
+    for (const room of core.rooms.values()) {
+      if (room.state !== ROOM_STATE.PLAYING) continue;
+      for (const player of room.players.values()) {
+        if (!player.bot) serverAutoFinish.apply({ room, player });
+      }
+    }
   }
 
   function logMetrics() {
@@ -326,6 +339,7 @@ function createBridge() {
     const authorityBoundary = authorityBoundaryProbe.metrics();
     const checkpointAuthority = checkpointAuthorityApplier.metrics();
     const finishAuthority = finishAuthorityCoreBridge.metrics();
+    const autoFinish = serverAutoFinish.metrics();
     const {
       coreProgress,
       authorityVerification,
@@ -338,7 +352,8 @@ function createBridge() {
       !hasSimulationTraffic &&
       !coreProgress.boundarySamples &&
       !authorityBoundary.samples &&
-      !finishAuthority.attempts
+      !finishAuthority.attempts &&
+      !autoFinish.candidates
     )
       return;
     process.stdout.write(
@@ -354,7 +369,8 @@ function createBridge() {
         authorityBoundaryVerification: authorityVerification,
         finishCoreVerification,
         checkpointAuthority,
-        finishAuthority
+        finishAuthority,
+        autoFinish
       })}\n`
     );
   }
@@ -400,6 +416,7 @@ function createBridge() {
     checkpointAuthorityApplier,
     finishAuthorityCoreBridge,
     finishAuthorityCoreVerification,
+    serverAutoFinish,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

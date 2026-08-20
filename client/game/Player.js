@@ -1,66 +1,39 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
+import { PLAYER_SIMULATION_CONSTANTS, dampScalar, playerTuning } from '/shared/playerSimulation.js';
 import { Character } from './Character.js';
 import { PLAYER_FOOT } from './PlayerDimensions.js';
 
-// Гравитация и импульсы вынесены в именованные константы: раньше это были числа, вкраплённые прямо
-// в формулы, и подобрать «ощущение» персонажа, не перечитывая всю функцию, было невозможно.
-const GRAVITY = 22.5;
-const JUMP_SPEED = 8.7;
-const DIVE_SPEED = 10.8;
-export const RUN_SPEED = 7.7;
-const ACCEL_GROUND = 18;
-const ACCEL_AIR = 7.2;
-const ROLL_TIME = 0.42;
-const ROLL_SPEED = 10.2;
-const LANDING_RETENTION_TIME = 0.34;
+// Основные параметры движения теперь принадлежат pure shared-симуляции. Клиент читает ровно те
+// же значения, которые будут использовать authoritative server tick и prediction/reconciliation.
+const {
+  GRAVITY,
+  JUMP_SPEED,
+  DIVE_SPEED,
+  ACCEL_GROUND,
+  ACCEL_AIR,
+  ROLL_TIME,
+  ROLL_SPEED,
+  LANDING_RETENTION_TIME,
+  KNOCKDOWN_IMMUNITY_TIME,
+  GETUP_TIME,
+  JUMP_BUFFER,
+  COYOTE_TIME,
+  GLIDE_GRAVITY
+} = PLAYER_SIMULATION_CONSTANTS;
+
+// Старый public import сохраняется для world-механик (например, кооперативного ветра), но источник
+// истины теперь shared/playerSimulation.js, а не второй набор чисел в Player.js.
+export const RUN_SPEED = PLAYER_SIMULATION_CONSTANTS.RUN_SPEED;
+export { playerTuning };
+
 const WALL_BOUNCE_SPEED = 8.8;
 const KNOCKDOWN_MIN_TIME = 1.05;
 const KNOCKDOWN_MAX_TIME = 1.65;
 
-// Сколько игрок защищён от НОВОГО сбивания после того, как поднялся.
-//
-// Именно от сбивания, а не от удара: препятствие в это окно по-прежнему толкает, отбрасывает и
-// меняет скорость — не запускается только новая полуторасекундная потеря управления. Разделить
-// удар и толчок в этой физике нельзя, они одно событие (проверено: попытка выталкивать без удара
-// превращает бампер в стену и ломает прохождение ботами), поэтому окно живёт здесь, в knockDown, а
-// не в разборе столкновений.
-const KNOCKDOWN_IMMUNITY_TIME = 0.7;
-const GETUP_TIME = 0.24;
-
-// Окно, в течение которого прыжок сработает, если нажать его чуть раньше приземления.
-const JUMP_BUFFER = 0.14;
-// Окно, в течение которого прыжок ещё возможен уже после схода с края. Без него точные прыжки
-// ощущаются несправедливыми: игрок нажимает вовремя, но персонаж уже формально в воздухе.
-const COYOTE_TIME = 0.11;
-
 // Удар сверху: резкий разгон вниз. Им приводят в действие катапульту. Доступен всем — ролей нет,
 // и «кто именно бьёт» решают сами игроки, а не разметка уровня.
 const SLAM_SPEED = 26;
-
-// Насколько слабее тянет вниз при планировании. Раньше это была способность лёгкой роли;
-// теперь ею пользуются все, и она стала частью базового управления, а не привилегией.
-const GLIDE_GRAVITY = 0.55;
-
-// Модификатор дня описывает мир и управление в одних и тех же терминах, а Player из него берёт
-// только своё. Значения по умолчанию собраны здесь, чтобы обычная игра шла ровно тем же кодом, что
-// и изменённая, — отдельной ветки «без модификатора» нет и разойтись им негде.
-export function playerTuning(modifier = null) {
-  return {
-    gravity: positive(modifier?.gravity, 1),
-    jump: positive(modifier?.jump, 1),
-    dash: positive(modifier?.dash, 1),
-    dashCooldown: positive(modifier?.dashCooldown, 1),
-    groundGrip: positive(modifier?.groundGrip, 1),
-    // Единственное булево: планирование либо есть, либо нет. Множитель тут был бы враньём —
-    // «планирование на 40%» игрок не различит.
-    glide: modifier?.glide !== false
-  };
-}
-
-function positive(value, fallback) {
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
 
 export class Player {
   constructor(scene, course, effects, options = {}) {
@@ -256,12 +229,12 @@ export class Player {
         : this.rollTimer > 0
           ? 0.48
           : 1;
-    this.velocity.x = THREE.MathUtils.damp(this.velocity.x, desired.x * maxSpeed, accel * control, dt);
-    this.velocity.z = THREE.MathUtils.damp(this.velocity.z, desired.z * maxSpeed, accel * control, dt);
+    this.velocity.x = dampScalar(this.velocity.x, desired.x * maxSpeed, accel * control, dt);
+    this.velocity.z = dampScalar(this.velocity.z, desired.z * maxSpeed, accel * control, dt);
     if (move.magnitude < 0.05 && this.grounded) {
       const stop = (knockedDown ? 3.2 : 12) * this.tuning.groundGrip;
-      this.velocity.x = THREE.MathUtils.damp(this.velocity.x, 0, stop, dt);
-      this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, stop, dt);
+      this.velocity.x = dampScalar(this.velocity.x, 0, stop, dt);
+      this.velocity.z = dampScalar(this.velocity.z, 0, stop, dt);
     }
 
     // Планирование: удержание прыжка в воздухе на пути вниз ослабляет гравитацию. Доступно всем.

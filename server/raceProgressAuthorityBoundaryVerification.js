@@ -1,6 +1,6 @@
 'use strict';
 
-const { C2S, S2C } = require('../shared/protocol.js');
+const { C2S, S2C, GAME_MODE } = require('../shared/protocol.js');
 
 function copiedProgress(progress) {
   if (!progress) return null;
@@ -12,7 +12,7 @@ function sameProgress(left, right) {
 }
 
 function createRaceProgressAuthorityBoundaryVerification() {
-  const pending = new WeakMap();
+  let pending = new WeakMap();
   let counters = {
     remembered: 0,
     stateComparisons: 0,
@@ -24,7 +24,9 @@ function createRaceProgressAuthorityBoundaryVerification() {
   };
 
   function remember({ room, player, message, probeResult } = {}) {
-    if (!room?.matchId || !player || !probeResult?.legacyProgress) return false;
+    if (room?.mode !== GAME_MODE.RACE || !room.matchId || !player || !probeResult?.legacyProgress) {
+      return false;
+    }
     if (message?.type !== C2S.PLAYER_STATE && message?.type !== C2S.FINISH) return false;
     pending.set(
       player,
@@ -72,7 +74,7 @@ function createRaceProgressAuthorityBoundaryVerification() {
   }
 
   function observeAcceptedState({ room, player, message } = {}) {
-    if (message?.type !== C2S.PLAYER_STATE || !player) return null;
+    if (room?.mode !== GAME_MODE.RACE || message?.type !== C2S.PLAYER_STATE || !player) return null;
     const entry = take({
       room,
       player,
@@ -88,7 +90,7 @@ function createRaceProgressAuthorityBoundaryVerification() {
   }
 
   function observeOutcomePayload({ payload, room, player } = {}) {
-    if (typeof payload !== 'string' || !room || !player) return null;
+    if (typeof payload !== 'string' || room?.mode !== GAME_MODE.RACE || !player) return null;
     let message;
     try {
       message = JSON.parse(payload);
@@ -114,6 +116,7 @@ function createRaceProgressAuthorityBoundaryVerification() {
   }
 
   function reset() {
+    pending = new WeakMap();
     counters = {
       remembered: 0,
       stateComparisons: 0,

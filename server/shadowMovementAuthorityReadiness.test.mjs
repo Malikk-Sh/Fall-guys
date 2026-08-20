@@ -109,7 +109,11 @@ test('match guard waits for race authority before taking an irreversible movemen
   const unresolved = guard.decide({ room, player });
   assert.equal(unresolved.source, MOVEMENT_AUTHORITY_SOURCE.LEGACY);
   assert.equal(unresolved.fallbackReason, MATCH_FALLBACK_REASON.RACE_AUTHORITY_UNRESOLVED);
-  assert.equal(guard.sourceFor(room), null, 'unresolved race authority does not lock movement to legacy');
+  assert.equal(
+    guard.sourceFor(room),
+    null,
+    'unresolved race authority does not lock movement to legacy'
+  );
 
   raceAuthoritySource = MOVEMENT_AUTHORITY_SOURCE.SHADOW;
   const shadow = guard.decide({ room, player });
@@ -174,7 +178,11 @@ test('movement guard treats malformed shadow state as unavailable even with comp
     runtimeService: {
       snapshot: () => ({
         matchId: room.matchId,
-        state: { position: { x: 0, y: 0, z: 0 }, velocity: { x: 0, y: 0, z: NaN }, grounded: true }
+        state: {
+          position: { x: 0, y: 0, z: 0 },
+          velocity: { x: 0, y: 0, z: NaN },
+          grounded: true
+        }
       })
     },
     parityProvider: () => ({ collisionParityVerified: true, obstacleParityVerified: true })

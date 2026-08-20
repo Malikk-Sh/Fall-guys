@@ -98,7 +98,11 @@ test('a new match creates a fresh server-owned race progress domain', () => {
   assert.ok(runtime.accept({ player, room, message: command('match-a', 5) }).accepted);
   const first = runtime.snapshot(player);
   first.progress.checkpoint = 1;
-  assert.equal(runtime.snapshot(player).progress.checkpoint, 0, 'snapshots expose copies, not controller state');
+  assert.equal(
+    runtime.snapshot(player).progress.checkpoint,
+    0,
+    'snapshots expose copies, not controller state'
+  );
 
   room.matchId = 'match-b';
   assert.ok(runtime.accept({ player, room, message: command('match-b', 0) }).accepted);

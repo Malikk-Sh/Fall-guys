@@ -17,7 +17,7 @@ function createBridge() {
   let core = null;
   let stopped = false;
 
-  function attachPlayer(player, room) {
+  function attachPlayer(player) {
     const ws = player?.ws;
     if (!ws || ws[SOCKET_KEY] || typeof ws.on !== 'function') return false;
     const limiter = new RateLimiter();
@@ -51,7 +51,7 @@ function createBridge() {
     for (const room of core.rooms.values()) {
       if (!ACTIVE_STATES.has(room.state)) continue;
       for (const player of room.players.values()) {
-        if (!player.bot) attachPlayer(player, room);
+        if (!player.bot) attachPlayer(player);
       }
     }
   }
@@ -111,7 +111,7 @@ const bridge = globalThis[BRIDGE_KEY] || createBridge();
 globalThis[BRIDGE_KEY] = bridge;
 
 setImmediate(() => {
-  if (bridge.started || bridge.stopped) return;
+  if (bridge.started) return;
   const core = require('./index');
   bridge.started = bridge.start(core);
 });

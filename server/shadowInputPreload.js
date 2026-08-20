@@ -13,6 +13,8 @@ const raceCheckpointAuthorityCoreBridge = require('./raceCheckpointAuthorityCore
 const raceServerCheckpointAdvance = require('./raceServerCheckpointAdvance');
 const raceFinishAuthorityCoreBridge = require('./raceFinishAuthorityCoreBridge');
 const raceServerAutoFinish = require('./raceServerAutoFinish');
+const shadowMovementAuthorityMatchGuard = require('./shadowMovementAuthorityMatchGuard');
+const { MOVEMENT_AUTHORITY_SOURCE } = require('./shadowMovementAuthorityReadiness');
 const gameRules = require('./gameRules');
 
 // Boundary diagnostics above intentionally captured the original legacy validateState/canFinish.
@@ -40,6 +42,14 @@ function createBridge() {
   const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
   const finishAuthorityCoreVerification = authorityService.finishCoreVerification;
   const serverAutoFinish = raceServerAutoFinish;
+  const movementAuthorityMatchGuard = shadowMovementAuthorityMatchGuard;
+  const movementAuthorityCounters = {
+    decisions: 0,
+    legacy: 0,
+    shadow: 0,
+    unresolved: 0,
+    errors: 0
+  };
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -124,12 +134,22 @@ function createBridge() {
       // Missing authority evidence must never make a client believe shadow state is authoritative.
       raceAuthoritySource = null;
     }
+    // The movement lease itself is granted on the fixed server tick. Reporting it here keeps the
+    // snapshot a pure read of an already-made decision, so building a payload can never latch a
+    // match to an authority source.
+    let movementAuthoritySource = null;
+    try {
+      movementAuthoritySource = movementAuthorityMatchGuard.sourceFor(current.room);
+    } catch {
+      movementAuthoritySource = null;
+    }
     return JSON.stringify({
       ...message,
       serverTick: shadow.lastServerTick >= 0 ? shadow.lastServerTick : runtime.serverTick,
       lastProcessedInput: shadow.lastProcessedInput,
       shadowPlayerState: shadow.state,
-      raceAuthoritySource
+      raceAuthoritySource,
+      movementAuthoritySource
     });
   }
 
@@ -350,8 +370,38 @@ function createBridge() {
         if (player.bot) continue;
         serverCheckpointAdvance.apply({ room, player, now });
         serverAutoFinish.apply({ room, player });
+        decideMovementAuthority(room, player);
       }
     }
+  }
+
+  // Movement authority is evaluated after the progress seams have run, so the race lease this
+  // match depends on is already established for the current tick. The guard is fail-closed: it
+  // stays unresolved until race authority decides, and its default parity evidence keeps every
+  // production match on legacy movement.
+  function decideMovementAuthority(room, player) {
+    let decision = null;
+    try {
+      decision = movementAuthorityMatchGuard.decide({ room, player });
+    } catch {
+      movementAuthorityCounters.errors += 1;
+      return null;
+    }
+    movementAuthorityCounters.decisions += 1;
+    if (
+      decision?.fallbackReason === movementAuthorityMatchGuard.MATCH_FALLBACK_REASON.RACE_AUTHORITY_UNRESOLVED
+    ) {
+      movementAuthorityCounters.unresolved += 1;
+    } else if (decision?.source === MOVEMENT_AUTHORITY_SOURCE.SHADOW) {
+      movementAuthorityCounters.shadow += 1;
+    } else {
+      movementAuthorityCounters.legacy += 1;
+    }
+    return decision;
+  }
+
+  function movementAuthorityMetrics() {
+    return { ...movementAuthorityCounters };
   }
 
   function logMetrics() {
@@ -362,6 +412,7 @@ function createBridge() {
     const serverCheckpoint = serverCheckpointAdvance.metrics();
     const finishAuthority = finishAuthorityCoreBridge.metrics();
     const autoFinish = serverAutoFinish.metrics();
+    const movementAuthority = movementAuthorityMetrics();
     const {
       coreProgress,
       authorityVerification,
@@ -377,7 +428,8 @@ function createBridge() {
       !checkpointCoreAuthority.calls &&
       !finishAuthority.attempts &&
       !serverCheckpoint.attempts &&
-      !autoFinish.candidates
+      !autoFinish.candidates &&
+      !movementAuthority.decisions
     )
       return;
     process.stdout.write(
@@ -396,7 +448,8 @@ function createBridge() {
         checkpointCoreAuthority,
         serverCheckpoint,
         finishAuthority,
-        autoFinish
+        autoFinish,
+        movementAuthority
       })}\n`
     );
   }
@@ -446,6 +499,8 @@ function createBridge() {
     finishAuthorityCoreBridge,
     finishAuthorityCoreVerification,
     serverAutoFinish,
+    movementAuthorityMatchGuard,
+    movementAuthorityMetrics,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

@@ -163,6 +163,11 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     null,
     'co-op never advertises an authoritative race reconciliation source'
   );
+  assert.equal(
+    acknowledgement.movementAuthoritySource,
+    null,
+    'co-op never advertises an authoritative movement source'
+  );
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.x));
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.y));
   assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.z));
@@ -176,7 +181,8 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
         message.type === 'snapshot' &&
         (message.lastProcessedInput !== undefined ||
           message.shadowPlayerState !== undefined ||
-          message.raceAuthoritySource !== undefined)
+          message.raceAuthoritySource !== undefined ||
+          message.movementAuthoritySource !== undefined)
     ),
     false,
     'shadow acknowledgement, simulation state and authority marker stay personalized to their owner'
@@ -293,4 +299,20 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
     'legacy',
     'owner snapshot exposes the match-scoped authority lease before reconciliation can cut over'
   );
+
+  // The movement lease is granted on the fixed server tick, so it can trail the race lease by a
+  // tick or two on a busy runner. Wait for the marker instead of assuming both land together.
+  const legacyMovementSnapshot = await first.wait(
+    'snapshot',
+    message => message.matchId === raceStart.matchId && message.movementAuthoritySource === 'legacy'
+  );
+  assert.equal(
+    legacyMovementSnapshot.movementAuthoritySource,
+    'legacy',
+    'owner snapshot exposes the match-scoped movement lease so the client cannot reconcile movement'
+  );
+  const movementAuthority = bridge.movementAuthorityMetrics();
+  assert.ok(movementAuthority.decisions > 0, 'the fixed tick evaluates movement authority');
+  assert.equal(movementAuthority.shadow, 0, 'default parity evidence never grants shadow movement');
+  assert.equal(movementAuthority.errors, 0, 'movement authority evaluation stays free of errors');
 });

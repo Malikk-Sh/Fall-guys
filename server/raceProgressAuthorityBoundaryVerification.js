@@ -11,17 +11,22 @@ function sameProgress(left, right) {
   return !!left && !!right && left.checkpoint === right.checkpoint && left.finished === right.finished;
 }
 
-function createRaceProgressAuthorityBoundaryVerification() {
-  let pending = new WeakMap();
-  let counters = {
+function createCounters() {
+  return {
     remembered: 0,
     stateComparisons: 0,
     stateMismatches: 0,
     finishComparisons: 0,
     finishMismatches: 0,
     stalePending: 0,
-    missingPending: 0
+    missingPending: 0,
+    finishCutoverSkips: 0
   };
+}
+
+function createRaceProgressAuthorityBoundaryVerification() {
+  let pending = new WeakMap();
+  let counters = createCounters();
 
   function remember({ room, player, message, probeResult } = {}) {
     if (room?.mode !== GAME_MODE.RACE || !room.matchId || !player || !probeResult?.legacyProgress) {
@@ -38,6 +43,16 @@ function createRaceProgressAuthorityBoundaryVerification() {
       })
     );
     counters.remembered++;
+    return true;
+  }
+
+  function discardFinish({ room, player, sequence = null } = {}) {
+    const entry = player ? pending.get(player) : null;
+    if (!entry || entry.messageType !== C2S.FINISH) return false;
+    const sequenceMatches = sequence === null || entry.sequence === sequence;
+    if (entry.matchId !== room?.matchId || !sequenceMatches) return false;
+    pending.delete(player);
+    counters.finishCutoverSkips++;
     return true;
   }
 
@@ -109,18 +124,17 @@ function createRaceProgressAuthorityBoundaryVerification() {
 
   function reset() {
     pending = new WeakMap();
-    counters = {
-      remembered: 0,
-      stateComparisons: 0,
-      stateMismatches: 0,
-      finishComparisons: 0,
-      finishMismatches: 0,
-      stalePending: 0,
-      missingPending: 0
-    };
+    counters = createCounters();
   }
 
-  return Object.freeze({ remember, observeAcceptedState, observeOutcomePayload, metrics, reset });
+  return Object.freeze({
+    discardFinish,
+    remember,
+    observeAcceptedState,
+    observeOutcomePayload,
+    metrics,
+    reset
+  });
 }
 
 const singleton = createRaceProgressAuthorityBoundaryVerification();

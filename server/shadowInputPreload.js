@@ -29,6 +29,7 @@ function createBridge() {
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
   const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
   const finishAuthorityCoreBridge = raceFinishAuthorityCoreBridge;
+  const finishAuthorityCoreVerification = authorityService.finishCoreVerification;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -51,15 +52,34 @@ function createBridge() {
 
     const current = currentPlayerFor(ws);
     if (!current) return;
-    try {
-      authorityBoundaryVerification.observeOutcomePayload({
-        payload,
-        room: current.room,
-        player: current.player
-      });
-    } catch {
-      // Verification is diagnostic-only and must never block the actual finish payload.
+
+    // Before cutover, this verifies that the pre-mutation legacy projection exactly mirrors core.
+    // Once a shadow decision is deliberately driving the core finish gate, comparing the outcome
+    // to that old legacy projection would turn an intentional authority difference into a false
+    // readiness failure. Shadow finishes therefore use their own core outcome/timing verifier.
+    const shadowCutover = finishAuthorityCoreVerification.hasPending(current.player);
+    if (shadowCutover) {
+      try {
+        finishAuthorityCoreVerification.observeOutcomePayload({
+          payload,
+          room: current.room,
+          player: current.player
+        });
+      } catch {
+        // Verification is diagnostic-only and must never block the actual finish payload.
+      }
+    } else {
+      try {
+        authorityBoundaryVerification.observeOutcomePayload({
+          payload,
+          room: current.room,
+          player: current.player
+        });
+      } catch {
+        // Verification is diagnostic-only and must never block the actual finish payload.
+      }
     }
+
     try {
       authorityService.observeOutcomePayload({
         payload,
@@ -126,8 +146,7 @@ function createBridge() {
 
       // prependListener places this probe before the core socket listener. It can therefore
       // exercise the same authority selector with a projected legacy outcome before core mutates
-      // player.checkpoint/player.finished. The result remains diagnostic-only, and the verifier
-      // later checks that this projection exactly matches the real legacy core outcome.
+      // player.checkpoint/player.finished.
       try {
         const probeResult = authorityBoundaryProbe.observe({
           message,
@@ -141,21 +160,43 @@ function createBridge() {
           probeResult
         });
       } catch {
-        // Diagnostic-only migration seam: fail open to the unchanged legacy core path.
+        // Diagnostic-only migration seam: fail open to the unchanged core path.
       }
 
       // FINISH remains a client intent, but when this match is latched to shadow authority the
-      // core canFinish call must consume the server decision instead of falling through to the
-      // client-derived finish state. Legacy matches are left byte-for-byte on their old gate.
+      // core canFinish call consumes the server decision instead of falling through to the
+      // client-derived finish state. Legacy matches remain on the original gate.
       if (
         message.type === C2S.FINISH &&
         !current.player.finished &&
         message.sequence > (current.player.lastSequence ?? -1)
       ) {
         try {
-          finishAuthorityCoreBridge.prepare({ room: current.room, player: current.player });
+          const decision = finishAuthorityCoreBridge.prepare({
+            room: current.room,
+            player: current.player
+          });
+          if (decision?.source === 'shadow') {
+            const remembered = finishAuthorityCoreVerification.remember({
+              room: current.room,
+              player: current.player,
+              decision
+            });
+            if (remembered) {
+              authorityBoundaryVerification.discardFinish({
+                room: current.room,
+                player: current.player,
+                sequence: message.sequence
+              });
+            } else {
+              // If the safety verifier cannot represent the shadow decision, do not let that
+              // decision reach core. Removing the bridge lease restores the original legacy gate.
+              finishAuthorityCoreBridge.clear(current.player);
+            }
+          }
         } catch {
           finishAuthorityCoreBridge.clear(current.player);
+          finishAuthorityCoreVerification.clear(current.player);
         }
       }
     };
@@ -180,11 +221,11 @@ function createBridge() {
       if (!current) return;
       if (message.matchId && message.matchId !== current.room.matchId) return;
 
-      // This listener runs after core. Consume the one-message finish lease even when core moved
-      // the room to RESULTS, rejected the finish, or returned early after handling it. Without the
-      // cleanup, a later lifecycle assignment such as time=null could inherit stale shadow timing.
+      // This listener runs after core. Consume one-message finish leases even when the room moved
+      // to RESULTS or the action was rejected before a finish outcome payload was produced.
       if (message.type === C2S.FINISH) {
         finishAuthorityCoreBridge.clear(current.player);
+        finishAuthorityCoreVerification.clear(current.player);
         return;
       }
 
@@ -285,8 +326,13 @@ function createBridge() {
     const authorityBoundary = authorityBoundaryProbe.metrics();
     const checkpointAuthority = checkpointAuthorityApplier.metrics();
     const finishAuthority = finishAuthorityCoreBridge.metrics();
-    const { coreProgress, authorityVerification, authorityReadiness, authorityProbe } =
-      authorityService.metrics();
+    const {
+      coreProgress,
+      authorityVerification,
+      finishCoreVerification,
+      authorityReadiness,
+      authorityProbe
+    } = authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
     if (
       !hasSimulationTraffic &&
@@ -306,6 +352,7 @@ function createBridge() {
         authorityProbe,
         authorityBoundary,
         authorityBoundaryVerification: authorityVerification,
+        finishCoreVerification,
         checkpointAuthority,
         finishAuthority
       })}\n`
@@ -352,6 +399,7 @@ function createBridge() {
     authorityBoundaryVerification,
     checkpointAuthorityApplier,
     finishAuthorityCoreBridge,
+    finishAuthorityCoreVerification,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

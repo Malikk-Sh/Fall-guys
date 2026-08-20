@@ -3,10 +3,7 @@ import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
 import { reconciliationApplicationProposal } from './ReconciliationApplicationPolicy.js';
-import {
-  applyReconciliationProposal,
-  normalizeMovementAuthoritySource
-} from './ReconciliationApplicator.js';
+import { applyReconciliationProposal, normalizeMovementAuthoritySource } from './ReconciliationApplicator.js';
 import { reconciliationDecision } from './ReconciliationPolicy.js';
 import { ReconciliationTelemetry } from './ReconciliationTelemetry.js';
 

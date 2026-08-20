@@ -131,7 +131,7 @@ test('cursor survives reload-style recreation for the same match and resets for 
 });
 
 test('prototype bridge captures input before Player consumes it and installs idempotently', () => {
-  let now = 0;
+  const now = 0;
   const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => now });
 
   class FakePlayer {

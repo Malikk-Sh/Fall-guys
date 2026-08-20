@@ -29,7 +29,9 @@ function evaluateShadowMovementAuthorityReadiness({
   return Object.freeze({
     ready: reasons.length === 0,
     source:
-      reasons.length === 0 ? MOVEMENT_AUTHORITY_SOURCE.SHADOW : MOVEMENT_AUTHORITY_SOURCE.LEGACY,
+      reasons.length === 0
+        ? MOVEMENT_AUTHORITY_SOURCE.SHADOW
+        : MOVEMENT_AUTHORITY_SOURCE.LEGACY,
     reasons: Object.freeze(reasons)
   });
 }

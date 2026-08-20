@@ -27,7 +27,11 @@ const REASON = Object.freeze({
   BOUNDARY_STATE_MISMATCH: 'boundary-state-mismatch',
   BOUNDARY_FINISH_MISMATCH: 'boundary-finish-mismatch',
   BOUNDARY_STALE_PENDING: 'boundary-stale-pending',
-  BOUNDARY_MISSING_PENDING: 'boundary-missing-pending'
+  BOUNDARY_MISSING_PENDING: 'boundary-missing-pending',
+  FINISH_CORE_VERIFICATION_INVALID: 'finish-core-verification-invalid',
+  FINISH_CORE_OUTCOME_MISMATCH: 'finish-core-outcome-mismatch',
+  FINISH_CORE_TIMING_MISMATCH: 'finish-core-timing-mismatch',
+  FINISH_CORE_STALE_PENDING: 'finish-core-stale-pending'
 });
 
 const BOUNDARY_VERIFICATION_FIELDS = Object.freeze([
@@ -38,6 +42,16 @@ const BOUNDARY_VERIFICATION_FIELDS = Object.freeze([
   'finishMismatches',
   'stalePending',
   'missingPending'
+]);
+
+const FINISH_CORE_VERIFICATION_FIELDS = Object.freeze([
+  'remembered',
+  'comparisons',
+  'acceptComparisons',
+  'rejectComparisons',
+  'outcomeMismatches',
+  'timingMismatches',
+  'stalePending'
 ]);
 
 function finiteRate(value) {
@@ -74,6 +88,14 @@ function validBoundaryVerificationMetrics(metrics) {
   );
 }
 
+function validFinishCoreVerificationMetrics(metrics) {
+  return (
+    !!metrics &&
+    typeof metrics === 'object' &&
+    FINISH_CORE_VERIFICATION_FIELDS.every(field => nonNegativeInteger(metrics[field]))
+  );
+}
+
 function normalizePolicy(policy = {}) {
   const merged = { ...DEFAULT_SHADOW_AUTHORITY_POLICY, ...policy };
   const integerFields = [
@@ -97,11 +119,19 @@ function normalizePolicy(policy = {}) {
   return Object.freeze({ ...merged });
 }
 
+function observedVerification(metrics, fields) {
+  if (!metrics || typeof metrics !== 'object') return null;
+  return Object.freeze(Object.fromEntries(fields.map(field => [field, metrics[field]])));
+}
+
 function observedBoundaryVerification(metrics) {
   if (!validBoundaryVerificationMetrics(metrics)) return null;
-  return Object.freeze(
-    Object.fromEntries(BOUNDARY_VERIFICATION_FIELDS.map(field => [field, metrics[field]]))
-  );
+  return observedVerification(metrics, BOUNDARY_VERIFICATION_FIELDS);
+}
+
+function observedFinishCoreVerification(metrics) {
+  if (!validFinishCoreVerificationMetrics(metrics)) return null;
+  return observedVerification(metrics, FINISH_CORE_VERIFICATION_FIELDS);
 }
 
 function appendBoundaryVerificationReasons(reasons, metrics) {
@@ -116,10 +146,22 @@ function appendBoundaryVerificationReasons(reasons, metrics) {
   if (metrics.missingPending > 0) reasons.push(REASON.BOUNDARY_MISSING_PENDING);
 }
 
+function appendFinishCoreVerificationReasons(reasons, metrics) {
+  if (metrics === null || metrics === undefined) return;
+  if (!validFinishCoreVerificationMetrics(metrics)) {
+    reasons.push(REASON.FINISH_CORE_VERIFICATION_INVALID);
+    return;
+  }
+  if (metrics.outcomeMismatches > 0) reasons.push(REASON.FINISH_CORE_OUTCOME_MISMATCH);
+  if (metrics.timingMismatches > 0) reasons.push(REASON.FINISH_CORE_TIMING_MISMATCH);
+  if (metrics.stalePending > 0) reasons.push(REASON.FINISH_CORE_STALE_PENDING);
+}
+
 function evaluateShadowRaceAuthorityReadiness(
   metrics,
   policyOverrides = {},
-  boundaryVerificationMetrics = null
+  boundaryVerificationMetrics = null,
+  finishCoreVerificationMetrics = null
 ) {
   const policy = normalizePolicy(policyOverrides);
   if (!validMetrics(metrics)) {
@@ -149,6 +191,7 @@ function evaluateShadowRaceAuthorityReadiness(
     reasons.push(REASON.REJECTED_SHADOW_FINISHED);
   }
   appendBoundaryVerificationReasons(reasons, boundaryVerificationMetrics);
+  appendFinishCoreVerificationReasons(reasons, finishCoreVerificationMetrics);
 
   return Object.freeze({
     ready: reasons.length === 0,
@@ -164,7 +207,8 @@ function evaluateShadowRaceAuthorityReadiness(
       invalidLegacySamples: metrics.invalidLegacySamples,
       acceptedButShadowUnfinishedSamples: metrics.acceptedButShadowUnfinishedSamples,
       rejectedButShadowFinishedSamples: metrics.rejectedButShadowFinishedSamples,
-      boundaryVerification: observedBoundaryVerification(boundaryVerificationMetrics)
+      boundaryVerification: observedBoundaryVerification(boundaryVerificationMetrics),
+      finishCoreVerification: observedFinishCoreVerification(finishCoreVerificationMetrics)
     })
   });
 }
@@ -172,10 +216,13 @@ function evaluateShadowRaceAuthorityReadiness(
 module.exports = {
   BOUNDARY_VERIFICATION_FIELDS,
   DEFAULT_SHADOW_AUTHORITY_POLICY,
+  FINISH_CORE_VERIFICATION_FIELDS,
   REASON,
   appendBoundaryVerificationReasons,
+  appendFinishCoreVerificationReasons,
   evaluateShadowRaceAuthorityReadiness,
   normalizePolicy,
   validBoundaryVerificationMetrics,
+  validFinishCoreVerificationMetrics,
   validMetrics
 };

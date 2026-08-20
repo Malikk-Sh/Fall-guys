@@ -6,11 +6,13 @@ const require = createRequire(import.meta.url);
 const service = require('./shadowRuntimeService');
 
 test('shadow runtime service is a process-local CommonJS singleton', () => {
-  assert.equal(require('./shadowRuntimeService'), service);
+  const loadedAgain = require('./shadowRuntimeService');
+  assert.equal(loadedAgain, service);
   assert.ok(service.runtime);
-  for (const method of ['accept', 'tick', 'snapshot', 'metrics']) {
-    assert.equal(typeof service[method], 'function');
-  }
+  assert.equal(typeof service.accept, 'function');
+  assert.equal(typeof service.tick, 'function');
+  assert.equal(typeof service.snapshot, 'function');
+  assert.equal(typeof service.metrics, 'function');
 });
 
 test('shadow runtime service facade delegates to one supplied runtime', () => {
@@ -43,17 +45,24 @@ test('shadow runtime service facade delegates to one supplied runtime', () => {
   assert.equal(isolated.tick(rooms, 123), 17);
   assert.deepEqual(isolated.snapshot(player), { matchId: 'm1' });
   assert.deepEqual(isolated.metrics(), { processed: 3 });
-  assert.deepEqual(calls, [
-    ['accept', options],
-    ['tick', rooms, 123],
-    ['snapshot', player],
-    ['metrics']
-  ]);
+  assert.equal(calls.length, 4);
+  assert.equal(calls[0][0], 'accept');
+  assert.equal(calls[0][1], options);
+  assert.equal(calls[1][0], 'tick');
+  assert.equal(calls[1][1], rooms);
+  assert.equal(calls[1][2], 123);
+  assert.equal(calls[2][0], 'snapshot');
+  assert.equal(calls[2][1], player);
+  assert.equal(calls[3][0], 'metrics');
 });
 
 test('shadow runtime service rejects incomplete runtime implementations', () => {
-  assert.throws(
-    () => service.createShadowRuntimeService({ runtime: { accept() {} } }),
-    /requires accept, tick, snapshot and metrics/
-  );
+  let failure = null;
+  try {
+    service.createShadowRuntimeService({ runtime: { accept() {} } });
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure instanceof TypeError);
+  assert.match(failure.message, /requires accept, tick, snapshot and metrics/);
 });

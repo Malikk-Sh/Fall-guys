@@ -138,15 +138,30 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
 
   const acknowledgement = await first.wait(
     'snapshot',
-    message => message.matchId === firstStart.matchId && message.lastProcessedInput === 0
+    message =>
+      message.matchId === firstStart.matchId &&
+      message.lastProcessedInput === 0 &&
+      message.shadowPlayerState !== undefined
   );
   assert.equal(acknowledgement.lastProcessedInput, 0);
   assert.ok(Number.isSafeInteger(acknowledgement.serverTick));
   assert.ok(acknowledgement.serverTick >= shadow.lastServerTick);
+  assert.ok(acknowledgement.shadowPlayerState);
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.x));
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.y));
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.position.z));
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.velocity.x));
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.velocity.y));
+  assert.ok(Number.isFinite(acknowledgement.shadowPlayerState.velocity.z));
+  assert.equal(typeof acknowledgement.shadowPlayerState.grounded, 'boolean');
   assert.equal(
-    second.messages.some(message => message.type === 'snapshot' && message.lastProcessedInput !== undefined),
+    second.messages.some(
+      message =>
+        message.type === 'snapshot' &&
+        (message.lastProcessedInput !== undefined || message.shadowPlayerState !== undefined)
+    ),
     false,
-    'acknowledgement is personalized and never leaks another player input cursor'
+    'shadow acknowledgement and simulation state stay personalized to their owner'
   );
 
   const staleBefore = bridge.runtime.metrics().rejected.staleSequence;

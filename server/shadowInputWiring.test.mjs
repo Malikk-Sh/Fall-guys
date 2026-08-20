@@ -136,6 +136,19 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
   assert.equal(shadow.matchId, firstStart.matchId);
   assert.deepEqual(player.last, legacyBefore, 'shadow simulation never replaces legacy authoritative state');
 
+  const acknowledgement = await first.wait(
+    'snapshot',
+    message => message.matchId === firstStart.matchId && message.lastProcessedInput === 0
+  );
+  assert.equal(acknowledgement.lastProcessedInput, 0);
+  assert.ok(Number.isSafeInteger(acknowledgement.serverTick));
+  assert.ok(acknowledgement.serverTick >= shadow.lastServerTick);
+  assert.equal(
+    second.messages.some(message => message.type === 'snapshot' && message.lastProcessedInput !== undefined),
+    false,
+    'acknowledgement is personalized and never leaks another player input cursor'
+  );
+
   const staleBefore = bridge.runtime.metrics().rejected.staleSequence;
   first.send('input', {
     matchId: firstStart.matchId,

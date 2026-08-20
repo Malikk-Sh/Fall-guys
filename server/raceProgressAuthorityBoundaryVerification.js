@@ -82,11 +82,7 @@ function createRaceProgressAuthorityBoundaryVerification() {
       sequence: message.sequence
     });
     if (!entry) return null;
-    return compare(
-      entry,
-      { checkpoint: player.checkpoint, finished: !!player.finished },
-      'state'
-    );
+    return compare(entry, { checkpoint: player.checkpoint, finished: !!player.finished }, 'state');
   }
 
   function observeOutcomePayload({ payload, room, player } = {}) {
@@ -104,11 +100,7 @@ function createRaceProgressAuthorityBoundaryVerification() {
 
     const entry = take({ room, player, messageType: C2S.FINISH });
     if (!entry) return null;
-    return compare(
-      entry,
-      { checkpoint: player.checkpoint, finished: accepted },
-      'finish'
-    );
+    return compare(entry, { checkpoint: player.checkpoint, finished: accepted }, 'finish');
   }
 
   function metrics() {

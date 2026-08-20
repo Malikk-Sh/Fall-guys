@@ -27,7 +27,7 @@ function fixture({ requestedSource = AUTHORITY_SOURCE.SHADOW, readiness = ready,
       return readiness;
     }
   };
-  const candidateFor = options => {
+  const candidateFor = _options => {
     calls.push('candidate');
     if (candidate instanceof Error) throw candidate;
     return candidate;

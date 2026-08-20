@@ -18,9 +18,9 @@ function validProgress(progress, checkpointLimit) {
   if (progress.checkpoint < 0 || progress.checkpoint > checkpointLimit) return false;
   if (typeof progress.finished !== 'boolean') return false;
   if (progress.finished && progress.checkpoint !== checkpointLimit) return false;
-  if (progress.finished && (!Number.isSafeInteger(progress.finishServerTick) || progress.finishServerTick < 0)) {
-    return false;
-  }
+  const validFinishTick =
+    Number.isSafeInteger(progress.finishServerTick) && progress.finishServerTick >= 0;
+  if (progress.finished && !validFinishTick) return false;
   if (!progress.finished && progress.finishServerTick !== null) return false;
   return true;
 }

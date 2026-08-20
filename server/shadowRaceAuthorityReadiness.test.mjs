@@ -9,6 +9,7 @@ const {
   evaluateShadowRaceAuthorityReadiness,
   normalizePolicy,
   validBoundaryVerificationMetrics,
+  validFinishCoreVerificationMetrics,
   validMetrics
 } = require('./shadowRaceAuthorityReadiness');
 
@@ -36,6 +37,19 @@ function healthyVerification(overrides = {}) {
     finishMismatches: 0,
     stalePending: 0,
     missingPending: 0,
+    ...overrides
+  };
+}
+
+function healthyFinishCoreVerification(overrides = {}) {
+  return {
+    remembered: 12,
+    comparisons: 12,
+    acceptComparisons: 8,
+    rejectComparisons: 4,
+    outcomeMismatches: 0,
+    timingMismatches: 0,
+    stalePending: 0,
     ...overrides
   };
 }
@@ -80,6 +94,7 @@ test('clean default evidence is advisory-ready', () => {
   assert.equal(result.observed.acceptedButShadowUnfinishedSamples, 0);
   assert.equal(result.observed.rejectedButShadowFinishedSamples, 0);
   assert.equal(result.observed.boundaryVerification, null);
+  assert.equal(result.observed.finishCoreVerification, null);
   assert.deepEqual(metrics, healthyMetrics());
 });
 
@@ -92,6 +107,16 @@ test('clean boundary verification preserves advisory readiness', () => {
   assert.equal(result.reasons.length, 0);
   assert.deepEqual(result.observed.boundaryVerification, verification);
   assert.equal(Object.isFrozen(result.observed.boundaryVerification), true);
+});
+
+test('clean finish core verification preserves readiness and is exposed read-only', () => {
+  const verification = healthyFinishCoreVerification();
+  const result = evaluateShadowRaceAuthorityReadiness(healthyMetrics(), {}, healthyVerification(), verification);
+
+  assert.equal(validFinishCoreVerificationMetrics(verification), true);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.observed.finishCoreVerification, verification);
+  assert.equal(Object.isFrozen(result.observed.finishCoreVerification), true);
 });
 
 test('each migration risk blocks readiness explicitly', () => {
@@ -134,6 +159,26 @@ test('each boundary verification integrity failure blocks shadow readiness', () 
   assert.ok(result.reasons.includes(REASON.BOUNDARY_MISSING_PENDING));
 });
 
+test('finish core outcome, timing and stale decision failures block shadow readiness', () => {
+  const verification = healthyFinishCoreVerification({
+    outcomeMismatches: 1,
+    timingMismatches: 1,
+    stalePending: 1
+  });
+  const result = evaluateShadowRaceAuthorityReadiness(
+    healthyMetrics(),
+    {},
+    healthyVerification(),
+    verification
+  );
+
+  assert.equal(result.ready, false);
+  assert.equal(result.reasons.length, 3);
+  assert.ok(result.reasons.includes(REASON.FINISH_CORE_OUTCOME_MISMATCH));
+  assert.ok(result.reasons.includes(REASON.FINISH_CORE_TIMING_MISMATCH));
+  assert.ok(result.reasons.includes(REASON.FINISH_CORE_STALE_PENDING));
+});
+
 test('malformed metrics fail closed', () => {
   assertInvalidMetrics(null);
   assertInvalidMetrics({});
@@ -149,6 +194,21 @@ test('supplied malformed boundary verification fails closed', () => {
   assert.equal(result.ready, false);
   assert.deepEqual(result.reasons, [REASON.BOUNDARY_VERIFICATION_INVALID]);
   assert.equal(result.observed.boundaryVerification, null);
+});
+
+test('supplied malformed finish core verification fails closed', () => {
+  const verification = healthyFinishCoreVerification({ timingMismatches: -1 });
+  const result = evaluateShadowRaceAuthorityReadiness(
+    healthyMetrics(),
+    {},
+    healthyVerification(),
+    verification
+  );
+
+  assert.equal(validFinishCoreVerificationMetrics(verification), false);
+  assert.equal(result.ready, false);
+  assert.deepEqual(result.reasons, [REASON.FINISH_CORE_VERIFICATION_INVALID]);
+  assert.equal(result.observed.finishCoreVerification, null);
 });
 
 test('policy overrides can be stricter or looser', () => {

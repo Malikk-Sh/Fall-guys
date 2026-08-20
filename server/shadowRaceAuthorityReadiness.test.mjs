@@ -27,10 +27,12 @@ function healthyMetrics(overrides = {}) {
 }
 
 test('default policy stays advisory-false until both state and finish evidence are sufficient', () => {
-  const result = evaluateShadowRaceAuthorityReadiness(healthyMetrics({
-    stateSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples - 1,
-    finishComparableSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minFinishSamples - 1
-  }));
+  const result = evaluateShadowRaceAuthorityReadiness(
+    healthyMetrics({
+      stateSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples - 1,
+      finishComparableSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minFinishSamples - 1
+    })
+  );
 
   assert.equal(result.ready, false);
   assert.deepEqual(result.reasons, [
@@ -88,7 +90,12 @@ test('each migration risk keeps authority readiness false with an explicit reaso
 });
 
 test('invalid metrics fail closed instead of manufacturing a positive readiness signal', () => {
-  for (const metrics of [null, {}, healthyMetrics({ availabilityRate: 2 }), healthyMetrics({ stateSamples: -1 })]) {
+  for (const metrics of [
+    null,
+    {},
+    healthyMetrics({ availabilityRate: 2 }),
+    healthyMetrics({ stateSamples: -1 })
+  ]) {
     assert.equal(validMetrics(metrics), false);
     const result = evaluateShadowRaceAuthorityReadiness(metrics);
     assert.equal(result.ready, false);

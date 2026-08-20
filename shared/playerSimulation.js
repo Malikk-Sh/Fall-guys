@@ -258,8 +258,7 @@ export function stepPlayerMotion(previousState, rawInput, context = {}, dt) {
     state.velocity.z = dampScalar(state.velocity.z, 0, stop, dt);
   }
 
-  state.gliding =
-    !knockedDown && tuning.glide && !state.grounded && state.velocity.y < 0 && input.jumpHeld;
+  state.gliding = !knockedDown && tuning.glide && !state.grounded && state.velocity.y < 0 && input.jumpHeld;
   const gravityScale = state.slamming ? 1.8 : state.gliding ? GLIDE_GRAVITY : 1;
   state.velocity.y -= GRAVITY * tuning.gravity * gravityScale * dt;
   state.position.x += state.velocity.x * dt;

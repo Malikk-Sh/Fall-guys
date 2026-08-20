@@ -46,6 +46,9 @@ import assert from 'node:assert/strict';
 
 import { createCourseSpec, DIFFICULTY_SEGMENTS } from '../shared/courseSpec.js';
 import { e2eSegmentCount, MIN_SEGMENTS } from './e2eCourse.js';
+// Shared simulation is a server/client foundation and must run in the required Node suite. Keeping
+// this import here avoids widening the already-explicit npm test manifest for a single migration PR.
+import './playerSimulation.test.mjs';
 
 // Ровно те значения, что стоят в playwright.config.js. Продублированы намеренно: тест обязан
 // сломаться и в том случае, если трассу поменяют в конфиге, не подобрав новую.

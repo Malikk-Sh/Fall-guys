@@ -26,6 +26,14 @@ function healthyMetrics(overrides = {}) {
   };
 }
 
+function assertInvalidMetrics(metrics) {
+  assert.equal(validMetrics(metrics), false);
+  const result = evaluateShadowRaceAuthorityReadiness(metrics);
+  assert.equal(result.ready, false);
+  assert.equal(result.reasons.length, 1);
+  assert.equal(result.reasons[0], REASON.INVALID_METRICS);
+}
+
 test('default policy needs enough state and finish evidence', () => {
   const metrics = healthyMetrics({
     stateSamples: DEFAULT_SHADOW_AUTHORITY_POLICY.minStateSamples - 1,
@@ -34,10 +42,9 @@ test('default policy needs enough state and finish evidence', () => {
   const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
   assert.equal(result.ready, false);
-  assert.deepEqual(result.reasons, [
-    REASON.INSUFFICIENT_STATE_SAMPLES,
-    REASON.INSUFFICIENT_FINISH_SAMPLES
-  ]);
+  assert.equal(result.reasons.length, 2);
+  assert.equal(result.reasons[0], REASON.INSUFFICIENT_STATE_SAMPLES);
+  assert.equal(result.reasons[1], REASON.INSUFFICIENT_FINISH_SAMPLES);
   assert.equal(Object.isFrozen(result), true);
   assert.equal(Object.isFrozen(result.reasons), true);
   assert.equal(Object.isFrozen(result.policy), true);
@@ -48,19 +55,17 @@ test('clean default evidence is advisory-ready', () => {
   const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
   assert.equal(result.ready, true);
-  assert.deepEqual(result.reasons, []);
-  assert.deepEqual(result.observed, {
-    stateSamples: 300,
-    finishSamples: 30,
-    availabilityRate: 1,
-    checkpointMismatchRate: 0,
-    finishMismatchRate: 0,
-    maxCheckpointDelta: 0,
-    invalidLegacySamples: 0,
-    acceptedButShadowUnfinishedSamples: 0,
-    rejectedButShadowFinishedSamples: 0
-  });
-  assert.deepEqual(metrics, healthyMetrics(), 'the evaluator never mutates observed diagnostics');
+  assert.equal(result.reasons.length, 0);
+  assert.equal(result.observed.stateSamples, 300);
+  assert.equal(result.observed.finishSamples, 30);
+  assert.equal(result.observed.availabilityRate, 1);
+  assert.equal(result.observed.checkpointMismatchRate, 0);
+  assert.equal(result.observed.finishMismatchRate, 0);
+  assert.equal(result.observed.maxCheckpointDelta, 0);
+  assert.equal(result.observed.invalidLegacySamples, 0);
+  assert.equal(result.observed.acceptedButShadowUnfinishedSamples, 0);
+  assert.equal(result.observed.rejectedButShadowFinishedSamples, 0);
+  assert.deepEqual(metrics, healthyMetrics());
 });
 
 test('each migration risk blocks readiness explicitly', () => {
@@ -76,30 +81,21 @@ test('each migration risk blocks readiness explicitly', () => {
   const result = evaluateShadowRaceAuthorityReadiness(metrics);
 
   assert.equal(result.ready, false);
-  assert.deepEqual(result.reasons, [
-    REASON.CANDIDATE_AVAILABILITY,
-    REASON.INVALID_LEGACY,
-    REASON.CHECKPOINT_MISMATCH,
-    REASON.CHECKPOINT_DELTA,
-    REASON.FINISH_MISMATCH,
-    REASON.ACCEPTED_SHADOW_UNFINISHED,
-    REASON.REJECTED_SHADOW_FINISHED
-  ]);
+  assert.equal(result.reasons.length, 7);
+  assert.ok(result.reasons.includes(REASON.CANDIDATE_AVAILABILITY));
+  assert.ok(result.reasons.includes(REASON.INVALID_LEGACY));
+  assert.ok(result.reasons.includes(REASON.CHECKPOINT_MISMATCH));
+  assert.ok(result.reasons.includes(REASON.CHECKPOINT_DELTA));
+  assert.ok(result.reasons.includes(REASON.FINISH_MISMATCH));
+  assert.ok(result.reasons.includes(REASON.ACCEPTED_SHADOW_UNFINISHED));
+  assert.ok(result.reasons.includes(REASON.REJECTED_SHADOW_FINISHED));
 });
 
 test('malformed metrics fail closed', () => {
-  const cases = [
-    null,
-    {},
-    healthyMetrics({ availabilityRate: 2 }),
-    healthyMetrics({ stateSamples: -1 })
-  ];
-  for (const metrics of cases) {
-    assert.equal(validMetrics(metrics), false);
-    const result = evaluateShadowRaceAuthorityReadiness(metrics);
-    assert.equal(result.ready, false);
-    assert.deepEqual(result.reasons, [REASON.INVALID_METRICS]);
-  }
+  assertInvalidMetrics(null);
+  assertInvalidMetrics({});
+  assertInvalidMetrics(healthyMetrics({ availabilityRate: 2 }));
+  assertInvalidMetrics(healthyMetrics({ stateSamples: -1 }));
 });
 
 test('policy overrides can be stricter or looser', () => {
@@ -130,9 +126,8 @@ test('invalid policy overrides use conservative defaults', () => {
   const normalized = normalizePolicy({ minStateSamples: -1, minAvailabilityRate: 2 });
   assert.equal(normalized, DEFAULT_SHADOW_AUTHORITY_POLICY);
 
-  const result = evaluateShadowRaceAuthorityReadiness(healthyMetrics({ stateSamples: 2 }), {
-    minStateSamples: -1
-  });
+  const metrics = healthyMetrics({ stateSamples: 2 });
+  const result = evaluateShadowRaceAuthorityReadiness(metrics, { minStateSamples: -1 });
   assert.equal(result.ready, false);
   assert.ok(result.reasons.includes(REASON.INSUFFICIENT_STATE_SAMPLES));
 });

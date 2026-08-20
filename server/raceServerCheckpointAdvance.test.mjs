@@ -101,10 +101,7 @@ test('unchanged shadow decisions and guarded fallbacks are distinguished', () =>
 test('non-race, non-playing, bot and finished players are ignored', () => {
   const { advance, calls } = fixture();
 
-  assert.equal(
-    advance.apply({ room: room({ mode: GAME_MODE.COOP }), player: player(), now: 500 }),
-    null
-  );
+  assert.equal(advance.apply({ room: room({ mode: GAME_MODE.COOP }), player: player(), now: 500 }), null);
   assert.equal(
     advance.apply({ room: room({ state: ROOM_STATE.RESULTS }), player: player(), now: 500 }),
     null

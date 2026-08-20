@@ -3,10 +3,12 @@
 const { createShadowRaceProgressDiagnostics } = require('./shadowRaceProgressDiagnostics');
 const { evaluateShadowRaceAuthorityReadiness } = require('./shadowRaceAuthorityReadiness');
 const { createShadowRaceAuthorityProbe } = require('./shadowRaceAuthorityProbe');
+const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
 
 function createShadowRaceAuthorityService({
   progressDiagnostics = createShadowRaceProgressDiagnostics(),
   authorityProbe = createShadowRaceAuthorityProbe(),
+  boundaryVerification = raceProgressAuthorityBoundaryVerification,
   readinessFor = evaluateShadowRaceAuthorityReadiness
 } = {}) {
   if (
@@ -26,12 +28,27 @@ function createShadowRaceAuthorityService({
   ) {
     throw new TypeError('shadow race authority service requires an authority probe');
   }
+  if (
+    !boundaryVerification ||
+    typeof boundaryVerification.metrics !== 'function' ||
+    typeof boundaryVerification.reset !== 'function'
+  ) {
+    throw new TypeError('shadow race authority service requires boundary verification');
+  }
   if (typeof readinessFor !== 'function') {
     throw new TypeError('shadow race authority service requires a readiness evaluator');
   }
 
+  function readinessFrom(coreProgress) {
+    const authorityVerification = boundaryVerification.metrics();
+    return Object.freeze({
+      authorityVerification,
+      authorityReadiness: readinessFor(coreProgress, {}, authorityVerification)
+    });
+  }
+
   function readiness() {
-    return readinessFor(progressDiagnostics.metrics());
+    return readinessFrom(progressDiagnostics.metrics()).authorityReadiness;
   }
 
   function observe(method, options) {
@@ -48,9 +65,11 @@ function createShadowRaceAuthorityService({
 
   function metrics() {
     const coreProgress = progressDiagnostics.metrics();
+    const { authorityVerification, authorityReadiness } = readinessFrom(coreProgress);
     return Object.freeze({
       coreProgress,
-      authorityReadiness: readinessFor(coreProgress),
+      authorityVerification,
+      authorityReadiness,
       authorityProbe: authorityProbe.metrics()
     });
   }
@@ -58,11 +77,13 @@ function createShadowRaceAuthorityService({
   function reset() {
     progressDiagnostics.reset();
     authorityProbe.reset();
+    boundaryVerification.reset();
   }
 
   return {
     progressDiagnostics,
     authorityProbe,
+    boundaryVerification,
     observeAcceptedState: options => observe('observeAcceptedState', options),
     observeOutcomePayload: options => observe('observeOutcomePayload', options),
     readiness,

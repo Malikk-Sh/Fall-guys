@@ -54,12 +54,7 @@ function createShadowRaceAuthorityService({
     return Object.freeze({
       authorityVerification,
       finishCoreVerification: finishCoreVerificationMetrics,
-      authorityReadiness: readinessFor(
-        coreProgress,
-        {},
-        authorityVerification,
-        finishCoreVerificationMetrics
-      )
+      authorityReadiness: readinessFor(coreProgress, {}, authorityVerification, finishCoreVerificationMetrics)
     });
   }
 
@@ -81,11 +76,8 @@ function createShadowRaceAuthorityService({
 
   function metrics() {
     const coreProgress = progressDiagnostics.metrics();
-    const {
-      authorityVerification,
-      finishCoreVerification: finishVerification,
-      authorityReadiness
-    } = readinessFrom(coreProgress);
+    const { authorityVerification, finishCoreVerification: finishVerification, authorityReadiness } =
+      readinessFrom(coreProgress);
     return Object.freeze({
       coreProgress,
       authorityVerification,

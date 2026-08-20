@@ -26,6 +26,9 @@ export const C2S = Object.freeze({
   HOST_CONFIGURE: 'configure',
   START_MATCH: 'start',
   PLAYER_STATE: 'state',
+  // Новый input-authoritative путь вводится параллельно legacy state-потоку. Пока клиент его не
+  // шлёт в production, но формат уже закрыт схемой и готов к shadow-обработке на сервере.
+  CLIENT_INPUT: 'input',
   PRESENCE: 'presence',
   COOP_EVENT: 'coopEvent',
   COOP_PING: 'coopPing',
@@ -134,6 +137,7 @@ export const ALLOWED_IN_STATE = Object.freeze({
   [C2S.HOST_CONFIGURE]: [ROOM_STATE.LOBBY],
   [C2S.START_MATCH]: [ROOM_STATE.LOBBY],
   [C2S.PLAYER_STATE]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
+  [C2S.CLIENT_INPUT]: [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING],
   // Присутствие сознательно разрешено в любом состоянии комнаты: свернуть игру можно и в лобби,
   // и на экране результатов, и напарнику полезно знать об этом именно там — там его ждут.
   [C2S.COOP_EVENT]: [ROOM_STATE.PLAYING],
@@ -290,6 +294,20 @@ export const MESSAGE_SCHEMAS = Object.freeze({
     state: PLAYER_STATE_SHAPE
   },
 
+  // Input-команда описывает только намерение игрока. Ни позиции, ни скорости, ни checkpoint здесь
+  // нет: новый authoritative путь не должен снова сделать клиент источником истины под другим именем.
+  [C2S.CLIENT_INPUT]: {
+    matchId: str(32),
+    sequence: num(0, Number.MAX_SAFE_INTEGER),
+    clientTick: num(0, Number.MAX_SAFE_INTEGER),
+    moveX: num(-1, 1),
+    moveZ: num(-1, 1),
+    jumpPressed: bool(),
+    jumpHeld: bool(),
+    divePressed: bool(),
+    cameraYaw: num(-100, 100)
+  },
+
   // Игра свёрнута или снова на экране. На телефоне переключение в мессенджер — обычное дело,
   // а для напарника неподвижный персонаж неотличим от вылета: он стоит и ждёт неизвестно чего.
   [C2S.PRESENCE]: { away: bool() },
@@ -352,6 +370,9 @@ export const RATE_LIMITS = Object.freeze({
   [C2S.HOST_CONFIGURE]: [20, 10_000],
   [C2S.START_MATCH]: [10, 10_000],
   [C2S.PLAYER_STATE]: [25, 1_000],
+  // Номинально input идёт 30 Гц. 45/с оставляет запас на burst после короткой паузы main thread,
+  // но не позволяет превратить симуляцию в обработчик неограниченного потока команд.
+  [C2S.CLIENT_INPUT]: [45, 1_000],
   // Переключение приложений — действие человеческого темпа. Лимит отсекает мигание вкладкой,
   // но оставляет запас на нормальную работу с телефоном.
   [C2S.PRESENCE]: [20, 10_000],

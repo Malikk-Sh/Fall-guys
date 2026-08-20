@@ -6,6 +6,8 @@ import {
   normalizePlayerInput,
   stepPlayerMotion
 } from '../shared/playerSimulation.js';
+import { ALLOWED_IN_STATE, C2S, RATE_LIMITS, ROOM_STATE } from '../shared/protocol.js';
+import { validateMessage } from '../shared/validation.js';
 
 const FIXED_DT = 1 / 60;
 
@@ -137,4 +139,67 @@ test('normalization and long input replay keep the state finite', () => {
     state = stepPlayerMotion(state, input, { knockdownControl: 0.25 }, FIXED_DT).state;
     assertFiniteState(state);
   }
+});
+
+const validClientInput = () => ({
+  type: C2S.CLIENT_INPUT,
+  matchId: 'a1b2c3d4e5f60718',
+  sequence: 184,
+  clientTick: 942,
+  moveX: 0.4,
+  moveZ: -0.9,
+  jumpPressed: false,
+  jumpHeld: true,
+  divePressed: true,
+  cameraYaw: 1.42
+});
+
+test('CLIENT_INPUT accepts only bounded player intent, never client coordinates', () => {
+  assert.equal(C2S.CLIENT_INPUT, 'input');
+  assert.ok(validateMessage(validClientInput()).ok);
+
+  for (const field of [
+    'matchId',
+    'sequence',
+    'clientTick',
+    'moveX',
+    'moveZ',
+    'jumpPressed',
+    'jumpHeld',
+    'divePressed',
+    'cameraYaw'
+  ]) {
+    const message = validClientInput();
+    delete message[field];
+    assert.equal(validateMessage(message).ok, false, `${field} должен быть обязательным`);
+  }
+
+  for (const [field, value] of [
+    ['moveX', 1.001],
+    ['moveZ', -1.001],
+    ['cameraYaw', Infinity],
+    ['jumpPressed', 1],
+    ['jumpHeld', 'yes'],
+    ['divePressed', null]
+  ]) {
+    const message = validClientInput();
+    message[field] = value;
+    assert.equal(validateMessage(message).ok, false, `${field}=${value} должен отклоняться`);
+  }
+
+  for (const protectedField of ['x', 'y', 'z', 'vx', 'vz', 'checkpoint', 'position']) {
+    const message = { ...validClientInput(), [protectedField]: 0 };
+    assert.equal(
+      validateMessage(message).ok,
+      false,
+      `${protectedField} не должен существовать в input-команде`
+    );
+  }
+});
+
+test('CLIENT_INPUT has a 30 Hz-friendly rate budget and race-state boundary', () => {
+  assert.deepEqual(RATE_LIMITS[C2S.CLIENT_INPUT], [45, 1000]);
+  assert.deepEqual(ALLOWED_IN_STATE[C2S.CLIENT_INPUT], [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING]);
+  assert.equal(ALLOWED_IN_STATE[C2S.CLIENT_INPUT].includes(ROOM_STATE.RESULTS), false);
+  assert.equal(ALLOWED_IN_STATE[C2S.CLIENT_INPUT].includes(ROOM_STATE.LOBBY), false);
 });

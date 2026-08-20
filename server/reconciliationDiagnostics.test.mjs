@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { ReconciliationTelemetry } from '../client/net/ReconciliationTelemetry.js';
 import { createPlayerSimulationState } from '../shared/playerSimulation.js';
 import { S2C } from '../shared/protocol.js';
 import {
@@ -75,6 +76,75 @@ test('simulation state error reports correction deltas without mutating either s
   assert.equal(simulationStateError({ position: {} }, local), null);
 });
 
+test('reconciliation telemetry keeps bounded p95 samples and whole-match aggregate stats', () => {
+  const telemetry = new ReconciliationTelemetry({ sampleLimit: 3 });
+  telemetry.reset('match-a');
+
+  for (let tick = 0; tick < 4; tick++) {
+    const value = tick + 1;
+    assert.equal(
+      telemetry.record({
+        serverTick: tick,
+        error: {
+          positionError: value,
+          horizontalPositionError: value / 2,
+          verticalPositionError: tick % 2,
+          velocityError: value + 1,
+          groundedMismatch: tick % 2 === 0
+        }
+      }),
+      true
+    );
+  }
+
+  assert.equal(
+    telemetry.record({
+      serverTick: 3,
+      error: {
+        positionError: 99,
+        horizontalPositionError: 99,
+        verticalPositionError: 99,
+        velocityError: 99,
+        groundedMismatch: true
+      }
+    }),
+    false,
+    'duplicate server tick cannot double-count reconciliation telemetry'
+  );
+  assert.equal(telemetry.record({ serverTick: 4, historyGap: true }), true);
+
+  assert.deepEqual(telemetry.snapshot(), {
+    matchId: 'match-a',
+    lastServerTick: 4,
+    replayAttempts: 5,
+    historyGaps: 1,
+    historyGapRate: 0.2,
+    localComparisons: 4,
+    groundedMismatches: 2,
+    groundedMismatchRate: 0.5,
+    positionError: { count: 4, mean: 2.5, p95: 4, max: 4, recentSamples: 3 },
+    horizontalPositionError: { count: 4, mean: 1.25, p95: 2, max: 2, recentSamples: 3 },
+    verticalPositionError: { count: 4, mean: 0.5, p95: 1, max: 1, recentSamples: 3 },
+    velocityError: { count: 4, mean: 3.5, p95: 5, max: 5, recentSamples: 3 }
+  });
+
+  telemetry.reset('match-b');
+  assert.deepEqual(telemetry.snapshot(), {
+    matchId: 'match-b',
+    lastServerTick: -1,
+    replayAttempts: 0,
+    historyGaps: 0,
+    historyGapRate: 0,
+    localComparisons: 0,
+    groundedMismatches: 0,
+    groundedMismatchRate: 0,
+    positionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
+    horizontalPositionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
+    verticalPositionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
+    velocityError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 }
+  });
+});
+
 test('shadow replay compares prediction against the latest sampled local physics state', () => {
   const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => 50 });
   sender.beginMatch('match-a');
@@ -105,8 +175,22 @@ test('shadow replay compares prediction against the latest sampled local physics
   assert.equal(replay.localError.velocityError, Math.sqrt(2));
   assert.equal(replay.localError.groundedMismatch, true);
 
+  const diagnostics = sender.reconciliationDiagnostics();
+  assert.equal(diagnostics.matchId, 'match-a');
+  assert.equal(diagnostics.replayAttempts, 1);
+  assert.equal(diagnostics.historyGaps, 0);
+  assert.equal(diagnostics.localComparisons, 1);
+  assert.equal(diagnostics.groundedMismatches, 1);
+  assert.equal(diagnostics.positionError.count, 1);
+  assert.equal(diagnostics.positionError.mean, Math.sqrt(5));
+  assert.equal(diagnostics.horizontalPositionError.mean, 1);
+  assert.equal(diagnostics.verticalPositionError.mean, 2);
+  assert.equal(diagnostics.velocityError.mean, Math.sqrt(2));
+
   sender.beginMatch('match-b');
   assert.equal(sender.shadowReplayState(), null, 'match boundary clears stale reconciliation diagnostics');
+  assert.equal(sender.reconciliationDiagnostics().matchId, 'match-b');
+  assert.equal(sender.reconciliationDiagnostics().replayAttempts, 0);
 });
 
 test('prototype bridge samples local state after the existing player step and never applies replay', () => {
@@ -168,6 +252,8 @@ test('prototype bridge samples local state after the existing player step and ne
   assert.deepEqual(replay.localError.velocityDelta, { x: 1, y: 0, z: 0 });
   assert.equal(replay.localError.positionError, 1);
   assert.equal(replay.localError.velocityError, 1);
+  assert.equal(sender.reconciliationDiagnostics().positionError.mean, 1);
+  assert.equal(sender.reconciliationDiagnostics().velocityError.mean, 1);
   assert.deepEqual(player.physics, { x: 1, y: 1, z: 0 }, 'diagnostics never move the local player');
   assert.deepEqual(player.velocity, { x: 2, y: 0, z: 0 }, 'diagnostics never change local velocity');
 });

@@ -145,10 +145,7 @@ test(
       probeResult: probeResult({ checkpoint: 2, finished: false })
     });
 
-    assert.equal(
-      verification.discardFinish({ room: currentRoom, player: racer, sequence }),
-      true
-    );
+    assert.equal(verification.discardFinish({ room: currentRoom, player: racer, sequence }), true);
     assert.equal(verification.metrics().finishCutoverSkips, 1);
     assert.equal(verification.metrics().finishMismatches, 0);
     assert.equal(verification.metrics().missingPending, 0);

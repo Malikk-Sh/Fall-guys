@@ -51,7 +51,6 @@ const { networkIdentity } = require('./networkIdentity');
 const { preloadBots, spawnBots, resetBots, stepBots, clearBots, placeBotsOnGrid } = require('./roomBots');
 const { raceSpawnFor } = require('../shared/raceGrid.js');
 const { assignRaceSlots } = require('./raceSlots');
-const { ShadowInputRuntime, SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 
 // Модель бота загружается здесь, а не только в bootstrap: иначе любая точка входа, берущая
 // index.js напрямую, молча оставалась бы без ботов — и добор в подборе не срабатывал бы, ничего
@@ -186,7 +185,6 @@ const accounts = new Accounts({ db: gameDb });
 const gameplay = new GameplayMetrics({ db: gameDb });
 const incidentDiagnostics = new IncidentDiagnostics({ db: gameDb });
 const socialSafety = new SocialSafety({ db: gameDb });
-const shadowInputRuntime = new ShadowInputRuntime();
 
 // Сессии для переподключения: токен → место игрока в комнате.
 const sessions = new Map();
@@ -331,7 +329,6 @@ const health = () => ({
   matchmaking: matchmakingStatus(),
   uptime: Math.round(process.uptime()),
   backup: backupHealthStatus({ databaseFile }),
-  shadowSimulation: shadowInputRuntime.metrics(),
   metrics
 });
 
@@ -670,7 +667,6 @@ const wss = new WebSocketServer({
 // Все они относятся к идущему забегу и после RESULTS не значат ничего.
 const MATCH_TRAILING_TYPES = new Set([
   C2S.PLAYER_STATE,
-  C2S.CLIENT_INPUT,
   C2S.COOP_EVENT,
   C2S.COOP_PING,
   C2S.RESPAWN,
@@ -857,6 +853,9 @@ const lobbyPayload = room => ({
 
 const emitLobby = room => broadcast(room, lobbyPayload(room));
 
+// Ролей больше нет — сервер раздаёт только «место» (0 или 1) по порядку входа. От него зависит
+// лишь точка появления: два персонажа не должны стоять в одной координате, иначе на первом же
+// кадре они выталкивают друг друга.
 function assignSlots(room) {
   const ordered = [...room.players.values()].sort((a, b) => a.joinOrder - b.joinOrder);
   ordered.forEach((player, index) => {
@@ -865,6 +864,8 @@ function assignSlots(room) {
 }
 
 function resetLobby(room, { newSeed = false } = {}) {
+  // Бот живёт ровно один матч. Оставить его в лобби значит показать игрокам участника, который
+  // никогда не нажмёт «готов» и о котором нельзя сказать, дождётся он реванша или нет.
   clearBots(room);
   setRoomState(room, ROOM_STATE.LOBBY);
   room.startedAt = null;
@@ -874,6 +875,12 @@ function resetLobby(room, { newSeed = false } = {}) {
   room.unranked = null;
   room.resultsDeadline = null;
   room.updatedAt = Date.now();
+  // Отыгравшая публичная комната перестаёт быть публичной.
+  //
+  // Иначе к вернувшимся в лобби подсаживался бы случайный новичок, его появление заводило бы срок
+  // набора, и людей, которые ещё решают, играть ли снова, утаскивало бы в новый забег без их
+  // согласия. Собравшаяся группа остаётся группой: повторный забег у неё уже есть — голосование
+  // за реванш.
   room.matchmade = false;
   room.fillDeadline = null;
   if (newSeed) room.spec = createCourseSpec(randomSeed(), room.spec.difficulty);
@@ -895,6 +902,11 @@ function resetLobby(room, { newSeed = false } = {}) {
 function dropPlayer(room, playerId) {
   room.players.delete(playerId);
   room.updatedAt = Date.now();
+  // Комната закрывается, когда ушли ЛЮДИ, а не когда опустел список участников.
+  //
+  // Боты живут в том же списке, поэтому его размер после ухода последнего игрока до нуля уже не
+  // доходит: комната провисела бы с одними ботами до истечения TTL, занимая слот и продолжая
+  // гонять физику для пустой трибуны.
   const humans = [...room.players.values()].filter(player => !player.bot);
   if (!humans.length) {
     clearBots(room);
@@ -903,6 +915,9 @@ function dropPlayer(room, playerId) {
     log('info', 'room_closed', { roomId: room.code });
     return;
   }
+
+  // Миграция хоста детерминирована (ТЗ 3.6): сначала те, кто на связи, среди них — вошедший раньше.
+  // Бот хостом стать не может: он не нажмёт «начать» и не сменит настройки.
   if (room.host === playerId) {
     const previousHostId = room.host;
     const candidates = humans.sort((a, b) => {
@@ -913,6 +928,7 @@ function dropPlayer(room, playerId) {
     broadcast(room, { type: S2C.HOST_CHANGED, previousHostId, hostId: room.host });
     log('info', 'host_migrated', { roomId: room.code, hostId: room.host });
   }
+
   assignSlots(room);
   if (resolveResultsDecision(room)) return;
   emitLobby(room);
@@ -933,6 +949,8 @@ function leave(ws) {
       room.abandonTracked = true;
       trackEvent(productEvents, 'matchAbandoned');
     }
+    // Где именно бросили — самое ценное в этом событии: чекпоинт называет участок, дальше
+    // которого не пошли.
     const leaver = room.players.get(ws.id);
     gameplay.count('match_abandoned', dims(room, leaver, `cp${leaver?.checkpoint ?? 0}`));
     incidentForSocket(ws, {
@@ -954,15 +972,22 @@ function leave(ws) {
   dropPlayer(room, ws.id);
 }
 
+// Обрыв связи — не то же самое, что выход. Слот держится RECONNECT_GRACE_MS, чтобы игрок,
+// у которого моргнул wi-fi, вернулся в тот же забег, а не обнаружил пустое меню.
 function handleDisconnect(ws) {
+  // `close` и `error` приходят оба, и почти всегда подряд. Без этого флага счётчик подключений
+  // с адреса уменьшался дважды за один разрыв и со временем уходил в минус, раздавая лишние
+  // соединения одному клиенту, — а отметка времени обрыва переписывалась второй раз.
   if (ws.disconnectHandled) return;
   ws.disconnectHandled = true;
+
   const ip = ws.ip;
   if (ip && ipConnections.has(ip)) {
     const left = ipConnections.get(ip) - 1;
     if (left > 0) ipConnections.set(ip, left);
     else ipConnections.delete(ip);
   }
+
   if (!ws.room) {
     const queued = coopMatchmaking.findIndex(entry => entry.ws === ws);
     incidentForSocket(ws, {
@@ -984,6 +1009,9 @@ function handleDisconnect(ws) {
   if (!room) return;
   const player = room.players.get(ws.id);
   if (!player) return;
+  // Сокет уже заменён: игрок вернулся по resume с нового соединения, а это — запоздавшее
+  // закрытие старого. Пометить игрока отключённым здесь значило бы выкинуть того, кто только
+  // что успешно вернулся.
   if (player.ws !== ws) {
     log('info', 'stale_socket_closed', { roomId: room.code, playerId: ws.id });
     return;
@@ -1002,6 +1030,9 @@ function handleDisconnect(ws) {
     gameplay.count('partner_disconnect', dims(room, player, `cp${player.checkpoint || 0}`));
   }
   room.updatedAt = Date.now();
+  // Обрыв посреди забега снимает зачёт. Раньше кооп молча превращался в одиночное прохождение:
+  // оставшийся доходил до финиша, получал время — и не знал, что это время уже ничего не значит,
+  // потому что половину главы за напарника не проходил никто. Честнее сказать это вслух.
   if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING)
     markUnranked(room, 'disconnect');
   if (ws.token) {
@@ -1009,6 +1040,8 @@ function handleDisconnect(ws) {
     if (session) session.expiresAt = Date.now() + SESSION_TTL_MS;
   }
   log('info', 'player_disconnected', { roomId: room.code, playerId: ws.id });
+  // Если оставшиеся уже проголосовали, обрыв второго обязан довести решение до конца — иначе
+  // комната зависнет на результатах навсегда.
   if (resolveResultsDecision(room)) return;
   emitLobby(room);
 }
@@ -1040,6 +1073,9 @@ function expireDisconnectedPlayers(now = Date.now()) {
   }
 }
 
+// playerId из сообщения сюда больше не приходит. Клиент его по-прежнему присылает — старые версии
+// в ходу, и ломать им вход незачем, — но сервер поле игнорирует: личность игрока определяется
+// только подтверждённой identity сокета.
 function addPlayer(room, ws, name) {
   ws.room = room.code;
   const color = PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
@@ -1048,8 +1084,18 @@ function addPlayer(room, ws, name) {
   room.players.set(ws.id, {
     id: ws.id,
     name: playerName,
+    // Ключ строки в таблице рекордов. У гостя его нет вовсе — и это не пропуск, а решение: без
+    // подтверждённой личности запись некуда класть, кроме как под ключ, выбранный самим клиентом.
+    // Именно так и было раньше, и это позволяло занять чужую строку.
+    //
+    // Хранится на игроке, но не попадает ни в один рассылаемый пакет: знать чужой ключ соседям по
+    // комнате незачем.
     anonymousId: authenticated?.id || null,
+    // Серверный прогресс никогда не доверяет присланному playerId: только identity,
+    // которая была подтверждена один раз и привязана к этому WebSocket.
     accountId: authenticated?.id || null,
+    // Никакой loadout не принимается из CREATE/JOIN/FIND. Он разрешается по уже привязанному
+    // ws.accountId через server inventory и дальше становится частью публичного room profile.
     loadout: socialCosmetics.forAccount(authenticated?.id),
     color,
     slot: 0,
@@ -1065,6 +1111,8 @@ function addPlayer(room, ws, name) {
     disconnectedAt: null,
     disconnectMatchContext: null,
     away: false,
+    // Тип устройства нужен метрикам: телефон и компьютер играют по-разному, и мерить их вместе
+    // значит не увидеть ни того, ни другого.
     device: ws.device || 'desktop',
     ws
   });
@@ -1087,12 +1135,16 @@ function bindAuthenticatedSocketToRoom(ws, accountId) {
   if (!player || player.ws !== ws) return false;
   const account = networkIdentity.accountForSocket(ws, accounts);
   if (!account || account.id !== id) return false;
+
   player.accountId = id;
   player.anonymousId = id;
   player.name = safeName(account.name);
   player.loadout = socialCosmetics.forAccount(id);
+
   const session = sessions.get(ws.token);
-  if (session && session.playerId === ws.id && session.roomCode === room.code) session.accountId = id;
+  if (session && session.playerId === ws.id && session.roomCode === room.code) {
+    session.accountId = id;
+  }
   room.updatedAt = Date.now();
   if (room.state === ROOM_STATE.LOBBY) emitLobby(room);
   return true;
@@ -1104,6 +1156,9 @@ function bindDeniedSocketToRoomForEnforcement(ws, accountId) {
   const room = rooms.get(ws.room);
   const player = room?.players.get(ws.id);
   if (!player || player.ws !== ws) return false;
+
+  // A valid ticket proved who owns this socket even though policy denied authentication. Preserve
+  // that identity only for server-side enforcement; public player payloads never expose accountId.
   player.accountId = id;
   for (const session of sessions.values()) {
     if (session.playerId === player.id && session.roomCode === room.code) session.accountId = id;
@@ -1162,6 +1217,7 @@ function enqueueCoop(ws, message) {
     incidentForSocket(ws, { kind: 'matchmaking', code: 'queued', phase: 'matchmaking' });
     return send(ws, { type: S2C.MATCHMAKING_WAITING, waitedMs: 0 });
   }
+
   const [partner] = coopMatchmaking.splice(partnerIndex, 1);
   const chapterId = requested || partner.chapterId || COOP_CHAPTER_IDS[0];
   const room = createCoopRoom(chapterId, partner.ws.id);
@@ -1169,7 +1225,11 @@ function enqueueCoop(ws, message) {
   addPlayer(room, ws, message.name);
   for (const player of room.players.values()) player.ready = true;
   for (const player of room.players.values()) gameplay.count('match_found', dims(room, player));
-  gameplay.observe('matchmaking_wait_ms', now - partner.queuedAt, dims(room, room.players.get(partner.ws.id)));
+  gameplay.observe(
+    'matchmaking_wait_ms',
+    now - partner.queuedAt,
+    dims(room, room.players.get(partner.ws.id))
+  );
   trackEvent(productEvents, 'matchmakingMatched');
   incidentForSocket(partner.ws, {
     kind: 'matchmaking',
@@ -1182,23 +1242,56 @@ function enqueueCoop(ws, message) {
   beginCountdown(room);
 }
 
+// Подбор в гонку.
+//
+// Устроен иначе, чем кооперативный, и не по прихоти. В кооперативе собирается ПАРА: как только
+// нашёлся второй, ждать больше нечего и матч начинается. В гонке собирается ГРУППА, и «достаточно»
+// определяется не количеством, а временем: ждать шестнадцатого — значит не начать никогда, а
+// стартовать вдвоём в ту же секунду — значит лишить гонку гонки.
+//
+// Поэтому здесь нет второго параллельного списка ожидающих. Публичная комната — она же очередь:
+// игрок попадает в настоящее лобби, видит, как подходят остальные, и матч начинается либо когда
+// комната заполнилась, либо по истечении срока набора. Заодно это переиспользует всё, что у комнат
+// уже есть: вход, выход, рассылку лобби, миграцию хоста, отсчёт и роспуск по TTL.
 const MIN_RACE_PLAYERS = 2;
 const RACE_FILL_MS = 25_000;
+
+// Сколько участников должно оказаться на старте, если живых не набралось.
+//
+// Не шестнадцать: комната, где один человек и пятнадцать ботов, — это одиночная игра с
+// декорациями, а не гонка. Четверо дают ощущение соревнования и оставляют место тем, кто ещё
+// ищет: боты добираются до этого числа, а подошедший позже человек садится на свободный слот.
 const RACE_BOT_FIELD = 4;
+
+// Уровни ботов в доборе идут вперемешку. Одинаковые прибежали бы плотной группой и выглядели бы
+// одним соперником, размноженным трижды.
 const RACE_BOT_SKILLS = Object.freeze(['rookie', 'steady', 'sharp']);
 
+// Сколько игроков в комнате НА СВЯЗИ.
+//
+// Размер room.players для этого не годится: отключившийся остаётся в списке ещё тридцать секунд —
+// столько ему даётся на переподключение. Для набора это означало бы, что гонка может стартовать с
+// одним живым участником, а поскольку обрыв случился в лобби, забег не пометился бы незачётным и
+// одиночный результат попал бы в таблицу проверенных рекордов.
 function connectedPlayers(room) {
   let count = 0;
   for (const player of room.players.values()) if (!player.disconnectedAt) count += 1;
   return count;
 }
 
+// Сколько ЖИВЫХ игроков на связи. Набор считается по ним: бот в комнате не повод перестать ждать
+// людей, иначе первый же добор закрывал бы дверь перед теми, кто уже искал гонку.
 function connectedHumans(room) {
   let count = 0;
   for (const player of room.players.values()) if (!player.disconnectedAt && !player.bot) count += 1;
   return count;
 }
 
+// Сколько участников ещё на трассе — и людей, и ботов.
+//
+// Число уходит вместе с сообщением о финише и нужно ровно для одного: дошедший должен понимать,
+// кончилась гонка или продолжается без него. Считать это на клиенте нельзя — состав комнаты он
+// знает по лобби, а кто из соперников уже дошёл и кто оборвался, достоверно известно только здесь.
 function stillRacing(room) {
   let count = 0;
   for (const player of room.players.values()) {
@@ -1208,6 +1301,12 @@ function stillRacing(room) {
   return count;
 }
 
+// Свободная публичная комната. Избегание уважается и здесь: игрок, которого попросили больше не
+// сводить с этим человеком, не должен встретить его через случайный подбор.
+//
+// Пустая difficulty означает «любая» и подбирает комнату любой сложности. Это не то же самое, что
+// «обычная»: игрок, которому всё равно, должен попадать к тем, кто уже ждёт, а не заводить рядом
+// третью комнату — иначе выбор «любая» замедлял бы подбор вместо того, чтобы ускорять его.
 function openRaceRoomFor(ws, difficulty, safety = socialSafety) {
   for (const room of rooms.values()) {
     if (room.mode !== GAME_MODE.RACE || !room.matchmade) continue;
@@ -1241,7 +1340,11 @@ function createMatchmadeRaceRoom(difficulty, hostId) {
     spec: createCourseSpec(randomSeed(), difficulty),
     players: new Map(),
     nextJoinOrder: 0,
+    // Отличает публичную комнату от приватной: по коду в неё не войти, зато она сама себя
+    // запускает. Приватные комнаты этого поля не имеют и продолжают ждать хоста.
     matchmade: true,
+    // Срок набора появляется не сразу, а когда собирается минимум: считать время в одиночестве
+    // незачем, а игрок, зашедший первым, иначе смотрел бы на истекающий отсчёт без соперников.
     fillDeadline: null,
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -1250,14 +1353,25 @@ function createMatchmadeRaceRoom(difficulty, hostId) {
   return room;
 }
 
+// Единственная точка, где публичная гонка стартует.
+//
+// Оба пути — «комната заполнилась» и «истёк срок набора» — идут сюда, чтобы проверка мощности и
+// учёт состоявшегося подбора не разъезжались между ними. Раньше их было два, и телеметрия успеха
+// не велась ни в одном: воронка показывала бы входящих в очередь и ноль матчей.
 function startMatchmadeRace(room, reason) {
   room.fillDeadline = null;
+
+  // Тот же предел, что и у ручного запуска. Без него набор нескольких комнат, истёкший
+  // одновременно, перешагивал бы лимит активных матчей ровно тогда, когда он и нужен.
   if (capacityStatus().matchesFull) {
     metrics.capacityRejected++;
+    // Не отменяем набор, а откладываем: игроки уже собрались, и разгонять их из-за чужой нагрузки
+    // хуже, чем попросить подождать ещё немного.
     room.fillDeadline = Date.now() + RACE_FILL_MS;
     emitLobby(room);
     return false;
   }
+
   const now = Date.now();
   for (const player of room.players.values()) {
     if (player.disconnectedAt || player.bot) continue;
@@ -1281,28 +1395,53 @@ function enqueueRace(ws, message) {
     return false;
   }
   leave(ws);
+  // Пустая строка — осознанный выбор «любая», а не отсутствие выбора. Приводить её к 'normal' сразу
+  // значило бы молча подменять запрос игрока: он просил любую комнату, а получил бы только обычные.
   const requested = message.difficulty ? safeDifficulty(message.difficulty) : '';
   const now = Date.now();
-  gameplay.count('queue_enter', { mode: GAME_MODE.RACE, course: requested || 'any', device: ws.device });
+  gameplay.count('queue_enter', {
+    mode: GAME_MODE.RACE,
+    course: requested || 'any',
+    device: ws.device
+  });
+
   const existing = openRaceRoomFor(ws, requested);
+  // Сложность выбирается только когда комнату действительно надо создать.
   const room = existing || createMatchmadeRaceRoom(safeDifficulty(requested), ws.id);
   addPlayer(room, ws, message.name);
+  // Готовность в публичной комнате не спрашивают: игрок уже сказал «найти гонку», и второй раз
+  // подтверждать то же самое — лишний клик перед стартом, которого он и так ждёт.
   const player = room.players.get(ws.id);
   if (player) {
     player.ready = true;
+    // Момент входа в очередь — по нему считается время ожидания, когда матч состоится.
     player.queuedAt = now;
   }
+
   if (!existing) {
     trackEvent(productEvents, 'matchmakingStarted');
     incidentForSocket(ws, { kind: 'matchmaking', code: 'queued', phase: 'matchmaking' });
   }
+
   const connected = connectedPlayers(room);
+
+  // Комната заполнилась — ждать больше некого.
   if (connected >= MAX_PLAYERS[GAME_MODE.RACE]) {
     room.fillDeadline = null;
     log('info', 'race_matchmaking_full', { roomId: room.code, difficulty: room.spec.difficulty });
     return startMatchmadeRace(room, 'full');
   }
+
+  // Срок набора заводится с ПЕРВОГО вошедшего, а не со второго.
+  //
+  // Раньше он появлялся только когда соберутся двое, и одинокий игрок на пустом сервере ждал не
+  // двадцать пять секунд, а бесконечность: срок, который никогда не заведётся, не истечёт. Теперь
+  // ожидание всегда конечно — за это время либо подойдут люди, либо к нему выйдут боты.
+  //
+  // Повторный вход срок НЕ продлевает: иначе поток входящих отодвигал бы старт бесконечно, и
+  // первый пришедший ждал бы дольше всех.
   if (!room.fillDeadline) room.fillDeadline = now + RACE_FILL_MS;
+
   emitLobby(room);
   return send(ws, {
     type: S2C.MATCHMAKING_WAITING,
@@ -1316,17 +1455,29 @@ function enqueueRace(ws, message) {
 
 function beginOperationalDrain() {
   if (!operationalState.beginDrain()) return false;
+
+  // No queued player can ever be matched after admission closes. Remove the impossible queue
+  // immediately and record the exit without counting it as a capacity rejection.
   const queued = coopMatchmaking.splice(0);
   for (const entry of queued) {
     incidentForSocket(entry.ws, { kind: 'matchmaking', code: 'restart', phase: 'matchmaking' });
-    gameplay.count('matchmaking_queue_exit', { detail: 'restart', device: entry.ws?.device || 'desktop' });
+    gameplay.count('matchmaking_queue_exit', {
+      detail: 'restart',
+      device: entry.ws?.device || 'desktop'
+    });
   }
+
+  // core.shutdown broadcasts only to room players. Roomless sockets (including matchmaking) must
+  // learn about maintenance now instead of waiting up to the match-drain deadline for a generic
+  // network close.
   for (const client of wss.clients) {
-    if (!client.room && canSend(client)) send(client, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    if (!client.room && canSend(client)) {
+      send(client, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+    }
   }
   return true;
 }
-
+// Возврат в комнату по токену прошлой сессии.
 function resume(ws, token) {
   ws.accountAccessDenied = false;
   const session = sessions.get(token);
@@ -1341,26 +1492,43 @@ function resume(ws, token) {
     sessions.delete(token);
     return false;
   }
+
+  // Resume token уже принадлежит конкретному серверному player. Обычный reconnect наследует
+  // accountId этого player; заранее привязанный другой account занять его место не может.
   if (player.accountId && !networkIdentity.allowed(player.accountId)) {
     ws.accountAccessDenied = true;
     ws.accountAccessDeniedAccountId = player.accountId;
     return false;
   }
   if (!networkIdentity.bindResumedPlayer(ws, player)) return false;
+
+  // Занимаем прежнее место: идентификатор игрока сохраняется, поэтому напарник не увидит,
+  // что кто-то «вышел и зашёл».
   sessions.delete(ws.token);
   ws.id = session.playerId;
   ws.token = token;
   ws.room = room.code;
+
+  // Прежний сокет мог ещё не закрыться — так бывает, когда клиент переподключился раньше, чем
+  // сервер заметил обрыв. Отвязываем его от комнаты ДО закрытия: иначе его `close` придёт уже
+  // после подмены и попытается пометить вернувшегося игрока отключённым.
   const previousWs = player.ws;
   player.ws = ws;
   player.disconnectedAt = null;
   player.disconnectMatchContext = null;
+  // `disconnectHandled` здесь НЕ ставим: закрытие старого сокета всё ещё должно вернуть
+  // счётчик подключений с адреса. Отвязки от комнаты достаточно — до игрока обработчик
+  // после неё не доходит.
   if (previousWs && previousWs !== ws) {
     previousWs.room = null;
     try {
       previousWs.close(4001, 'Session resumed elsewhere');
-    } catch {}
+    } catch {
+      // Уже закрыт — ровно то состояние, которого мы хотели.
+    }
   }
+  // Раз соединение восстанавливается, вкладка снова на экране: иначе флаг «отошёл» пережил бы
+  // возвращение и напарник продолжал бы ждать уже вернувшегося игрока.
   player.away = false;
   session.expiresAt = Date.now() + SESSION_TTL_MS;
   room.updatedAt = Date.now();
@@ -1368,6 +1536,10 @@ function resume(ws, token) {
   metrics.resumeSucceeded++;
   trackEvent(productEvents, 'connectionRecovered');
   incidentForSocket(ws, { accountId: player.accountId, kind: 'connection', code: 'resumed' });
+
+  // Токен возвращается вместе с ответом. Клиенту он нужен: при подключении сервер выдал ему
+  // новый временный токен в `hello`, и без этой строки клиент сохранил бы у себя токен,
+  // который сервер только что удалил, — следующий обрыв уже не восстановился бы.
   send(ws, { type: S2C.RESUMED, id: ws.id, token: ws.token, serverTime: Date.now() });
   if (room.state === ROOM_STATE.COUNTDOWN || room.state === ROOM_STATE.PLAYING) {
     send(ws, {
@@ -1377,6 +1549,12 @@ function resume(ws, token) {
       mode: room.mode,
       spec: room.spec,
       slots: Object.fromEntries([...room.players.values()].map(item => [item.id, item.slot])),
+      // Продолжение, а не начало заново.
+      //
+      // Сервер всё это время помнил, где игрок находится и что с ним. Без этих полей клиент
+      // строил уровень с нуля и ставил персонажа на старт — то есть в середине главы игрока
+      // отбрасывало к началу, а сервер продолжал видеть его там, где он был. Хуже всего это
+      // работало у финишировавшего: он снова оказывался на трассе, хотя уже ждал напарника.
       resumed: {
         position: player.last || spawnFor(room.spec, player.checkpoint),
         raceSpawn: room.mode === GAME_MODE.RACE && player.raceSpawn ? { ...player.raceSpawn } : null,
@@ -1387,12 +1565,21 @@ function resume(ws, token) {
       }
     });
   }
+  // Вернулся на экран результатов — верни и сами результаты. Иначе игрок, у которого связь
+  // моргнула сразу после финиша, попадал в комнату без карточки: голосовать не за что,
+  // времени не видно, и единственный выход — выйти из игры.
   if (room.state === ROOM_STATE.RESULTS && room.results) send(ws, room.results);
   emitLobby(room);
   log('info', 'player_resumed', { roomId: room.code, playerId: ws.id });
   return true;
 }
 
+// Снимает зачёт с текущего забега и говорит об этом оставшимся — один раз за матч.
+//
+// Кооп после обрыва не прерывается: оставшийся игрок доигрывает главу (иначе он застрял бы
+// навсегда), но результат такого прохождения не рекорд — половину препятствий проходил не тот,
+// кто их задумывался проходить, а автоподъём заменял напарника. Отметка `unranked` уезжает
+// вместе с результатами и в личные рекорды не пишется.
 function markUnranked(room, reason) {
   if (room.unranked) return false;
   room.unranked = reason;
@@ -1420,6 +1607,9 @@ function addVerificationFindings(room, player, findings, details = {}) {
   return added;
 }
 
+// Измерения события: что за режим, какая трасса и с чего играют. Устройство берётся у игрока —
+// в одной комнате могут быть и телефон, и компьютер, и усреднять их значило бы потерять главное
+// различие.
 function dims(room, player, detail) {
   return {
     mode: room.mode,
@@ -1455,21 +1645,37 @@ function trackCheckpointDuration(room, player, checkpoint, now) {
   player.checkpointAt = now;
 }
 
+// Запуск забега: отсчёт, новый matchId, сброс состояния игроков по местам появления.
+//
+// Вынесено из обработчика START_MATCH, потому что вызывать это надо из двух мест: по команде хоста
+// и по единогласному реваншу. Реванш обязан именно ЗАПУСКАТЬ забег, а не возвращать в лобби —
+// раньше обе кнопки экрана результатов вели в resetLobby, то есть делали в точности одно и то же,
+// и «голосование за реванш» ничего не решало.
 function beginCountdown(room) {
+  // Drain is a process-wide admission boundary, not just an Nginx connection gate. Existing
+  // lobby/results sockets stay alive while current matches finish, but none of them may start
+  // another countdown after SIGUSR2. Every path (host start, matchmaking, rematch, next chapter)
+  // funnels through this one function.
   if (operationalState.isDraining()) {
     broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
     return false;
   }
   if (!setRoomState(room, ROOM_STATE.COUNTDOWN)) return false;
+  // matchId одновременно отсекает хвост прошлого забега и служит солью для перестановки race-slot'ов:
+  // ряды отличаются по Z, поэтому привязывать переднюю клетку к joinOrder было бы постоянной форой.
   room.matchId = crypto.randomBytes(8).toString('hex');
+  // Сначала сбрасываем/при необходимости пересоздаём ботов. Смена сложности может пересобрать их
+  // записи целиком, поэтому окончательные slot'ы назначаются уже после resetBots.
   resetBots(room);
   if (room.mode === GAME_MODE.RACE) assignRaceSlots(room, room.matchId);
   else assignSlots(room);
+  // Внутренняя физика ботов должна получить те же уже перемешанные клетки, что player.last и клиенты.
   placeBotsOnGrid(room);
   room.snapshotSequence = 0;
   room.startedAt = Date.now() + COUNTDOWN_MS;
   room.firstFinishAt = null;
   room.coopRevives = 0;
+  // Забег начинается «в зачёт»; первый же обрыв связи снимает эту отметку до конца матча.
   room.unranked = null;
   room.results = null;
   room.resultsDeadline = null;
@@ -1477,6 +1683,9 @@ function beginCountdown(room) {
   room.pairEndedTracked = false;
   metrics.matchesStarted++;
   trackEvent(productEvents, 'matchStarted');
+  // Бот в продуктовую статистику не идёт ни здесь, ни в других счётчиках участников. Причина не в
+  // чистоте ради чистоты: у бота нет устройства, и его события легли бы на desktop, сдвинув и
+  // воронку подбора, и разрезы по устройствам — тем сильнее, чем чаще комнаты добираются ботами.
   for (const item of room.players.values()) {
     if (item.bot) continue;
     gameplay.count('match_started', dims(room, item));
@@ -1493,6 +1702,7 @@ function beginCountdown(room) {
   if (room.mode === GAME_MODE.COOP) {
     for (const item of room.players.values()) gameplay.count('chapter_started', dims(room, item));
   }
+
   for (const item of room.players.values()) {
     const start =
       room.mode === GAME_MODE.COOP
@@ -1504,8 +1714,17 @@ function beginCountdown(room) {
       coopFalls: 0,
       time: null,
       checkpoint: 0,
+      // Для гонки сохраняем клетку отдельно: checkpoint 0 обязан возвращать игрока именно сюда,
+      // а не в старую общую центральную точку. В коопе старт и так вычисляется по slot каждый раз.
       raceSpawn: room.mode === GAME_MODE.RACE ? { ...start } : null,
-      last: { ...start, ry: 0, vx: 0, vz: 0, state: 'ground', checkpoint: 0 },
+      last: {
+        ...start,
+        ry: 0,
+        vx: 0,
+        vz: 0,
+        state: 'ground',
+        checkpoint: 0
+      },
       downed: false,
       downedAt: 0,
       lastAt: room.startedAt,
@@ -1514,18 +1733,26 @@ function beginCountdown(room) {
       matchStartedAt: room.startedAt,
       unverifiedReason: null,
       verificationReasons: [],
+      // Отклонения и история движения принадлежат ЗАБЕГУ, а не игроку. Раньше они не сбрасывались
+      // и копились через реванши: честный игрок, оставшийся в комнате на четвёртый забег, приносил
+      // в него запас, израсходованный в первых трёх, и терял зачёт ни за что.
       movementAnomalies: {},
       movementHistory: [],
       freeFallSince: null,
+      // Независимая история co-op audit. Она сбрасывается на каждый matchId так же, как race
+      // verification, чтобы реванш не наследовал аномалии предыдущего забега.
       coopMovementAnomalies: {},
       coopMovementHistory: [],
       coopFreeFallSince: null,
       coopLastCheckpointAt: room.startedAt,
       coopMotionException: null,
+      // Готовность снимается: следующий выход в лобби не должен начинаться с чужого «готов»
+      // прошлого забега. На реванш это не влияет — он идёт мимо лобби.
       ready: false,
       resultChoice: null
     });
   }
+
   log('info', 'match_started', { roomId: room.code, matchId: room.matchId, mode: room.mode });
   return broadcast(room, {
     type: S2C.MATCH_START,
@@ -1537,18 +1764,35 @@ function beginCountdown(room) {
   });
 }
 
+// Решение на экране результатов: пора ли распускать комнату в лобби.
+//
+// Считать это только в момент голосования нельзя. Если один уже проголосовал, а второй оборвался,
+// активным остаётся один — и условие «все проголосовали» выполнено, но пересчитать его некому:
+// повторно голосовать первый не может, его голос уже учтён. Комната зависала на результатах
+// навсегда. Поэтому пересчёт вызывается и на голос, и на обрыв, и на освобождение слота.
 function resolveResultsDecision(room, now = Date.now()) {
   if (room.state !== ROOM_STATE.RESULTS) return false;
   const active = [...room.players.values()].filter(player => !player.disconnectedAt);
+  // Голосуют только люди. Бот сидит в комнате обычным участником и кнопку нажать не может, так что
+  // условие «решили все» при нём не выполнялось бы никогда: выбор человека ждал бы двадцатисекундного
+  // срока, а реванш стал бы недостижим вовсе — по истечении срока комната уходит в лобби.
   const voters = active.filter(player => !player.bot);
   if (!voters.length) return false;
+
   const decided = voters.every(player => player.resultChoice);
   const expired = !!room.resultsDeadline && now >= room.resultsDeadline;
   if (!decided && !expired) {
     emitLobby(room);
     return false;
   }
+
+  // Состава должно хватать на забег. Кооперативную главу проходят вдвоём, и запускать её на
+  // одного, когда напарник оборвался, бессмысленно: игрок упрётся в первую же плиту, которую
+  // некому держать. Такой случай уводим в лобби — оттуда видно, что напарника ждут.
   const enoughPlayers = room.mode === GAME_MODE.COOP ? voters.length === 2 : voters.length > 0;
+
+  // Продолжение кампании сохраняет сокеты, комнату, порядок пары и сразу запускает следующую
+  // главу. Готовность и промежуточное лобби здесь только ломали бы непрерывность приключения.
   if (
     room.mode === GAME_MODE.COOP &&
     enoughPlayers &&
@@ -1574,6 +1818,10 @@ function resolveResultsDecision(room, now = Date.now()) {
     beginCountdown(room);
     return true;
   }
+
+  // Реванш — только единогласно и только явным выбором. Во всех остальных исходах уходим в лобби:
+  // и когда кто-то выбрал лобби, и когда время вышло, а кто-то так и не решил. Молчание не должно
+  // толковаться как согласие на ещё один забег — человек мог просто отложить телефон.
   if (enoughPlayers && decided && voters.every(player => player.resultChoice === 'rematch')) {
     if (operationalState.isDraining()) {
       broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
@@ -1594,9 +1842,12 @@ function resolveResultsDecision(room, now = Date.now()) {
   return true;
 }
 
+// Матч завершается, когда дошли все, кто ещё на связи. В коопе это обязательное условие:
+// глава считается пройденной только вдвоём.
 function checkMatchEnd(room) {
   if (room.state !== ROOM_STATE.PLAYING) return;
   if (room.mode === GAME_MODE.COOP) {
+    // Глава засчитывается, только когда дошли оба: одиночный финиш матч не завершает.
     if (!coopComplete(room)) return;
     return finishMatch(room);
   }
@@ -1609,13 +1860,29 @@ function finishMatch(room) {
   if (!setRoomState(room, ROOM_STATE.RESULTS)) return;
   metrics.matchesFinished++;
   trackEvent(productEvents, 'matchCompleted');
+  // Потолок ожидания решения. Без него комната жила в RESULTS до последнего обрыва связи: один
+  // отложил телефон — и второй заперт на карточке итогов, не имея ни одной кнопки, которая
+  // что-то изменит.
   room.resultsDeadline = Date.now() + RESULTS_TIMEOUT_MS;
   const board = leaderboard(room);
   for (const entry of board) {
     const player = room.players.get(entry.id);
+    // Время бота — не наблюдение о трассе, а настройка его же модели. В среднем времени прохождения
+    // оно рассказывало бы о том, как быстро мы сделали ботов, и заглушало бы единственное, ради чего
+    // эта величина считается: стала ли трасса проходиться быстрее у людей.
     if (player?.bot) continue;
     gameplay.count('match_finished', dims(room, player));
-    gameplay.observe('finish_time', entry.time, dims(room, player, entry.verified ? 'verified' : 'unverified'));
+    // Время забега — единственная величина, которую стоит усреднять: по ней видно, стала ли
+    // трасса проходиться быстрее после правки, и на каком устройстве она даётся тяжелее.
+    //
+    // Отметка проверки идёт отдельным измерением, а не фильтром. Непроверенный забег всё равно
+    // полезен для продуктовой аналитики: он показывает длительность попытки, но не участвует в
+    // competitive leaderboard и не смешивается со средним подтверждённых прохождений.
+    gameplay.observe(
+      'finish_time',
+      entry.time,
+      dims(room, player, entry.verified ? 'verified' : 'unverified')
+    );
     incidentForSocket(player?.ws, {
       accountId: player?.accountId,
       kind: 'match',
@@ -1632,6 +1899,8 @@ function finishMatch(room) {
   if (room.mode === GAME_MODE.COOP) {
     for (const player of room.players.values()) gameplay.count('chapter_completed', dims(room, player));
   }
+  // Итоги сохраняются, а не только рассылаются: их надо будет отдать заново тому, кто вернулся
+  // по resume уже на экране результатов.
   room.results = {
     type: S2C.MATCH_RESULTS,
     matchId: room.matchId,
@@ -1639,16 +1908,26 @@ function finishMatch(room) {
     hasNextChapter:
       room.mode === GAME_MODE.COOP && COOP_CHAPTER_IDS.indexOf(room.chapterId) < COOP_CHAPTER_IDS.length - 1,
     board,
+    // В коопе засчитывается время последнего дошедшего: команда финиширует вместе.
     coopTime,
     unranked: room.unranked || (verificationFailed ? 'verification' : null),
     trusted: !room.unranked && !verificationFailed
   };
+  // В публичную таблицу идут только trusted online-забеги. В race движение проверяется по
+  // процедурной геометрии, в coop — отдельным data-driven CoopMovementAudit с известными
+  // исключениями механик. Соло в таблицу не идёт: сервера там нет, и подтвердить движение некому.
   if (room.results.trusted) {
     verifiedLeaderboard.record({
       matchId: room.matchId,
       mode: room.mode,
       courseKey: courseKeyFor(room.mode, room.spec),
-      entries: board.map(entry => ({ ...entry, playerId: room.players.get(entry.id)?.anonymousId || null }))
+      // Анонимный идентификатор подставляется здесь, а не в leaderboard(): board уходит в рассылку
+      // всем игрокам комнаты, и чужой ключ в нём означал бы, что перезаписать чужую строку в
+      // таблице может любой, кто был с человеком в одном матче.
+      entries: board.map(entry => ({
+        ...entry,
+        playerId: room.players.get(entry.id)?.anonymousId || null
+      }))
     });
     if (room.mode === GAME_MODE.COOP && coopTime) {
       const accountIds = [];
@@ -1665,14 +1944,38 @@ function finishMatch(room) {
       }
       accounts.recordCoopPartners({ accountIds, chapterId: room.chapterId });
     }
+
+    // Итоги гонки по аккаунтам. Место берётся из уже посчитанной таблицы результатов, а не
+    // пересчитывается заново: разойдись они — игрок увидел бы на экране одно место, а награду
+    // получил бы за другое.
     if (room.mode === GAME_MODE.RACE) {
+      // Считаем по АККАУНТАМ, а не по аватарам.
+      //
+      // Один аккаунт может занимать несколько слотов: авторизация запрещает второй раз назвать
+      // себя одним сокетом, но не запрещает войти в комнату со второй вкладки. По аватарам «живой
+      // соперник» и «пьедестал» тогда набирались бы из самого себя — две вкладки давали бы победу,
+      // три — пьедестал, и каждая добавляла бы финиш к счётчику завсегдатая. Порог, который можно
+      // выполнить в одиночку, не порог.
+      //
+      // Из нескольких аватаров одного аккаунта берётся лучший: доска уже отсортирована по времени,
+      // поэтому первое вхождение и есть лучшее.
+      // Место считается по ПОРЯДКУ В ПРОТОКОЛЕ, а не по номеру среди людей.
+      //
+      // Первая редакция складывала место из числа уже учтённых аккаунтов, а ботов лишь добавляла к
+      // общему количеству участников. Получалось прямо противоположное задуманному: единственный
+      // человек, пришедший ЧЕТВЁРТЫМ после трёх ботов, записывался как первый из четырёх — то есть
+      // получал и победу, и пьедестал за проигранный забег. Место обязано считаться там же, где
+      // игрок его видит, — в итоговой таблице.
       const standings = room.results?.board || [];
       const bestByAccount = new Map();
       let botFinishers = 0;
+      // Строка протокола, на которой мы сейчас стоим: и люди, и боты.
       let position = 0;
       for (const entry of standings) {
         const participant = room.players.get(entry.id);
         if (participant?.bot) {
+          // Боты считаются соперниками наравне с людьми: обогнать их — результат. Переключается
+          // константой BOTS_COUNT_AS_OPPONENTS. Когда она выключена, бот не занимает и места.
           if (!BOTS_COUNT_AS_OPPONENTS) continue;
           botFinishers += 1;
           position += 1;
@@ -1681,18 +1984,31 @@ function finishMatch(room) {
         const accountId = participant?.accountId;
         if (!accountId) continue;
         position += 1;
+        // Защита от самонаграждения: несколько вкладок одного аккаунта — один участник, и место
+        // засчитывается по лучшему из них. Доска отсортирована по времени, поэтому первое
+        // вхождение и есть лучшее.
         if (bestByAccount.has(accountId)) continue;
         bestByAccount.set(accountId, position);
       }
       const finishers = bestByAccount.size + botFinishers;
-      for (const [accountId, place] of bestByAccount) accounts.recordRaceFinish({ accountId, place, finishers });
+      for (const [accountId, place] of bestByAccount) {
+        accounts.recordRaceFinish({ accountId, place, finishers });
+      }
     }
   }
   broadcast(room, room.results);
+  // Сразу за итогами — состояние комнаты. Без него клиент остаётся с составом, снятым ещё до
+  // старта: счётчик голосов на экране результатов не с чего было бы нарисовать до первого голоса.
   emitLobby(room);
   log('info', 'match_finished', { roomId: room.code, matchId: room.matchId, players: board.length });
 }
 
+// Адрес клиента с учётом обратного прокси.
+//
+// За Nginx `req.socket.remoteAddress` — это адрес самого Nginx, один на всех. Тогда лимиты
+// «24 соединения» и «40 операций с комнатами в минуту» делятся между ВСЕМИ игроками сразу, и при
+// нескольких десятках человек отказы начинают сыпаться на случайных людей. Заголовку доверяем
+// только по явному разрешению: если Node смотрит в интернет напрямую, его подделает кто угодно.
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 
 function clientIp(req) {
@@ -1718,18 +2034,21 @@ wss.on('connection', (ws, req) => {
     return;
   }
   ipConnections.set(ip, openFromIp);
+
   ws.id = crypto.randomBytes(8).toString('hex');
   ws.token = crypto.randomBytes(16).toString('hex');
   ws.ip = ip;
   ws.accountId = null;
   ws.isAlive = true;
   ws.limiter = new RateLimiter();
+  // По User-Agent, один раз при подключении: игрок его в середине матча не меняет.
   ws.device = deviceFromUserAgent(req.headers['user-agent']);
   ws.violations = new ViolationTracker({
     threshold: VIOLATION_DISCONNECT_THRESHOLD,
     decayPerMinute: VIOLATION_DECAY_PER_MINUTE
   });
   metrics.connections++;
+
   send(ws, {
     type: S2C.WELCOME,
     id: ws.id,
@@ -1737,9 +2056,13 @@ wss.on('connection', (ws, req) => {
     serverTime: Date.now(),
     protocolVersion: PROTOCOL_VERSION
   });
+
   ws.on('pong', () => {
     ws.isAlive = true;
   });
+
+  // Единая точка отказа: начисляет штраф, отвечает структурированной ошибкой и при необходимости
+  // закрывает соединение.
   const reject = (reason, code, message) => {
     metrics.invalidMessages++;
     sendError(ws, code, message);
@@ -1750,6 +2073,10 @@ wss.on('connection', (ws, req) => {
       ws.close();
     }
   };
+
+  // Внешняя обёртка ловит всё, что не предусмотрено внутри. Непредвиденная ошибка в обработке
+  // одного сообщения одного игрока не должна ронять процесс со всеми остальными комнатами:
+  // это единственный обработчик, куда приходят данные из внешнего мира.
   ws.on('message', raw => {
     try {
       handleClientMessage(raw);
@@ -1764,8 +2091,20 @@ wss.on('connection', (ws, req) => {
     }
   });
 
+  // Сообщения, которым комната не нужна: они про соединение и личность, а не про игру.
+  //
+  // Обработчики собраны в таблицы, а раньше были цепочкой из двадцати шести `if`, растянутой на
+  // шестьсот строк. Порядок в такой цепочке значил всё, но не был виден: чтобы понять, почему
+  // проверка версии стоит именно здесь, приходилось читать её целиком. Теперь порядок задан
+  // конвейером ниже — по нему видно, что фаз три и что между ними стоят общие проверки.
+  //
+  // Тела обработчиков перенесены дословно: имена параметров совпадают с прежними переменными,
+  // поэтому внутри не поменялось ни строки.
   const CONNECTION_HANDLERS = Object.freeze({
-    [C2S.PING]: message => send(ws, { type: S2C.PONG, at: message.at, serverTime: Date.now() }),
+    // Отметка времени сервера в каждом pong — по ней клиент оценивает расхождение часов.
+    [C2S.PING]: message => {
+      return send(ws, { type: S2C.PONG, at: message.at, serverTime: Date.now() });
+    },
     [C2S.AUTH]: message => {
       const authenticated = networkIdentity.authenticate(ws, message.ticket);
       if (!authenticated.ok) {
@@ -1788,10 +2127,16 @@ wss.on('connection', (ws, req) => {
         sendError(ws, code, detail, false);
         if (authenticated.reason === 'blocked-account') {
           bindDeniedSocketToRoomForEnforcement(ws, ws.accountAccessDeniedAccountId);
-          incidentForSocket(ws, { accountId: ws.accountAccessDeniedAccountId, kind: 'auth', code: 'account-sanctioned' });
+          incidentForSocket(ws, {
+            accountId: ws.accountAccessDeniedAccountId,
+            kind: 'auth',
+            code: 'account-sanctioned'
+          });
           try {
             ws.close(4003, 'account-sanctioned');
-          } catch {}
+          } catch {
+            // The account remains blocked by the server-side policy even if close races transport teardown.
+          }
         }
         return;
       }
@@ -1799,17 +2144,25 @@ wss.on('connection', (ws, req) => {
       incidentForSocket(ws, { accountId: authenticated.accountId, kind: 'auth', code: 'authenticated' });
       return send(ws, { type: S2C.AUTHENTICATED, accountId: authenticated.accountId });
     },
-    [C2S.LEAVE_ROOM]: () => leave(ws),
+    [C2S.LEAVE_ROOM]: () => {
+      return leave(ws);
+    },
     [C2S.RESUME]: message => {
       if (resume(ws, message.token)) return;
       metrics.resumeFailed++;
       if (ws.accountAccessDenied) {
-        incidentForSocket(ws, { accountId: ws.accountAccessDeniedAccountId, kind: 'auth', code: 'account-sanctioned' });
+        incidentForSocket(ws, {
+          accountId: ws.accountAccessDeniedAccountId,
+          kind: 'auth',
+          code: 'account-sanctioned'
+        });
         log('info', 'resume_sanctioned', { playerId: ws.id });
         sendError(ws, ERROR_CODES.ACCOUNT_SANCTIONED, 'Онлайн-доступ аккаунта ограничен модерацией.', false);
         try {
           ws.close(4003, 'account-sanctioned');
-        } catch {}
+        } catch {
+          // The access decision is already final; close failure cannot authorize the socket.
+        }
         return;
       }
       log('info', 'resume_failed', { playerId: ws.id });
@@ -1817,8 +2170,11 @@ wss.on('connection', (ws, req) => {
     }
   });
 
+  // Вход в игру: подбор и комнаты. Сюда попадают только после общей проверки версии и лимита.
   const LOBBY_HANDLERS = Object.freeze({
     [C2S.CANCEL_MATCHMAKING]: () => {
+      // Гонка ждёт не в списке, а в настоящей комнате, поэтому отмена для неё — это выход.
+      // Отдельного состояния «в очереди» у неё нет, и заводить его только ради отмены незачем.
       const raceRoom = rooms.get(ws.room);
       if (raceRoom?.matchmade && raceRoom.state === ROOM_STATE.LOBBY) {
         gameplay.count('queue_cancel', { mode: GAME_MODE.RACE, detail: 'button', device: ws.device });
@@ -1829,14 +2185,19 @@ wss.on('connection', (ws, req) => {
       const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
       if (index !== -1) {
         coopMatchmaking.splice(index, 1);
-        gameplay.count('matchmaking_queue_exit', { detail: 'cancel', device: ws.device || 'desktop' });
+        gameplay.count('matchmaking_queue_exit', {
+          detail: 'cancel',
+          device: ws.device || 'desktop'
+        });
         gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'button', device: ws.device });
         incidentForSocket(ws, { kind: 'matchmaking', code: 'cancelled', phase: 'matchmaking' });
       }
       return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, waitedMs: 0 });
     },
     [C2S.FIND_COOP]: message => {
-      if (operationalState.isDraining()) return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (loadStatus().overloaded || rooms.size >= MAX_ROOMS) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
@@ -1844,7 +2205,12 @@ wss.on('connection', (ws, req) => {
       return enqueueCoop(ws, message);
     },
     [C2S.FIND_RACE]: message => {
-      if (operationalState.isDraining()) return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      // Проверка на MAX_ROOMS мягче, чем у кооператива: подбор в гонку чаще ВХОДИТ в уже открытую
+      // комнату, чем создаёт новую, и отказывать входящему из-за общего числа комнат значило бы
+      // закрывать дверь в помещение, где есть места.
       if (loadStatus().overloaded) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
@@ -1861,10 +2227,15 @@ wss.on('connection', (ws, req) => {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервер перегружен. Попробуйте чуть позже.');
       }
-      if (rooms.size >= MAX_ROOMS) return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      if (rooms.size >= MAX_ROOMS) {
+        return sendError(ws, ERROR_CODES.SERVER_FULL, 'Сервис перегружен. Попробуйте позже.');
+      }
       const mode = message.mode === GAME_MODE.COOP ? GAME_MODE.COOP : GAME_MODE.RACE;
       const code = roomCode();
-      const chapterId = COOP_CHAPTER_IDS.includes(message.difficulty) ? message.difficulty : COOP_CHAPTER_IDS[0];
+      // В кооперативе «сложность» — это выбор главы: сид там ни при чём, уровни рукотворные.
+      const chapterId = COOP_CHAPTER_IDS.includes(message.difficulty)
+        ? message.difficulty
+        : COOP_CHAPTER_IDS[0];
       const room = {
         code,
         host: ws.id,
@@ -1889,84 +2260,161 @@ wss.on('connection', (ws, req) => {
       log('info', 'room_created', { roomId: code, mode });
       addPlayer(room, ws, message.name);
       incidentForSocket(ws, { kind: 'room', code: 'created' });
+      return;
     },
     [C2S.JOIN_ROOM]: message => {
       leave(ws);
       const room = rooms.get(message.code.trim().toUpperCase());
       if (!room) return sendError(ws, ERROR_CODES.ROOM_NOT_FOUND, 'Комната не найдена. Проверьте код.');
-      if (room.state !== ROOM_STATE.LOBBY)
+      if (room.state !== ROOM_STATE.LOBBY) {
         return sendError(ws, ERROR_CODES.MATCH_ALREADY_STARTED, 'Игра в этой комнате уже началась.');
-      if (room.matchmade)
-        return sendError(ws, ERROR_CODES.ROOM_NOT_FOUND, 'Это комната случайного подбора. Нажмите «Найти гонку».');
-      if (room.players.size >= MAX_PLAYERS[room.mode])
+      }
+      // Публичная комната набирается подбором, а не по коду. Код у неё есть и виден в лобби, так
+      // что запрет — не про угадывание: пришедший по ссылке обошёл бы и подбор по сложности, и
+      // список избеганий, а главное — остался бы неготовым, но всё равно поехал бы по таймеру.
+      if (room.matchmade) {
+        return sendError(
+          ws,
+          ERROR_CODES.ROOM_NOT_FOUND,
+          'Это комната случайного подбора. Нажмите «Найти гонку».'
+        );
+      }
+      if (room.players.size >= MAX_PLAYERS[room.mode]) {
         return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
+      }
       trackEvent(productEvents, 'roomJoined');
       addPlayer(room, ws, message.name);
       incidentForSocket(ws, { kind: 'room', code: 'joined' });
+      return;
     }
   });
 
+  // Действия внутри комнаты. Вызываются, когда комната и игрок уже найдены, опоздавшие пакеты
+  // отброшены, а таблица состояний разрешила действие — поэтому room и player приходят готовыми.
   const ROOM_HANDLERS = Object.freeze({
+    // Хост приватной комнаты зовёт ботов.
     [C2S.ADD_BOTS]: (message, room) => {
-      if (room.host !== ws.id) return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Соперников добавляет только хост.');
-      if (room.matchmade) return sendError(ws, ERROR_CODES.WRONG_STATE, 'В случайной гонке соперников подбирает сервер.');
-      if (room.mode !== GAME_MODE.RACE) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Боты пока есть только в гонке.');
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Соперников добавляет только хост.');
+      }
+      // В публичной комнате состав определяет подбор: он и людей приведёт, и ботов позовёт сам.
+      // Разрешить здесь ручной вызов значило бы дать одному участнику решать за остальных.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'В случайной гонке соперников подбирает сервер.');
+      }
+      if (room.mode !== GAME_MODE.RACE) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Боты пока есть только в гонке.');
+      }
       const free = MAX_PLAYERS[GAME_MODE.RACE] - room.players.size;
-      if (message.count > 0 && free <= 0) return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
+      // Удаление не требует свободного места — наоборот, именно в полной комнате кнопка «−»
+      // особенно нужна, чтобы освободить слот живому игроку.
+      if (message.count > 0 && free <= 0)
+        return sendError(ws, ERROR_CODES.ROOM_FULL, 'В комнате нет свободных мест.');
       const changed = addRoomBots(room, {
         count: message.count === 0 ? 0 : Math.min(message.count, free),
         skill: message.skill || RACE_BOT_SKILLS
       });
       if (!changed)
-        return sendError(ws, ERROR_CODES.WRONG_STATE, message.count === 0 ? 'В комнате нет ботов.' : 'Соперники сейчас недоступны.');
+        return sendError(
+          ws,
+          ERROR_CODES.WRONG_STATE,
+          message.count === 0 ? 'В комнате нет ботов.' : 'Соперники сейчас недоступны.'
+        );
       log('info', 'room_bots_changed', { roomId: room.code, delta: changed });
+      return undefined;
     },
+
     [C2S.PLAYER_READY]: (message, room, player) => {
       player.ready = message.ready;
       return emitLobby(room);
     },
     [C2S.HOST_CONFIGURE]: (message, room) => {
-      if (room.host !== ws.id) return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Настройки меняет только хост.');
-      if (room.matchmade) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Настройки случайной гонки задаёт подбор.');
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Настройки меняет только хост.');
+      }
+      // В публичной комнате сложность выбрана подбором, и менять её на ходу нельзя: остальные
+      // пришли именно на неё. Заодно это снимает противоречие — смена настроек сбрасывает
+      // готовность всем, а набор стартует по таймеру и о готовности не спрашивает.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Настройки случайной гонки задаёт подбор.');
+      }
       if (message.difficulty !== undefined) {
         if (room.mode === GAME_MODE.COOP) {
-          room.chapterId = COOP_CHAPTER_IDS.includes(message.difficulty) ? message.difficulty : room.chapterId;
+          room.chapterId = COOP_CHAPTER_IDS.includes(message.difficulty)
+            ? message.difficulty
+            : room.chapterId;
           room.spec = coopSpec(room.chapterId);
-        } else room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+        } else {
+          room.spec = createCourseSpec(randomSeed(), safeDifficulty(message.difficulty));
+        }
       }
       if (message.mode !== undefined && message.mode !== room.mode) {
+        // Смена режима меняет вместимость: лишних игроков в коопе быть не должно.
+        //
+        // Боты в этот счёт не идут. Модель бота написана для гонки — кооперативную главу проходят
+        // вдвоём и с механиками на двоих, и напарник из бота не выйдет. Поэтому при переходе в кооп
+        // ботов не пересчитывают, а распускают: иначе хост, добавивший троих, получал бы отказ
+        // «в комнате должно быть не больше двух игроков», не понимая, о каких игроках речь.
         const humans = [...room.players.values()].filter(item => !item.bot);
-        if (message.mode === GAME_MODE.COOP && humans.length > MAX_PLAYERS[GAME_MODE.COOP])
-          return sendError(ws, ERROR_CODES.ROOM_FULL, 'Для кооператива в комнате должно быть не больше двух игроков.');
+        if (message.mode === GAME_MODE.COOP && humans.length > MAX_PLAYERS[GAME_MODE.COOP]) {
+          return sendError(
+            ws,
+            ERROR_CODES.ROOM_FULL,
+            'Для кооператива в комнате должно быть не больше двух игроков.'
+          );
+        }
         if (message.mode === GAME_MODE.COOP) clearBots(room);
         room.mode = message.mode;
+        // Смена режима меняет и тип уровня: у кооператива главы, у гонки процедурная трасса.
         room.spec =
           room.mode === GAME_MODE.COOP
             ? coopSpec(room.chapterId)
             : createCourseSpec(randomSeed(), room.spec.difficulty || 'normal');
         assignSlots(room);
       }
+      // Любое изменение настроек сбрасывает готовность: игроки согласились на другие условия.
+      //
+      // Бота это не касается, и не по недосмотру: PLAYER_READY он не пришлёт никогда, а неготовый
+      // участник не даёт комнате стартовать. Сброс готовности боту означал бы, что смена сложности
+      // после «добавить ботов» насовсем запирает старт: кнопка гаснет, а сервер отвечает NOT_READY.
       for (const item of room.players.values()) if (!item.bot) item.ready = false;
+      // Настройки сменились — сменилась и трасса, а бот бежит по геометрии, собранной под прежнюю.
+      // resetBots пересоберёт состав под новый spec тем же числом и теми же уровнями.
       resetBots(room);
       return emitLobby(room);
     },
     [C2S.START_MATCH]: (message, room) => {
-      if (room.host !== ws.id) return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
-      if (operationalState.isDraining()) return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
-      if (room.matchmade) return sendError(ws, ERROR_CODES.NOT_READY, 'Гонка начнётся сама, когда соберутся соперники.');
+      if (room.host !== ws.id) {
+        return reject('PROTECTED_STATE', ERROR_CODES.NOT_HOST, 'Забег запускает только хост.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
+      // Публичная комната стартует сама и только по своим правилам. Первый вошедший становится в
+      // ней хостом — и без этого запрета мог бы нажать «начать» сразу после поиска и уехать в
+      // гонку в одиночку, обойдя весь набор.
+      if (room.matchmade) {
+        return sendError(ws, ERROR_CODES.NOT_READY, 'Гонка начнётся сама, когда соберутся соперники.');
+      }
       if (capacityStatus().matchesFull) {
         metrics.capacityRejected++;
         return sendError(ws, ERROR_CODES.SERVER_FULL, 'Все игровые слоты заняты. Попробуйте чуть позже.');
       }
       const active = [...room.players.values()].filter(item => !item.disconnectedAt);
-      if (room.mode === GAME_MODE.COOP && active.length !== 2)
+      if (room.mode === GAME_MODE.COOP && active.length !== 2) {
         return sendError(ws, ERROR_CODES.NOT_READY, 'Для кооператива нужны ровно два игрока на связи.');
-      if (!active.length || !active.every(item => item.ready))
+      }
+      if (!active.length || !active.every(item => item.ready)) {
         return sendError(ws, ERROR_CODES.NOT_READY, 'Все игроки должны быть готовы.');
+      }
+
       return beginCountdown(room);
     },
     [C2S.PLAYER_STATE]: (message, room, player) => {
+      // Сообщения прошлого забега приходят после рестарта и не должны применяться.
       if (message.matchId && message.matchId !== room.matchId) return;
+      // После reconnect старый и новый сокеты могут кратко пересечься. Номер состояния не даёт
+      // запоздавшему пакету откатить игрока к уже пройденной позиции.
       if (message.sequence <= (player.lastSequence ?? -1)) return;
       if (Date.now() < room.startedAt - 300) return;
       const now = Date.now();
@@ -1974,7 +2422,9 @@ wss.on('connection', (ws, req) => {
       player.receivedAt = now;
       const result = validateState(player, message.state, room.spec, now);
       if (!result.ok) {
-        if (result.reason === 'speed') send(ws, { type: S2C.CORRECTION, position: result.position, reason: 'movement' });
+        if (result.reason === 'speed') {
+          send(ws, { type: S2C.CORRECTION, position: result.position, reason: 'movement' });
+        }
         return;
       }
       addVerificationFindings(room, player, verificationFindingsForState(room, player, result.state, now));
@@ -1985,24 +2435,29 @@ wss.on('connection', (ws, req) => {
       trackCheckpointDuration(room, player, result.checkpoint, now);
       if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
       player.checkpoint = result.checkpoint;
-    },
-    [C2S.CLIENT_INPUT]: (message, room, player) => {
-      shadowInputRuntime.accept({ player, room, message });
+      return;
     },
     [C2S.PRESENCE]: (message, room, player) => {
       if (player.away === message.away) return;
       player.away = message.away;
       broadcast(room, { type: S2C.PLAYER_PRESENCE, id: player.id, away: player.away });
       emitLobby(room);
+      return;
     },
     [C2S.COOP_EVENT]: (message, room, player) => {
-      if (room.mode !== GAME_MODE.COOP) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Это действие доступно только в кооперативе.');
+      if (room.mode !== GAME_MODE.COOP) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Это действие доступно только в кооперативе.');
+      }
       if (message.matchId && message.matchId !== room.matchId) return;
       const result = validateCoopEvent(room, player, message);
+      // Отклонённое кооп-действие — чаще всего рассинхрон на долю секунды, а не обман,
+      // поэтому штрафа здесь нет: игрока не за что наказывать.
       if (!result.ok) return;
       trackSignatureMetrics({ room, player, message, result, gameplay, dimensions: dims });
       if (result.relay) {
         if (result.relay.action === 'launch') {
+          // Исключение выдаёт сервер и только тому, кого действительно подбросила прошедшая все
+          // проверки катапульта. Клиент сам объявить себе «режим быстрого полёта» не может.
           const target = room.players.get(result.relay.target);
           if (target) noteAuthoritativeLaunch(target);
         }
@@ -2012,46 +2467,112 @@ wss.on('connection', (ws, req) => {
         }
         broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, ...result.relay });
       }
+      return;
     },
     [C2S.COOP_PING]: (message, room, player) => {
       if (room.mode !== GAME_MODE.COOP) return;
       gameplay.count('coop_ping', dims(room, player, message.command));
-      return broadcast(room, { type: S2C.COOP_PING, matchId: room.matchId, id: player.id, command: message.command, at: Date.now() });
+      return broadcast(room, {
+        type: S2C.COOP_PING,
+        matchId: room.matchId,
+        id: player.id,
+        command: message.command,
+        at: Date.now()
+      });
     },
+    // Эмоция.
+    //
+    // Клиент присылает только ID. Сервер проверяет всё остальное: участника комнаты (это уже
+    // сделано выше — до сюда доходят лишь `room`+`player`), канонический ID, слот, владение и то,
+    // что предмет действительно выбран в emote loadout. Ничего из присланного не пересказывается
+    // дальше, кроме самого ID: длительность, поза и эффект — дело каталога, а не отправителя.
+    //
+    // Эмоция не трогает authoritative state: ни позиции, ни скорости, ни чекпоинта. Это событие
+    // презентации, и в обработчике намеренно нет ни одной строки, которая меняла бы игрока.
     [C2S.EMOTE]: (message, room, player) => {
+      // Гость эмоций не имеет: у него нет ни владения, ни выбранного набора. Это не отказ в
+      // обслуживании, а следствие того, что владение — свойство аккаунта.
       if (!player.accountId) return;
       if (!socialCosmetics.canPlayEmote(player.accountId, message.emoteId)) return;
       gameplay.count('emote', dims(room, player, message.emoteId));
-      return broadcast(room, { type: S2C.PLAYER_EMOTE, id: player.id, emoteId: message.emoteId, at: Date.now() });
+      return broadcast(room, {
+        type: S2C.PLAYER_EMOTE,
+        id: player.id,
+        emoteId: message.emoteId,
+        at: Date.now()
+      });
     },
     [C2S.RESPAWN]: (message, room, player) => {
       const now = Date.now();
       if (now - (player.lastRespawn || 0) < 450) return;
       player.lastRespawn = now;
       if (room.mode === GAME_MODE.COOP) {
+        // В кооперативе падение — не откат, а ожидание напарника: игрок появляется у последнего
+        // чекпоинта, но остаётся «упавшим», пока его не поднимут.
         if (markDowned(player, now)) {
           player.coopFalls = (player.coopFalls || 0) + 1;
           trackEvent(productEvents, 'playerDowned');
+          // В кооперативе трасса рукотворная, и «тип сегмента» к ней неприменим. Место
+          // обозначается пройденным чекпоинтом: этого хватает, чтобы найти участок в разметке.
           gameplay.count('fall', dims(room, player, `cp${player.checkpoint}`));
         }
         const point = coopSpawnFor(room.spec, player.checkpoint, player.slot);
         resetHistory(player);
         resetCoopMotionHistory(player);
-        player.last = { ...point, ry: 0, vx: 0, vz: 0, state: 'air', checkpoint: player.checkpoint, id: player.id };
+        player.last = {
+          ...point,
+          ry: 0,
+          vx: 0,
+          vz: 0,
+          state: 'air',
+          checkpoint: player.checkpoint,
+          id: player.id
+        };
         player.lastAt = now;
-        broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, action: 'downed', target: player.id });
+        broadcast(room, {
+          type: S2C.COOP_EVENT,
+          matchId: room.matchId,
+          action: 'downed',
+          target: player.id
+        });
         return send(ws, { type: S2C.CORRECTION, position: point, reason: 'respawn' });
       }
-      const position = player.checkpoint === 0 && player.raceSpawn ? player.raceSpawn : spawnFor(room.spec, player.checkpoint);
+      const position =
+        player.checkpoint === 0 && player.raceSpawn
+          ? player.raceSpawn
+          : spawnFor(room.spec, player.checkpoint);
+      // Главный вопрос про падения — не «сколько», а «где». Место берётся по последнему
+      // положению, которое сервер успел принять: именно оттуда игрок и полетел вниз.
       gameplay.count('fall', dims(room, player, segmentTypeAt(room.spec, player.last?.z ?? 0)));
+      // Возрождение переносит игрока на чекпоинт. История движения до падения к новому месту
+      // отношения не имеет, и окно свободного падения обязано начаться заново.
       resetHistory(player);
-      player.last = { ...position, ry: 0, vx: 0, vz: 0, state: 'air', checkpoint: player.checkpoint, id: player.id };
+      player.last = {
+        ...position,
+        ry: 0,
+        vx: 0,
+        vz: 0,
+        state: 'air',
+        checkpoint: player.checkpoint,
+        id: player.id
+      };
       player.lastAt = now;
       return send(ws, { type: S2C.CORRECTION, position, reason: 'respawn' });
     },
     [C2S.FINISH]: (message, room, player) => {
+      // Повторный финиш ничего не меняет и не является нарушением: он приходит при
+      // переподключении и при повторной попытке после отказа.
       if (player.finished) return;
       if (message.sequence <= (player.lastSequence ?? -1)) return;
+
+      // Финальная позиция приезжает внутри самого финиша и применяется здесь же — без
+      // ограничения «не чаще раза в 32 мс», которое действует на поток обычных состояний.
+      //
+      // Раньше клиент слал её отдельным пакетом непосредственно перед финишем, и она попадала
+      // ровно в это окно: обычные позиции идут раз в 66 мс, поэтому примерно в половине случаев
+      // финальная терялась молча. Финиш проверялся по точке ПЕРЕД лентой и отклонялся, а игрок
+      // видел «Финиш не засчитан» после честно пройденной трассы. Теперь позиция и завершение —
+      // одна операция.
       const now = Date.now();
       const result = validateState(player, message.state, room.spec, now);
       if (result.ok) {
@@ -2065,14 +2586,27 @@ wss.on('connection', (ws, req) => {
         player.checkpoint = result.checkpoint;
         player.lastSequence = message.sequence;
       }
+
+      // Последний отрезок тоже входит в verification boundary. У гонки и коопа разные
+      // геометрия и физические исключения, но итог один: мгновенный выход к ленте не становится
+      // подтверждённым результатом.
       const tail =
         room.mode === GAME_MODE.COOP
           ? verifyCoopFinish(player, room.spec, player.last, now)
           : verifyFinishTime(player, now);
       if (tail) addVerificationFindings(room, player, [tail.reason], tail);
+
       if (!canFinish(player, room.spec)) {
         metrics.finishRejected++;
-        log('info', 'finish_rejected', { roomId: room.code, matchId: room.matchId, playerId: player.id });
+        log('info', 'finish_rejected', {
+          roomId: room.code,
+          matchId: room.matchId,
+          playerId: player.id
+        });
+        // Отказ помечен явно, а не спрятан в обычную коррекцию: клиент должен понять, что финиш
+        // НЕ засчитан, и повторить его после следующего валидного состояния. Раньше он видел
+        // рядовую коррекцию, считал себя финишировавшим и навсегда оставался в «Подтверждаем
+        // результат…».
         return send(ws, {
           type: S2C.FINISH_REJECTED,
           matchId: room.matchId,
@@ -2096,15 +2630,22 @@ wss.on('connection', (ws, req) => {
       return checkMatchEnd(room);
     },
     [C2S.REMATCH_VOTE]: (message, room, player) => {
-      if (operationalState.isDraining()) return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (player.resultChoice === 'rematch') return;
       player.resultChoice = 'rematch';
       return resolveResultsDecision(room);
     },
     [C2S.NEXT_CHAPTER_VOTE]: (message, room, player) => {
+      // В гонке и после последней главы такой кнопки нет; поддельное сообщение не меняет выбор.
       const current = COOP_CHAPTER_IDS.indexOf(room.chapterId);
-      if (room.mode !== GAME_MODE.COOP || current < 0) return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
-      if (operationalState.isDraining()) return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      if (room.mode !== GAME_MODE.COOP || current < 0) {
+        return sendError(ws, ERROR_CODES.WRONG_STATE, 'Следующей главы сейчас нет.');
+      }
+      if (operationalState.isDraining()) {
+        return send(ws, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+      }
       if (player.resultChoice === 'next') return;
       player.resultChoice = 'next';
       gameplay.count('next_chapter_vote', dims(room, player));
@@ -2124,13 +2665,23 @@ wss.on('connection', (ws, req) => {
     } catch {
       return reject('INVALID_SCHEMA', ERROR_CODES.INVALID_MESSAGE, 'Некорректное сетевое сообщение.');
     }
+
     const validation = validateMessage(message);
-    if (!validation.ok)
-      return reject(validation.reason, ERROR_CODES.INVALID_MESSAGE, `Некорректное сообщение: ${validation.detail}`);
-    if (!ws.limiter.allow(message.type))
+    if (!validation.ok) {
+      return reject(
+        validation.reason,
+        ERROR_CODES.INVALID_MESSAGE,
+        `Некорректное сообщение: ${validation.detail}`
+      );
+    }
+
+    if (!ws.limiter.allow(message.type)) {
       return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком часто. Немного подождите.');
+    }
+
     const connection = CONNECTION_HANDLERS[message.type];
     if (connection) return connection(message);
+
     if (
       message.type === C2S.CREATE_ROOM ||
       message.type === C2S.JOIN_ROOM ||
@@ -2141,43 +2692,97 @@ wss.on('connection', (ws, req) => {
         message.protocolVersion !== undefined &&
         message.protocolVersion !== PROTOCOL_VERSION &&
         message.protocolVersion !== PROTOCOL_VERSION - 1
-      )
+      ) {
         return sendError(ws, ERROR_CODES.VERSION_MISMATCH, 'Версия игры устарела. Обновите страницу.', false);
-      if (ipRateLimited(ws.ip)) return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком много запросов. Подождите минуту.');
+      }
+      if (ipRateLimited(ws.ip)) {
+        return reject('RATE_EXCEEDED', ERROR_CODES.RATE_LIMITED, 'Слишком много запросов. Подождите минуту.');
+      }
     }
+
+    // Вход в игру: подбор и создание комнат.
     const lobbyAction = LOBBY_HANDLERS[message.type];
     if (lobbyAction) return lobbyAction(message);
+
+    // Свернувший вкладку игрок не должен оставаться кандидатом для случайного напарника. Это не
+    // ready-check и не дополнительный клик: очередь просто честно отменяется, а событие измеряется.
     if (message.type === C2S.PRESENCE && !ws.room) {
       const index = coopMatchmaking.findIndex(entry => entry.ws === ws);
       if (message.away && index !== -1) {
         coopMatchmaking.splice(index, 1);
-        gameplay.count('matchmaking_queue_exit', { detail: 'away', device: ws.device || 'desktop' });
+        gameplay.count('matchmaking_queue_exit', {
+          detail: 'away',
+          device: ws.device || 'desktop'
+        });
         gameplay.count('queue_cancel', { mode: GAME_MODE.COOP, detail: 'away', device: ws.device });
         incidentForSocket(ws, { kind: 'matchmaking', code: 'away', phase: 'matchmaking' });
-        return send(ws, { type: S2C.MATCHMAKING_WAITING, cancelled: true, reason: 'away', waitedMs: 0 });
+        return send(ws, {
+          type: S2C.MATCHMAKING_WAITING,
+          cancelled: true,
+          reason: 'away',
+          waitedMs: 0
+        });
       }
       return;
     }
+
     const room = rooms.get(ws.room);
     const player = room?.players.get(ws.id);
-    if (!room || !player) return sendError(ws, ERROR_CODES.NOT_IN_ROOM, 'Сначала создайте комнату или войдите в неё.');
+    if (!room || !player) {
+      return sendError(ws, ERROR_CODES.NOT_IN_ROOM, 'Сначала создайте комнату или войдите в неё.');
+    }
+
+    // Пакет из чужого забега — опоздавший, а не злонамеренный. Молча отбрасываем ДО проверки
+    // состояния: иначе хвост прошлого матча получал бы WRONG_STATE и начислял игроку нарушения.
     if (message.matchId && room.matchId && message.matchId !== room.matchId) {
       metrics.latePacketsDropped++;
       return;
     }
+
+    // Хвост завершившегося матча.
+    //
+    // Это и есть главная причина «ошибки сервера, когда второй игрок доходит до конца». Клиент
+    // шлёт `finish`, сервер тут же переводит комнату в RESULTS — а следующий кадр того же клиента
+    // уже отправил `state`. Пакет приходит через миллисекунды, находит комнату в RESULTS, не
+    // проходит по таблице состояний и превращается в ошибку протокола со штрафом. Ничьей вины
+    // здесь нет: так работает порядок доставки, и правильная реакция — тишина.
     if (room.state === ROOM_STATE.RESULTS && MATCH_TRAILING_TYPES.has(message.type)) {
       metrics.latePacketsDropped++;
       return;
     }
+
+    // Проверка допустимости действия в текущем состоянии комнаты. Закрывает целый класс ошибок:
+    // смена сложности во время забега, повторный старт, финиш в лобби.
     const allowedStates = ALLOWED_IN_STATE[message.type];
-    if (allowedStates && !allowedStates.includes(room.state))
+    if (allowedStates && !allowedStates.includes(room.state)) {
       return reject('WRONG_STATE', ERROR_CODES.WRONG_STATE, 'Это действие сейчас недоступно.');
+    }
+
     room.updatedAt = Date.now();
+
+    // Всё остальное — действия внутри комнаты.
     const roomAction = ROOM_HANDLERS[message.type];
     if (roomAction) return roomAction(message, room, player);
+
+    // Игрок свернул игру или вернулся. Сервер здесь ничего не решает — только запоминает и
+    // пересказывает: решение принимает человек, а знать об этом должен напарник.
+
+    // Реванш — единогласное решение, а не команда хоста.
+    //
+    // Раньше голос хоста мгновенно распускал комнату в лобби. На экране результатов это выглядело
+    // так: один нажал «реванш» — и карточка исчезла у обоих, второй просто не успевал ничего
+    // нажать. Теперь голос — это голос: комната остаётся в RESULTS, пока не проголосуют все,
+    // кто на связи, а рассылка состояния показывает счёт голосов.
+    // Выбор можно менять, пока комната не решила: передумать — нормальное поведение, а запрет
+    // на смену и создавал тупик. Пересчёт после каждого нажатия.
+
+    // Возврат в лобби — тоже общее решение. Хост здесь не привилегирован по той же причине:
+    // его нажатие закрывало карточку результатов остальным.
   }
 
   ws.on('close', () => handleDisconnect(ws));
+  // `error` тоже ведёт к разрыву, но состояние меняем один раз — этим занимается
+  // `disconnectHandled` внутри. Здесь только причина в лог.
   ws.on('error', error => {
     incidentForSocket(ws, { kind: 'connection', code: 'socket-error' });
     log('warn', 'socket_error', { playerId: ws.id, message: error?.message });
@@ -2185,34 +2790,50 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-const shadowSimulationTimer = setInterval(
-  () => shadowInputRuntime.tick(rooms),
-  SERVER_SIMULATION_INTERVAL_MS
-);
-shadowSimulationTimer.unref();
-
 let snapshotTick = 0;
 const snapshotTimer = setInterval(() => {
   const now = Date.now();
   snapshotTick++;
+  // При перегрузке отправляем два тика из трёх: частота падает с 15 до 10 Гц, но таймеры комнат
+  // и переход COUNTDOWN → PLAYING продолжают обрабатываться на каждом тике.
   const skipBroadcast = loadStatus().overloaded && snapshotTick % 3 === 0;
   for (const room of rooms.values()) {
+    // Истёк срок голосования на результатах — решаем без опоздавших. Проверка живёт здесь, а не
+    // в отдельном таймере на комнату: таймеры пришлось бы заводить, снимать и не забывать снимать
+    // при роспуске, а этот цикл и так обходит все комнаты каждый тик.
     if (room.state === ROOM_STATE.RESULTS && room.resultsDeadline && now >= room.resultsDeadline) {
       resolveResultsDecision(room, now);
       continue;
     }
+
+    // Истёк срок набора публичной гонки — стартуем тем составом, который собрался.
+    //
+    // Проверка живёт здесь по той же причине, что и голосование на результатах строкой выше:
+    // отдельный таймер на комнату пришлось бы заводить, снимать при старте, снимать при выходе
+    // последнего игрока и не забыть снять при роспуске, а этот цикл и так обходит все комнаты.
     if (room.state === ROOM_STATE.LOBBY && room.fillDeadline && now >= room.fillDeadline) {
       room.fillDeadline = null;
+      // Пока ждали, кто-то мог отвалиться. Считаем только тех, кто на связи: оборвавшийся ещё
+      // тридцать секунд числится в комнате, и по размеру списка гонка стартовала бы в одиночку.
       const humans = connectedHumans(room);
       if (!humans) continue;
       if (humans >= MIN_RACE_PLAYERS) {
         startMatchmadeRace(room, 'deadline');
         continue;
       }
+      // Людей не хватило. Раньше на этом месте набор просто начинался заново, и на пустом сервере
+      // игрок мог ждать сколько угодно, ни разу не увидев гонки. Теперь к нему выходят боты:
+      // соперники ненастоящие, зато забег настоящий и начинается сейчас.
+      //
+      // Комната, где боты уже стоят, идёт сразу на старт. Такое бывает: если в прошлый срок
+      // упёрлись в потолок активных матчей, старт отложился, боты остались, и повторный вызов
+      // spawnBots вернул бы ноль — не «ботов нет», а «они уже здесь». Ветка ниже приняла бы этот
+      // ноль за отказ и переназначала срок бесконечно, даже когда нагрузка давно спала.
       const added = room.bots
         ? room.bots.list.length
         : addRoomBots(room, { count: RACE_BOT_FIELD - humans, skill: RACE_BOT_SKILLS });
       if (!added) {
+        // Боты почему-то недоступны — ждём людей дальше, как раньше.
         room.fillDeadline = now + RACE_FILL_MS;
         continue;
       }
@@ -2220,12 +2841,23 @@ const snapshotTimer = setInterval(() => {
       startMatchmadeRace(room, 'bots');
       continue;
     }
+
+    // Комната без активного матча не участвует в рассылке вообще (ТЗ 12.5).
     if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
-    if (room.state === ROOM_STATE.COUNTDOWN && now >= room.startedAt) setRoomState(room, ROOM_STATE.PLAYING);
+
+    // Отсчёт закончился — переводим комнату в игру.
+    if (room.state === ROOM_STATE.COUNTDOWN && now >= room.startedAt) {
+      setRoomState(room, ROOM_STATE.PLAYING);
+    }
+
     if (skipBroadcast) {
       metrics.snapshotsSkippedForLoad++;
       continue;
     }
+
+    // Бота двигает сервер: живому игроку состояние присылает его клиент, а за бота шаг физики
+    // делается здесь — в том же цикле, который рассылает состояние, поэтому бот двигается ровно с
+    // той частотой, с какой его видят.
     if (room.bots) {
       stepBots(room, {
         now,
@@ -2243,9 +2875,16 @@ const snapshotTimer = setInterval(() => {
         }
       });
     }
+
     const players = [...room.players.values()]
       .filter(player => player.last)
-      .map(player => ({ ...player.last, id: player.id, checkpoint: player.checkpoint, finished: player.finished }));
+      .map(player => ({
+        ...player.last,
+        id: player.id,
+        checkpoint: player.checkpoint,
+        finished: player.finished
+      }));
+
     broadcast(
       room,
       {
@@ -2265,6 +2904,7 @@ function pruneIncidentDiagnostics(now = Date.now()) {
   try {
     return incidentDiagnostics.pruneExpired(now);
   } catch {
+    // Diagnostics are observability only. A retention cleanup failure must never stop gameplay.
     process.stderr.write('[wobble] incident_diagnostics_housekeeping_failed\n');
     return 0;
   }
@@ -2279,21 +2919,43 @@ const heartbeatTimer = setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   }
+
   const now = Date.now();
   pruneIncidentDiagnostics(now);
+
+  // Игроки, не вернувшиеся за отведённое время, освобождают слот и считаются
+  // abandon только после истечения grace period — краткий обрыв с успешным resume им не является.
   expireDisconnectedPlayers(now);
   for (const room of [...rooms.values()]) {
     if (room.state === ROOM_STATE.PLAYING && room.mode === GAME_MODE.COOP) {
+      // Упавший поднимается сам по истечении срока — иначе пара, где один отошёл от устройства,
+      // застряла бы в главе навсегда.
       for (const id of autoRevive(room, now)) {
         room.coopRevives = (room.coopRevives || 0) + 1;
         broadcast(room, { type: S2C.COOP_EVENT, matchId: room.matchId, action: 'revive', target: id });
       }
     }
+    // Если все ушли из матча, он не должен висеть в PLAYING до истечения TTL.
     if (room.state === ROOM_STATE.PLAYING) checkMatchEnd(room);
   }
+
+  // Сброс раз в пятнадцать секунд, вместе с прочей уборкой: копить дольше незачем, а писать
+  // чаще — значит платить обращением к диску за каждое падение в пропасть.
+  //
+  // Обёрнут по той же причине, что и pruneIncidentDiagnostics выше: статистика — наблюдаемость, и
+  // остановить ею игру нельзя. Раньше исключение отсюда поднималось из колбэка таймера, не встречало
+  // ни одного обработчика и завершало процесс — то есть неудачная запись счётчика выбрасывала из
+  // забега всех игроков во всех комнатах разом.
   try {
     gameplay.flush();
   } catch (error) {
+    // Сообщать об этом через log() нельзя.
+    //
+    // console.* перехвачен reliability capture, а его приёмник пишет событие синхронно тем же
+    // соединением с той же базой. Значит рассказ о том, что ожидание базы исчерпано, стоил бы
+    // второго такого же ожидания: цикл событий встал бы вдвое дольше — и снапшоты, и heartbeat, и
+    // разбор сообщений. Пишем прямо в поток, минуя перехват; ровно так же поступает
+    // pruneIncidentDiagnostics выше и по той же причине.
     process.stderr.write(
       `${JSON.stringify({
         level: 'warn',
@@ -2306,6 +2968,8 @@ const heartbeatTimer = setInterval(() => {
   expireSessions(now);
   for (const [code, room] of rooms) {
     if (now - room.updatedAt <= ROOM_TTL) continue;
+    // Освобождаем графику ботов до того, как комната исчезнет: иначе их сцены остались бы жить
+    // ссылками из ничего.
     clearBots(room);
     rooms.delete(code);
   }
@@ -2315,37 +2979,81 @@ const heartbeatTimer = setInterval(() => {
 heartbeatTimer.unref();
 
 const port = process.env.PORT || 3000;
+
+// К какому интерфейсу привязываться.
+//
+// По умолчанию — ко всем: так работает на платформах вроде Render, где снаружи слушает их
+// собственный балансировщик. На своём VPS за Nginx правильнее `HOST=127.0.0.1`: тогда порт 3000
+// не виден из интернета вовсе и попасть в игру можно только через прокси, где стоит TLS,
+// заголовки безопасности и ограничения.
 const host = process.env.HOST || '0.0.0.0';
+// Корректное завершение по сигналу от systemd или Docker.
+//
+// Без него `systemctl restart` рвал соединения посреди забега: игроки видели обычный обрыв связи
+// и уходили в переподключение — к серверу, которого ещё нет. Клиент честно ждал и повторял,
+// потому что отличить «сеть моргнула» от «сервер выключается» ему было нечем. Обновление игры
+// выглядело как поломка сети, и происходило это при каждом развёртывании.
+//
+// Порядок важен: сначала снимаем готовность и перестаём брать новых, потом предупреждаем тех,
+// кто уже играет, и только затем закрываем.
 const GOODBYE_MS = 300;
 
 function shutdown(signal, { exitProcess = true } = {}) {
   if (shuttingDown) return;
   shuttingDown = true;
   log('info', 'shutdown_started', { signal, rooms: rooms.size, sessions: sessions.size });
-  clearInterval(shadowSimulationTimer);
+
   clearInterval(snapshotTimer);
   clearInterval(eventLoopTimer);
   eventLoopDelay.disable();
   clearInterval(heartbeatTimer);
-  for (const room of rooms.values()) broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+
+  // Предупреждение уходит ДО закрытия сокетов, иначе клиент увидит только обрыв. Состояние комнат
+  // живёт в памяти процесса и переживёт перезапуск: честно говорим, что комната потеряна, вместо
+  // того чтобы обещать восстановление, которого не будет.
+  for (const room of rooms.values()) {
+    broadcast(room, { type: S2C.SERVER_SHUTDOWN, reason: 'restart' });
+  }
+
+  // Небольшая пауза, чтобы предупреждение успело уйти в сеть. Закрывать сокет в том же тике —
+  // значит отправить сообщение в никуда: оно останется в буфере отправки.
   setTimeout(() => {
     for (const client of wss.clients) {
+      // 1001 — «going away», штатный код именно для выключения сервера.
       try {
         client.close(1001, 'Server restarting');
-      } catch {}
+      } catch {
+        // Сокет мог отвалиться сам, пока мы шли по списку. Это не мешает завершению.
+      }
     }
     wss.close();
     server.close(() => {
+      // База закрывается до выхода: в режиме WAL это дописывает журнал в основной файл, и рекорды
+      // не зависят от того, успеет ли это сделать следующий запуск.
       try {
+        // На выходе ждём занятый файл меньше, чем в игре.
+        //
+        // Ожидание блокировки синхронно: оно останавливает цикл событий целиком, а значит и
+        // страховочный выход двумя строками ниже, который стоит на трёх секундах. С обычными пятью
+        // секундами перезапуск, пришедшийся на чужую запись, растянулся бы дольше собственного
+        // предела — то есть ограничение перестало бы что-либо ограничивать. Секунды здесь хватает:
+        // терять на выходе нечего, кроме последней пачки счётчиков.
         gameDb.exec('PRAGMA busy_timeout = 1000');
+        // Накопленное с последнего сброса — тоже данные. Пятнадцать секунд статистики теряются
+        // при каждом развёртывании, а развёртываний бывает много.
         gameplay.flush();
         gameDb.close();
       } catch (error) {
         log('warn', 'database_close_failed', { error: error.message });
       }
       log('info', 'shutdown_complete', {});
+      // exitProcess снимается в тестах: выход из процесса убил бы сам прогон. Проверять поведение
+      // выключения нужно, а единственная его часть, которую нельзя выполнить внутри теста, —
+      // как раз завершение процесса.
       if (exitProcess) process.exit(0);
     });
+    // Страховка: одно зависшее соединение не должно задерживать перезапуск навсегда. systemd
+    // всё равно добьёт процесс по своему таймауту, но лучше уйти самим и с нулевым кодом.
     setTimeout(() => {
       log('warn', 'shutdown_forced', {});
       if (exitProcess) process.exit(0);
@@ -2361,6 +3069,11 @@ if (require.main === module) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
+// Завести ботов в комнате. Экспортируется ради тестов и добора: правила потолка живут в roomBots.
+//
+// Состав комнаты после этого обязательно рассылается. Само по себе добавление меняет только карту
+// на сервере, и без рассылки соперники существуют, бегут и финишируют, но в лобби их не видно —
+// именно так это и выглядело при первой проверке в браузере.
 function addRoomBots(room, options) {
   const added = spawnBots(room, options);
   if (added) {
@@ -2370,6 +3083,9 @@ function addRoomBots(room, options) {
   return added;
 }
 
+// Сброс счётчиков по адресу. Нужен тестам: они ходят с одного 127.0.0.1 и за минуту создают
+// комнат больше, чем позволено живому человеку. Без сброса набор разваливался непредсказуемо —
+// падал тот тест, который случайно пересёк границу окна.
 function resetRateLimits() {
   ipRoomOps.clear();
   ipConnections.clear();
@@ -2384,7 +3100,6 @@ module.exports = {
   rooms,
   sessions,
   metrics,
-  shadowInputRuntime,
   verifiedLeaderboard,
   accounts,
   gameplay,

@@ -60,9 +60,7 @@ function fixture(results) {
 test('legacy decision preserves the complete player state', () => {
   const current = player();
   const before = structuredClone(current);
-  const { applier, calls } = fixture([
-    decision(AUTHORITY_SOURCE.LEGACY, 1, 'shadow-not-ready')
-  ]);
+  const { applier, calls } = fixture([decision(AUTHORITY_SOURCE.LEGACY, 1, 'shadow-not-ready')]);
 
   const result = applier.apply({ room: room(), player: current, now: 500 });
 
@@ -126,10 +124,7 @@ test('shadow checkpoint rollback and out-of-course checkpoint fail closed', () =
 test('co-op and already-finished players never consult the race guard', () => {
   const { applier, calls } = fixture([decision(AUTHORITY_SOURCE.SHADOW, 2)]);
 
-  assert.equal(
-    applier.apply({ room: room({ mode: GAME_MODE.COOP }), player: player(), now: 500 }),
-    null
-  );
+  assert.equal(applier.apply({ room: room({ mode: GAME_MODE.COOP }), player: player(), now: 500 }), null);
   assert.equal(applier.apply({ room: room(), player: player({ finished: true }), now: 500 }), null);
   assert.equal(calls.length, 0);
 });

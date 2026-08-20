@@ -72,12 +72,7 @@ function createBridge() {
 
   function attachPlayer(player) {
     const ws = player?.ws;
-    if (
-      !ws ||
-      ws[SOCKET_KEY] ||
-      typeof ws.on !== 'function' ||
-      typeof ws.prependListener !== 'function'
-    )
+    if (!ws || ws[SOCKET_KEY] || typeof ws.on !== 'function' || typeof ws.prependListener !== 'function')
       return false;
     const limiter = new RateLimiter();
     let observedMatchId = null;

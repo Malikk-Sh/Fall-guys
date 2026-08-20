@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  RECONCILIATION_APPLICATION_MODE,
+  reconciliationApplicationProposal
+} from '../client/net/ReconciliationApplicationPolicy.js';
+import {
   RECONCILIATION_ACTION,
   RECONCILIATION_THRESHOLDS,
   reconciliationDecision
@@ -100,6 +104,109 @@ test('race authority source marker accepts only explicit legacy or shadow leases
   assert.equal(normalizeRaceAuthoritySource(undefined), null);
   assert.equal(normalizeRaceAuthoritySource('server'), null);
   assert.equal(normalizeRaceAuthoritySource({ source: 'shadow' }), null);
+});
+
+test('reconciliation application stays fail-closed until shadow authority is explicit', () => {
+  const predicted = createPlayerSimulationState({
+    position: { x: 4, y: 1, z: -8 },
+    velocity: { x: 1, y: 0, z: -2 },
+    grounded: true,
+    jumpBuffer: 0.05
+  });
+  const predictedBefore = structuredClone(predicted);
+  const softCorrection = { action: RECONCILIATION_ACTION.SOFT, reason: 'position-error' };
+
+  assert.deepEqual(
+    reconciliationApplicationProposal({
+      raceAuthoritySource: 'legacy',
+      correction: softCorrection,
+      predicted
+    }),
+    {
+      apply: false,
+      mode: RECONCILIATION_APPLICATION_MODE.NONE,
+      reason: 'authority-not-shadow',
+      state: null
+    }
+  );
+  assert.deepEqual(
+    reconciliationApplicationProposal({
+      raceAuthoritySource: null,
+      correction: softCorrection,
+      predicted
+    }),
+    {
+      apply: false,
+      mode: RECONCILIATION_APPLICATION_MODE.NONE,
+      reason: 'authority-not-shadow',
+      state: null
+    }
+  );
+
+  const soft = reconciliationApplicationProposal({
+    raceAuthoritySource: 'shadow',
+    correction: softCorrection,
+    predicted
+  });
+  assert.equal(soft.apply, true);
+  assert.equal(soft.mode, RECONCILIATION_APPLICATION_MODE.SOFT);
+  assert.equal(soft.reason, 'position-error');
+  assert.deepEqual(soft.state, predicted);
+  assert.notEqual(soft.state, predicted);
+  assert.equal(Object.isFrozen(soft), true);
+  assert.equal(Object.isFrozen(soft.state), true);
+  assert.equal(Object.isFrozen(soft.state.position), true);
+  assert.equal(Object.isFrozen(soft.state.velocity), true);
+  assert.deepEqual(predicted, predictedBefore, 'proposal never mutates the replay prediction');
+
+  const hard = reconciliationApplicationProposal({
+    raceAuthoritySource: 'shadow',
+    correction: { action: RECONCILIATION_ACTION.HARD, reason: 'velocity-error' },
+    predicted
+  });
+  assert.equal(hard.apply, true);
+  assert.equal(hard.mode, RECONCILIATION_APPLICATION_MODE.HARD);
+  assert.equal(hard.reason, 'velocity-error');
+
+  assert.deepEqual(
+    reconciliationApplicationProposal({
+      raceAuthoritySource: 'shadow',
+      correction: { action: RECONCILIATION_ACTION.HARD, reason: 'history-gap' },
+      predicted: null
+    }),
+    {
+      apply: false,
+      mode: RECONCILIATION_APPLICATION_MODE.NONE,
+      reason: 'missing-predicted-state',
+      state: null
+    }
+  );
+  assert.deepEqual(
+    reconciliationApplicationProposal({
+      raceAuthoritySource: 'shadow',
+      correction: { action: RECONCILIATION_ACTION.NONE, reason: 'within-tolerance' },
+      predicted
+    }),
+    {
+      apply: false,
+      mode: RECONCILIATION_APPLICATION_MODE.NONE,
+      reason: 'correction-not-actionable',
+      state: null
+    }
+  );
+  assert.deepEqual(
+    reconciliationApplicationProposal({
+      raceAuthoritySource: 'shadow',
+      correction: { action: RECONCILIATION_ACTION.SOFT, reason: 'position-error' },
+      predicted: { position: {}, velocity: {}, grounded: true }
+    }),
+    {
+      apply: false,
+      mode: RECONCILIATION_APPLICATION_MODE.NONE,
+      reason: 'invalid-predicted-state',
+      state: null
+    }
+  );
 });
 
 test('reconciliation policy separates tolerated, soft and hard divergence', () => {
@@ -264,6 +371,10 @@ test('shadow replay compares prediction against the latest sampled local physics
     action: RECONCILIATION_ACTION.HARD,
     reason: 'position-error'
   });
+  assert.equal(replay.application.apply, true);
+  assert.equal(replay.application.mode, RECONCILIATION_APPLICATION_MODE.HARD);
+  assert.equal(replay.application.reason, 'position-error');
+  assert.deepEqual(replay.application.state, replay.predicted);
 
   const diagnostics = sender.reconciliationDiagnostics();
   assert.equal(diagnostics.matchId, 'match-a');
@@ -348,6 +459,12 @@ test('prototype bridge samples local state after the existing player step and ne
   assert.deepEqual(replay.correction, {
     action: RECONCILIATION_ACTION.SOFT,
     reason: 'position-error'
+  });
+  assert.deepEqual(replay.application, {
+    apply: false,
+    mode: RECONCILIATION_APPLICATION_MODE.NONE,
+    reason: 'authority-not-shadow',
+    state: null
   });
   assert.deepEqual(sender.reconciliationDiagnostics().corrections, {
     none: 0,

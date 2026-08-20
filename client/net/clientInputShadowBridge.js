@@ -2,6 +2,7 @@ import { createPlayerSimulationState, stepPlayerMotion } from '/shared/playerSim
 import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
+import { reconciliationApplicationProposal } from './ReconciliationApplicationPolicy.js';
 import { reconciliationDecision } from './ReconciliationPolicy.js';
 import { ReconciliationTelemetry } from './ReconciliationTelemetry.js';
 
@@ -262,18 +263,25 @@ export class ClientInputShadowSender {
     const prediction = historyGap ? null : predicted;
     const localError = prediction ? simulationStateError(prediction, this.latestLocalState) : null;
     const correction = reconciliationDecision({ error: localError, historyGap });
+    const normalizedAuthoritySource = normalizeRaceAuthoritySource(raceAuthoritySource);
+    const application = reconciliationApplicationProposal({
+      raceAuthoritySource: normalizedAuthoritySource,
+      correction,
+      predicted: prediction
+    });
     this.lastShadowReplay = {
       matchId,
       serverTick,
       lastProcessedInput,
-      raceAuthoritySource: normalizeRaceAuthoritySource(raceAuthoritySource),
+      raceAuthoritySource: normalizedAuthoritySource,
       historyGap,
       replayedInputs,
       baseline,
       predicted: prediction,
       localSampleAt: this.latestLocalSampleAt,
       localError,
-      correction
+      correction,
+      application
     };
     this.telemetry.record({ serverTick, historyGap, error: localError, correction });
     return !historyGap;
@@ -288,7 +296,15 @@ export class ClientInputShadowSender {
         ? createPlayerSimulationState(this.lastShadowReplay.predicted)
         : null,
       localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null,
-      correction: this.lastShadowReplay.correction ? { ...this.lastShadowReplay.correction } : null
+      correction: this.lastShadowReplay.correction ? { ...this.lastShadowReplay.correction } : null,
+      application: this.lastShadowReplay.application
+        ? {
+            ...this.lastShadowReplay.application,
+            state: this.lastShadowReplay.application.state
+              ? createPlayerSimulationState(this.lastShadowReplay.application.state)
+              : null
+          }
+        : null
     };
   }
 

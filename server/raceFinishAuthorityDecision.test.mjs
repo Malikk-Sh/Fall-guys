@@ -55,7 +55,9 @@ function candidate(overrides = {}) {
   });
 }
 
-function fixture({ guardResult, candidateResult = candidate(), guardError = null, candidateError = null } = {}) {
+function fixture(
+  { guardResult, candidateResult = candidate(), guardError = null, candidateError = null } = {}
+) {
   const guardCalls = [];
   const candidateCalls = [];
   const matchGuard = {

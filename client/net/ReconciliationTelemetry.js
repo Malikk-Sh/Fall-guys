@@ -1,4 +1,8 @@
+import { RECONCILIATION_ACTION } from './ReconciliationPolicy.js';
+
 export const RECONCILIATION_TELEMETRY_SAMPLE_LIMIT = 256;
+
+const CORRECTION_ACTIONS = new Set(Object.values(RECONCILIATION_ACTION));
 
 function positiveLimit(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : RECONCILIATION_TELEMETRY_SAMPLE_LIMIT;
@@ -8,6 +12,15 @@ function percentile95(samples) {
   if (!samples.length) return 0;
   const sorted = [...samples].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
+}
+
+function createCorrectionCounts() {
+  return {
+    [RECONCILIATION_ACTION.NONE]: 0,
+    [RECONCILIATION_ACTION.SOFT]: 0,
+    [RECONCILIATION_ACTION.HARD]: 0,
+    [RECONCILIATION_ACTION.SKIP]: 0
+  };
 }
 
 export class RollingReconciliationErrorStats {
@@ -72,19 +85,21 @@ export class ReconciliationTelemetry {
     this.historyGaps = 0;
     this.localComparisons = 0;
     this.groundedMismatches = 0;
+    this.corrections = createCorrectionCounts();
     this.positionError.reset();
     this.horizontalPositionError.reset();
     this.verticalPositionError.reset();
     this.velocityError.reset();
   }
 
-  record({ serverTick, historyGap = false, error = null }) {
+  record({ serverTick, historyGap = false, error = null, correction = null }) {
     if (!Number.isSafeInteger(serverTick) || serverTick < 0 || serverTick <= this.lastServerTick) {
       return false;
     }
     this.lastServerTick = serverTick;
     this.replayAttempts += 1;
     if (historyGap) this.historyGaps += 1;
+    if (CORRECTION_ACTIONS.has(correction?.action)) this.corrections[correction.action] += 1;
 
     if (validError(error)) {
       this.localComparisons += 1;
@@ -107,6 +122,7 @@ export class ReconciliationTelemetry {
       localComparisons: this.localComparisons,
       groundedMismatches: this.groundedMismatches,
       groundedMismatchRate: this.localComparisons ? this.groundedMismatches / this.localComparisons : 0,
+      corrections: { ...this.corrections },
       positionError: this.positionError.snapshot(),
       horizontalPositionError: this.horizontalPositionError.snapshot(),
       verticalPositionError: this.verticalPositionError.snapshot(),

@@ -2,6 +2,7 @@ import { createPlayerSimulationState, stepPlayerMotion } from '/shared/playerSim
 import { C2S, S2C } from '/shared/protocol.js';
 import { Player } from '../game/Player.js';
 import { NetworkManager } from './NetworkManager.js';
+import { reconciliationDecision } from './ReconciliationPolicy.js';
 import { ReconciliationTelemetry } from './ReconciliationTelemetry.js';
 
 export const CLIENT_INPUT_INTERVAL_MS = 1000 / 30;
@@ -256,6 +257,7 @@ export class ClientInputShadowSender {
 
     const prediction = historyGap ? null : predicted;
     const localError = prediction ? simulationStateError(prediction, this.latestLocalState) : null;
+    const correction = reconciliationDecision({ error: localError, historyGap });
     this.lastShadowReplay = {
       matchId,
       serverTick,
@@ -265,9 +267,10 @@ export class ClientInputShadowSender {
       baseline,
       predicted: prediction,
       localSampleAt: this.latestLocalSampleAt,
-      localError
+      localError,
+      correction
     };
-    this.telemetry.record({ serverTick, historyGap, error: localError });
+    this.telemetry.record({ serverTick, historyGap, error: localError, correction });
     return !historyGap;
   }
 
@@ -279,7 +282,8 @@ export class ClientInputShadowSender {
       predicted: this.lastShadowReplay.predicted
         ? createPlayerSimulationState(this.lastShadowReplay.predicted)
         : null,
-      localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null
+      localError: this.lastShadowReplay.localError ? structuredClone(this.lastShadowReplay.localError) : null,
+      correction: this.lastShadowReplay.correction ? { ...this.lastShadowReplay.correction } : null
     };
   }
 

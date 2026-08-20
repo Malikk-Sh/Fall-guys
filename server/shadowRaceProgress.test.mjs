@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const {
-  advanceShadowRaceProgress,
-  createShadowRaceProgress
-} = require('./shadowRaceProgress');
+const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const spec = Object.freeze({
   checkpoints: [-18, -36],

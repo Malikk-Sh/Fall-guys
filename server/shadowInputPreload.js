@@ -7,6 +7,7 @@ const shadowRuntimeService = require('./shadowRuntimeService');
 const shadowRaceAuthorityService = require('./shadowRaceAuthorityService');
 const raceProgressAuthorityBoundaryProbe = require('./raceProgressAuthorityBoundaryProbe');
 const raceProgressAuthorityBoundaryVerification = require('./raceProgressAuthorityBoundaryVerification');
+const raceCheckpointAuthorityApplier = require('./raceCheckpointAuthorityApplier');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -19,6 +20,7 @@ function createBridge() {
   const authorityService = shadowRaceAuthorityService;
   const authorityBoundaryProbe = raceProgressAuthorityBoundaryProbe;
   const authorityBoundaryVerification = raceProgressAuthorityBoundaryVerification;
+  const checkpointAuthorityApplier = raceCheckpointAuthorityApplier;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -161,15 +163,20 @@ function createBridge() {
       if (message.sequence !== current.player.lastSequence) return;
       if (message.sequence <= lastObservedLegacySequence) return;
       lastObservedLegacySequence = message.sequence;
+
+      let verificationObserved = false;
       try {
         authorityBoundaryVerification.observeAcceptedState({
           message,
           room: current.room,
           player: current.player
         });
+        verificationObserved = true;
       } catch {
         // Post-core verification must not turn diagnostics into a transport failure.
       }
+
+      let readinessObserved = false;
       try {
         authorityService.observeAcceptedState({
           message,
@@ -177,8 +184,20 @@ function createBridge() {
           player: current.player,
           runtimeService: shadowRuntimeService
         });
+        readinessObserved = true;
       } catch {
         // Readiness/probe diagnostics remain fail-open to the accepted legacy state.
+      }
+
+      if (!verificationObserved || !readinessObserved) return;
+      try {
+        checkpointAuthorityApplier.apply({
+          room: current.room,
+          player: current.player,
+          now: Date.now()
+        });
+      } catch {
+        // The optional checkpoint cutover must always fail open to the accepted legacy checkpoint.
       }
     };
 
@@ -220,6 +239,7 @@ function createBridge() {
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
+    const checkpointAuthority = checkpointAuthorityApplier.metrics();
     const { coreProgress, authorityVerification, authorityReadiness, authorityProbe } =
       authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
@@ -234,7 +254,8 @@ function createBridge() {
         authorityReadiness,
         authorityProbe,
         authorityBoundary,
-        authorityBoundaryVerification: authorityVerification
+        authorityBoundaryVerification: authorityVerification,
+        checkpointAuthority
       })}\n`
     );
   }
@@ -277,6 +298,7 @@ function createBridge() {
     authorityService,
     authorityBoundaryProbe,
     authorityBoundaryVerification,
+    checkpointAuthorityApplier,
     progressDiagnostics: authorityService.progressDiagnostics,
     authorityProbe: authorityService.authorityProbe,
     start,

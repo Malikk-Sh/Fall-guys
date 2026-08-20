@@ -6,6 +6,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const { EVENT_LOOP_WINDOW_MS, createEventLoopLoad } = require('./eventLoopLoad');
 const { createEventCounters, trackEvent } = require('./productEvents');
+const { installSpaFallback, installStaticShell } = require('./httpAssets');
 
 const {
   PLAYER_COLORS,
@@ -87,89 +88,14 @@ const sharedPath = path.join(__dirname, '..', 'shared');
 
 app.disable('x-powered-by');
 
-// Хеш встроенного import map для политики безопасности.
-//
-// Import map обязан быть встроенным в HTML — внешние карты браузеры не поддерживают. При строгой
-// политике script-src 'self' такой скрипт блокируется, и игра просто не загружается: спецификатор
-// 'three' перестаёт разрешаться. Разрешать 'unsafe-inline' ради этого нельзя — это открыло бы
-// исполнение любого встроенного скрипта. Поэтому считаем хеш содержимого при старте: политика
-// остаётся строгой и автоматически подстраивается, если карта изменится.
-function inlineScriptHashes() {
-  try {
-    const html = require('fs').readFileSync(path.join(clientPath, 'index.html'), 'utf8');
-    const hashes = [];
-    for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)) {
-      const body = match[1];
-      if (!body.trim()) continue;
-      hashes.push(`'sha256-${crypto.createHash('sha256').update(body, 'utf8').digest('base64')}'`);
-    }
-    return hashes;
-  } catch {
-    return [];
-  }
-}
-const INLINE_SCRIPT_HASHES = inlineScriptHashes();
-
-// Заголовки безопасности (ТЗ 13.6). Игра целиком самодостаточна: внешних скриптов, шрифтов и
-// стилей нет, поэтому политика может быть строгой без риска что-то сломать.
-app.use((_req, res, next) => {
-  res.setHeader(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      ["script-src 'self'", ...INLINE_SCRIPT_HASHES].join(' '),
-      "worker-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
-      "connect-src 'self' ws: wss:",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'none'"
-    ].join('; ')
-  );
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  next();
+// Политика безопасности и раздача статики живут отдельным модулем: они не знают ни про комнаты,
+// ни про сокеты, и проверяются собственными тестами.
+installStaticShell(app, {
+  clientPath,
+  sharedPath,
+  vendorPath: path.join(__dirname, '..', 'node_modules', 'three', 'build'),
+  addonsPath: path.join(__dirname, '..', 'node_modules', 'three', 'examples', 'jsm')
 });
-
-// Код клиента и общие с сервером правила НЕ кэшируются надолго.
-//
-// Имена файлов без хеша, а протокол между клиентом и сервером обязан совпадать. Пятиминутный
-// кэш означал, что после деплоя часть игроков несколько минут говорит со свежим сервером старым
-// клиентом: сообщения не сходятся по схеме, и сбои выглядят случайными. Долгий immutable-кэш
-// оставлен только для vendor-файлов, чьи версии меняются вместе с именем пакета.
-const NO_CACHE = 'no-cache, must-revalidate';
-app.use(
-  express.static(clientPath, {
-    setHeaders: (res, file) => {
-      if (/\.(js|css|html|webmanifest)$/.test(file)) res.setHeader('Cache-Control', NO_CACHE);
-    }
-  })
-);
-// Общие с клиентом правила: один и тот же файл исполняется и на сервере, и в браузере.
-app.use(
-  '/shared',
-  express.static(sharedPath, {
-    setHeaders: res => res.setHeader('Cache-Control', NO_CACHE)
-  })
-);
-app.use(
-  '/vendor',
-  express.static(path.join(__dirname, '..', 'node_modules', 'three', 'build'), {
-    maxAge: '1d',
-    immutable: true
-  })
-);
-// Дополнения Three.js (постобработка). Они импортируют 'three' как голое имя, поэтому в
-// client/index.html объявлен import map — иначе браузер загрузил бы вторую копию движка.
-app.use(
-  '/vendor/addons',
-  express.static(path.join(__dirname, '..', 'node_modules', 'three', 'examples', 'jsm'), {
-    maxAge: '1d',
-    immutable: true
-  })
-);
 
 const rooms = new Map();
 
@@ -481,13 +407,7 @@ app.post('/account/record', accountJson, (req, res) => {
   return res.json({ ok: true, ...saved });
 });
 
-// Отдаём index.html только для навигационных запросов. Раньше сюда попадали и запросы к
-// несуществующим ассетам — браузер получал HTML вместо 404 и молча ломался на разборе.
-app.get('*', (req, res, next) => {
-  if (path.extname(req.path)) return next();
-  res.setHeader('Cache-Control', NO_CACHE);
-  res.sendFile(path.join(clientPath, 'index.html'));
-});
+installSpaFallback(app, { clientPath });
 
 const server = http.createServer(app);
 

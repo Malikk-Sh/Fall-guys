@@ -173,6 +173,7 @@ class ShadowInputRuntime {
         state: stateFromLegacy(player.last),
         input: neutralInput(),
         progress: raceProgressFor(room),
+        finishServerTime: null,
         legacyFinishedObserved: false,
         lastProcessedInput: -1,
         lastServerTick: -1
@@ -214,7 +215,7 @@ class ShadowInputRuntime {
     return true;
   }
 
-  advanceProgress(controller, player, room, previousState, currentState) {
+  advanceProgress(controller, player, room, previousState, currentState, now) {
     if (!controller.progress) return false;
     const result = advanceShadowRaceProgress(
       controller.progress,
@@ -226,13 +227,18 @@ class ShadowInputRuntime {
     controller.progress = result.progress;
     for (const event of result.events) {
       if (event.type === 'checkpoint') this.progressDiagnostics.checkpointEvents += 1;
-      if (event.type === 'finish') this.progressDiagnostics.finishEvents += 1;
+      if (event.type === 'finish') {
+        this.progressDiagnostics.finishEvents += 1;
+        if (controller.finishServerTime === null && Number.isSafeInteger(now) && now >= 0) {
+          controller.finishServerTime = now;
+        }
+      }
     }
     this.recordProgressComparison(controller, player);
     return result.events.length > 0;
   }
 
-  consume(controller, player, room, { advance }) {
+  consume(controller, player, room, { advance, now }) {
     const batch = controller.queue.drain();
     controller.input = heldInputFromBatch(batch, controller.input);
     if (batch.length) {
@@ -255,7 +261,7 @@ class ShadowInputRuntime {
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;
-    this.advanceProgress(controller, player, room, previousState, controller.state);
+    this.advanceProgress(controller, player, room, previousState, controller.state, now);
 
     const legacy = player.last;
     if (legacy && Number.isFinite(legacy.x) && Number.isFinite(legacy.y) && Number.isFinite(legacy.z)) {
@@ -286,7 +292,7 @@ class ShadowInputRuntime {
           }
           continue;
         }
-        this.consume(controller, player, room, { advance });
+        this.consume(controller, player, room, { advance, now });
       }
     }
     return this.serverTick;
@@ -301,7 +307,8 @@ class ShadowInputRuntime {
       lastProcessedInput: controller.lastProcessedInput,
       lastServerTick: controller.lastServerTick,
       state: copySimulationState(controller.state),
-      progress: copyRaceProgress(controller.progress)
+      progress: copyRaceProgress(controller.progress),
+      finishServerTime: controller.finishServerTime
     };
   }
 

@@ -8,7 +8,9 @@ import {
 } from '../shared/playerSimulation.js';
 import { ALLOWED_IN_STATE, C2S, RATE_LIMITS, ROOM_STATE } from '../shared/protocol.js';
 import { validateMessage } from '../shared/validation.js';
+import clientInputQueue from './clientInputQueue.js';
 
+const { ClientInputQueue, DEFAULT_MAX_PENDING_INPUTS } = clientInputQueue;
 const FIXED_DT = 1 / 60;
 
 function assertFiniteState(state) {
@@ -202,4 +204,74 @@ test('CLIENT_INPUT has a 30 Hz-friendly rate budget and race-state boundary', ()
   assert.deepEqual(ALLOWED_IN_STATE[C2S.CLIENT_INPUT], [ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING]);
   assert.equal(ALLOWED_IN_STATE[C2S.CLIENT_INPUT].includes(ROOM_STATE.RESULTS), false);
   assert.equal(ALLOWED_IN_STATE[C2S.CLIENT_INPUT].includes(ROOM_STATE.LOBBY), false);
+});
+
+test('server input queue copies commands and drains an atomic batch', () => {
+  const queue = new ClientInputQueue();
+  const first = validClientInput();
+  first.sequence = 0;
+  first.clientTick = 10;
+
+  const accepted = queue.accept(first);
+  assert.equal(accepted.accepted, true);
+  assert.equal(queue.size, 1);
+  assert.equal(queue.latest.moveX, 0.4);
+
+  // После accept сетевой объект не владеет содержимым очереди.
+  first.moveX = -1;
+  assert.equal(queue.latest.moveX, 0.4);
+
+  const batch = queue.drain();
+  assert.equal(queue.size, 0);
+  assert.equal(batch.length, 1);
+  assert.equal(batch[0].sequence, 0);
+  batch[0].moveX = 1;
+  assert.equal(queue.latest, null);
+});
+
+test('server input queue rejects replay, reversed client ticks and invalid ordering fields', () => {
+  const queue = new ClientInputQueue();
+  const command = (sequence, clientTick) => ({ ...validClientInput(), sequence, clientTick });
+
+  assert.equal(queue.accept(command(5, 100)).accepted, true);
+  assert.deepEqual(queue.accept(command(5, 100)), { accepted: false, reason: 'stale-sequence' });
+  assert.deepEqual(queue.accept(command(6, 99)), {
+    accepted: false,
+    reason: 'stale-client-tick'
+  });
+  assert.equal(queue.accept(command(6, 101)).accepted, true);
+  assert.equal(queue.replayed, 1);
+  assert.equal(queue.outOfOrderTicks, 1);
+
+  assert.deepEqual(queue.accept(command(6.5, 102)), {
+    accepted: false,
+    reason: 'invalid-sequence'
+  });
+  assert.deepEqual(queue.accept(command(7, Number.NaN)), {
+    accepted: false,
+    reason: 'invalid-client-tick'
+  });
+});
+
+test('server input queue is memory-bounded without skipping rejected sequence numbers', () => {
+  assert.ok(DEFAULT_MAX_PENDING_INPUTS >= 60);
+  const queue = new ClientInputQueue({ maxPending: 2 });
+  const command = (sequence, clientTick = sequence) => ({
+    ...validClientInput(),
+    sequence,
+    clientTick
+  });
+
+  assert.equal(queue.accept(command(0)).accepted, true);
+  assert.equal(queue.accept(command(1)).accepted, true);
+  assert.deepEqual(queue.accept(command(2)), { accepted: false, reason: 'queue-full' });
+  assert.equal(queue.size, 2);
+  assert.equal(queue.overflowed, 1);
+  assert.equal(queue.lastAcceptedSequence, 1, 'переполнение не подтверждает потерянную команду');
+
+  queue.drain();
+  assert.equal(queue.accept(command(2)).accepted, true, 'после drain ту же команду можно принять');
+  queue.reset({ nextSequence: 20, nextClientTick: 50 });
+  assert.equal(queue.size, 0);
+  assert.equal(queue.accept(command(20, 50)).accepted, true);
 });

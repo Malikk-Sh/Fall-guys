@@ -264,6 +264,26 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   assert.equal(checkpointMetrics.appliedAdvances, checkpointMetricsBefore.appliedAdvances);
   assert.equal(racePlayer.checkpoint, 0, 'default authority never rewrites the legacy checkpoint');
 
+  first.send('input', {
+    matchId: raceStart.matchId,
+    sequence: 0,
+    clientTick: 0,
+    moveX: 0,
+    moveZ: 0,
+    jumpPressed: false,
+    jumpHeld: false,
+    divePressed: false,
+    cameraYaw: 0
+  });
+  assert.equal(
+    await waitFor(() => {
+      const raceShadow = bridge.runtime.snapshot(racePlayer);
+      return raceShadow?.matchId === raceStart.matchId && raceShadow.lastProcessedInput === 0;
+    }),
+    true,
+    'new race input creates a match-scoped owner shadow snapshot'
+  );
+
   const legacyAuthoritySnapshot = await first.wait(
     'snapshot',
     message => message.matchId === raceStart.matchId && message.raceAuthoritySource === 'legacy'

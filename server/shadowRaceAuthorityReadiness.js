@@ -22,8 +22,23 @@ const REASON = Object.freeze({
   CHECKPOINT_DELTA: 'checkpoint-delta',
   FINISH_MISMATCH: 'finish-mismatch',
   ACCEPTED_SHADOW_UNFINISHED: 'accepted-shadow-unfinished',
-  REJECTED_SHADOW_FINISHED: 'rejected-shadow-finished'
+  REJECTED_SHADOW_FINISHED: 'rejected-shadow-finished',
+  BOUNDARY_VERIFICATION_INVALID: 'boundary-verification-invalid',
+  BOUNDARY_STATE_MISMATCH: 'boundary-state-mismatch',
+  BOUNDARY_FINISH_MISMATCH: 'boundary-finish-mismatch',
+  BOUNDARY_STALE_PENDING: 'boundary-stale-pending',
+  BOUNDARY_MISSING_PENDING: 'boundary-missing-pending'
 });
+
+const BOUNDARY_VERIFICATION_FIELDS = Object.freeze([
+  'remembered',
+  'stateComparisons',
+  'stateMismatches',
+  'finishComparisons',
+  'finishMismatches',
+  'stalePending',
+  'missingPending'
+]);
 
 function finiteRate(value) {
   return Number.isFinite(value) && value >= 0 && value <= 1;
@@ -51,6 +66,14 @@ function validMetrics(metrics) {
   );
 }
 
+function validBoundaryVerificationMetrics(metrics) {
+  return (
+    !!metrics &&
+    typeof metrics === 'object' &&
+    BOUNDARY_VERIFICATION_FIELDS.every(field => nonNegativeInteger(metrics[field]))
+  );
+}
+
 function normalizePolicy(policy = {}) {
   const merged = { ...DEFAULT_SHADOW_AUTHORITY_POLICY, ...policy };
   const integerFields = [
@@ -74,7 +97,30 @@ function normalizePolicy(policy = {}) {
   return Object.freeze({ ...merged });
 }
 
-function evaluateShadowRaceAuthorityReadiness(metrics, policyOverrides = {}) {
+function observedBoundaryVerification(metrics) {
+  if (!validBoundaryVerificationMetrics(metrics)) return null;
+  return Object.freeze(
+    Object.fromEntries(BOUNDARY_VERIFICATION_FIELDS.map(field => [field, metrics[field]]))
+  );
+}
+
+function appendBoundaryVerificationReasons(reasons, metrics) {
+  if (metrics === null || metrics === undefined) return;
+  if (!validBoundaryVerificationMetrics(metrics)) {
+    reasons.push(REASON.BOUNDARY_VERIFICATION_INVALID);
+    return;
+  }
+  if (metrics.stateMismatches > 0) reasons.push(REASON.BOUNDARY_STATE_MISMATCH);
+  if (metrics.finishMismatches > 0) reasons.push(REASON.BOUNDARY_FINISH_MISMATCH);
+  if (metrics.stalePending > 0) reasons.push(REASON.BOUNDARY_STALE_PENDING);
+  if (metrics.missingPending > 0) reasons.push(REASON.BOUNDARY_MISSING_PENDING);
+}
+
+function evaluateShadowRaceAuthorityReadiness(
+  metrics,
+  policyOverrides = {},
+  boundaryVerificationMetrics = null
+) {
   const policy = normalizePolicy(policyOverrides);
   if (!validMetrics(metrics)) {
     return Object.freeze({
@@ -102,6 +148,7 @@ function evaluateShadowRaceAuthorityReadiness(metrics, policyOverrides = {}) {
   if (metrics.rejectedButShadowFinishedSamples > policy.maxRejectedButShadowFinishedSamples) {
     reasons.push(REASON.REJECTED_SHADOW_FINISHED);
   }
+  appendBoundaryVerificationReasons(reasons, boundaryVerificationMetrics);
 
   return Object.freeze({
     ready: reasons.length === 0,
@@ -116,15 +163,19 @@ function evaluateShadowRaceAuthorityReadiness(metrics, policyOverrides = {}) {
       maxCheckpointDelta: metrics.maxCheckpointDelta,
       invalidLegacySamples: metrics.invalidLegacySamples,
       acceptedButShadowUnfinishedSamples: metrics.acceptedButShadowUnfinishedSamples,
-      rejectedButShadowFinishedSamples: metrics.rejectedButShadowFinishedSamples
+      rejectedButShadowFinishedSamples: metrics.rejectedButShadowFinishedSamples,
+      boundaryVerification: observedBoundaryVerification(boundaryVerificationMetrics)
     })
   });
 }
 
 module.exports = {
+  BOUNDARY_VERIFICATION_FIELDS,
   DEFAULT_SHADOW_AUTHORITY_POLICY,
   REASON,
+  appendBoundaryVerificationReasons,
   evaluateShadowRaceAuthorityReadiness,
   normalizePolicy,
+  validBoundaryVerificationMetrics,
   validMetrics
 };

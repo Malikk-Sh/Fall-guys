@@ -77,6 +77,7 @@ test('30 Hz sender latches one-shot actions until a network sample is emitted', 
   assert.equal(second.divePressed, true);
   assert.equal(second.moveX, -0.4, 'continuous movement uses the newest physics sample');
   assert.equal(second.moveZ, 0.5);
+  assert.equal(sender.reconciliationState().pendingCount, 2);
 });
 
 test('disconnected input never becomes a packet backlog and keeps one pending edge', () => {
@@ -92,6 +93,7 @@ test('disconnected input never becomes a packet backlog and keeps one pending ed
   sender.capture(input({ moveX: 1, moveZ: 0, jump: false }), 0.2);
   assert.equal(sender.flush(net), false);
   assert.equal(net.sent.length, 0);
+  assert.equal(sender.reconciliationState().pendingCount, 0);
 
   net.handshakeReady = true;
   const resumed = sender.flush(net);
@@ -128,9 +130,85 @@ test('cursor survives reload-style recreation for the same match and resets for 
   assert.equal(next.sequence, 0);
   assert.equal(next.clientTick, 0);
   assert.equal(next.divePressed, true);
+  assert.deepEqual(reloadedSender.reconciliationState(), {
+    matchId: 'match-b',
+    lastAcknowledgedInput: -1,
+    lastAcknowledgedServerTick: -1,
+    pendingCount: 1,
+    oldestPendingInput: 0,
+    latestPendingInput: 0,
+    historyDropped: 0
+  });
 });
 
-test('prototype bridge captures input before Player consumes it and installs idempotently', () => {
+test('server acknowledgement prunes only the confirmed input prefix', () => {
+  let now = 0;
+  const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => now });
+  const net = network();
+  sender.beginMatch(net.matchId);
+
+  for (let sequence = 0; sequence < 3; sequence++) {
+    sender.capture(input({ moveX: sequence / 2, moveZ: 1 }), sequence * 0.1);
+    sender.flush(net);
+    now += CLIENT_INPUT_INTERVAL_MS + 1;
+  }
+
+  assert.deepEqual(
+    sender.pendingInputs.map(command => command.sequence),
+    [0, 1, 2]
+  );
+  assert.equal(sender.acknowledge(net.matchId, 1, 42), true);
+  assert.deepEqual(
+    sender.pendingInputs.map(command => command.sequence),
+    [2]
+  );
+  assert.deepEqual(sender.reconciliationState(), {
+    matchId: 'match-a',
+    lastAcknowledgedInput: 1,
+    lastAcknowledgedServerTick: 42,
+    pendingCount: 1,
+    oldestPendingInput: 2,
+    latestPendingInput: 2,
+    historyDropped: 0
+  });
+
+  assert.equal(sender.acknowledge(net.matchId, 1, 43), false, 'duplicate ack is ignored');
+  assert.equal(sender.acknowledge(net.matchId, 3, 44), false, 'future unsent ack is ignored');
+  assert.equal(sender.acknowledge('other-match', 2, 44), false, 'another match cannot prune this history');
+  assert.equal(sender.acknowledge(net.matchId, 2, 41), true);
+  assert.equal(sender.reconciliationState().pendingCount, 0);
+  assert.equal(sender.reconciliationState().lastAcknowledgedServerTick, 42, 'server tick is monotonic');
+});
+
+test('unacknowledged input history stays bounded when acknowledgements stall', () => {
+  let now = 0;
+  const sender = new ClientInputShadowSender({
+    storage: new MemoryStorage(),
+    now: () => now,
+    historyLimit: 2
+  });
+  const net = network();
+  sender.beginMatch(net.matchId);
+
+  for (let sequence = 0; sequence < 3; sequence++) {
+    sender.capture(input({ moveZ: 1 }), 0);
+    sender.flush(net);
+    now += CLIENT_INPUT_INTERVAL_MS + 1;
+  }
+
+  assert.deepEqual(
+    sender.pendingInputs.map(command => command.sequence),
+    [1, 2]
+  );
+  assert.equal(sender.reconciliationState().historyDropped, 1);
+  assert.equal(sender.acknowledge(net.matchId, 0, 10), true, 'ack before retained window remains meaningful');
+  assert.deepEqual(
+    sender.pendingInputs.map(command => command.sequence),
+    [1, 2]
+  );
+});
+
+test('prototype bridge captures input before Player consumes it and applies snapshot acknowledgement', () => {
   const now = 0;
   const sender = new ClientInputShadowSender({ storage: new MemoryStorage(), now: () => now });
 
@@ -173,4 +251,16 @@ test('prototype bridge captures input before Player consumes it and installs ide
   assert.equal(net.sent[0].jumpPressed, true, 'shadow sender observed the edge before local consumption');
   assert.equal(net.sent[0].jumpHeld, true);
   assert.equal(net.sent[0].cameraYaw, 0.3);
+  assert.equal(sender.reconciliationState().pendingCount, 1);
+
+  net.handleMessage({
+    type: S2C.SNAPSHOT,
+    matchId: 'match-live',
+    lastProcessedInput: 0,
+    serverTick: 12,
+    players: []
+  });
+  assert.equal(sender.reconciliationState().pendingCount, 0);
+  assert.equal(sender.reconciliationState().lastAcknowledgedInput, 0);
+  assert.equal(sender.reconciliationState().lastAcknowledgedServerTick, 12);
 });

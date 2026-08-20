@@ -4,6 +4,7 @@ import { NetworkManager } from './NetworkManager.js';
 
 export const CLIENT_INPUT_INTERVAL_MS = 1000 / 30;
 export const CLIENT_INPUT_CURSOR_KEY = 'wobble-client-input-shadow-cursor';
+export const CLIENT_INPUT_HISTORY_LIMIT = 240;
 
 const PLAYER_PATCH = Symbol.for('wobble.client-input-shadow.player-step');
 const NETWORK_TICK_PATCH = Symbol.for('wobble.client-input-shadow.network-tick');
@@ -22,9 +23,15 @@ function browserStorage() {
 }
 
 export class ClientInputShadowSender {
-  constructor({ storage = browserStorage(), now = () => performance.now() } = {}) {
+  constructor({
+    storage = browserStorage(),
+    now = () => performance.now(),
+    historyLimit = CLIENT_INPUT_HISTORY_LIMIT
+  } = {}) {
     this.storage = storage;
     this.now = now;
+    this.historyLimit =
+      Number.isSafeInteger(historyLimit) && historyLimit > 0 ? historyLimit : CLIENT_INPUT_HISTORY_LIMIT;
     this.activeMatchId = null;
     this.sequence = 0;
     this.clientTick = 0;
@@ -32,6 +39,10 @@ export class ClientInputShadowSender {
     this.latest = null;
     this.jumpPressed = false;
     this.divePressed = false;
+    this.pendingInputs = [];
+    this.lastAcknowledgedInput = -1;
+    this.lastAcknowledgedServerTick = -1;
+    this.historyDropped = 0;
   }
 
   readCursor(matchId) {
@@ -75,6 +86,10 @@ export class ClientInputShadowSender {
     this.latest = null;
     this.jumpPressed = false;
     this.divePressed = false;
+    this.pendingInputs.length = 0;
+    this.lastAcknowledgedInput = -1;
+    this.lastAcknowledgedServerTick = -1;
+    this.historyDropped = 0;
     if (nextMatchId && !cursor) this.persistCursor();
     return true;
   }
@@ -102,6 +117,43 @@ export class ClientInputShadowSender {
     return network.ws?.readyState === 1 && typeof network.raw === 'function';
   }
 
+  remember(payload) {
+    this.pendingInputs.push({ ...payload });
+    while (this.pendingInputs.length > this.historyLimit) {
+      this.pendingInputs.shift();
+      this.historyDropped += 1;
+    }
+  }
+
+  acknowledge(matchId, sequence, serverTick = null) {
+    if (matchId !== this.activeMatchId || !Number.isSafeInteger(sequence) || sequence < 0) return false;
+    // `sequence` is the last command the server processed; it can never acknowledge a command the
+    // client has not sent yet. Ignoring an impossible future ack keeps the replay window intact if
+    // a malformed or stale snapshot ever crosses the migration boundary.
+    if (sequence >= this.sequence || sequence <= this.lastAcknowledgedInput) return false;
+
+    this.lastAcknowledgedInput = sequence;
+    if (Number.isSafeInteger(serverTick) && serverTick >= 0) {
+      this.lastAcknowledgedServerTick = Math.max(this.lastAcknowledgedServerTick, serverTick);
+    }
+    while (this.pendingInputs.length && this.pendingInputs[0].sequence <= sequence) {
+      this.pendingInputs.shift();
+    }
+    return true;
+  }
+
+  reconciliationState() {
+    return {
+      matchId: this.activeMatchId,
+      lastAcknowledgedInput: this.lastAcknowledgedInput,
+      lastAcknowledgedServerTick: this.lastAcknowledgedServerTick,
+      pendingCount: this.pendingInputs.length,
+      oldestPendingInput: this.pendingInputs[0]?.sequence ?? null,
+      latestPendingInput: this.pendingInputs.at(-1)?.sequence ?? null,
+      historyDropped: this.historyDropped
+    };
+  }
+
   flush(network, now = this.now()) {
     if (network?.matchId !== this.activeMatchId) this.beginMatch(network?.matchId);
     if (!this.canSend(network)) return false;
@@ -120,6 +172,7 @@ export class ClientInputShadowSender {
       cameraYaw: this.latest.cameraYaw
     };
     network.raw(payload);
+    this.remember(payload);
     this.lastSentAt = now;
     this.sequence += 1;
     this.clientTick += 1;
@@ -151,6 +204,9 @@ export function installClientInputShadowBridge({
       // Reset before normal MATCH_START listeners run, so the first physics sample of a new match
       // cannot inherit movement or one-shot actions from the previous results screen.
       if (message?.type === S2C.MATCH_START) sender.beginMatch(message.matchId);
+      if (message?.type === S2C.SNAPSHOT && message.matchId === this.matchId) {
+        sender.acknowledge(message.matchId, message.lastProcessedInput, message.serverTick);
+      }
       const result = originalHandleMessage.call(this, message);
       if (message?.type === S2C.RESUME_FAILED || message?.type === S2C.SERVER_SHUTDOWN) {
         sender.beginMatch(null);

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const bridge = require('./shadowInputPreload');
 const WebSocket = require('ws');
 const { PROTOCOL_VERSION } = require('../shared/protocol.js');
-const { server, rooms, resetRateLimits, shadowInputRuntime } = require('./index');
+const { server, rooms, resetRateLimits } = require('./index');
 
 const WAIT_MS = 10_000;
 
@@ -105,9 +106,14 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
   const room = [...rooms.values()].find(item => item.matchId === firstStart.matchId);
   const player = room.players.get(firstHello.id);
   assert.ok(player);
-  const legacyBefore = structuredClone(player.last);
-  const metricsBefore = shadowInputRuntime.metrics();
+  assert.equal(
+    await waitFor(() => bridge.attachedCount() >= 2),
+    true,
+    'bridge attaches to active player sockets before input is sampled'
+  );
 
+  const legacyBefore = structuredClone(player.last);
+  const metricsBefore = bridge.runtime.metrics();
   first.send('input', {
     matchId: firstStart.matchId,
     sequence: 0,
@@ -121,16 +127,16 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
   });
 
   assert.equal(
-    await waitFor(() => shadowInputRuntime.metrics().processed > metricsBefore.processed),
+    await waitFor(() => bridge.runtime.metrics().processed > metricsBefore.processed),
     true,
     'fixed shadow tick consumes the live input'
   );
-  const shadow = shadowInputRuntime.snapshot(player);
+  const shadow = bridge.runtime.snapshot(player);
   assert.equal(shadow.lastProcessedInput, 0);
   assert.equal(shadow.matchId, firstStart.matchId);
   assert.deepEqual(player.last, legacyBefore, 'shadow simulation never replaces legacy authoritative state');
 
-  const staleBefore = shadowInputRuntime.metrics().rejected.staleSequence;
+  const staleBefore = bridge.runtime.metrics().rejected.staleSequence;
   first.send('input', {
     matchId: firstStart.matchId,
     sequence: 0,
@@ -143,7 +149,7 @@ test('live CLIENT_INPUT feeds the 30 Hz shadow runtime without mutating legacy p
     cameraYaw: 0
   });
   assert.equal(
-    await waitFor(() => shadowInputRuntime.metrics().rejected.staleSequence > staleBefore),
+    await waitFor(() => bridge.runtime.metrics().rejected.staleSequence > staleBefore),
     true,
     'replayed input is diagnostic-only and rejected by ordering'
   );

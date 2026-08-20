@@ -156,10 +156,7 @@ test('co-op, stale room association and guard errors fail open to legacy validat
   const guardedRoom = room();
   const guardedPlayer = player();
   attach(guardFailure.bridge, guardedRoom, guardedPlayer);
-  assert.equal(
-    guardFailure.gameRules.validateState(guardedPlayer, {}, guardedRoom.spec, 500).checkpoint,
-    2
-  );
+  assert.equal(guardFailure.gameRules.validateState(guardedPlayer, {}, guardedRoom.spec, 500).checkpoint, 2);
   assert.equal(guardFailure.bridge.metrics().errors, 1);
 });
 

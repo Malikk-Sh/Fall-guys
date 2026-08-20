@@ -105,10 +105,7 @@ test('unchanged shadow checkpoint does not rewrite checkpoint timing', () => {
 
 test('shadow checkpoint rollback and out-of-course checkpoint fail closed', () => {
   const current = player({ checkpoint: 2 });
-  const { applier } = fixture([
-    decision(AUTHORITY_SOURCE.SHADOW, 1),
-    decision(AUTHORITY_SOURCE.SHADOW, 5)
-  ]);
+  const { applier } = fixture([decision(AUTHORITY_SOURCE.SHADOW, 1), decision(AUTHORITY_SOURCE.SHADOW, 5)]);
 
   const rollback = applier.apply({ room: room(), player: current, now: 500 });
   const outsideCourse = applier.apply({ room: room(), player: current, now: 600 });

@@ -6,6 +6,7 @@ const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
 const { createShadowRaceProgressDiagnostics } = require('./shadowRaceProgressDiagnostics');
 const { evaluateShadowRaceAuthorityReadiness } = require('./shadowRaceAuthorityReadiness');
+const { createShadowRaceAuthorityProbe } = require('./shadowRaceAuthorityProbe');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -16,6 +17,7 @@ const METRICS_INTERVAL_MS = 60_000;
 function createBridge() {
   const runtime = shadowRuntimeService.runtime;
   const progressDiagnostics = createShadowRaceProgressDiagnostics();
+  const authorityProbe = createShadowRaceAuthorityProbe();
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -29,6 +31,12 @@ function createBridge() {
     return { room, player: currentPlayer };
   }
 
+  function observeAuthorityProbe(sample, player) {
+    if (!sample || !player) return;
+    const readiness = evaluateShadowRaceAuthorityReadiness(progressDiagnostics.metrics());
+    authorityProbe.observe({ sample, player, readiness });
+  }
+
   function observeCoreOutcomePayload(payload, player, ws) {
     if (typeof payload !== 'string') return;
     const isFinishOutcome =
@@ -38,12 +46,13 @@ function createBridge() {
 
     const current = currentPlayerFor(player, ws);
     if (!current) return;
-    progressDiagnostics.observeOutcomePayload({
+    const sample = progressDiagnostics.observeOutcomePayload({
       payload,
       room: current.room,
       player: current.player,
       runtimeService: shadowRuntimeService
     });
+    observeAuthorityProbe(sample, current.player);
   }
 
   function enrichSnapshotPayload(payload, player, ws) {
@@ -107,12 +116,13 @@ function createBridge() {
       if (message.sequence !== current.player.lastSequence) return;
       if (message.sequence <= lastObservedLegacySequence) return;
       lastObservedLegacySequence = message.sequence;
-      progressDiagnostics.observeAcceptedState({
+      const sample = progressDiagnostics.observeAcceptedState({
         message,
         room: current.room,
         player: current.player,
         runtimeService: shadowRuntimeService
       });
+      observeAuthorityProbe(sample, current.player);
     };
 
     const originalSend = ws.send;
@@ -153,6 +163,7 @@ function createBridge() {
     const metrics = shadowRuntimeService.metrics();
     const coreProgress = progressDiagnostics.metrics();
     const authorityReadiness = evaluateShadowRaceAuthorityReadiness(coreProgress);
+    const authorityProbeMetrics = authorityProbe.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
     if (!hasSimulationTraffic && !coreProgress.boundarySamples) return;
     process.stdout.write(
@@ -162,7 +173,8 @@ function createBridge() {
         ts: new Date().toISOString(),
         ...metrics,
         coreProgress,
-        authorityReadiness
+        authorityReadiness,
+        authorityProbe: authorityProbeMetrics
       })}\n`
     );
   }
@@ -202,6 +214,7 @@ function createBridge() {
     runtime,
     runtimeService: shadowRuntimeService,
     progressDiagnostics,
+    authorityProbe,
     start,
     stop,
     scan,

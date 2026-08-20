@@ -4,6 +4,7 @@ const { C2S, S2C, ROOM_STATE } = require('../shared/protocol.js');
 const { validateMessage, RateLimiter } = require('../shared/validation.js');
 const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
 const shadowRuntimeService = require('./shadowRuntimeService');
+const { createShadowRaceProgressDiagnostics } = require('./shadowRaceProgressDiagnostics');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -13,11 +14,30 @@ const METRICS_INTERVAL_MS = 60_000;
 
 function createBridge() {
   const runtime = shadowRuntimeService.runtime;
+  const progressDiagnostics = createShadowRaceProgressDiagnostics();
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
   let core = null;
   let stopped = false;
+
+  function currentPlayerFor(player, ws) {
+    const room = core?.rooms.get(ws.room);
+    const currentPlayer = room?.players.get(ws.id);
+    if (!room || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return null;
+    return { room, player: currentPlayer };
+  }
+
+  function observeCoreOutcomePayload(payload, player, ws) {
+    const current = currentPlayerFor(player, ws);
+    if (!current) return;
+    progressDiagnostics.observeOutcomePayload({
+      payload,
+      room: current.room,
+      player: current.player,
+      runtimeService: shadowRuntimeService
+    });
+  }
 
   function enrichSnapshotPayload(payload, player, ws) {
     if (typeof payload !== 'string' || !payload.includes('"type":"snapshot"')) return payload;
@@ -29,12 +49,10 @@ function createBridge() {
     }
     if (message?.type !== S2C.SNAPSHOT) return payload;
 
-    const currentRoom = core?.rooms.get(ws.room);
-    const currentPlayer = currentRoom?.players.get(ws.id);
-    if (!currentRoom || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return payload;
-    if (message.matchId !== currentRoom.matchId) return payload;
+    const current = currentPlayerFor(player, ws);
+    if (!current || message.matchId !== current.room.matchId) return payload;
 
-    const shadow = shadowRuntimeService.snapshot(currentPlayer);
+    const shadow = shadowRuntimeService.snapshot(current.player);
     if (!shadow || shadow.matchId !== message.matchId) return payload;
     return JSON.stringify({
       ...message,
@@ -48,6 +66,8 @@ function createBridge() {
     const ws = player?.ws;
     if (!ws || ws[SOCKET_KEY] || typeof ws.on !== 'function') return false;
     const limiter = new RateLimiter();
+    let observedMatchId = null;
+    let lastObservedLegacySequence = -1;
     const listener = raw => {
       let message;
       try {
@@ -55,18 +75,44 @@ function createBridge() {
       } catch {
         return;
       }
-      if (message?.type !== C2S.CLIENT_INPUT) return;
+      if (message?.type !== C2S.CLIENT_INPUT && message?.type !== C2S.PLAYER_STATE) return;
       const validation = validateMessage(message);
-      if (!validation.ok || !limiter.allow(C2S.CLIENT_INPUT)) return;
-      const currentRoom = core?.rooms.get(ws.room);
-      const currentPlayer = currentRoom?.players.get(ws.id);
-      if (!currentRoom || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return;
-      if (!ACTIVE_STATES.has(currentRoom.state) || message.matchId !== currentRoom.matchId) return;
-      shadowRuntimeService.accept({ player: currentPlayer, room: currentRoom, message });
+      if (!validation.ok) return;
+
+      const current = currentPlayerFor(player, ws);
+      if (!current || !ACTIVE_STATES.has(current.room.state)) return;
+      if (message.matchId && message.matchId !== current.room.matchId) return;
+
+      if (message.type === C2S.CLIENT_INPUT) {
+        if (!limiter.allow(C2S.CLIENT_INPUT)) return;
+        if (message.matchId !== current.room.matchId) return;
+        shadowRuntimeService.accept({ player: current.player, room: current.room, message });
+        return;
+      }
+
+      // The core socket listener is registered when the connection is created; this migration
+      // listener is attached only after the player enters an active room. EventEmitter preserves
+      // that registration order, so lastSequence here is the outcome of the core validation path.
+      if (observedMatchId !== current.room.matchId) {
+        observedMatchId = current.room.matchId;
+        lastObservedLegacySequence = -1;
+      }
+      if (message.sequence !== current.player.lastSequence) return;
+      if (message.sequence <= lastObservedLegacySequence) return;
+      lastObservedLegacySequence = message.sequence;
+      progressDiagnostics.observeAcceptedState({
+        message,
+        room: current.room,
+        player: current.player,
+        runtimeService: shadowRuntimeService
+      });
     };
 
     const originalSend = ws.send;
     const wrappedSend = function shadowAcknowledgedSend(payload, ...args) {
+      // PLAYER_FINISHED and FINISH_REJECTED are emitted only after core has made its legacy
+      // authority decision. Reading that outcome here cannot alter the decision or its payload.
+      observeCoreOutcomePayload(payload, player, ws);
       return originalSend.call(this, enrichSnapshotPayload(payload, player, ws), ...args);
     };
     Object.defineProperty(ws, SOCKET_KEY, { value: true, configurable: true });
@@ -98,13 +144,16 @@ function createBridge() {
 
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
-    if (!metrics.accepted && !Object.values(metrics.rejected).some(Boolean)) return;
+    const coreProgress = progressDiagnostics.metrics();
+    const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
+    if (!hasSimulationTraffic && !coreProgress.boundarySamples) return;
     process.stdout.write(
       `${JSON.stringify({
         level: 'info',
         event: 'shadow_simulation_metrics',
         ts: new Date().toISOString(),
-        ...metrics
+        ...metrics,
+        coreProgress
       })}\n`
     );
   }
@@ -143,6 +192,7 @@ function createBridge() {
   return {
     runtime,
     runtimeService: shadowRuntimeService,
+    progressDiagnostics,
     start,
     stop,
     scan,

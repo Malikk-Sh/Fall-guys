@@ -11,6 +11,7 @@ function raceRoom() {
     mode: GAME_MODE.RACE,
     state: ROOM_STATE.PLAYING,
     matchId: 'match-a',
+    startedAt: 1000,
     spec: { segmentCount: 2, checkpoints: [-18, -36] }
   };
 }
@@ -25,6 +26,7 @@ function shadowSnapshot(overrides = {}) {
       finished: false,
       finishServerTick: null
     },
+    finishServerTime: null,
     ...overrides
   };
 }
@@ -43,7 +45,9 @@ test('current race shadow progress becomes an immutable read-only candidate', ()
     lastProcessedInput: 7,
     checkpoint: 1,
     finished: false,
-    finishServerTick: null
+    finishServerTick: null,
+    finishServerTime: null,
+    finishTimeMs: null
   });
   assert.equal(Object.isFrozen(candidate), true);
   assert.deepEqual(snapshot, before, 'candidate inspection never mutates the runtime snapshot');
@@ -76,7 +80,7 @@ test('candidate requires a real processed input and an advanced server tick', ()
   assert.equal(shadowRaceProgressCandidate({ room, player, runtimeService: noTick }), null);
 });
 
-test('candidate validates checkpoint and finish invariants before exposing progress', () => {
+test('candidate validates checkpoint, finish and server timing invariants before exposing progress', () => {
   const room = raceRoom();
   const player = { id: 'p1' };
 
@@ -90,13 +94,33 @@ test('candidate validates checkpoint and finish invariants before exposing progr
   };
   assert.equal(shadowRaceProgressCandidate({ room, player, runtimeService: earlyFinish }), null);
 
+  const beforeStart = {
+    snapshot: () =>
+      shadowSnapshot({
+        progress: { checkpoint: 2, finished: true, finishServerTick: 11 },
+        finishServerTime: 999
+      })
+  };
+  assert.equal(shadowRaceProgressCandidate({ room, player, runtimeService: beforeStart }), null);
+
+  const strayTime = {
+    snapshot: () => shadowSnapshot({ finishServerTime: 1200 })
+  };
+  assert.equal(shadowRaceProgressCandidate({ room, player, runtimeService: strayTime }), null);
+
   const complete = {
-    snapshot: () => shadowSnapshot({ progress: { checkpoint: 2, finished: true, finishServerTick: 11 } })
+    snapshot: () =>
+      shadowSnapshot({
+        progress: { checkpoint: 2, finished: true, finishServerTick: 11 },
+        finishServerTime: 1450
+      })
   };
   const candidate = shadowRaceProgressCandidate({ room, player, runtimeService: complete });
   assert.equal(candidate.finished, true);
   assert.equal(candidate.checkpoint, 2);
   assert.equal(candidate.finishServerTick, 11);
+  assert.equal(candidate.finishServerTime, 1450);
+  assert.equal(candidate.finishTimeMs, 450);
 });
 
 test('candidate treats shadow service failures as unavailable diagnostics', () => {

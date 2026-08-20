@@ -31,14 +31,14 @@ function raceFixture() {
     matchId: 'match-a',
     mode: GAME_MODE.RACE,
     state: ROOM_STATE.PLAYING,
-    startedAt: 0,
+    startedAt: 1000,
     spec: { checkpoints: [-18], finishZ: -31 },
     players: new Map([[player.id, player]])
   };
   return { player, room, rooms: new Map([['ROOM', room]]) };
 }
 
-test('fixed-step race progress is derived from shadow state without mutating legacy authority', () => {
+test('fixed-step race progress records server finish time without mutating legacy authority', () => {
   const runtime = new ShadowInputRuntime({
     step: state => ({
       state: {
@@ -65,6 +65,7 @@ test('fixed-step race progress is derived from shadow state without mutating leg
     finished: false,
     finishServerTick: null
   });
+  assert.equal(runtime.snapshot(player).finishServerTime, null);
 
   runtime.tick(rooms, 1034);
   assert.deepEqual(runtime.snapshot(player).progress, {
@@ -72,6 +73,9 @@ test('fixed-step race progress is derived from shadow state without mutating leg
     finished: true,
     finishServerTick: 2
   });
+  assert.equal(runtime.snapshot(player).finishServerTime, 1034);
+  runtime.tick(rooms, 1068);
+  assert.equal(runtime.snapshot(player).finishServerTime, 1034, 'finish time is captured only once');
   assert.deepEqual(
     { last: player.last, checkpoint: player.checkpoint, finished: player.finished },
     before,
@@ -81,17 +85,17 @@ test('fixed-step race progress is derived from shadow state without mutating leg
   assert.deepEqual(runtime.metrics().shadowRaceProgress, {
     checkpointEvents: 1,
     finishEvents: 1,
-    comparisons: 2,
-    checkpointMismatchSamples: 2,
-    finishMismatchSamples: 1,
-    shadowAheadSamples: 2,
+    comparisons: 3,
+    checkpointMismatchSamples: 3,
+    finishMismatchSamples: 2,
+    shadowAheadSamples: 3,
     legacyAheadSamples: 0,
     checkpointMismatchRate: 1,
-    finishMismatchRate: 0.5
+    finishMismatchRate: 2 / 3
   });
 });
 
-test('a new match creates a fresh server-owned race progress domain', () => {
+test('a new match creates a fresh server-owned race progress and finish timing domain', () => {
   const runtime = new ShadowInputRuntime();
   const { player, room } = raceFixture();
 
@@ -106,14 +110,16 @@ test('a new match creates a fresh server-owned race progress domain', () => {
 
   room.matchId = 'match-b';
   assert.ok(runtime.accept({ player, room, message: command('match-b', 0) }).accepted);
-  assert.deepEqual(runtime.snapshot(player).progress, {
+  const next = runtime.snapshot(player);
+  assert.deepEqual(next.progress, {
     checkpoint: 0,
     finished: false,
     finishServerTick: null
   });
+  assert.equal(next.finishServerTime, null);
 });
 
-test('co-op controllers do not run race progress rules', () => {
+test('co-op controllers do not run race progress rules or finish timing', () => {
   const runtime = new ShadowInputRuntime({
     step: state => ({ state, events: [] })
   });
@@ -123,6 +129,7 @@ test('co-op controllers do not run race progress rules', () => {
   assert.ok(runtime.accept({ player, room, message: command(room.matchId) }).accepted);
   runtime.tick(rooms, 1000);
   assert.equal(runtime.snapshot(player).progress, null);
+  assert.equal(runtime.snapshot(player).finishServerTime, null);
   assert.equal(runtime.metrics().shadowRaceProgress.comparisons, 0);
 });
 
@@ -147,4 +154,5 @@ test('legacy finish records one final diagnostic comparison without advancing sh
   assert.equal(diagnostics.checkpointMismatchSamples, 1);
   assert.equal(diagnostics.finishMismatchSamples, 1);
   assert.equal(diagnostics.legacyAheadSamples, 1);
+  assert.equal(runtime.snapshot(player).finishServerTime, null);
 });

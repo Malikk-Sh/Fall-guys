@@ -24,6 +24,21 @@ function validProgress(progress, checkpointLimit) {
   return true;
 }
 
+function finishTimingFor(room, shadow) {
+  const finished = shadow?.progress?.finished === true;
+  const finishServerTime = shadow?.finishServerTime;
+  if (!finished) {
+    return finishServerTime === null ? Object.freeze({ finishServerTime: null, finishTimeMs: null }) : null;
+  }
+
+  if (!Number.isSafeInteger(room?.startedAt) || room.startedAt < 0) return null;
+  if (!Number.isSafeInteger(finishServerTime) || finishServerTime < room.startedAt) return null;
+  return Object.freeze({
+    finishServerTime,
+    finishTimeMs: finishServerTime - room.startedAt
+  });
+}
+
 function shadowRaceProgressCandidate({ room, player, runtimeService = shadowRuntimeService } = {}) {
   if (!room || !player || room.mode !== GAME_MODE.RACE) return null;
   if (!room.matchId || !ACTIVE_STATES.has(room.state)) return null;
@@ -41,6 +56,8 @@ function shadowRaceProgressCandidate({ room, player, runtimeService = shadowRunt
 
   const checkpointLimit = safeCheckpointLimit(room);
   if (!validProgress(shadow.progress, checkpointLimit)) return null;
+  const finishTiming = finishTimingFor(room, shadow);
+  if (!finishTiming) return null;
 
   return Object.freeze({
     matchId: shadow.matchId,
@@ -48,12 +65,15 @@ function shadowRaceProgressCandidate({ room, player, runtimeService = shadowRunt
     lastProcessedInput: shadow.lastProcessedInput,
     checkpoint: shadow.progress.checkpoint,
     finished: shadow.progress.finished,
-    finishServerTick: shadow.progress.finishServerTick
+    finishServerTick: shadow.progress.finishServerTick,
+    finishServerTime: finishTiming.finishServerTime,
+    finishTimeMs: finishTiming.finishTimeMs
   });
 }
 
 module.exports = {
   shadowRaceProgressCandidate,
+  finishTimingFor,
   safeCheckpointLimit,
   validProgress
 };

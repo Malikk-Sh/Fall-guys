@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import {
+  RECONCILIATION_ACTION,
+  RECONCILIATION_THRESHOLDS,
+  reconciliationDecision
+} from '../client/net/ReconciliationPolicy.js';
 import { ReconciliationTelemetry } from '../client/net/ReconciliationTelemetry.js';
 import { createPlayerSimulationState } from '../shared/playerSimulation.js';
 import { S2C } from '../shared/protocol.js';
@@ -48,6 +53,17 @@ function controls() {
   };
 }
 
+function error(overrides = {}) {
+  return {
+    positionError: 0,
+    horizontalPositionError: 0,
+    verticalPositionError: 0,
+    velocityError: 0,
+    groundedMismatch: false,
+    ...overrides
+  };
+}
+
 test('simulation state error reports correction deltas without mutating either state', () => {
   const predicted = createPlayerSimulationState({
     position: { x: 3, y: 4, z: 0 },
@@ -76,15 +92,64 @@ test('simulation state error reports correction deltas without mutating either s
   assert.equal(simulationStateError({ position: {} }, local), null);
 });
 
+test('reconciliation policy separates tolerated, soft and hard divergence', () => {
+  assert.deepEqual(reconciliationDecision({ error: error() }), {
+    action: RECONCILIATION_ACTION.NONE,
+    reason: 'within-tolerance'
+  });
+  assert.deepEqual(
+    reconciliationDecision({
+      error: error({ positionError: RECONCILIATION_THRESHOLDS.SOFT_POSITION_ERROR })
+    }),
+    { action: RECONCILIATION_ACTION.SOFT, reason: 'position-error' }
+  );
+  assert.deepEqual(
+    reconciliationDecision({
+      error: error({ positionError: RECONCILIATION_THRESHOLDS.HARD_POSITION_ERROR })
+    }),
+    { action: RECONCILIATION_ACTION.HARD, reason: 'position-error' }
+  );
+  assert.deepEqual(
+    reconciliationDecision({
+      error: error({ velocityError: RECONCILIATION_THRESHOLDS.HARD_VELOCITY_ERROR })
+    }),
+    { action: RECONCILIATION_ACTION.HARD, reason: 'velocity-error' }
+  );
+  assert.deepEqual(
+    reconciliationDecision({
+      error: error({
+        verticalPositionError: RECONCILIATION_THRESHOLDS.HARD_VERTICAL_ERROR,
+        groundedMismatch: true
+      })
+    }),
+    { action: RECONCILIATION_ACTION.HARD, reason: 'ground-contact' }
+  );
+  assert.deepEqual(reconciliationDecision({ historyGap: true }), {
+    action: RECONCILIATION_ACTION.HARD,
+    reason: 'history-gap'
+  });
+  assert.deepEqual(reconciliationDecision({ error: null }), {
+    action: RECONCILIATION_ACTION.SKIP,
+    reason: 'invalid-error'
+  });
+});
+
 test('reconciliation telemetry keeps bounded p95 samples and whole-match aggregate stats', () => {
   const telemetry = new ReconciliationTelemetry({ sampleLimit: 3 });
   telemetry.reset('match-a');
+  const corrections = [
+    RECONCILIATION_ACTION.NONE,
+    RECONCILIATION_ACTION.SOFT,
+    RECONCILIATION_ACTION.SOFT,
+    RECONCILIATION_ACTION.HARD
+  ];
 
   for (let tick = 0; tick < 4; tick++) {
     const value = tick + 1;
     assert.equal(
       telemetry.record({
         serverTick: tick,
+        correction: { action: corrections[tick] },
         error: {
           positionError: value,
           horizontalPositionError: value / 2,
@@ -100,6 +165,7 @@ test('reconciliation telemetry keeps bounded p95 samples and whole-match aggrega
   assert.equal(
     telemetry.record({
       serverTick: 3,
+      correction: { action: RECONCILIATION_ACTION.SKIP },
       error: {
         positionError: 99,
         horizontalPositionError: 99,
@@ -111,7 +177,14 @@ test('reconciliation telemetry keeps bounded p95 samples and whole-match aggrega
     false,
     'duplicate server tick cannot double-count reconciliation telemetry'
   );
-  assert.equal(telemetry.record({ serverTick: 4, historyGap: true }), true);
+  assert.equal(
+    telemetry.record({
+      serverTick: 4,
+      historyGap: true,
+      correction: { action: RECONCILIATION_ACTION.HARD }
+    }),
+    true
+  );
 
   assert.deepEqual(telemetry.snapshot(), {
     matchId: 'match-a',
@@ -122,6 +195,7 @@ test('reconciliation telemetry keeps bounded p95 samples and whole-match aggrega
     localComparisons: 4,
     groundedMismatches: 2,
     groundedMismatchRate: 0.5,
+    corrections: { none: 1, soft: 2, hard: 2, skip: 0 },
     positionError: { count: 4, mean: 2.5, p95: 4, max: 4, recentSamples: 3 },
     horizontalPositionError: { count: 4, mean: 1.25, p95: 2, max: 2, recentSamples: 3 },
     verticalPositionError: { count: 4, mean: 0.5, p95: 1, max: 1, recentSamples: 3 },
@@ -138,6 +212,7 @@ test('reconciliation telemetry keeps bounded p95 samples and whole-match aggrega
     localComparisons: 0,
     groundedMismatches: 0,
     groundedMismatchRate: 0,
+    corrections: { none: 0, soft: 0, hard: 0, skip: 0 },
     positionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
     horizontalPositionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
     verticalPositionError: { count: 0, mean: 0, p95: 0, max: 0, recentSamples: 0 },
@@ -174,6 +249,10 @@ test('shadow replay compares prediction against the latest sampled local physics
   assert.equal(replay.localError.verticalPositionError, 2);
   assert.equal(replay.localError.velocityError, Math.sqrt(2));
   assert.equal(replay.localError.groundedMismatch, true);
+  assert.deepEqual(replay.correction, {
+    action: RECONCILIATION_ACTION.HARD,
+    reason: 'position-error'
+  });
 
   const diagnostics = sender.reconciliationDiagnostics();
   assert.equal(diagnostics.matchId, 'match-a');
@@ -181,6 +260,7 @@ test('shadow replay compares prediction against the latest sampled local physics
   assert.equal(diagnostics.historyGaps, 0);
   assert.equal(diagnostics.localComparisons, 1);
   assert.equal(diagnostics.groundedMismatches, 1);
+  assert.deepEqual(diagnostics.corrections, { none: 0, soft: 0, hard: 1, skip: 0 });
   assert.equal(diagnostics.positionError.count, 1);
   assert.equal(diagnostics.positionError.mean, Math.sqrt(5));
   assert.equal(diagnostics.horizontalPositionError.mean, 1);
@@ -252,6 +332,16 @@ test('prototype bridge samples local state after the existing player step and ne
   assert.deepEqual(replay.localError.velocityDelta, { x: 1, y: 0, z: 0 });
   assert.equal(replay.localError.positionError, 1);
   assert.equal(replay.localError.velocityError, 1);
+  assert.deepEqual(replay.correction, {
+    action: RECONCILIATION_ACTION.SOFT,
+    reason: 'position-error'
+  });
+  assert.deepEqual(sender.reconciliationDiagnostics().corrections, {
+    none: 0,
+    soft: 1,
+    hard: 0,
+    skip: 0
+  });
   assert.equal(sender.reconciliationDiagnostics().positionError.mean, 1);
   assert.equal(sender.reconciliationDiagnostics().velocityError.mean, 1);
   assert.deepEqual(player.physics, { x: 1, y: 1, z: 0 }, 'diagnostics never move the local player');

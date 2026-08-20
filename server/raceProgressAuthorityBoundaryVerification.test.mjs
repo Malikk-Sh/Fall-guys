@@ -131,26 +131,23 @@ test('rejected finish compares the final checkpoint and unfinished core state', 
   assert.equal(verification.metrics().finishMismatches, 0);
 });
 
-test(
-  'shadow finish cutover can discard the legacy finish projection without poisoning verifier metrics',
-  () => {
-    const verification = createRaceProgressAuthorityBoundaryVerification();
-    const racer = player({ checkpoint: 2 });
-    const currentRoom = room();
-    const sequence = 14;
-    verification.remember({
-      room: currentRoom,
-      player: racer,
-      message: { type: C2S.FINISH, sequence },
-      probeResult: probeResult({ checkpoint: 2, finished: false })
-    });
+test('shadow finish cutover can discard the legacy finish projection without poisoning verifier metrics', () => {
+  const verification = createRaceProgressAuthorityBoundaryVerification();
+  const racer = player({ checkpoint: 2 });
+  const currentRoom = room();
+  const sequence = 14;
+  verification.remember({
+    room: currentRoom,
+    player: racer,
+    message: { type: C2S.FINISH, sequence },
+    probeResult: probeResult({ checkpoint: 2, finished: false })
+  });
 
-    assert.equal(verification.discardFinish({ room: currentRoom, player: racer, sequence }), true);
-    assert.equal(verification.metrics().finishCutoverSkips, 1);
-    assert.equal(verification.metrics().finishMismatches, 0);
-    assert.equal(verification.metrics().missingPending, 0);
-  }
-);
+  assert.equal(verification.discardFinish({ room: currentRoom, player: racer, sequence }), true);
+  assert.equal(verification.metrics().finishCutoverSkips, 1);
+  assert.equal(verification.metrics().finishMismatches, 0);
+  assert.equal(verification.metrics().missingPending, 0);
+});
 
 test('discardFinish refuses stale match or sequence and leaves the projection available', () => {
   const verification = createRaceProgressAuthorityBoundaryVerification();

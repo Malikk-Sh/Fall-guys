@@ -1,8 +1,9 @@
 'use strict';
 
 const { ClientInputQueue } = require('./clientInputQueue');
-const { ROOM_STATE } = require('../shared/protocol.js');
+const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const { createPlayerSimulationState, stepPlayerMotion } = require('../shared/playerSimulation.js');
+const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const SERVER_SIMULATION_HZ = 30;
 const SERVER_SIMULATION_DT = 1 / SERVER_SIMULATION_HZ;
@@ -37,6 +38,14 @@ function copySimulationState(state) {
     position: { ...state.position },
     velocity: { ...state.velocity }
   };
+}
+
+function copyRaceProgress(progress) {
+  return progress ? { ...progress } : null;
+}
+
+function raceProgressFor(room) {
+  return room?.mode === GAME_MODE.RACE ? createShadowRaceProgress(room.spec) : null;
 }
 
 function neutralInput() {
@@ -144,6 +153,15 @@ class ShadowInputRuntime {
     };
     this.positionError = new RollingErrorStats();
     this.horizontalError = new RollingErrorStats();
+    this.progressDiagnostics = {
+      checkpointEvents: 0,
+      finishEvents: 0,
+      comparisons: 0,
+      checkpointMismatchSamples: 0,
+      finishMismatchSamples: 0,
+      shadowAheadSamples: 0,
+      legacyAheadSamples: 0
+    };
   }
 
   controllerFor(player, room) {
@@ -154,6 +172,8 @@ class ShadowInputRuntime {
         queue: new ClientInputQueue(),
         state: stateFromLegacy(player.last),
         input: neutralInput(),
+        progress: raceProgressFor(room),
+        legacyFinishedObserved: false,
         lastProcessedInput: -1,
         lastServerTick: -1
       };
@@ -179,7 +199,40 @@ class ShadowInputRuntime {
     return result;
   }
 
-  consume(controller, player, { advance }) {
+  recordProgressComparison(controller, player) {
+    if (!controller.progress) return false;
+    const legacyCheckpoint = Number.isSafeInteger(player.checkpoint) ? Math.max(0, player.checkpoint) : 0;
+    const shadowCheckpoint = controller.progress.checkpoint;
+    const legacyFinished = player.finished === true;
+    const shadowFinished = controller.progress.finished === true;
+
+    this.progressDiagnostics.comparisons += 1;
+    if (shadowCheckpoint !== legacyCheckpoint) this.progressDiagnostics.checkpointMismatchSamples += 1;
+    if (shadowFinished !== legacyFinished) this.progressDiagnostics.finishMismatchSamples += 1;
+    if (shadowCheckpoint > legacyCheckpoint) this.progressDiagnostics.shadowAheadSamples += 1;
+    if (legacyCheckpoint > shadowCheckpoint) this.progressDiagnostics.legacyAheadSamples += 1;
+    return true;
+  }
+
+  advanceProgress(controller, player, room, previousState, currentState) {
+    if (!controller.progress) return false;
+    const result = advanceShadowRaceProgress(
+      controller.progress,
+      previousState,
+      currentState,
+      room.spec,
+      this.serverTick
+    );
+    controller.progress = result.progress;
+    for (const event of result.events) {
+      if (event.type === 'checkpoint') this.progressDiagnostics.checkpointEvents += 1;
+      if (event.type === 'finish') this.progressDiagnostics.finishEvents += 1;
+    }
+    this.recordProgressComparison(controller, player);
+    return result.events.length > 0;
+  }
+
+  consume(controller, player, room, { advance }) {
     const batch = controller.queue.drain();
     controller.input = heldInputFromBatch(batch, controller.input);
     if (batch.length) {
@@ -197,10 +250,12 @@ class ShadowInputRuntime {
     }
 
     const aligned = alignKnownWorldContact(controller.state, player.last);
+    const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;
+    this.advanceProgress(controller, player, room, previousState, controller.state);
 
     const legacy = player.last;
     if (legacy && Number.isFinite(legacy.x) && Number.isFinite(legacy.y) && Number.isFinite(legacy.z)) {
@@ -223,8 +278,15 @@ class ShadowInputRuntime {
       const advance = room.state === ROOM_STATE.PLAYING || (room.startedAt && now >= room.startedAt);
       for (const player of room.players.values()) {
         const controller = this.controllers.get(player);
-        if (!controller || controller.matchId !== room.matchId || player.bot || player.finished) continue;
-        this.consume(controller, player, { advance });
+        if (!controller || controller.matchId !== room.matchId || player.bot) continue;
+        if (player.finished) {
+          if (!controller.legacyFinishedObserved) {
+            controller.legacyFinishedObserved = true;
+            this.recordProgressComparison(controller, player);
+          }
+          continue;
+        }
+        this.consume(controller, player, room, { advance });
       }
     }
     return this.serverTick;
@@ -238,11 +300,13 @@ class ShadowInputRuntime {
       pending: controller.queue.size,
       lastProcessedInput: controller.lastProcessedInput,
       lastServerTick: controller.lastServerTick,
-      state: copySimulationState(controller.state)
+      state: copySimulationState(controller.state),
+      progress: copyRaceProgress(controller.progress)
     };
   }
 
   metrics() {
+    const comparisons = this.progressDiagnostics.comparisons;
     return {
       serverHz: SERVER_SIMULATION_HZ,
       serverTick: this.serverTick,
@@ -251,7 +315,14 @@ class ShadowInputRuntime {
       simulatedSteps: this.simulatedSteps,
       rejected: { ...this.rejected },
       legacyPositionError: this.positionError.snapshot(),
-      legacyHorizontalError: this.horizontalError.snapshot()
+      legacyHorizontalError: this.horizontalError.snapshot(),
+      shadowRaceProgress: {
+        ...this.progressDiagnostics,
+        checkpointMismatchRate: comparisons
+          ? this.progressDiagnostics.checkpointMismatchSamples / comparisons
+          : 0,
+        finishMismatchRate: comparisons ? this.progressDiagnostics.finishMismatchSamples / comparisons : 0
+      }
     };
   }
 }
@@ -265,5 +336,6 @@ module.exports = {
   ShadowInputRuntime,
   alignKnownWorldContact,
   heldInputFromBatch,
+  raceProgressFor,
   stateFromLegacy
 };

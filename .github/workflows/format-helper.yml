@@ -1,0 +1,27 @@
+name: Temporary format helper
+
+on:
+  push:
+    branches:
+      - agent/race-finish-cutover-verification
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Print Prettier diff
+        run: |
+          npx prettier --write server/raceProgressAuthorityBoundaryVerification.test.mjs server/shadowRaceAuthorityService.js
+          git diff -- server/raceProgressAuthorityBoundaryVerification.test.mjs server/shadowRaceAuthorityService.js

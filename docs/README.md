@@ -34,6 +34,8 @@
 Следующие документы уже описывают конкретные подсистемы подробнее. Новые ролевые руководства не
 заменяют их, а связывают в единый рабочий процесс:
 
+- [`NETCODE-MIGRATION.md`](NETCODE-MIGRATION.md) — что уже переведено на серверный авторитет, как
+  устроены ворота готовности и лизы на матч, и что блокирует авторитет движения.
 - [`DEPLOY.md`](DEPLOY.md) — установка и базовое развёртывание.
 - [`../deploy/PRODUCTION-SAFETY.md`](../deploy/PRODUCTION-SAFETY.md) — verified backup, restore,
   deploy safety и shared-443 topology.

@@ -28,11 +28,7 @@ function progressSnapshot(progress) {
 }
 
 function readinessAllowsShadow(readiness) {
-  return (
-    readiness?.ready === true &&
-    Array.isArray(readiness.reasons) &&
-    readiness.reasons.length === 0
-  );
+  return readiness?.ready === true && Array.isArray(readiness.reasons) && readiness.reasons.length === 0;
 }
 
 function selectedResult(source, progress, fallbackReason = null) {

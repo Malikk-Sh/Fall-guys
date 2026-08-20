@@ -255,8 +255,16 @@ test('shadow replay deterministically reapplies only unacknowledged input comman
   );
 
   assert.equal(sender.replayFromShadow(net.matchId, baseline, 20, 0), true);
-  assert.deepEqual(sender.shadowReplayState().predicted, expected, 'replaying the same snapshot is deterministic');
-  assert.equal(sender.replayFromShadow(net.matchId, baseline, 19, 0), false, 'older server state cannot rewind replay');
+  assert.deepEqual(
+    sender.shadowReplayState().predicted,
+    expected,
+    'replaying the same snapshot is deterministic'
+  );
+  assert.equal(
+    sender.replayFromShadow(net.matchId, baseline, 19, 0),
+    false,
+    'older server state cannot rewind replay'
+  );
   assert.equal(sender.replayFromShadow('other-match', baseline, 21, 0), false);
   assert.equal(sender.replayFromShadow(net.matchId, { grounded: true }, 21, 0), false);
 });

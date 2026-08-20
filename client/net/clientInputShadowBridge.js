@@ -139,7 +139,7 @@ export function installClientInputShadowBridge({
     const originalStep = PlayerClass.prototype.step;
     Object.defineProperty(PlayerClass.prototype, PLAYER_PATCH, { value: originalStep });
     PlayerClass.prototype.step = function clientInputShadowStep(dt, input, cameraYaw, elapsed) {
-      sender.capture(input, cameraYaw);
+      if (this.finished !== true && this.remote !== true) sender.capture(input, cameraYaw);
       return originalStep.call(this, dt, input, cameraYaw, elapsed);
     };
   }
@@ -148,8 +148,13 @@ export function installClientInputShadowBridge({
     const originalHandleMessage = NetworkClass.prototype.handleMessage;
     Object.defineProperty(NetworkClass.prototype, NETWORK_MESSAGE_PATCH, { value: originalHandleMessage });
     NetworkClass.prototype.handleMessage = function clientInputShadowMessage(message) {
+      // Reset before normal MATCH_START listeners run, so the first physics sample of a new match
+      // cannot inherit movement or one-shot actions from the previous results screen.
+      if (message?.type === S2C.MATCH_START) sender.beginMatch(message.matchId);
       const result = originalHandleMessage.call(this, message);
-      if (message?.type === S2C.MATCH_START) sender.beginMatch(this.matchId || message.matchId);
+      if (message?.type === S2C.RESUME_FAILED || message?.type === S2C.SERVER_SHUTDOWN) {
+        sender.beginMatch(null);
+      }
       return result;
     };
   }

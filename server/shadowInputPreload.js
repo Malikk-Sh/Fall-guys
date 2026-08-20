@@ -2,7 +2,8 @@
 
 const { C2S, S2C, ROOM_STATE } = require('../shared/protocol.js');
 const { validateMessage, RateLimiter } = require('../shared/validation.js');
-const { ShadowInputRuntime, SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
+const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');
+const shadowRuntimeService = require('./shadowRuntimeService');
 
 const BRIDGE_KEY = Symbol.for('wobble.shadow-input-bridge');
 const SOCKET_KEY = Symbol.for('wobble.shadow-input-listener');
@@ -11,7 +12,7 @@ const ACTIVE_STATES = new Set([ROOM_STATE.COUNTDOWN, ROOM_STATE.PLAYING]);
 const METRICS_INTERVAL_MS = 60_000;
 
 function createBridge() {
-  const runtime = new ShadowInputRuntime();
+  const runtime = shadowRuntimeService.runtime;
   const attached = new Map();
   let tickTimer = null;
   let metricsTimer = null;
@@ -33,7 +34,7 @@ function createBridge() {
     if (!currentRoom || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return payload;
     if (message.matchId !== currentRoom.matchId) return payload;
 
-    const shadow = runtime.snapshot(currentPlayer);
+    const shadow = shadowRuntimeService.snapshot(currentPlayer);
     if (!shadow || shadow.matchId !== message.matchId) return payload;
     return JSON.stringify({
       ...message,
@@ -61,7 +62,7 @@ function createBridge() {
       const currentPlayer = currentRoom?.players.get(ws.id);
       if (!currentRoom || !currentPlayer || currentPlayer !== player || currentPlayer.ws !== ws) return;
       if (!ACTIVE_STATES.has(currentRoom.state) || message.matchId !== currentRoom.matchId) return;
-      runtime.accept({ player: currentPlayer, room: currentRoom, message });
+      shadowRuntimeService.accept({ player: currentPlayer, room: currentRoom, message });
     };
 
     const originalSend = ws.send;
@@ -92,11 +93,11 @@ function createBridge() {
   function tick() {
     if (!core || stopped) return;
     scan();
-    runtime.tick(core.rooms);
+    shadowRuntimeService.tick(core.rooms);
   }
 
   function logMetrics() {
-    const metrics = runtime.metrics();
+    const metrics = shadowRuntimeService.metrics();
     if (!metrics.accepted && !Object.values(metrics.rejected).some(Boolean)) return;
     process.stdout.write(
       `${JSON.stringify({
@@ -139,7 +140,14 @@ function createBridge() {
     return true;
   }
 
-  return { runtime, start, stop, scan, attachedCount: () => attached.size };
+  return {
+    runtime,
+    runtimeService: shadowRuntimeService,
+    start,
+    stop,
+    scan,
+    attachedCount: () => attached.size
+  };
 }
 
 const bridge = globalThis[BRIDGE_KEY] || createBridge();

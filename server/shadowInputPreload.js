@@ -100,12 +100,17 @@ function createBridge() {
 
       // prependListener places this probe before the core socket listener. It can therefore
       // exercise the same authority selector with a projected legacy outcome before core mutates
-      // player.checkpoint/player.finished. The result is intentionally ignored in this PR.
-      authorityBoundaryProbe.observe({
-        message,
-        room: current.room,
-        player: current.player
-      });
+      // player.checkpoint/player.finished. The result is intentionally ignored in this PR, and an
+      // audit failure must never prevent the legacy core listener from processing the message.
+      try {
+        authorityBoundaryProbe.observe({
+          message,
+          room: current.room,
+          player: current.player
+        });
+      } catch {
+        // Diagnostic-only migration seam: fail open to the unchanged legacy core path.
+      }
     };
 
     const listener = raw => {

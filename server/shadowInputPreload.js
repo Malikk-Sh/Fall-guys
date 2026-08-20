@@ -37,8 +37,9 @@ function createBridge() {
     if (!shadow || shadow.matchId !== message.matchId) return payload;
     return JSON.stringify({
       ...message,
-      serverTick: runtime.serverTick,
-      lastProcessedInput: shadow.lastProcessedInput
+      serverTick: shadow.lastServerTick >= 0 ? shadow.lastServerTick : runtime.serverTick,
+      lastProcessedInput: shadow.lastProcessedInput,
+      shadowPlayerState: shadow.state
     });
   }
 

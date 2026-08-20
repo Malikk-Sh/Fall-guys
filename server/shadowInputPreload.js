@@ -41,12 +41,6 @@ function createBridge() {
 
     const current = currentPlayerFor(player, ws);
     if (!current) return;
-    authorityService.observeOutcomePayload({
-      payload,
-      room: current.room,
-      player: current.player,
-      runtimeService: shadowRuntimeService
-    });
     try {
       authorityBoundaryVerification.observeOutcomePayload({
         payload,
@@ -55,6 +49,16 @@ function createBridge() {
       });
     } catch {
       // Verification is diagnostic-only and must never block the actual finish payload.
+    }
+    try {
+      authorityService.observeOutcomePayload({
+        payload,
+        room: current.room,
+        player: current.player,
+        runtimeService: shadowRuntimeService
+      });
+    } catch {
+      // Readiness/probe diagnostics must fail open to the already-produced core finish outcome.
     }
   }
 
@@ -157,12 +161,6 @@ function createBridge() {
       if (message.sequence !== current.player.lastSequence) return;
       if (message.sequence <= lastObservedLegacySequence) return;
       lastObservedLegacySequence = message.sequence;
-      authorityService.observeAcceptedState({
-        message,
-        room: current.room,
-        player: current.player,
-        runtimeService: shadowRuntimeService
-      });
       try {
         authorityBoundaryVerification.observeAcceptedState({
           message,
@@ -171,6 +169,16 @@ function createBridge() {
         });
       } catch {
         // Post-core verification must not turn diagnostics into a transport failure.
+      }
+      try {
+        authorityService.observeAcceptedState({
+          message,
+          room: current.room,
+          player: current.player,
+          runtimeService: shadowRuntimeService
+        });
+      } catch {
+        // Readiness/probe diagnostics remain fail-open to the accepted legacy state.
       }
     };
 
@@ -212,8 +220,8 @@ function createBridge() {
   function logMetrics() {
     const metrics = shadowRuntimeService.metrics();
     const authorityBoundary = authorityBoundaryProbe.metrics();
-    const authorityBoundaryVerificationMetrics = authorityBoundaryVerification.metrics();
-    const { coreProgress, authorityReadiness, authorityProbe } = authorityService.metrics();
+    const { coreProgress, authorityVerification, authorityReadiness, authorityProbe } =
+      authorityService.metrics();
     const hasSimulationTraffic = metrics.accepted || Object.values(metrics.rejected).some(Boolean);
     if (!hasSimulationTraffic && !coreProgress.boundarySamples && !authorityBoundary.samples) return;
     process.stdout.write(
@@ -226,7 +234,7 @@ function createBridge() {
         authorityReadiness,
         authorityProbe,
         authorityBoundary,
-        authorityBoundaryVerification: authorityBoundaryVerificationMetrics
+        authorityBoundaryVerification: authorityVerification
       })}\n`
     );
   }

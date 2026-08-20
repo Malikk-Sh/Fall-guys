@@ -12,12 +12,7 @@ export function normalizeMovementAuthoritySource(value) {
 }
 
 function finiteVector(value) {
-  return (
-    !!value &&
-    Number.isFinite(value.x) &&
-    Number.isFinite(value.y) &&
-    Number.isFinite(value.z)
-  );
+  return !!value && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z);
 }
 
 function validPlayer(player) {
@@ -96,11 +91,7 @@ function applyHardMotionState(player, state) {
   player.gliding = state.gliding === true;
 }
 
-export function applyReconciliationProposal(
-  player,
-  proposal,
-  { movementAuthoritySource = null } = {}
-) {
+export function applyReconciliationProposal(player, proposal, { movementAuthoritySource = null } = {}) {
   const source = normalizeMovementAuthoritySource(movementAuthoritySource);
   if (source !== 'shadow') return noApplication('movement-authority-not-shadow');
   if (!validPlayer(player)) return noApplication('invalid-player');

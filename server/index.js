@@ -7,6 +7,8 @@ const { WebSocketServer, WebSocket } = require('ws');
 const { EVENT_LOOP_WINDOW_MS, createEventLoopLoad } = require('./eventLoopLoad');
 const { createEventCounters, trackEvent } = require('./productEvents');
 const { installSpaFallback, installStaticShell } = require('./httpAssets');
+const { installLegacyAccountRoutes } = require('./legacyAccountRoutes');
+const { installLeaderboardRoutes } = require('./leaderboardRoutes');
 
 const {
   PLAYER_COLORS,
@@ -43,7 +45,7 @@ const {
 const { validateMessage, RateLimiter, ViolationTracker } = require('../shared/validation.js');
 const { coopSpec, coopSpawnFor, COOP_CHAPTER_IDS } = require('../shared/coopChapters.js');
 const { validateCoopEvent, markDowned, autoRevive, coopComplete } = require('./coopRules');
-const { VerifiedLeaderboard, VERIFICATION_VERSION } = require('./verifiedLeaderboard');
+const { VerifiedLeaderboard } = require('./verifiedLeaderboard');
 const { openDatabase } = require('./db');
 const { migrateDatabase } = require('./migrations');
 const { Accounts } = require('./accounts');
@@ -248,163 +250,16 @@ app.get('/health/ready', (_req, res) => {
   res.status(ready ? 200 : 503).json({ ok: ready, ...health() });
 });
 
-app.get('/leaderboard', (req, res) => {
-  const seedText = String(req.query.seed || '');
-  const seed = Number(seedText);
-  const difficulty = safeDifficulty(req.query.difficulty);
-  if (!/^\d{1,10}$/.test(seedText) || !Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff)
-    return res.status(400).json({ ok: false, error: 'invalid-seed' });
-  // Идентификатор нужен, чтобы посчитать место игрока и отставание. Он же помечает его строку в
-  // выдаче. Приходит параметром запроса, а не заголовком: страница лобби обновляет таблицу обычным
-  // fetch, и лишний слой тут ничего не даёт.
-  const playerId = typeof req.query.playerId === 'string' ? req.query.playerId.slice(0, 64) : null;
-  const key = courseKeyFor(GAME_MODE.RACE, { seed, difficulty });
-  res.setHeader('Cache-Control', 'no-store');
-  return res.json({
-    ok: true,
-    mode: GAME_MODE.RACE,
-    seed: seed >>> 0,
-    difficulty,
-    verificationVersion: VERIFICATION_VERSION,
-    entries: verifiedLeaderboard.get(GAME_MODE.RACE, key, req.query.limit, playerId),
-    // null, если игрок эту трассу ещё не проходил, — отдельно от entries, потому что его строка
-    // может быть далеко за пределами показанной десятки.
-    standing: verifiedLeaderboard.standing(GAME_MODE.RACE, key, playerId)
-  });
-});
+// Таблицы рекордов зависят только от проверенного лидерборда и разбора параметров запроса.
+installLeaderboardRoutes(app, { verifiedLeaderboard });
 
-// Таблица кооперативных глав.
-//
-// Отдельным адресом, а не параметром к /leaderboard: у гонки трасса задаётся сидом и сложностью,
-// у главы — идентификатором, и склеивать два разных набора параметров в один маршрут значило бы
-// проверять их вперемешку.
-//
-// Время и движение здесь проверяет сервер. Для рукотворных глав используется отдельный
-// CoopMovementAudit: он читает ту же data-driven разметку, что строит клиент, и проверяет
-// систематическую скорость, опоры, высоту, checkpoint regions и физические минимумы, сохраняя
-// узкие исключения только для серверно подтверждённых механик.
-app.get('/leaderboard/coop', (req, res) => {
-  const chapterId = typeof req.query.chapter === 'string' ? req.query.chapter : '';
-  if (!COOP_CHAPTER_IDS.includes(chapterId))
-    return res.status(400).json({ ok: false, error: 'invalid-chapter' });
-  const playerId = typeof req.query.playerId === 'string' ? req.query.playerId.slice(0, 64) : null;
-  const key = courseKeyFor(GAME_MODE.COOP, { chapterId });
-  res.setHeader('Cache-Control', 'no-store');
-  return res.json({
-    ok: true,
-    mode: GAME_MODE.COOP,
-    chapter: chapterId,
-    movementVerified: true,
-    verificationVersion: VERIFICATION_VERSION,
-    entries: verifiedLeaderboard.get(GAME_MODE.COOP, key, req.query.limit, playerId),
-    standing: verifiedLeaderboard.standing(GAME_MODE.COOP, key, playerId)
-  });
-});
-
-// ---------------------------------------------------------------------------------------------
-// Аккаунты.
-//
-// Разговор идёт по HTTP, а не по WebSocket, сознательно: одиночный забег сокет вообще не открывает,
-// а рекорд после него сохранить надо. Заводить ради этого соединение значило бы держать его ради
-// одного сообщения.
-//
-// Код восстановления присылается с каждым запросом вместо серверной сессии. Отдельная таблица
-// сессий здесь ничего не добавила бы: код и так хранится у игрока, живёт долго и передаётся по тому
-// же TLS, что и любая сессия.
-
-// Разбор тела с жёстким потолком: тут ждут короткий JSON, и принимать мегабайты незачем.
-const accountJson = express.json({ limit: '2kb' });
-
-// Ограничители по адресу, отдельные от комнатных.
-//
-// У создания аккаунта и у входа разные опасности: первое спамят, второе перебирают. Общий счётчик
-// означал бы, что спам создания закрывает вход честному игроку с того же адреса — а за NAT это
-// целый дом.
-const HTTP_WINDOW_MS = 10 * 60 * 1000;
-const httpLimits = {
-  create: [20, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })],
-  login: [40, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })],
-  record: [200, new BoundedIpRateLimiter({ windowMs: HTTP_WINDOW_MS })]
-};
-
-function httpRateLimited(kind, ip) {
-  if (!ip) return false;
-  const [max, limiter] = httpLimits[kind];
-  return limiter.limited(ip, max);
-}
-
-// Личные рекорды отдаются вместе с аккаунтом: клиенту они нужны сразу после входа, чтобы показать
-// рекорд трассы в меню, и отдельный запрос за ними был бы лишним кругом.
-const accountPayload = account => ({
-  ok: true,
-  account: { id: account.id, name: account.name },
-  records: accounts.records(account.id),
-  progress: accounts.progress(account.id)
-});
-
-function legacySanction(account) {
-  const item = account?.id ? accountAccessPolicy.sanction(account.id) : null;
-  if (!item) return null;
-  return {
-    reason: String(item.reason || 'other'),
-    expiresAt: item.expiresAt == null ? null : Number(item.expiresAt),
-    permanent: Boolean(item.permanent)
-  };
-}
-
-function rejectSanctionedLegacy(res, account) {
-  const sanction = legacySanction(account);
-  if (!sanction) return false;
-  res.setHeader('Cache-Control', 'no-store');
-  res.status(403).json({ ok: false, error: 'account-sanctioned', sanction });
-  return true;
-}
-
-app.post('/account', accountJson, (req, res) => {
-  if (httpRateLimited('create', clientIp(req))) {
-    return res.status(429).json({ ok: false, error: 'rate-limited' });
-  }
-  const account = accounts.create(req.body?.name);
-  log('info', 'account_created', { accountId: account.id });
-  // Код возвращается ровно здесь и больше нигде: на сервере остаётся только его хеш.
-  return res.status(201).json({ ...accountPayload(account), secret: account.secret });
-});
-
-app.post('/account/login', accountJson, (req, res) => {
-  if (httpRateLimited('login', clientIp(req))) {
-    return res.status(429).json({ ok: false, error: 'rate-limited' });
-  }
-  const account = accounts.login(req.body?.secret);
-  // 404, а не 403: «такого аккаунта нет» и «код неверный» — для игрока одно и то же событие, и
-  // различать их вслух значило бы подсказывать перебирающему, что он угадал половину.
-  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
-  if (rejectSanctionedLegacy(res, account)) return undefined;
-  return res.json(accountPayload(account));
-});
-
-app.post('/account/name', accountJson, (req, res) => {
-  const account = accounts.login(req.body?.secret);
-  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
-  if (rejectSanctionedLegacy(res, account)) return undefined;
-  const name = accounts.rename(account.id, req.body?.name);
-  return res.json({ ok: true, account: { id: account.id, name } });
-});
-
-app.post('/account/record', accountJson, (req, res) => {
-  if (httpRateLimited('record', clientIp(req))) {
-    return res.status(429).json({ ok: false, error: 'rate-limited' });
-  }
-  const account = accounts.login(req.body?.secret);
-  if (!account) return res.status(404).json({ ok: false, error: 'unknown-code' });
-  if (rejectSanctionedLegacy(res, account)) return undefined;
-  const saved = accounts.saveRecord({
-    accountId: account.id,
-    mode: req.body?.mode,
-    courseKey: req.body?.courseKey,
-    timeMs: Number(req.body?.timeMs)
-  });
-  if (saved.reason) return res.status(400).json({ ok: false, error: saved.reason });
-  return res.json({ ok: true, ...saved });
+// Аккаунты по коду восстановления живут отдельным модулем: они не знают ни про комнаты, ни про
+// сокеты, а свои ограничители по адресу держат при себе.
+const legacyAccountRoutes = installLegacyAccountRoutes(app, {
+  accounts,
+  accountAccessPolicy,
+  clientIp,
+  log
 });
 
 installSpaFallback(app, { clientPath });
@@ -2836,7 +2691,7 @@ const heartbeatTimer = setInterval(() => {
     rooms.delete(code);
   }
   ipRoomOps.cleanup(now, { force: true });
-  for (const [, limiter] of Object.values(httpLimits)) limiter.cleanup(now, { force: true });
+  legacyAccountRoutes.cleanup(now);
 }, 15000);
 heartbeatTimer.unref();
 
@@ -2950,7 +2805,7 @@ function addRoomBots(room, options) {
 function resetRateLimits() {
   ipRoomOps.clear();
   ipConnections.clear();
-  for (const [, limiter] of Object.values(httpLimits)) limiter.clear();
+  legacyAccountRoutes.clear();
 }
 
 module.exports = {

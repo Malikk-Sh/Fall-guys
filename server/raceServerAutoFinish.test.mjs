@@ -85,7 +85,10 @@ test('validFinishedSnapshot requires same match and server-owned finish time', (
   const currentRoom = room();
   assert.equal(validFinishedSnapshot(finishedSnapshot(), currentRoom), true);
   assert.equal(validFinishedSnapshot(finishedSnapshot({ matchId: 'm2' }), currentRoom), false);
-  assert.equal(validFinishedSnapshot(finishedSnapshot({ progress: { finished: false } }), currentRoom), false);
+  assert.equal(
+    validFinishedSnapshot(finishedSnapshot({ progress: { finished: false } }), currentRoom),
+    false
+  );
   assert.equal(validFinishedSnapshot(finishedSnapshot({ finishServerTime: 999 }), currentRoom), false);
 });
 

@@ -1,3 +1,7 @@
+// Temporary migration bridge: captures raw controls before Player consumes one-shot actions and
+// mirrors them to the server shadow simulation without changing local gameplay authority.
+import '../net/clientInputShadowBridge.js';
+
 export const APP_STATE = Object.freeze({
   MENU: 'menu',
   LOBBY: 'lobby',

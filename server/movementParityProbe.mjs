@@ -57,10 +57,29 @@ function latchingInput(input) {
   return latched;
 }
 
-function runRace(runtime, { seed, difficulty, skill, index }) {
+function runRace({ seed, difficulty, skill, index }) {
+  // Свой runtime на забег, а не один на все восемнадцать.
+  //
+  // Метрики runtime — накопительные счётчики, и с общим экземпляром разделить забеги было нельзя:
+  // застрявший бот подмешивал свой хвост в общий итог, и «12 930 выборок» описывали не покрытие
+  // трассы, а время, проведённое у одного препятствия. Отдельный экземпляр даёт замер по забегу,
+  // который потом складывается ТОЧНО (все поля политики — счётчики).
+  //
+  // Заодно чинится утечка через сопоставление ударов: пары в `EventPairing` закрываются по
+  // времени, а серверный тик сквозной, поэтому незакрытое ожидание конца одного забега могло
+  // найти себе пару в начале следующего.
+  const runtime = new ShadowInputRuntime();
   const spec = createCourseSpec(seed, difficulty);
   const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
-  const bot = new RaceBot(course, { skill, seed, index });
+  // Устойчивость после удара приравнивается к живому клиенту, и это не настройка сложности.
+  //
+  // `RaceBot` по умолчанию раздаёт себе 0.86–0.98: сбитый бот почти не теряет управление, иначе он
+  // не доезжал бы до финиша. Живой клиент (`client/main.js`) не передаёт `knockdownControl` вовсе,
+  // то есть играет с нулём, и ровно ноль подставляет серверная симуляция. Пока бот бежал со своим
+  // значением, замер сравнивал во время каждого сбивания РАЗНЫЕ правила: бот рулил, а серверная
+  // копия лежала. Расхождение при этом накапливалось метрами и попадало в статистику как «дрейф
+  // физики», которым оно не было.
+  const bot = new RaceBot(course, { skill, seed, index, knockdownControl: 0 });
   const field = new BotField(course, [bot]);
   const latched = latchingInput(bot.input);
 
@@ -146,10 +165,71 @@ function runRace(runtime, { seed, difficulty, skill, index }) {
     skill,
     finished: bot.finished,
     seconds: frames * FIXED_DT,
-    respawns
+    respawns,
+    metrics: runtime.metrics().shadowGroundContact
   };
   field.dispose();
   return result;
+}
+
+// Точное сложение замеров по забегам.
+//
+// Все поля, по которым судит политика, — счётчики, поэтому складываются они без приближений:
+// суммы для количеств, взвешенное среднее по количеству для средних, максимум для максимумов, доли
+// превышения — обратно через счётчики. Квантили НЕ складываются: они живут в кольце последних 512
+// значений каждого забега, и общего кольца у них нет. Поэтому они здесь и не выводятся — политика
+// их всё равно не читает, по этой же причине.
+function poolMetrics(runs) {
+  const list = runs.map(run => run.metrics);
+  const sum = pick => list.reduce((total, m) => total + pick(m), 0);
+  const max = pick => list.reduce((best, m) => Math.max(best, pick(m)), 0);
+  const errorSum = pick => {
+    const count = sum(m => pick(m).count);
+    return {
+      count,
+      mean: count ? sum(m => pick(m).mean * pick(m).count) / count : 0,
+      max: max(m => pick(m).max),
+      overSoftRate: count ? sum(m => Math.round(pick(m).overSoftRate * pick(m).count)) / count : 0,
+      overHardRate: count ? sum(m => Math.round(pick(m).overHardRate * pick(m).count)) / count : 0
+    };
+  };
+
+  const matched = sum(m => m.hitParity.matched);
+  const serverOnly = sum(m => m.hitParity.serverOnly);
+  const clientOnly = sum(m => m.hitParity.clientOnly);
+  const decided = matched + serverOnly + clientOnly;
+
+  return {
+    runs: runs.length,
+    samples: sum(m => m.samples),
+    agreements: sum(m => m.agreements),
+    shadowGroundedOnly: sum(m => m.shadowGroundedOnly),
+    clientGroundedOnly: sum(m => m.clientGroundedOnly),
+    groundStateUnknown: sum(m => m.groundStateUnknown),
+    worldMissing: sum(m => m.worldMissing),
+    impulses: sum(m => m.impulses),
+    wallBounces: sum(m => m.wallBounces),
+    reanchors: sum(m => m.reanchors),
+    clientTeleports: sum(m => m.clientTeleports),
+    groundModel: {
+      samples: sum(m => m.groundModel.samples),
+      agreements: sum(m => m.groundModel.agreements),
+      serverGroundedOnly: sum(m => m.groundModel.serverGroundedOnly),
+      clientGroundedOnly: sum(m => m.groundModel.clientGroundedOnly),
+      dynamicSkipped: sum(m => m.groundModel.dynamicSkipped),
+      placedSkipped: sum(m => m.groundModel.placedSkipped)
+    },
+    heightError: errorSum(m => m.heightError),
+    freeTrajectoryError: errorSum(m => m.freeTrajectoryError),
+    hitParity: {
+      serverHits: sum(m => m.hitParity.serverHits),
+      clientHits: sum(m => m.hitParity.clientHits),
+      matched,
+      serverOnly,
+      clientOnly,
+      matchRate: decided ? matched / decided : 0
+    }
+  };
 }
 
 function pct(value) {
@@ -157,58 +237,90 @@ function pct(value) {
 }
 
 function main() {
-  const runtime = new ShadowInputRuntime();
   const runs = [];
   let index = 0;
 
   for (const seed of SEEDS) {
     for (const difficulty of DIFFICULTIES) {
       const skill = BOT_SKILL_IDS[index % BOT_SKILL_IDS.length];
-      runs.push(runRace(runtime, { seed, difficulty, skill, index }));
+      runs.push(runRace({ seed, difficulty, skill, index }));
       index += 1;
     }
   }
 
-  const metrics = runtime.metrics().shadowGroundContact;
-  const evaluation = evaluateMovementParity(metrics);
   const policy = DEFAULT_MOVEMENT_PARITY_POLICY;
-  const respawns = runs.reduce((sum, run) => sum + run.respawns, 0);
-  const unfinished = runs.filter(run => !run.finished);
+  const finished = runs.filter(run => run.finished);
+  const stalled = runs.filter(run => !run.finished);
 
   const lines = [
     '',
-    `Забегов: ${runs.length}, из них не дошли: ${unfinished.length}`,
-    `Возвратов на чекпоинт за все забеги: ${respawns}`,
+    `Забегов: ${runs.length}, дошли до финиша: ${finished.length}, застряли: ${stalled.length}`,
+    `Возвратов на чекпоинт за все забеги: ${runs.reduce((sum, run) => sum + run.respawns, 0)}`,
+    ''
+  ];
+
+  // Дошедшие и застрявшие забеги НЕ складываются в одно число.
+  //
+  // Без управления в сбивании часть ботов упирается в препятствие и стоит там до лимита в 200
+  // секунд. Такой хвост — это не покрытие трассы, а одна и та же геометрия, снятая тысячи раз, и
+  // в общем итоге он забивает всё остальное: он давал 60 % выборок и почти все односторонние
+  // удары. Числа по нему не выбрасываются — они выводятся отдельно и в оценку не идут.
+  //
+  // Цена такого разделения названа прямо ниже: дошедшие забеги — это те, где бот НЕ застрял, и
+  // выборка по ним смещена в лёгкую сторону.
+  lines.push(...section('Дошедшие до финиша (по ним и оценка)', finished, policy));
+  if (stalled.length) {
+    lines.push(...section('Застрявшие до лимита (в оценку не входят)', stalled, policy));
+  }
+
+  const evaluation = evaluateMovementParity(poolMetrics(finished), policy);
+  lines.push(
+    '─'.repeat(72),
+    `столкновения: ${evaluation.collisionParityVerified ? 'подтверждены' : 'НЕ подтверждены'}`,
+    `импульсы:     ${evaluation.obstacleParityVerified ? 'подтверждены' : 'НЕ подтверждены'}`,
+    `причины отказа: ${evaluation.reasons.length ? evaluation.reasons.join(', ') : '—'}`,
     '',
-    'Измерение shadowGroundContact',
+    'Замер сделан на ботах. Он уже живой игры и воротами движения не является.',
+    '',
+    'Оценка идёт по дошедшим забегам, и это тоже смещение: дошли ровно те, где бот не застрял.',
+    'Ни та, ни другая выборка порогов не калибрует — для этого нужен живой трафик.',
+    ''
+  );
+  process.stdout.write(`${lines.join('\n')}\n`);
+
+  return {
+    finished: poolMetrics(finished),
+    stalled: stalled.length ? poolMetrics(stalled) : null,
+    evaluation,
+    runs
+  };
+}
+
+function section(title, runs, policy) {
+  const metrics = poolMetrics(runs);
+  const model = metrics.groundModel;
+  const decided = metrics.hitParity.matched + metrics.hitParity.serverOnly + metrics.hitParity.clientOnly;
+  return [
+    `${title}: ${runs.length} забегов`,
     '─'.repeat(72),
     `выборок               ${metrics.samples}   (порог ≥ ${policy.minSamples})`,
     `мир не построен       ${metrics.worldMissing}   (порог ${policy.maxWorldMissingSamples})`,
     'Модель мира (опора в точке клиента) — от неё зависит паритет столкновений',
-    `  выборок             ${metrics.groundModel.samples}   (порог ≥ ${policy.minSamples})`,
-    `  согласие            ${pct(metrics.groundModel.agreementRate)}   (порог ≥ ${pct(policy.minGroundAgreementRate)})`,
-    `  сервер дал пол      ${metrics.groundModel.serverGroundedOnly}   (порог ${policy.maxShadowGroundedOnlySamples})`,
-    `  сервер потерял пол  ${metrics.groundModel.clientGroundedOnly}`,
-    `  подвижных пропущено ${metrics.groundModel.dynamicSkipped}   (только когда клиент не прислал courseTime)`,
-    `  после постановки    ${metrics.groundModel.placedSkipped}   (шага физики ещё не было)`,
-    '',
-    'Опора у свободной траектории (справочно: сюда входит дрейф)',
-    `  согласие            ${pct(metrics.agreementRate)}`,
-    `  сервер дал пол      ${metrics.shadowGroundedOnly}`,
-    `  сервер потерял пол  ${metrics.clientGroundedOnly}`,
+    `  выборок             ${model.samples}   (порог ≥ ${policy.minSamples})`,
+    `  согласие            ${pct(model.samples ? model.agreements / model.samples : 0)}   (порог ≥ ${pct(policy.minGroundAgreementRate)})`,
+    `  сервер дал пол      ${model.serverGroundedOnly}   (порог ${policy.maxShadowGroundedOnlySamples})`,
+    `  сервер потерял пол  ${model.clientGroundedOnly}`,
+    `  подвижных пропущено ${model.dynamicSkipped}   (только когда клиент не прислал courseTime)`,
+    `  после постановки    ${model.placedSkipped}   (шага физики ещё не было)`,
     `опора не наблюдаема   ${metrics.groundStateUnknown}   (dive/slam/knockdown — вне статистики)`,
     `высота стояния  сред. ${metrics.heightError.mean.toFixed(4)}   (порог ≤ ${policy.maxGroundHeightErrorMean})`,
-    `                 p95  ${metrics.heightError.p95.toFixed(4)}`,
     `                 макс ${metrics.heightError.max.toFixed(4)}   (порог ≤ ${policy.maxGroundHeightErrorMax})`,
     `траектория      сред. ${metrics.freeTrajectoryError.mean.toFixed(4)}   (справочно)`,
-    `                 p50  ${metrics.freeTrajectoryError.p50.toFixed(4)}   (справочно, по окну)`,
-    `                 p95  ${metrics.freeTrajectoryError.p95.toFixed(4)}   (справочно, по окну)`,
     `                 макс ${metrics.freeTrajectoryError.max.toFixed(4)}   (справочно)`,
     `  выше 0.3            ${pct(metrics.freeTrajectoryError.overSoftRate)}   (порог ≤ ${pct(policy.maxOverSoftRate)})`,
     `  выше 1.5            ${pct(metrics.freeTrajectoryError.overHardRate)}   (порог ≤ ${pct(policy.maxOverHardRate)})`,
     `  записей отрыва      ${metrics.freeTrajectoryError.count}`,
     `импульсов             ${metrics.impulses}   (порог ≥ ${policy.minImpulseSamples})`,
-    '',
     'Паритет попаданий',
     `  ударов у сервера    ${metrics.hitParity.serverHits}`,
     `  сбиваний у клиента  ${metrics.hitParity.clientHits}`,
@@ -216,22 +328,12 @@ function main() {
     `  сервер выдумал      ${metrics.hitParity.serverOnly}   (порог ${policy.maxServerOnlyHits})`,
     `  сервер прозевал     ${metrics.hitParity.clientOnly}`,
     `  доля совпадений     ${pct(metrics.hitParity.matchRate)}   (порог ≥ ${pct(policy.minHitMatchRate)})`,
-    `  решено событий      ${metrics.hitParity.matched + metrics.hitParity.serverOnly + metrics.hitParity.clientOnly}   (порог ≥ ${policy.minHitSamples})`,
-    '',
+    `  решено событий      ${decided}   (порог ≥ ${policy.minHitSamples})`,
     `отскоков от стен      ${metrics.wallBounces}`,
     `сбросов якоря         ${metrics.reanchors}`,
     `возвратов клиента     ${metrics.clientTeleports}`,
-    '─'.repeat(72),
-    `столкновения: ${evaluation.collisionParityVerified ? 'подтверждены' : 'НЕ подтверждены'}`,
-    `импульсы:     ${evaluation.obstacleParityVerified ? 'подтверждены' : 'НЕ подтверждены'}`,
-    `причины отказа: ${evaluation.reasons.length ? evaluation.reasons.join(', ') : '—'}`,
-    '',
-    'Замер сделан на ботах. Он уже живой игры и воротами движения не является.',
     ''
   ];
-  process.stdout.write(`${lines.join('\n')}\n`);
-
-  return { metrics, evaluation, runs };
 }
 
 main();

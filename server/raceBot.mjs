@@ -207,9 +207,13 @@ export class RaceBot {
   // та же, и держать её в одном экземпляре не оптимизация, а очевидное следствие этого факта.
   //
   // Двигает трассу не бот, а поле (BotField): общих часов на всех ровно одни. Подробности — там же.
-  constructor(course, { skill = 'steady', seed = 1, index = 0, name = null } = {}) {
+  constructor(course, { skill = 'steady', seed = 1, index = 0, name = null, knockdownControl = null } = {}) {
     this.skill = BOT_SKILLS[skill] || BOT_SKILLS.steady;
     this.index = index;
+    // Устойчивость после удара обычно разыгрывается по индексу (см. reset). Переопределяется она
+    // ровно в одном месте — в замере паритета движения, где бот обязан играть по правилам ЖИВОГО
+    // клиента, а не по своим. Для соперников в настоящем матче значение остаётся прежним.
+    this.knockdownControlOverride = Number.isFinite(knockdownControl) ? knockdownControl : null;
     this.name = name || NAMES[(seed + index * 7) % NAMES.length];
     this.course = course;
     this.baseSeed = seed * 2654435761 + index * 40503;
@@ -229,7 +233,7 @@ export class RaceBot {
     this.player?.dispose();
     // У ботов чуть разная устойчивость после удара: это не бонус к скорости, а небольшой
     // разброс реакции, чтобы одинаковый контакт не собирал трёх соперников в один строй.
-    const knockdownControl = Math.min(0.98, 0.86 + (this.index % 4) * 0.04);
+    const knockdownControl = this.knockdownControlOverride ?? Math.min(0.98, 0.86 + (this.index % 4) * 0.04);
     this.player = new Player(this.scene, this.course, NO_EFFECTS, { knockdownControl });
     this.random = seededRandom(this.baseSeed + run * 0x9e3779b1);
     this.elapsed = 0;

@@ -905,7 +905,7 @@ export class CoopCourse extends CourseBuilder {
           tile.timer = tile.respawn;
           tile.platform.disabled = true;
           tile.platform.mesh.visible = false;
-          tile.platform.mesh.position.y = tile.baseY;
+          this.movePlatform(tile.platform, 'y', tile.baseY);
           sfx?.collapse(tile.platform.mesh.position);
         } else {
           // Возвращается: иначе идущий вторым остался бы без пола навсегда.
@@ -916,14 +916,14 @@ export class CoopCourse extends CourseBuilder {
         }
       } else if (!tile.fallen) {
         // Дрожит перед обрушением — то же предупреждение, что и мигание пресса.
-        tile.platform.mesh.position.y = tile.baseY + Math.sin(tile.timer * 40) * 0.06;
+        this.movePlatform(tile.platform, 'y', tile.baseY + Math.sin(tile.timer * 40) * 0.06);
       }
     }
 
     for (const span of this.spans.values()) {
       if (!span.active) continue;
       // Лёгкое подрагивание активного пролёта: он держится «на честном слове» напарника.
-      span.platform.mesh.position.y = Math.sin(elapsed * 5 + span.z) * 0.03;
+      this.movePlatform(span.platform, 'y', Math.sin(elapsed * 5 + span.z) * 0.03);
     }
   }
 
@@ -1013,14 +1013,13 @@ export class CoopCourse extends CourseBuilder {
 
     for (const tile of this.tiles) {
       if (tile.fallen || tile.timer !== 0) continue;
-      const mesh = tile.platform.mesh;
-      if (Math.abs(position.x - mesh.position.x) > tile.platform.w / 2) continue;
-      if (Math.abs(position.z - mesh.position.z) > tile.platform.d / 2) continue;
+      if (Math.abs(position.x - tile.platform.x) > tile.platform.w / 2) continue;
+      if (Math.abs(position.z - tile.platform.z) > tile.platform.d / 2) continue;
       if (Math.abs(position.y - PLAYER_FOOT - 0.5) > 0.6) continue;
       tile.timer = tile.delay;
       // Треск — то же предупреждение, что и мигание пресса, только его слышно, даже когда
       // смотришь на напарника.
-      sfx?.crack(mesh.position);
+      sfx?.crack(tile.platform.mesh.position);
     }
   }
 

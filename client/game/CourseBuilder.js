@@ -17,6 +17,17 @@ export { PLAYER_FOOT } from './PlayerDimensions.js';
 // иначе каждый шаг физики на статичной платформе выделял бы новый Vector3.
 const ZERO_DELTA = Object.freeze(new THREE.Vector3());
 
+// Единственный способ сдвинуть опору.
+//
+// Источник истины — плоская запись, меш её повторяет. Раньше было наоборот, и опора существовала
+// только там, где есть Three.js: серверная симуляция не могла бы спросить про пол, не построив
+// сцену. Двигать меш напрямую теперь нельзя — запись отстанет, и игрок будет стоять на том, чего
+// на экране уже нет.
+export function movePlatform(platform, axis, value) {
+  platform[axis] = value;
+  platform.mesh.position[axis] = value;
+}
+
 export class CourseBuilder {
   constructor(scene, { quality = 'high' } = {}) {
     this.scene = scene;
@@ -26,9 +37,6 @@ export class CourseBuilder {
 
     // Опоры, на которые можно встать.
     this.platforms = [];
-    // Плоское описание тех же опор для общей проверки пола. Живёт ровно столько же, сколько
-    // platforms, и обновляется на месте — см. syncColliders().
-    this.colliders = [];
     // Препятствия, реагирующие на касание.
     this.obstacles = [];
     // Платформы с собственным движением: их сдвиг за шаг переносит стоящего игрока.
@@ -95,11 +103,15 @@ export class CourseBuilder {
     if (collider) {
       const platform = {
         mesh,
+        x,
+        y,
+        z,
         w,
         h,
         d,
+        r: 0,
         type: 'box',
-        lastPosition: mesh.position.clone(),
+        disabled: false,
         delta: new THREE.Vector3()
       };
       this.platforms.push(platform);
@@ -123,12 +135,15 @@ export class CourseBuilder {
     if (collider) {
       const platform = {
         mesh,
+        x,
+        y,
+        z,
         w: r * 1.7,
         h,
         d: r * 1.7,
         r,
         type: 'cylinder',
-        lastPosition: mesh.position.clone(),
+        disabled: false,
         delta: new THREE.Vector3()
       };
       this.platforms.push(platform);
@@ -140,40 +155,17 @@ export class CourseBuilder {
   // Поиск опоры под ногами.
   //
   // Сама проверка живёт в shared/courseCollision.js: это чистая арифметика над коробками и
-  // цилиндрами, и серверная симуляция обязана спрашивать про пол по той же формуле. Здесь остаётся
-  // только перенос текущих позиций мешей в плоское описание опор — по одному объекту на платформу,
-  // созданному один раз, чтобы физический шаг ничего не выделял.
+  // цилиндрами, и серверная симуляция обязана спрашивать про пол по той же формуле. Платформа сама
+  // и есть плоская запись опоры — меш висит на ней дополнительным полем и в проверку не входит.
   surfaceAt(position, previousY, velocityY) {
-    const colliders = this.syncColliders();
-    const index = supportIndexAt(colliders, position, previousY, velocityY, PLAYER_FOOT);
+    const index = supportIndexAt(this.platforms, position, previousY, velocityY, PLAYER_FOOT);
     if (index < 0) return null;
     const platform = this.platforms[index];
-    return { y: supportTop(colliders[index]), platform, delta: platform.delta || ZERO_DELTA };
+    return { y: supportTop(platform), platform, delta: platform.delta || ZERO_DELTA };
   }
 
-  // Плоское описание опор, отражающее текущее положение мешей.
-  syncColliders() {
-    const colliders = this.colliders;
-    colliders.length = this.platforms.length;
-    for (let index = 0; index < this.platforms.length; index++) {
-      const platform = this.platforms[index];
-      const meshPosition = platform.mesh.position;
-      let collider = colliders[index];
-      if (!collider) {
-        collider = { x: 0, y: 0, z: 0, w: 0, h: 0, d: 0, r: 0, type: 'box', disabled: false };
-        colliders[index] = collider;
-      }
-      collider.x = meshPosition.x;
-      collider.y = meshPosition.y;
-      collider.z = meshPosition.z;
-      collider.w = platform.w;
-      collider.h = platform.h;
-      collider.d = platform.d;
-      collider.r = platform.r || 0;
-      collider.type = platform.type;
-      collider.disabled = platform.disabled === true;
-    }
-    return colliders;
+  movePlatform(platform, axis, value) {
+    movePlatform(platform, axis, value);
   }
 
   // Возвращает нормаль специальной стены, пересечённой за текущий физический шаг.
@@ -197,13 +189,17 @@ export class CourseBuilder {
   }
 
   // Сдвиг движущихся платформ за шаг. Игрок, стоящий сверху, получает этот сдвиг в surfaceAt.
+  //
+  // Ход задаётся данными — ось, центр, размах, скорость и фаза, — поэтому положение любой такой
+  // опоры в любой момент считается без сцены и без истории.
   updateDynamic(elapsed) {
     for (const platform of this.dynamic) {
-      platform.lastPosition.copy(platform.mesh.position);
-      const m = platform.motion;
-      const value = m.origin + Math.sin(elapsed * m.speed + m.phase) * m.range;
-      platform.mesh.position[m.axis] = value;
-      platform.delta.copy(platform.mesh.position).sub(platform.lastPosition);
+      const motion = platform.motion;
+      const previous = platform[motion.axis];
+      const value = motion.origin + Math.sin(elapsed * motion.speed + motion.phase) * motion.range;
+      this.movePlatform(platform, motion.axis, value);
+      platform.delta.set(0, 0, 0);
+      platform.delta[motion.axis] = value - previous;
     }
   }
 
@@ -216,7 +212,6 @@ export class CourseBuilder {
     for (const material of this.materials.values()) material.dispose();
     this.materials.clear();
     this.platforms.length = 0;
-    this.colliders.length = 0;
     this.obstacles.length = 0;
     this.dynamic.length = 0;
     this.cameraMeshes.length = 0;

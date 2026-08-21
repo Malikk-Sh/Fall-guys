@@ -165,14 +165,17 @@ export class Course extends CourseBuilder {
     // Ступица — чистая декорация, коллайдера у неё нет: столкновение считается по самой балке.
     this.cylinder({ x, y: y + 0.2, z, r: 0.62, h: 0.9, color: COLORS.purpleDark });
     this.group.add(pivot);
-    this.obstacles.push({
+    this.registerObstacle({
       type: 'spinner',
       mesh: pivot,
+      x,
+      y,
+      z,
       length,
       width: beamWidth,
       speed,
       phase,
-      center: new THREE.Vector3(x, y, z),
+      angle: 0,
       height: 0.7
     });
   }
@@ -190,13 +193,22 @@ export class Course extends CourseBuilder {
     ring.position.set(x, y + 0.2, z);
     ring.castShadow = true;
     this.group.add(ring);
-    this.obstacles.push({ type: 'bumper', mesh, radius: hitRadius, phase: this.rng() * 6.28 });
+    this.registerObstacle({
+      type: 'bumper',
+      mesh,
+      x,
+      y,
+      z,
+      radius: hitRadius,
+      color,
+      phase: this.rng() * 6.28
+    });
   }
   addSpring(x, y, z, radius) {
     radius *= 1.08;
     const pad = this.cylinder({ x, y, z, r: radius, h: 0.25, color: COLORS.yellow });
     const inner = this.cylinder({ x, y: y + 0.14, z, r: radius * 0.66, h: 0.05, color: COLORS.pink });
-    this.obstacles.push({ type: 'spring', mesh: pad, radius, inner, phase: this.rng() * 6.28 });
+    this.registerObstacle({ type: 'spring', mesh: pad, x, y, z, radius, inner, phase: this.rng() * 6.28 });
   }
   addFinish() {
     const end = -18 * this.spec.segmentCount;
@@ -323,8 +335,11 @@ export class Course extends CourseBuilder {
         obstacle.angle = elapsed * obstacle.speed + obstacle.phase;
         obstacle.mesh.rotation.y = obstacle.angle;
       } else if (obstacle.type === 'puncher') {
-        obstacle.mesh.position.x =
-          obstacle.originX + Math.sin(elapsed * obstacle.speed + obstacle.phase) * obstacle.range;
+        this.moveObstacle(
+          obstacle,
+          'x',
+          obstacle.originX + Math.sin(elapsed * obstacle.speed + obstacle.phase) * obstacle.range
+        );
       } else if (obstacle.type === 'bumper') {
         obstacle.mesh.scale.y = 1 + Math.sin(elapsed * 2.2 + obstacle.phase) * 0.045;
       } else if (obstacle.type === 'spring') {
@@ -351,14 +366,14 @@ export class Course extends CourseBuilder {
       knockback = this.spec.modifier?.knockback || 1,
       limpHitCooldown = player.knockdownTimer > 0 ? 1.5 : 0;
     for (const o of this.obstacles) {
-      const key = o.mesh.uuid,
+      const key = o.id,
         last = player.hitTimes.get(key) || 0;
       if (o.type === 'spring') {
-        const dx = pos.x - o.mesh.position.x,
-          dz = pos.z - o.mesh.position.z;
+        const dx = pos.x - o.x,
+          dz = pos.z - o.z;
         if (
           Math.hypot(dx, dz) < o.radius * 0.82 &&
-          Math.abs(pos.y - PLAYER_FOOT - (o.mesh.position.y + 0.13)) < 0.38 &&
+          Math.abs(pos.y - PLAYER_FOOT - (o.y + 0.13)) < 0.38 &&
           player.velocity.y <= 1 &&
           now - last > 0.35
         ) {
@@ -373,26 +388,22 @@ export class Course extends CourseBuilder {
         continue;
       }
       if (o.type === 'bumper') {
-        const dx = pos.x - o.mesh.position.x,
-          dz = pos.z - o.mesh.position.z,
+        const dx = pos.x - o.x,
+          dz = pos.z - o.z,
           dist = Math.hypot(dx, dz) || 0.01,
           min = o.radius + radius;
-        if (
-          dist < min &&
-          Math.abs(pos.y - o.mesh.position.y) < 1.55 &&
-          now - last > Math.max(0.28, limpHitCooldown)
-        ) {
+        if (dist < min && Math.abs(pos.y - o.y) < 1.55 && now - last > Math.max(0.28, limpHitCooldown)) {
           const nx = dx / dist,
             nz = dz / dist;
-          pos.x = o.mesh.position.x + nx * min;
-          pos.z = o.mesh.position.z + nz * min;
+          pos.x = o.x + nx * min;
+          pos.z = o.z + nz * min;
           player.velocity.x = nx * 10 * knockback;
           player.velocity.z = nz * 10 * knockback;
           player.velocity.y = Math.max(6.2 * knockback, player.velocity.y);
           player.grounded = false;
           player.hitTimes.set(key, now);
           player.hits++;
-          effects.burst(pos, o.mesh.material.color.getHex(), 16, 1.15);
+          effects.burst(pos, o.color, 16, 1.15);
           sfx?.bumper();
           player.impact = Math.max(player.impact, 0.4);
           player.knockDown?.(0.4);
@@ -400,8 +411,8 @@ export class Course extends CourseBuilder {
         continue;
       }
       if (o.type === 'spinner') {
-        const dx = pos.x - o.center.x,
-          dz = pos.z - o.center.z,
+        const dx = pos.x - o.x,
+          dz = pos.z - o.z,
           cos = Math.cos(o.angle),
           sin = Math.sin(o.angle),
           along = dx * cos - dz * sin,
@@ -409,7 +420,7 @@ export class Course extends CourseBuilder {
         if (
           Math.abs(along) < o.length / 2 + radius &&
           Math.abs(cross) < o.width / 2 + radius &&
-          Math.abs(pos.y - o.center.y) < 1.05 &&
+          Math.abs(pos.y - o.y) < 1.05 &&
           now - last > Math.max(0.32, limpHitCooldown)
         ) {
           const side = Math.sign(cross) || 1,
@@ -432,12 +443,12 @@ export class Course extends CourseBuilder {
         continue;
       }
       if (o.type === 'puncher') {
-        const dx = pos.x - o.mesh.position.x,
-          dz = pos.z - o.mesh.position.z;
+        const dx = pos.x - o.x,
+          dz = pos.z - o.z;
         if (
           Math.abs(dx) < o.w / 2 + radius &&
           Math.abs(dz) < o.d / 2 + radius &&
-          Math.abs(pos.y - o.mesh.position.y) < 1.5 &&
+          Math.abs(pos.y - o.y) < 1.5 &&
           now - last > Math.max(0.34, limpHitCooldown)
         ) {
           const dir = Math.sign(dx) || Math.sign(Math.cos(now * o.speed + o.phase)) || 1;

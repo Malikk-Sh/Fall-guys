@@ -57,14 +57,17 @@ test('coop downed остаётся отдельным состоянием от 
 // не геометрия попадания, а то, кого Course.interact пускает во внутренность условия.
 function alwaysTouching() {
   const course = new Course(new THREE.Scene(), courseSpec(3, 'easy'), { quality: 'low' });
+  // Препятствие описано числами, а не мешем: физика удара читает саму запись, поэтому подделывать
+  // сцену тут больше нечем и незачем.
   course.obstacles = [
     {
+      id: 'единственный-бампер',
       type: 'bumper',
-      mesh: {
-        uuid: 'единственный-бампер',
-        position: new THREE.Vector3(0, 0.9, 0),
-        material: { color: { getHex: () => 0 } }
-      },
+      mesh: { position: new THREE.Vector3(0, 0.9, 0) },
+      x: 0,
+      y: 0.9,
+      z: 0,
+      color: 0,
       radius: 40
     }
   ];

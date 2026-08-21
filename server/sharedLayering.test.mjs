@@ -47,6 +47,28 @@ test('общий код не тянет за собой сервер и не т�
   }
 });
 
+// Этот набор идёт без загрузчика клиента, то есть без подмены путей и без Three.js. Если бы общая
+// геометрия хоть где-то тянула сцену, импорт ниже просто не разрешился бы.
+test('трасса собирается без браузера и без Three.js', async () => {
+  const { createCourseSpec } = await import('../shared/courseSpec.js');
+  const { recordRaceCourse } = await import('../shared/courseColliderRecorder.js');
+  const { supportIndexAt, supportTop } = await import('../shared/courseCollision.js');
+
+  const recorded = recordRaceCourse(createCourseSpec(20260821, 'chaos'));
+  assert.ok(recorded.platforms.length > 0, 'у трассы обязан быть пол');
+  assert.ok(recorded.obstacles.length > 0, 'у трассы обязаны быть препятствия');
+  for (const platform of recorded.platforms) {
+    assert.ok(Number.isFinite(platform.x) && Number.isFinite(platform.y) && Number.isFinite(platform.z));
+  }
+
+  // И по этой записи уже отвечает общий поиск опоры — то, чего серверной симуляции не хватало.
+  const start = recorded.platforms[0];
+  const foot = 0.384;
+  const y = supportTop(start) + foot;
+  const index = supportIndexAt(recorded.platforms, { x: start.x, y, z: start.z }, y, 0, foot);
+  assert.ok(index >= 0, 'сервер обязан находить пол на стартовой площадке');
+});
+
 test('расстановка сегментов трассы лежит в общем коде', () => {
   const names = sharedModules().map(item => item.name);
   assert.ok(names.includes('courseSegments.js'), 'сервер обязан иметь доступ к расстановке сегментов');

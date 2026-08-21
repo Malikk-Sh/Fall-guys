@@ -184,6 +184,34 @@ export class CourseBuilder {
     moveObstacle(obstacle, axis, value);
   }
 
+  // Балка вертушки. Расстановка знает про неё только то, что у объекта поворачивается rotation.y —
+  // сам поворот считается по данным препятствия, а меш его повторяет.
+  spinnerBeam({ x = 0, y = 0, z = 0, length = 1, width = 1 } = {}) {
+    const pivot = new THREE.Group();
+    pivot.position.set(x, y, z);
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(length, 0.48, width),
+      this.material({ color: COLORS.yellow, roughness: 0.24 })
+    );
+    bar.castShadow = true;
+    pivot.add(bar);
+    this.group.add(pivot);
+    return pivot;
+  }
+
+  // Кольцо бампера — чистая декорация, в физике не участвует.
+  ringDecor({ x = 0, y = 0, z = 0, radius = 1 } = {}) {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(radius, 0.095, 6, 16),
+      this.material({ color: 0xffffff, roughness: 0.2 })
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(x, y, z);
+    ring.castShadow = true;
+    this.group.add(ring);
+    return ring;
+  }
+
   registerObstacle(record) {
     const obstacle = { id: `obstacle-${nextObstacleId++}`, ...record };
     this.obstacles.push(obstacle);

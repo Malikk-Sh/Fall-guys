@@ -68,9 +68,12 @@ function puncher(course, ctx, { x, z, range, speed, phase }) {
     collider: false
   }).mesh;
   mesh.scale.z = 0.86;
-  course.obstacles.push({
+  course.registerObstacle({
     type: 'puncher',
     mesh,
+    x,
+    y: 1,
+    z,
     originX: x,
     range,
     speed,

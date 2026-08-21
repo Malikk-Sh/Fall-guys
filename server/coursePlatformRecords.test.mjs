@@ -87,6 +87,51 @@ test('общая проверка опоры находит пол по запи
   }
 });
 
+test('каждое препятствие описано числами и опознаётся без меша', () => {
+  const course = new Course(new THREE.Scene(), courseSpec(20260821, 'chaos'), { quality: 'low' });
+  try {
+    assert.ok(course.obstacles.length > 0);
+    const ids = new Set();
+    for (const obstacle of course.obstacles) {
+      assert.ok(['spinner', 'bumper', 'spring', 'puncher'].includes(obstacle.type));
+      assert.equal(typeof obstacle.id, 'string');
+      assert.equal(ids.has(obstacle.id), false, 'перезарядка удара держится на уникальном ключе');
+      ids.add(obstacle.id);
+      assert.ok(Number.isFinite(obstacle.x));
+      assert.ok(Number.isFinite(obstacle.y));
+      assert.ok(Number.isFinite(obstacle.z));
+      assert.ok(Number.isFinite(obstacle.radius) || Number.isFinite(obstacle.length));
+    }
+  } finally {
+    course.dispose();
+  }
+});
+
+test('молот и вертушка живут по данным, а меш лишь повторяет их', () => {
+  const course = new Course(new THREE.Scene(), courseSpec(31337, 'chaos'), { quality: 'low' });
+  try {
+    for (let step = 0; step < 180; step++) {
+      const elapsed = step / 60;
+      course.update(1 / 60, elapsed);
+      for (const obstacle of course.obstacles) {
+        if (obstacle.type === 'puncher') {
+          assert.equal(obstacle.x, obstacle.mesh.position.x, `молот разошёлся с мешем на шаге ${step}`);
+          assert.equal(
+            obstacle.x,
+            obstacle.originX + Math.sin(elapsed * obstacle.speed + obstacle.phase) * obstacle.range
+          );
+        }
+        if (obstacle.type === 'spinner') {
+          assert.equal(obstacle.angle, elapsed * obstacle.speed + obstacle.phase);
+          assert.equal(obstacle.mesh.rotation.y, obstacle.angle);
+        }
+      }
+    }
+  } finally {
+    course.dispose();
+  }
+});
+
 test('осыпающаяся плитка кооператива дрожит, падает и возвращается вместе со своей записью', () => {
   const course = new CoopCourse(new THREE.Scene(), coopSpec('ch4'), { quality: 'low' });
   try {

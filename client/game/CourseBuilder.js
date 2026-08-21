@@ -28,6 +28,18 @@ export function movePlatform(platform, axis, value) {
   platform.mesh.position[axis] = value;
 }
 
+// То же правило для препятствий: сначала запись, потом меш.
+export function moveObstacle(obstacle, axis, value) {
+  obstacle[axis] = value;
+  obstacle.mesh.position[axis] = value;
+}
+
+// Опознаётся препятствие своим идентификатором, а не uuid меша.
+//
+// По этому ключу игрок помнит, когда его последний раз ударило, — то есть на нём держится
+// перезарядка удара. Пока ключом был uuid, физика удара не могла существовать без сцены.
+let nextObstacleId = 0;
+
 export class CourseBuilder {
   constructor(scene, { quality = 'high' } = {}) {
     this.scene = scene;
@@ -166,6 +178,16 @@ export class CourseBuilder {
 
   movePlatform(platform, axis, value) {
     movePlatform(platform, axis, value);
+  }
+
+  moveObstacle(obstacle, axis, value) {
+    moveObstacle(obstacle, axis, value);
+  }
+
+  registerObstacle(record) {
+    const obstacle = { id: `obstacle-${nextObstacleId++}`, ...record };
+    this.obstacles.push(obstacle);
+    return obstacle;
   }
 
   // Возвращает нормаль специальной стены, пересечённой за текущий физический шаг.

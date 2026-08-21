@@ -11,7 +11,7 @@ import {
   segmentTypeAt
 } from '../shared/courseSpec.js';
 import { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, FINISH_TAIL, START } from '../shared/courseSpec.js';
-import { variantCount } from '../client/game/segments.js';
+import { variantCount } from '../shared/courseSegments.js';
 import { RaceRun } from './bots.mjs';
 
 test('план сегментов детерминирован и входит в общую спецификацию трассы', () => {

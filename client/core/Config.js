@@ -17,18 +17,9 @@ import { modifierForDay, objectiveForDay, materializeObjective, checkObjective }
 export { SEGMENT_LENGTH, FIRST_SEGMENT_CENTER, SEGMENT_WIDTH, START_PLATFORM, safeDifficulty, spawnFor };
 export { DAILY_MODIFIERS, DAILY_OBJECTIVES, modifierForDay, objectiveForDay } from './dailyModifiers.js';
 
-export const COLORS = {
-  purple: 0x6546d8,
-  purpleDark: 0x34206f,
-  pink: 0xff4f91,
-  yellow: 0xffd94b,
-  cyan: 0x48dcda,
-  mint: 0x58ebb8,
-  orange: 0xff914d,
-  blue: 0x55a7ff,
-  white: 0xf7fbff,
-  ink: 0x261653
-};
+// Палитра переехала в shared/ вместе с расстановкой сегментов; здесь она только
+// переэкспортируется, чтобы клиентские модули не меняли свои импорты.
+export { COLORS } from '/shared/palette.js';
 
 // Число сегментов берётся из общего модуля, чтобы не разойтись с сервером;
 // скорость препятствий и целевое время — чисто клиентская настройка подачи.

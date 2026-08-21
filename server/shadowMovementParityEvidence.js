@@ -21,15 +21,27 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   // Расхождение по высоте стояния — прямое следствие разной геометрии опоры.
   maxGroundHeightErrorMean: 0.02,
   maxGroundHeightErrorMax: 0.12,
-  // Свободная траектория не обязана совпадать с клиентом до последнего разряда: у неё нет ни
-  // сетевой задержки, ни коррекций. Но её отрыв обязан оставаться в пределах мягкой коррекции,
-  // иначе переключение обернулось бы рывком на экране.
-  maxFreeTrajectoryErrorMean: 0.3,
-  maxFreeTrajectoryErrorMax: 1.5,
   // Ни одного тика без мира: матч, где геометрия не построилась, доказательством быть не может.
   maxWorldMissingSamples: 0,
-  // Импульсы обязаны хоть раз случиться, иначе их паритет ничем не подтверждён.
-  minImpulseSamples: 50
+  // Импульсы обязаны хоть раз случиться, иначе про них нечего утверждать.
+  minImpulseSamples: 50,
+  // Паритет препятствий меряется СОБЫТИЯМИ, а не расстоянием.
+  //
+  // Раньше здесь стоял порог на отрыв свободной траектории — среднее 0.3, максимум 1.5. Замер
+  // показал, что эта величина описывает не то: внутри секундного окна всё определяет одно
+  // попадание, а попадания усиливают расхождение скачком — попал или нет решают доли единицы, а
+  // после попадания разница измеряется метрами. Среднее по такому распределению не значит ничего,
+  // и калибровать его было бы работой впустую.
+  //
+  // Вопрос ставится прямо: бьёт ли сервер по тем же препятствиям, что и клиент. Сбивающие удары
+  // видны с обеих сторон — у сервера как событие импульса, у клиента как переход снапшота в
+  // `knockdown`, — и сопоставляются во времени с допуском.
+  minHitSamples: 40,
+  minHitMatchRate: 0.9,
+  // Удар, которого у клиента не было, опаснее пропущенного: так игрока сбивало бы на ровном месте.
+  // Отношение к `clientOnly` мягче — пропуск лишь означает, что сервер не воспроизвёл удар, и это
+  // ловится общей долей совпадений.
+  maxServerOnlyHits: 0
 });
 
 const REASON = Object.freeze({
@@ -39,8 +51,10 @@ const REASON = Object.freeze({
   GROUND_AGREEMENT: 'ground-agreement',
   SHADOW_GROUNDED_ONLY: 'shadow-grounded-only',
   GROUND_HEIGHT_ERROR: 'ground-height-error',
-  TRAJECTORY_ERROR: 'trajectory-error',
-  INSUFFICIENT_IMPULSE_SAMPLES: 'insufficient-impulse-samples'
+  INSUFFICIENT_IMPULSE_SAMPLES: 'insufficient-impulse-samples',
+  INSUFFICIENT_HIT_SAMPLES: 'insufficient-hit-samples',
+  HIT_MATCH_RATE: 'hit-match-rate',
+  SERVER_ONLY_HITS: 'server-only-hits'
 });
 
 function finiteNonNegative(value) {
@@ -57,6 +71,17 @@ function validErrorStats(stats) {
   );
 }
 
+function validHitParity(parity) {
+  return (
+    !!parity &&
+    typeof parity === 'object' &&
+    finiteNonNegative(parity.matched) &&
+    finiteNonNegative(parity.serverOnly) &&
+    finiteNonNegative(parity.clientOnly) &&
+    finiteNonNegative(parity.matchRate)
+  );
+}
+
 function validMetrics(metrics) {
   return (
     !!metrics &&
@@ -67,7 +92,7 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.worldMissing) &&
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
-    validErrorStats(metrics.freeTrajectoryError)
+    validHitParity(metrics.hitParity)
   );
 }
 
@@ -99,22 +124,18 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
   ) {
     reasons.push(REASON.GROUND_HEIGHT_ERROR);
   }
-  if (
-    metrics.freeTrajectoryError.mean > policy.maxFreeTrajectoryErrorMean ||
-    metrics.freeTrajectoryError.max > policy.maxFreeTrajectoryErrorMax
-  ) {
-    reasons.push(REASON.TRAJECTORY_ERROR);
-  }
-
-  // Паритет столкновений и паритет импульсов — разные утверждения, и второе требует, чтобы удары
-  // вообще случались. Общие препятствия к тому моменту уже отработали, но без выборки доказывать
-  // нечего.
+  // Паритет столкновений и паритет препятствий — разные утверждения. Первое про опору: находит ли
+  // сервер тот же пол. Второе про удары: бьёт ли он по тем же препятствиям.
   const collisionParityVerified = reasons.length === 0;
+
   const impulseReasons = [...reasons];
-  if (metrics.impulses < policy.minImpulseSamples) {
-    impulseReasons.push(REASON.INSUFFICIENT_IMPULSE_SAMPLES);
-    reasons.push(REASON.INSUFFICIENT_IMPULSE_SAMPLES);
-  }
+  const hits = metrics.hitParity;
+  const decidedHits = hits.matched + hits.serverOnly + hits.clientOnly;
+  if (metrics.impulses < policy.minImpulseSamples) impulseReasons.push(REASON.INSUFFICIENT_IMPULSE_SAMPLES);
+  if (decidedHits < policy.minHitSamples) impulseReasons.push(REASON.INSUFFICIENT_HIT_SAMPLES);
+  if (hits.matchRate < policy.minHitMatchRate) impulseReasons.push(REASON.HIT_MATCH_RATE);
+  if (hits.serverOnly > policy.maxServerOnlyHits) impulseReasons.push(REASON.SERVER_ONLY_HITS);
+  for (const reason of impulseReasons) if (!reasons.includes(reason)) reasons.push(reason);
 
   return Object.freeze({
     collisionParityVerified,

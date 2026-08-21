@@ -189,8 +189,12 @@ function poolMetrics(runs) {
       count,
       mean: count ? sum(m => pick(m).mean * pick(m).count) / count : 0,
       max: max(m => pick(m).max),
-      overSoftRate: count ? sum(m => Math.round(pick(m).overSoftRate * pick(m).count)) / count : 0,
-      overHardRate: count ? sum(m => Math.round(pick(m).overHardRate * pick(m).count)) / count : 0
+      // Счётчики складываются как счётчики. Раньше они восстанавливались из доли округлением —
+      // приближение там, где вся остальная сборка точна.
+      overSoft: sum(m => pick(m).overSoft),
+      overHard: sum(m => pick(m).overHard),
+      overSoftRate: count ? sum(m => pick(m).overSoft) / count : 0,
+      overHardRate: count ? sum(m => pick(m).overHard) / count : 0
     };
   };
 

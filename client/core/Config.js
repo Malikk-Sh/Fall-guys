@@ -7,8 +7,10 @@ import {
   SEGMENT_WIDTH,
   START_PLATFORM,
   DIFFICULTY_SEGMENTS,
+  DIFFICULTY_OBSTACLE_SPEED,
   createCourseSpec,
   safeDifficulty,
+  seededRandom,
   spawnFor
 } from '/shared/courseSpec.js';
 
@@ -24,9 +26,24 @@ export { COLORS } from '/shared/palette.js';
 // Число сегментов берётся из общего модуля, чтобы не разойтись с сервером;
 // скорость препятствий и целевое время — чисто клиентская настройка подачи.
 export const DIFFICULTIES = {
-  easy: { label: 'Легко', segments: DIFFICULTY_SEGMENTS.easy, speed: 0.82, parPerSegment: 15 },
-  normal: { label: 'Забег', segments: DIFFICULTY_SEGMENTS.normal, speed: 1, parPerSegment: 13 },
-  chaos: { label: 'Хаос', segments: DIFFICULTY_SEGMENTS.chaos, speed: 1.2, parPerSegment: 12 }
+  easy: {
+    label: 'Легко',
+    segments: DIFFICULTY_SEGMENTS.easy,
+    speed: DIFFICULTY_OBSTACLE_SPEED.easy,
+    parPerSegment: 15
+  },
+  normal: {
+    label: 'Забег',
+    segments: DIFFICULTY_SEGMENTS.normal,
+    speed: DIFFICULTY_OBSTACLE_SPEED.normal,
+    parPerSegment: 13
+  },
+  chaos: {
+    label: 'Хаос',
+    segments: DIFFICULTY_SEGMENTS.chaos,
+    speed: DIFFICULTY_OBSTACLE_SPEED.chaos,
+    parPerSegment: 12
+  }
 };
 
 export function hashString(value) {
@@ -49,16 +66,9 @@ export function dailyDayKey(date = new Date()) {
 export function randomSeed() {
   return (crypto?.getRandomValues?.(new Uint32Array(1))[0] ?? Math.floor(Math.random() * 0xffffffff)) >>> 0;
 }
-export function seededRandom(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// Генератор переехал в общий модуль: копия здесь означала бы два источника случайности на один
+// seed, и достаточно было бы поправить один из них, чтобы трассы разошлись.
+export { seededRandom };
 export const courseSpec = createCourseSpec;
 
 // Эталонное время трассы: по нему выдаются медали и от него считается цель «уложиться во время».

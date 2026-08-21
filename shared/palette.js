@@ -14,3 +14,14 @@ export const COLORS = {
   white: 0xf7fbff,
   ink: 0x261653
 };
+
+// Палитра сегментов трассы: цвет выбирается по индексу сегмента и seed, поэтому порядок значим.
+export const COURSE_PALETTE = [
+  COLORS.purple,
+  COLORS.orange,
+  COLORS.cyan,
+  COLORS.pink,
+  COLORS.blue,
+  COLORS.mint,
+  COLORS.yellow
+];

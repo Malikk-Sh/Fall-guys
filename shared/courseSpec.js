@@ -117,6 +117,10 @@ export function corridorHalfWidth(zones, z) {
   return half || Infinity;
 }
 
+// Темп препятствий входит в геометрию: от него зависят фаза и скорость каждой вертушки и молота.
+// Поэтому таблица живёт здесь, а не в клиентской подаче сложности.
+export const DIFFICULTY_OBSTACLE_SPEED = Object.freeze({ easy: 0.82, normal: 1, chaos: 1.2 });
+
 export const SEGMENT_ROLE = Object.freeze({
   WARMUP: 'warmup',
   SKILL: 'skill',
@@ -133,7 +137,9 @@ const ROLE_TYPES = Object.freeze({
   [SEGMENT_ROLE.FINALE]: ['bridge', 'punchers', 'crosswind', 'sweepers']
 });
 
-function seededRandom(seed) {
+// Один и тот же генератор нужен и планировщику сегментов, и расстановке: разные последовательности
+// по одному seed означали бы разные трассы у клиента и сервера.
+export function seededRandom(seed) {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) | 0;

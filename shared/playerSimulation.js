@@ -120,6 +120,18 @@ export function dampScalar(current, target, smoothing, dt) {
   return current + (target - current) * (1 - Math.exp(-smoothing * dt));
 }
 
+// Куда игрок хочет двигаться с учётом поворота камеры.
+//
+// Формула одна на клиент и сервер именно как код, а не как описание. Раньше клиент считал то же
+// самое своими средствами: поворот, затем нормализация через Vector3.normalize, то есть через
+// sqrt(x²+z²). Здесь длина берётся Math.hypot, и на части углов эти два способа дают разный
+// последний разряд — направление расходилось на ~2e-16 на каждом шаге. Величина ничтожная, но она
+// накапливается при переигрывании неподтверждённого ввода, и «одинаковое правило у клиента и
+// сервера» переставало быть правдой ровно там, где на него собираются опереться.
+export function movementIntent(rawInput) {
+  return normalizedDirection(cameraRelativeIntent(normalizePlayerInput(rawInput)));
+}
+
 function cameraRelativeIntent(input) {
   const sin = Math.sin(input.cameraYaw);
   const cos = Math.cos(input.cameraYaw);

@@ -585,3 +585,49 @@ test('выборка на подвижной опоре не засчитыва�
   assert.equal(after.samples, before.samples, 'в согласие такая выборка не идёт');
   assert.equal(after.dynamicSkipped, before.dynamicSkipped + 1, 'но и не теряется молча');
 });
+
+// Только что поставленный игрок про опору не свидетельствует.
+//
+// `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не
+// пересчитывают — это сделает следующий шаг физики. Один кадр игрок помечен воздухом, стоя над
+// самым полом, и замер видел в этом расхождение геометрии. Собственный поиск опоры клиента в той же
+// точке при этом находит ту же опору: подпись на прогоне ботов была 51 случай из 51 с `vy = 0` и
+// неподвижной позицией на высоте чекпоинта.
+test('кадр сразу после постановки в доказательства не идёт', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  const start = recordRaceCourse(spec).platforms[0];
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel;
+
+  // Возврат на чекпоинт: скачок позиции, «воздух», нулевая скорость — и над самой опорой.
+  const placed = {
+    x: start.x,
+    y: supportTop(start) + PLAYER_FOOT + 0.266,
+    z: start.z - 30,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    state: 'air'
+  };
+  player.last = placed;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+
+  // Пока игрок стоит на месте постановки, выборки откладываются.
+  player.last = { ...placed };
+  tick(runtime, room, player, 2, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+  const during = runtime.metrics().shadowGroundContact.groundModel;
+  assert.equal(during.samples, before.samples, 'шага физики ещё не было — свидетельствовать нечем');
+  assert.equal(during.serverGroundedOnly, before.serverGroundedOnly, 'и расхождением это не считается');
+  assert.ok(during.placedSkipped > 0, 'пропуск обязан быть виден в счётчике');
+
+  // Клиент сдвинулся — значит шаг прошёл, и выборки снова идут.
+  player.last = { ...placed, y: placed.y - 0.05, vy: -0.8 };
+  tick(runtime, room, player, 1, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
+  assert.ok(
+    runtime.metrics().shadowGroundContact.groundModel.samples > before.samples,
+    'после первого же шага измерение возобновляется'
+  );
+});

@@ -374,7 +374,9 @@ class ShadowInputRuntime {
       serverGroundedOnly: 0,
       clientGroundedOnly: 0,
       // Выборки на подвижных опорах: сверить их нечем, пока в снимке нет клиентского времени.
-      dynamicSkipped: 0
+      dynamicSkipped: 0,
+      // Выборки сразу после постановки: шага физики ещё не было, ярлык опоры бессмыслен.
+      placedSkipped: 0
     };
     this.groundHeightError = new RollingErrorStats();
     // Пороги те же, по которым живёт реконсиляция: мягкая коррекция с 0.3, жёсткая с 1.5.
@@ -517,6 +519,9 @@ class ShadowInputRuntime {
       this.worldDiagnostics.clientTeleports += 1;
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
+      // Пока по этой точке не прошёл шаг физики, ярлык опоры у клиента ничего не сообщает: см.
+      // `placedNotSimulated`.
+      controller.placedAt = { ...controller.lastClientPosition };
       // Этот тик не измеряем вовсе: сравнивать было бы нечего.
       return true;
     }
@@ -647,7 +652,25 @@ class ShadowInputRuntime {
     const freshSnapshot =
       Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
     if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
-    if (clientGroundKnown && freshSnapshot) {
+    // Игрок, ТОЛЬКО ЧТО ПОСТАВЛЕННЫЙ на место, про опору не свидетельствует.
+    //
+    // `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не
+    // пересчитывают — его посчитает следующий шаг физики. Один кадр игрок помечен воздухом, стоя
+    // над самым полом. Замер это видел как расхождение геометрии, хотя геометрия ни при чём:
+    // собственный поиск опоры клиента в той же точке находит ту же самую опору. Подпись
+    // однозначна — 51 случай из 51 с `vy = 0` и неподвижной позицией на высоте чекпоинта 1.15.
+    //
+    // Признак не гадательный: возврат уже распознан по скачку позиции выше, и выборки пропускаются,
+    // пока клиент не сдвинется с точки постановки, то есть пока шаг физики действительно не пройдёт.
+    const placedNotSimulated =
+      !!controller.placedAt &&
+      finite(player.last?.x) === controller.placedAt.x &&
+      finite(player.last?.y) === controller.placedAt.y &&
+      finite(player.last?.z) === controller.placedAt.z;
+    if (!placedNotSimulated) controller.placedAt = null;
+    else this.groundModelDiagnostics.placedSkipped += 1;
+
+    if (clientGroundKnown && freshSnapshot && !placedNotSimulated) {
       probeWorld.advance(snapshotAt);
       const index = supportIndexAt(
         probeWorld.colliders,

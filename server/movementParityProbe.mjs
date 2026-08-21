@@ -187,6 +187,7 @@ function main() {
     `  сервер дал пол      ${metrics.groundModel.serverGroundedOnly}   (порог ${policy.maxShadowGroundedOnlySamples})`,
     `  сервер потерял пол  ${metrics.groundModel.clientGroundedOnly}`,
     `  подвижных пропущено ${metrics.groundModel.dynamicSkipped}   (фазу к моменту снимка не восстановить)`,
+    `  после постановки    ${metrics.groundModel.placedSkipped}   (шага физики ещё не было)`,
     '',
     'Опора у свободной траектории (справочно: сюда входит дрейф)',
     `  согласие            ${pct(metrics.agreementRate)}`,

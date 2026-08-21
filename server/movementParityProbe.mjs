@@ -76,6 +76,7 @@ function runRace(runtime, { seed, difficulty, skill, index }) {
     finished: false,
     last: bot.snapshot(),
     lastAt: startedAt,
+    lastCourseTime: 0,
     lastSequence: 0
   };
   const room = {
@@ -106,6 +107,8 @@ function runRace(runtime, { seed, difficulty, skill, index }) {
     if (frames % FRAMES_PER_STATE === 0) {
       player.last = bot.snapshot();
       player.lastAt = startedAt + field.elapsed * 1000;
+      // Время трассы, на котором снят снимок, — то же, что клиент шлёт полем `courseTime`.
+      player.lastCourseTime = field.elapsed;
       player.lastSequence += 1;
       player.checkpoint = bot.player.checkpoint;
       player.finished = bot.player.finished;
@@ -186,7 +189,8 @@ function main() {
     `  согласие            ${pct(metrics.groundModel.agreementRate)}   (порог ≥ ${pct(policy.minGroundAgreementRate)})`,
     `  сервер дал пол      ${metrics.groundModel.serverGroundedOnly}   (порог ${policy.maxShadowGroundedOnlySamples})`,
     `  сервер потерял пол  ${metrics.groundModel.clientGroundedOnly}`,
-    `  подвижных пропущено ${metrics.groundModel.dynamicSkipped}   (фазу к моменту снимка не восстановить)`,
+    `  подвижных пропущено ${metrics.groundModel.dynamicSkipped}   (только когда клиент не прислал courseTime)`,
+    `  после постановки    ${metrics.groundModel.placedSkipped}   (шага физики ещё не было)`,
     '',
     'Опора у свободной траектории (справочно: сюда входит дрейф)',
     `  согласие            ${pct(metrics.agreementRate)}`,

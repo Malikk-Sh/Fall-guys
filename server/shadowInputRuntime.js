@@ -134,8 +134,30 @@ const FREE_TRAJECTORY_SUB_DT = SERVER_SIMULATION_DT / FREE_TRAJECTORY_SUB_STEPS;
 // единиц (p99 = 0.62), самый короткий возврат — 10.83. Между ними нет ни одного шага.
 const CLIENT_TELEPORT_DISTANCE = 4;
 
+// Сколько снимков подряд можно отложить как «поставлен, но ещё не просимулирован».
+//
+// Постановка распознаётся по скачку позиции, а скачок не отличает возрождение от обычного бега,
+// потерявшего несколько пакетов состояния. Если после такого разрыва игрок остановится, его
+// округлённая позиция может совпадать с точкой «постановки» сколь угодно долго — и доказательства
+// молча выбрасывались бы вместо того, чтобы откладываться на кадр. Настоящему возрождению хватает
+// одного-двух снимков: следующий шаг физики уже ставит игрока на опору.
+const PLACED_SKIP_LIMIT = 2;
+
 // Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
 const CLIENT_FRAME_DT = 1 / 60;
+
+// Насколько время трассы от клиента может расходиться с серверным, чтобы ему ещё верили.
+//
+// Поле `courseTime` приходит от клиента, а клиент — не источник истины. Само по себе оно безобидно:
+// читает его только диагностика, и попадает оно лишь в отдельный мир для сверки опоры. Но метрики
+// паритета общие на процесс, и подставленное значение навело бы платформу на чужую фазу — то есть
+// испортило бы или, наоборот, приукрасило доказательства, по которым однажды будут открывать
+// ворота. Поэтому значение принимается, только если сходится с собственным временем сервера.
+//
+// Полсекунды с запасом покрывают задержку и интервал рассылки. Внутри этого окна клиент по-прежнему
+// волен соврать, и это неустранимо без доверенных часов; за окном — значение просто не берётся, и
+// подвижные опоры откладываются, как будто поля нет.
+const CLIENT_COURSE_TIME_TOLERANCE = 0.5;
 
 // Полосы коррекции реконсиляции: мягкая правка начинается с 0.3, жёсткая — с 1.5, и жёсткая видна
 // игроку рывком (`client/net/ReconciliationPolicy.js`). Доли превышения считаются по ним.
@@ -151,6 +173,14 @@ const TRAJECTORY_HARD_LIMIT = 1.5;
 function matchElapsedSeconds(room, now) {
   if (!Number.isFinite(now) || !Number.isFinite(room?.startedAt)) return null;
   return (now - room.startedAt) / 1000;
+}
+
+// Время трассы от клиента, если ему можно верить. Иначе null — и подвижные опоры не сверяются.
+function trustedCourseTime(player, matchTime) {
+  const reported = player?.lastCourseTime;
+  if (!Number.isFinite(reported) || reported < 0) return null;
+  if (!Number.isFinite(matchTime)) return null;
+  return Math.abs(reported - matchTime) <= CLIENT_COURSE_TIME_TOLERANCE ? reported : null;
 }
 
 // Сброс якоря переносит позицию и скорость, но НЕ стирает сбивание.
@@ -374,7 +404,9 @@ class ShadowInputRuntime {
       serverGroundedOnly: 0,
       clientGroundedOnly: 0,
       // Выборки на подвижных опорах: сверить их нечем, пока в снимке нет клиентского времени.
-      dynamicSkipped: 0
+      dynamicSkipped: 0,
+      // Выборки сразу после постановки: шага физики ещё не было, ярлык опоры бессмыслен.
+      placedSkipped: 0
     };
     this.groundHeightError = new RollingErrorStats();
     // Пороги те же, по которым живёт реконсиляция: мягкая коррекция с 0.3, жёсткая с 1.5.
@@ -517,6 +549,11 @@ class ShadowInputRuntime {
       this.worldDiagnostics.clientTeleports += 1;
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
+      // Пока по этой точке не прошёл шаг физики, ярлык опоры у клиента ничего не сообщает: см.
+      // `placedNotSimulated`. Латч ограничен по числу снимков — распознавание идёт по расстоянию, а
+      // расстояние не отличает возрождение от потери пакетов.
+      controller.placedAt = { ...controller.lastClientPosition };
+      controller.placedSkipsLeft = PLACED_SKIP_LIMIT;
       // Этот тик не измеряем вовсе: сравнивать было бы нечего.
       return true;
     }
@@ -647,7 +684,36 @@ class ShadowInputRuntime {
     const freshSnapshot =
       Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
     if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
-    if (clientGroundKnown && freshSnapshot) {
+    // Игрок, ТОЛЬКО ЧТО ПОСТАВЛЕННЫЙ на место, про опору не свидетельствует.
+    //
+    // `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не
+    // пересчитывают — его посчитает следующий шаг физики. Один кадр игрок помечен воздухом, стоя
+    // над самым полом. Замер это видел как расхождение геометрии, хотя геометрия ни при чём:
+    // собственный поиск опоры клиента в той же точке находит ту же самую опору. Подпись
+    // однозначна — 51 случай из 51 с `vy = 0` и неподвижной позицией на высоте чекпоинта 1.15.
+    //
+    // Признак не гадательный: возврат уже распознан по скачку позиции выше, и выборки пропускаются,
+    // пока клиент не сдвинется с точки постановки, то есть пока шаг физики действительно не пройдёт.
+    const stillAtPlacement =
+      !!controller.placedAt &&
+      finite(player.last?.x) === controller.placedAt.x &&
+      finite(player.last?.y) === controller.placedAt.y &&
+      finite(player.last?.z) === controller.placedAt.z;
+    // Счётчик тратится ТОЛЬКО на свежих снимках: тик идёт на 30 Гц, состояние приходит на 15, и
+    // считать один и тот же снимок дважды значило бы и запас исчерпать вдвое быстрее, и счётчик
+    // сделать несопоставимым с `samples` и `dynamicSkipped`.
+    const placedNotSimulated = stillAtPlacement && controller.placedSkipsLeft > 0;
+    if (!stillAtPlacement) {
+      controller.placedAt = null;
+      controller.placedSkipsLeft = 0;
+    } else if (freshSnapshot) {
+      if (placedNotSimulated) {
+        this.groundModelDiagnostics.placedSkipped += 1;
+        controller.placedSkipsLeft -= 1;
+      }
+    }
+
+    if (clientGroundKnown && freshSnapshot && !placedNotSimulated) {
       probeWorld.advance(snapshotAt);
       const index = supportIndexAt(
         probeWorld.colliders,
@@ -662,14 +728,14 @@ class ShadowInputRuntime {
       // не быстрее 1.5, и клиент живёт по второму. Замер, звавший только первый, считал полом всё,
       // что летело вверх со скоростью между 1.5 и 2.2, — то есть мерил более слабым правилом, чем
       // то, которое проверяет. На прогоне ботов это давало 6 расхождений из 8.
-      // Подвижная опора в доказательства не идёт: её фазу к моменту СНИМКА восстановить нечем.
+      // Подвижная опора идёт в доказательства только тогда, когда её фазу есть на что навести.
       //
-      // `player.lastAt` — время приёма пакета, а не время, когда клиент снял состояние: в
-      // `PLAYER_STATE` клиентской отметки нет вовсе (`{ state, matchId, sequence }`). За время
-      // задержки платформа уже уехала, и сравнение старой позиции игрока с новой позицией опоры
-      // дало бы расхождение из ничего. Неподвижного пола это не касается — он и через секунду там
-      // же. Счётчик отдельный, чтобы пропуск был виден, а не растворился в выборке.
-      if (index >= 0 && probeWorld.colliders[index]?.motion) {
+      // Клиент присылает `courseTime` — то самое время трассы, на котором он снял состояние. Есть
+      // оно — мир доведён ровно до этого момента, и подвижная опора сверяется наравне с полом. Нет
+      // (старый клиент, пакет без поля) — сверять нечем: момент приёма для этого не годится, за
+      // задержку платформа уезжает. Тогда выборка откладывается в свой счётчик, а не молча
+      // растворяется. Неподвижного пола это не касается вовсе — он и через секунду там же.
+      if (index >= 0 && probeWorld.colliders[index]?.motion && !Number.isFinite(snapshotSeconds)) {
         this.groundModelDiagnostics.dynamicSkipped += 1;
         controller.clientPreviousY = finite(player.last?.y);
         return true;
@@ -716,7 +782,12 @@ class ShadowInputRuntime {
       // реконсиляции, оказался бы недостижим на живом трафике по построению. На свежем снимке фаза
       // одна и та же, а постоянная часть задержки взаимно уничтожается: якорь тоже ставится по
       // запоздавшему снимку.
-      if (freshSnapshot) this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      // Кадр постановки исключается и отсюда. Он объявлен непригодным как свидетельство об опоре,
+      // а доли превышения отрыва — такая же часть ворот: пустить его сюда значило бы выбросить его
+      // из одной решающей метрики и оставить в другой.
+      if (freshSnapshot && !placedNotSimulated) {
+        this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      }
     }
     return true;
   }
@@ -779,12 +850,12 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
-    this.measureFreeTrajectory(
-      controller,
-      player,
-      matchElapsedSeconds(room, now),
-      matchElapsedSeconds(room, player.lastAt)
-    );
+    // Время снимка берётся у КЛИЕНТА, а не по моменту приёма: за сетевую задержку подвижная опора
+    // уезжает, и сверка старой позиции игрока с новой позицией платформы дала бы расхождение из
+    // ничего. Но верят ему только в пределах допуска — см. CLIENT_COURSE_TIME_TOLERANCE. Не сошлось
+    // или поля нет — подвижные опоры в доказательства не идут.
+    const matchTime = matchElapsedSeconds(room, now);
+    this.measureFreeTrajectory(controller, player, matchTime, trustedCourseTime(player, matchTime));
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;

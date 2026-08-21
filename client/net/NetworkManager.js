@@ -638,7 +638,7 @@ export class NetworkManager {
     return this.send(C2S.EMOTE, { emoteId });
   }
 
-  sendState(state, { force = false } = {}) {
+  sendState(state, { force = false, courseTime = null } = {}) {
     if (!this.matchId) return false;
     // После отправки финиша состояние не шлём вовсе. Сервер к этому моменту уже мог перевести
     // комнату в «результаты», и опоздавший пакет стал бы ошибкой протокола на ровном месте.
@@ -646,11 +646,15 @@ export class NetworkManager {
     const now = performance.now();
     if (!force && now - this.lastState < STATE_INTERVAL_MS) return false;
     this.lastState = now;
-    return this.send(C2S.PLAYER_STATE, {
+    const payload = {
       state,
       matchId: this.matchId,
       sequence: this.stateSequence++
-    });
+    };
+    // Время трассы прикладывается, только если оно осмысленно: сервер по нему выбирает момент, на
+    // который смотреть при сверке подвижных опор, и мусор там хуже, чем отсутствие поля.
+    if (Number.isFinite(courseTime) && courseTime >= 0) payload.courseTime = courseTime;
+    return this.send(C2S.PLAYER_STATE, payload);
   }
 
   // Финиш вместе с финальной позицией — одним пакетом.

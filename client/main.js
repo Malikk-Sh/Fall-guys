@@ -951,7 +951,10 @@ class Game {
 
       if (this.online && this.net) {
         // Финишировавший больше не участвует в забеге, и его позиция никому не нужна.
-        if (!this.player.finished) this.net.sendState(this.player.snapshot());
+        // Время трассы уходит вместе с состоянием: по нему сервер сверяет опору под игроком с
+        // подвижной платформой, а момент приёма пакета для этого не годится.
+        if (!this.player.finished)
+          this.net.sendState(this.player.snapshot(), { courseTime: this.courseElapsed() });
         this.net.tick();
         this.syncRemoteRoster();
       }

@@ -472,9 +472,12 @@ test('опора спрашивается у мира на момент снап
   room.startedAt = 1_760_000_000_000;
   const player = standingPlayer();
 
-  // Снапшот на секунду старше тика: за это время подвижные опоры успевают уехать.
+  // Снимок старше тика: за это время подвижные опоры успевают уехать. Время снимка приносит сам
+  // клиент полем `courseTime` — момент приёма для этого не годится. Расхождение берём в пределах
+  // допуска: дальше сервер клиенту не верит (см. отдельную проверку ниже).
   const now = room.startedAt + 4000;
-  player.lastAt = now - 1000;
+  player.lastAt = now - 300;
+  player.lastCourseTime = 3.7;
   tick(runtime, room, player, 1, now);
 
   const controller = runtime.controllers.get(player);
@@ -484,7 +487,7 @@ test('опора спрашивается у мира на момент снап
   assert.ok(probe.dynamic.length, 'на трассе обязаны быть подвижные опоры');
 
   const expected = createShadowCourseWorld(spec);
-  expected.advance(3);
+  expected.advance(3.7);
   probe.dynamic.forEach((platform, index) => {
     const axis = platform.motion.axis;
     assert.equal(platform[axis], expected.dynamic[index][axis], `опора ${index} на момент снапшота`);
@@ -584,4 +587,198 @@ test('выборка на подвижной опоре не засчитыва�
   const after = runtime.metrics().shadowGroundContact.groundModel;
   assert.equal(after.samples, before.samples, 'в согласие такая выборка не идёт');
   assert.equal(after.dynamicSkipped, before.dynamicSkipped + 1, 'но и не теряется молча');
+});
+
+// Только что поставленный игрок про опору не свидетельствует.
+//
+// `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не
+// пересчитывают — это сделает следующий шаг физики. Один кадр игрок помечен воздухом, стоя над
+// самым полом, и замер видел в этом расхождение геометрии. Собственный поиск опоры клиента в той же
+// точке при этом находит ту же опору: подпись на прогоне ботов была 51 случай из 51 с `vy = 0` и
+// неподвижной позицией на высоте чекпоинта.
+test('кадр сразу после постановки в доказательства не идёт', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  const start = recordRaceCourse(spec).platforms[0];
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel;
+
+  // Возврат на чекпоинт: скачок позиции, «воздух», нулевая скорость — и над самой опорой.
+  const placed = {
+    x: start.x,
+    y: supportTop(start) + PLAYER_FOOT + 0.266,
+    z: start.z - 30,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    state: 'air'
+  };
+  player.last = placed;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+
+  // Пока игрок стоит на месте постановки, выборки откладываются.
+  player.last = { ...placed };
+  tick(runtime, room, player, 2, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+  const during = runtime.metrics().shadowGroundContact.groundModel;
+  assert.equal(during.samples, before.samples, 'шага физики ещё не было — свидетельствовать нечем');
+  assert.equal(during.serverGroundedOnly, before.serverGroundedOnly, 'и расхождением это не считается');
+  assert.ok(during.placedSkipped > 0, 'пропуск обязан быть виден в счётчике');
+
+  // Клиент сдвинулся — значит шаг прошёл, и выборки снова идут.
+  player.last = { ...placed, y: placed.y - 0.05, vy: -0.8 };
+  tick(runtime, room, player, 1, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
+  assert.ok(
+    runtime.metrics().shadowGroundContact.groundModel.samples > before.samples,
+    'после первого же шага измерение возобновляется'
+  );
+});
+
+// Подвижная опора сверяется, когда клиент прислал время трассы, и откладывается, когда не прислал.
+test('courseTime возвращает подвижные опоры в доказательства', () => {
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const at = 3;
+
+  // Позиция опоры на том самом моменте трассы, который клиент и сообщает.
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(at);
+  const moving = expected.dynamic[0];
+  assert.ok(moving, 'на трассе обязана быть подвижная опора');
+
+  const onMovingPlatform = runtime => {
+    const player = standingPlayer();
+    tick(runtime, room, player, 1, room.startedAt);
+    const controller = runtime.controllers.get(player);
+    player.last = {
+      ...player.last,
+      x: moving.x,
+      y: supportTop(moving) + PLAYER_FOOT,
+      z: moving.z,
+      vy: 0,
+      state: 'ground'
+    };
+    controller.lastClientPosition = null;
+    return player;
+  };
+
+  // Без времени трассы сверять нечем: момент приёма для подвижной опоры не годится.
+  const without = new ShadowInputRuntime();
+  const a = onMovingPlatform(without);
+  const beforeA = without.metrics().shadowGroundContact.groundModel;
+  tick(without, room, a, 1, room.startedAt + at * 1000);
+  const afterA = without.metrics().shadowGroundContact.groundModel;
+  assert.equal(afterA.samples, beforeA.samples);
+  assert.equal(afterA.dynamicSkipped, beforeA.dynamicSkipped + 1);
+
+  // С временем трассы мир доводится ровно до момента снимка, и выборка идёт в согласие.
+  const withTime = new ShadowInputRuntime();
+  const b = onMovingPlatform(withTime);
+  const beforeB = withTime.metrics().shadowGroundContact.groundModel;
+  b.lastCourseTime = at;
+  tick(withTime, room, b, 1, room.startedAt + at * 1000);
+  const afterB = withTime.metrics().shadowGroundContact.groundModel;
+  assert.equal(afterB.dynamicSkipped, beforeB.dynamicSkipped, 'откладывать больше нечего');
+  assert.equal(afterB.samples, beforeB.samples + 1, 'выборка засчитана');
+  assert.equal(afterB.serverGroundedOnly, 0, 'и опора совпала');
+});
+
+// Время трассы приходит от клиента, а клиент не источник истины.
+//
+// Само поле безобидно — читает его только диагностика, — но метрики паритета общие на процесс, и
+// подставленное значение навело бы платформу на чужую фазу: испортило бы доказательства или,
+// наоборот, приукрасило их. Поэтому оно принимается лишь в пределах допуска от собственного времени
+// сервера, а за ним не берётся вовсе.
+test('время трассы, не сходящееся с серверным, во внимание не принимается', () => {
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const at = 3;
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(at);
+  const moving = expected.dynamic[0];
+
+  const onMovingPlatform = (runtime, courseTime) => {
+    const player = standingPlayer();
+    tick(runtime, room, player, 1, room.startedAt);
+    const controller = runtime.controllers.get(player);
+    player.last = {
+      ...player.last,
+      x: moving.x,
+      y: supportTop(moving) + PLAYER_FOOT,
+      z: moving.z,
+      vy: 0,
+      state: 'ground'
+    };
+    player.lastCourseTime = courseTime;
+    controller.lastClientPosition = null;
+    tick(runtime, room, player, 1, room.startedAt + at * 1000);
+    return runtime.metrics().shadowGroundContact.groundModel;
+  };
+
+  // Заявленное время расходится с серверным на минуту — верить нечему.
+  const lying = onMovingPlatform(new ShadowInputRuntime(), at + 60);
+  assert.equal(lying.dynamicSkipped, 1, 'подвижная опора отложена, как будто поля нет');
+
+  // И отрицательное время тоже не берётся.
+  const negative = onMovingPlatform(new ShadowInputRuntime(), -5);
+  assert.equal(negative.dynamicSkipped, 1);
+
+  // А сошедшееся — принимается.
+  const honest = onMovingPlatform(new ShadowInputRuntime(), at);
+  assert.equal(honest.dynamicSkipped, 0, 'сошедшемуся времени верим');
+});
+
+// Разрыв в пакетах — не постановка, и доказательства из-за него не должны пропадать насовсем.
+//
+// Постановка распознаётся по скачку позиции, а скачок не отличает возрождение от обычного бега,
+// потерявшего несколько снимков. Остановись игрок после такого разрыва — его округлённая позиция
+// совпадала бы с «точкой постановки» сколь угодно долго.
+test('откладывание после скачка ограничено и само отпускает', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel.samples;
+
+  // Разрыв: игрок «перепрыгнул» дальше порога, хотя никакого возрождения не было.
+  const far = { ...player.last, z: player.last.z - 30 };
+  player.last = far;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+
+  // И замер на месте — позиция не меняется. Пропуски обязаны кончиться.
+  let now = room.startedAt + 3 * SERVER_SIMULATION_DT * 1000;
+  for (let step = 0; step < 8; step++) {
+    player.last = { ...far };
+    tick(runtime, room, player, 1, now);
+    now += SERVER_SIMULATION_DT * 1000;
+  }
+
+  const model = runtime.metrics().shadowGroundContact.groundModel;
+  assert.ok(model.placedSkipped > 0, 'первые снимки после скачка откладываются');
+  assert.ok(model.placedSkipped <= 2, 'но не бесконечно: запас ограничен');
+  assert.ok(model.samples > before, 'дальше доказательства снова идут, а не пропадают');
+});
+
+test('кадр постановки не попадает и в отрыв траектории', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.freeTrajectoryError.count;
+
+  // Возврат на чекпоинт: скачок, затем тот же снимок ещё раз.
+  const placed = { ...player.last, z: player.last.z - 40, vy: 0, state: 'air' };
+  player.last = placed;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+  player.last = { ...placed };
+  tick(runtime, room, player, 1, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+
+  assert.equal(
+    runtime.metrics().shadowGroundContact.freeTrajectoryError.count,
+    before,
+    'непригодный как свидетельство кадр не должен смещать и доли превышения отрыва'
+  );
 });

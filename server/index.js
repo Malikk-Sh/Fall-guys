@@ -2148,6 +2148,10 @@ wss.on('connection', (ws, req) => {
       verifyPlayerProgress(room, player, result.checkpoint, result.state, now);
       player.last = { ...result.state, id: player.id };
       player.lastAt = now;
+      // Время трассы, на котором клиент снял это состояние. Нужно только диагностике паритета:
+      // по нему сверяется опора под игроком с подвижной платформой. Авторитетом не является —
+      // ни прогресс, ни проверка состояния его не читают.
+      player.lastCourseTime = Number.isFinite(message.courseTime) ? message.courseTime : null;
       player.lastSequence = message.sequence;
       trackCheckpointDuration(room, player, result.checkpoint, now);
       if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');
@@ -2297,6 +2301,7 @@ wss.on('connection', (ws, req) => {
         verifyPlayerProgress(room, player, result.checkpoint, result.state, now);
         player.last = { ...result.state, id: player.id };
         player.lastAt = now;
+        player.lastCourseTime = Number.isFinite(message.courseTime) ? message.courseTime : null;
         player.receivedAt = now;
         trackCheckpointDuration(room, player, result.checkpoint, now);
         if (result.checkpoint > player.checkpoint) trackEvent(productEvents, 'checkpointReached');

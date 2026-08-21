@@ -40,10 +40,14 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   // с 0.3, жёсткая — с 1.5, и жёсткая видна игроку рывком. Отсюда требование: типичный тик лежит в
   // полосе мягкой коррекции, а до жёсткой доходит не чаще одного тика из двадцати.
   //
-  // Среднее для этого не годится: у отрыва тяжёлый хвост, и его задают редкие выбросы после
-  // попаданий, а не типичное поведение. Поэтому меряются квантили.
-  maxFreeTrajectoryErrorP50: 0.3,
-  maxFreeTrajectoryErrorP95: 1.5,
+  // Проверяются ДОЛИ ПРЕВЫШЕНИЯ, а не квантили. Среднее не годится — у отрыва тяжёлый хвост, его
+  // задают редкие выбросы после попаданий. Но и квантили из метрики брать нельзя: они считаются по
+  // кольцу последних 512 значений, тогда как выборка требуется от 3000. Прогон, где 2488 плохих
+  // значений сменились 512 хорошими, показал бы проходящие квантили при почти целиком проваленной
+  // статистике. Доли превышения считаются двумя счётчиками по всей популяции и от длины окна не
+  // зависят вовсе.
+  maxOverSoftRate: 0.5,
+  maxOverHardRate: 0.05,
   // Импульсы обязаны хоть раз случиться, иначе про них нечего утверждать.
   minImpulseSamples: 50,
   // Паритет препятствий меряется СОБЫТИЯМИ, а не расстоянием.
@@ -139,8 +143,8 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
     validErrorStats(metrics.freeTrajectoryError) &&
-    finiteNonNegative(metrics.freeTrajectoryError.p50) &&
-    finiteNonNegative(metrics.freeTrajectoryError.p95) &&
+    finiteNonNegative(metrics.freeTrajectoryError.overSoftRate) &&
+    finiteNonNegative(metrics.freeTrajectoryError.overHardRate) &&
     validHitParity(metrics.hitParity)
   );
 }
@@ -174,8 +178,8 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
     reasons.push(REASON.GROUND_HEIGHT_ERROR);
   }
   if (
-    metrics.freeTrajectoryError.p50 > policy.maxFreeTrajectoryErrorP50 ||
-    metrics.freeTrajectoryError.p95 > policy.maxFreeTrajectoryErrorP95
+    metrics.freeTrajectoryError.overSoftRate > policy.maxOverSoftRate ||
+    metrics.freeTrajectoryError.overHardRate > policy.maxOverHardRate
   ) {
     reasons.push(REASON.TRAJECTORY_ERROR);
   }

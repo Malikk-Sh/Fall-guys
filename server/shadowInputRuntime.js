@@ -137,6 +137,11 @@ const CLIENT_TELEPORT_DISTANCE = 4;
 // Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
 const CLIENT_FRAME_DT = 1 / 60;
 
+// Полосы коррекции реконсиляции: мягкая правка начинается с 0.3, жёсткая — с 1.5, и жёсткая видна
+// игроку рывком (`client/net/ReconciliationPolicy.js`). Доли превышения считаются по ним.
+const TRAJECTORY_SOFT_LIMIT = 0.3;
+const TRAJECTORY_HARD_LIMIT = 1.5;
+
 // Секунды с начала забега — то же число, что клиент держит в `RaceSession.elapsed` и передаёт в
 // `Course.update` и `Course.interact`.
 //
@@ -195,12 +200,21 @@ function clientFramePreviousY(legacy) {
 }
 
 class RollingErrorStats {
-  constructor(limit = ERROR_SAMPLE_LIMIT) {
+  // `thresholds` — значения, доли превышения которых считаются по ВСЕЙ популяции, а не по окну.
+  //
+  // Квантили здесь живут в кольце последних 512 значений, и как справка это нормально. Но решение
+  // по ним принимать нельзя: 2488 плохих выборок, за которыми идут 512 хороших, дали бы проходящие
+  // p50 и p95 при том, что почти вся накопленная статистика провалена. Доля превышения порога
+  // считается двумя счётчиками и от длины окна не зависит вовсе.
+  constructor(limit = ERROR_SAMPLE_LIMIT, thresholds = null) {
     this.limit = limit;
     this.count = 0;
     this.sum = 0;
     this.max = 0;
     this.samples = [];
+    this.thresholds = thresholds;
+    this.overSoft = 0;
+    this.overHard = 0;
   }
 
   record(value) {
@@ -208,6 +222,10 @@ class RollingErrorStats {
     this.count += 1;
     this.sum += value;
     this.max = Math.max(this.max, value);
+    if (this.thresholds) {
+      if (value > this.thresholds.soft) this.overSoft += 1;
+      if (value > this.thresholds.hard) this.overHard += 1;
+    }
     this.samples.push(value);
     if (this.samples.length > this.limit) this.samples.shift();
     return true;
@@ -224,7 +242,10 @@ class RollingErrorStats {
       p50: quantile(0.5),
       p95: quantile(0.95),
       max: this.max,
-      recentSamples: this.samples.length
+      recentSamples: this.samples.length,
+      // Доли превышения — по всей популяции. Именно они и проверяются политикой.
+      overSoftRate: this.count ? this.overSoft / this.count : 0,
+      overHardRate: this.count ? this.overHard / this.count : 0
     };
   }
 }
@@ -351,10 +372,16 @@ class ShadowInputRuntime {
       samples: 0,
       agreements: 0,
       serverGroundedOnly: 0,
-      clientGroundedOnly: 0
+      clientGroundedOnly: 0,
+      // Выборки на подвижных опорах: сверить их нечем, пока в снимке нет клиентского времени.
+      dynamicSkipped: 0
     };
     this.groundHeightError = new RollingErrorStats();
-    this.freeTrajectoryError = new RollingErrorStats();
+    // Пороги те же, по которым живёт реконсиляция: мягкая коррекция с 0.3, жёсткая с 1.5.
+    this.freeTrajectoryError = new RollingErrorStats(ERROR_SAMPLE_LIMIT, {
+      soft: TRAJECTORY_SOFT_LIMIT,
+      hard: TRAJECTORY_HARD_LIMIT
+    });
     this.worldDiagnostics = { wallBounces: 0, impulses: 0, reanchors: 0, clientTeleports: 0 };
     // Паритет попаданий: сбивающие удары сервера против сбиваний, видимых у клиента.
     //
@@ -604,8 +631,22 @@ class ShadowInputRuntime {
     // засчитывается: иначе одно расхождение считалось бы дважды, а выборка была бы дутой.
     const probeWorld = controller.probeWorld || world;
     const snapshotAt = Number.isFinite(snapshotSeconds) ? snapshotSeconds : matchTime;
-    const freshSnapshot = !Number.isFinite(player.lastAt) || controller.measuredSnapshotAt !== player.lastAt;
-    controller.measuredSnapshotAt = Number.isFinite(player.lastAt) ? player.lastAt : null;
+    // Свежесть считается по КЛИЕНТСКОЙ последовательности, а не по времени приёма, и это закрывает
+    // сразу две дыры.
+    //
+    // Первая: возрождение. Сервер пишет `player.last` САМ — ставит игрока на чекпоинт с `state:
+    // 'air'` и нулевой скоростью, — и раньше, чем исправленный клиент пришлёт свой снимок. Такое
+    // состояние не наблюдение, а решение сервера: опора под чекпоинтом находится, у «клиента»
+    // помечен воздух, и выходит расхождение из ничего. При пороге в строгий ноль одно возрождение
+    // навсегда закрыло бы паритет столкновений. `lastSequence` сервер при возрождении не трогает,
+    // поэтому такие состояния сюда просто не попадают.
+    //
+    // Вторая: один и тот же снимок приходит в несколько тиков подряд — 66 мс рассылки против 33 мс
+    // тика. Повторно он не засчитывается.
+    const snapshotSequence = player.lastSequence;
+    const freshSnapshot =
+      Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
+    if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
     if (clientGroundKnown && freshSnapshot) {
       probeWorld.advance(snapshotAt);
       const index = supportIndexAt(
@@ -621,6 +662,19 @@ class ShadowInputRuntime {
       // не быстрее 1.5, и клиент живёт по второму. Замер, звавший только первый, считал полом всё,
       // что летело вверх со скоростью между 1.5 и 2.2, — то есть мерил более слабым правилом, чем
       // то, которое проверяет. На прогоне ботов это давало 6 расхождений из 8.
+      // Подвижная опора в доказательства не идёт: её фазу к моменту СНИМКА восстановить нечем.
+      //
+      // `player.lastAt` — время приёма пакета, а не время, когда клиент снял состояние: в
+      // `PLAYER_STATE` клиентской отметки нет вовсе (`{ state, matchId, sequence }`). За время
+      // задержки платформа уже уехала, и сравнение старой позиции игрока с новой позицией опоры
+      // дало бы расхождение из ничего. Неподвижного пола это не касается — он и через секунду там
+      // же. Счётчик отдельный, чтобы пропуск был виден, а не растворился в выборке.
+      if (index >= 0 && probeWorld.colliders[index]?.motion) {
+        this.groundModelDiagnostics.dynamicSkipped += 1;
+        controller.clientPreviousY = finite(player.last?.y);
+        return true;
+      }
+
       const serverFindsGround = index >= 0 && finite(player.last.vy) <= GROUND_CONTACT_MAX_UPWARD_SPEED;
       this.groundModelDiagnostics.samples += 1;
       if (serverFindsGround === clientGrounded) this.groundModelDiagnostics.agreements += 1;
@@ -654,7 +708,15 @@ class ShadowInputRuntime {
       const dy = controller.freeState.position.y - legacy.y;
       const dz = controller.freeState.position.z - legacy.z;
       // Расхождение по позиции наблюдаемо всегда: ярлык состояния на него не влияет.
-      this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      // Отрыв записывается ТОЛЬКО на свежем клиентском снимке.
+      //
+      // `freeState` шагает каждые 33 мс, а `player.last` обновляется раз в 66 мс и приходит с
+      // задержкой. Замер на каждом тике поэтому пилообразный: даже у совпадающей симуляции набегало
+      // бы около 0.26 единицы за тик на беговой скорости 7.7, и порог, взятый из полос
+      // реконсиляции, оказался бы недостижим на живом трафике по построению. На свежем снимке фаза
+      // одна и та же, а постоянная часть задержки взаимно уничтожается: якорь тоже ставится по
+      // запоздавшему снимку.
+      if (freshSnapshot) this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
     }
     return true;
   }

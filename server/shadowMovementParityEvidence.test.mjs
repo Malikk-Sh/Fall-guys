@@ -29,7 +29,15 @@ function goodMetrics(overrides = {}) {
     impulses: 200,
     wallBounces: 12,
     heightError: { count: 5000, mean: 0.004, p95: 0.01, max: 0.03 },
-    freeTrajectoryError: { count: 5000, mean: 0.08, p50: 0.05, p95: 0.2, max: 0.5 },
+    freeTrajectoryError: {
+      count: 5000,
+      mean: 0.08,
+      p50: 0.05,
+      p95: 0.2,
+      max: 0.5,
+      overSoftRate: 0.02,
+      overHardRate: 0
+    },
     hitParity: {
       serverHits: 84,
       clientHits: 85,
@@ -113,7 +121,17 @@ test('расхождение по высоте стояния закрывает
 // идеальным, а паритет попаданий обычный дрейф без сбиваний не ловит.
 test('редкий выброс отрыва воротам не мешает, если типичный тик в норме', () => {
   const evaluation = evaluateMovementParity(
-    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 2, p50: 0.1, p95: 0.9, max: 90 } })
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 5000,
+        mean: 2,
+        p50: 0.1,
+        p95: 0.9,
+        max: 90,
+        overSoftRate: 0.1,
+        overHardRate: 0.01
+      }
+    })
   );
   assert.equal(evaluation.collisionParityVerified, true);
   assert.equal(evaluation.obstacleParityVerified, true);
@@ -121,13 +139,33 @@ test('редкий выброс отрыва воротам не мешает, �
 
 test('уехавшая траектория закрывает ворота, даже когда опора и удары сходятся', () => {
   const byTypical = evaluateMovementParity(
-    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 1, p50: 0.9, p95: 1.2, max: 3 } })
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 5000,
+        mean: 1,
+        p50: 0.9,
+        p95: 1.2,
+        max: 3,
+        overSoftRate: 0.7,
+        overHardRate: 0.01
+      }
+    })
   );
-  assert.equal(byTypical.collisionParityVerified, false, 'типичный тик вне полосы мягкой коррекции');
+  assert.equal(byTypical.collisionParityVerified, false, 'больше половины тиков вне полосы мягкой коррекции');
   assert.ok(byTypical.reasons.includes(REASON.TRAJECTORY_ERROR));
 
   const byTail = evaluateMovementParity(
-    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 1, p50: 0.1, p95: 4.2, max: 17 } })
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 5000,
+        mean: 1,
+        p50: 0.1,
+        p95: 4.2,
+        max: 17,
+        overSoftRate: 0.2,
+        overHardRate: 0.2
+      }
+    })
   );
   assert.equal(byTail.collisionParityVerified, false, 'жёсткая коррекция чаще одного тика из двадцати');
   assert.equal(byTail.obstacleParityVerified, false, 'условие общее для обоих признаков');
@@ -264,8 +302,8 @@ test('пороги политики остаются консервативны�
   assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxServerOnlyHits, 0);
   assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minHitMatchRate >= 0.9);
   // Пороги отрыва — те же числа, по которым живёт реконсиляция: мягкая коррекция и жёсткая.
-  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxFreeTrajectoryErrorP50, 0.3);
-  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxFreeTrajectoryErrorP95, 1.5);
+  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxOverSoftRate, 0.5);
+  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxOverHardRate, 0.05);
 });
 
 test('singleton guard не пользуется живым провайдером и остаётся закрытым', () => {

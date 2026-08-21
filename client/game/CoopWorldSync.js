@@ -5,14 +5,15 @@
 // действия игрока. Главное такое место — осыпающаяся плитка: раньше её таймер заводил только
 // локальный Player.interact, поэтому напарник видел человека над совершенно целым полом.
 
+import { movePlatform } from './CourseBuilder.js';
+
 const PLAYER_FOOT = 0.48;
 const TILE_TOP_Y = 0.5;
 
 function standsOnTile(position, tile) {
   if (!position || !tile?.platform?.mesh) return false;
-  const mesh = tile.platform.mesh;
-  if (Math.abs(position.x - mesh.position.x) > tile.platform.w / 2) return false;
-  if (Math.abs(position.z - mesh.position.z) > tile.platform.d / 2) return false;
+  if (Math.abs(position.x - tile.platform.x) > tile.platform.w / 2) return false;
+  if (Math.abs(position.z - tile.platform.z) > tile.platform.d / 2) return false;
   return Math.abs(position.y - PLAYER_FOOT - TILE_TOP_Y) < 0.6;
 }
 
@@ -75,7 +76,7 @@ export function applyCollapseEvent(course, { objectId, at } = {}, nowMs = Date.n
     tile.timer = Math.max(0.001, respawn - (age - delay));
     tile.platform.disabled = true;
     mesh.visible = false;
-    mesh.position.y = tile.baseY;
+    movePlatform(tile.platform, 'y', tile.baseY);
     return true;
   }
 
@@ -85,6 +86,6 @@ export function applyCollapseEvent(course, { objectId, at } = {}, nowMs = Date.n
   tile.timer = 0;
   tile.platform.disabled = false;
   mesh.visible = true;
-  mesh.position.y = tile.baseY;
+  movePlatform(tile.platform, 'y', tile.baseY);
   return true;
 }

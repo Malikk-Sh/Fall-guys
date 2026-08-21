@@ -3,6 +3,7 @@
 const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const {
+  GROUND_CONTACT_MAX_UPWARD_SPEED,
   PLAYER_SIMULATION_CONSTANTS,
   applyKnockdown,
   createPlayerSimulationState,
@@ -133,6 +134,9 @@ const FREE_TRAJECTORY_SUB_DT = SERVER_SIMULATION_DT / FREE_TRAJECTORY_SUB_STEPS;
 // единиц (p99 = 0.62), самый короткий возврат — 10.83. Между ними нет ни одного шага.
 const CLIENT_TELEPORT_DISTANCE = 4;
 
+// Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
+const CLIENT_FRAME_DT = 1 / 60;
+
 // Секунды с начала забега — то же число, что клиент держит в `RaceSession.elapsed` и передаёт в
 // `Course.update` и `Course.interact`.
 //
@@ -170,6 +174,19 @@ function reanchoredState(legacy, previous) {
   next.knockdownImmunity = previous.knockdownImmunity;
   next.getupTimer = previous.getupTimer;
   return next;
+}
+
+// Откуда клиент пришёл за ОДИН СВОЙ кадр, а не за один серверный тик.
+//
+// Свип-тест спрашивает «не прошёл ли игрок сквозь поверхность с прошлой проверки». Клиент проверяет
+// каждые 1/60, а сервер видит его раз в 1/30, и подстановка прошлого сетевого отсчёта растягивала
+// свип вдвое: на падении со скоростью 8.9 он покрывал 0.30 вместо 0.15 и ловил опору, мимо которой
+// клиент пролетел. Поэтому исходная точка восстанавливается по скорости на один клиентский кадр —
+// единственное, что тут можно сделать честно: промежуточной позиции сервер не видит вовсе.
+function clientFramePreviousY(legacy) {
+  const y = finite(legacy?.y);
+  const vy = finite(legacy?.vy);
+  return vy < 0 ? y - vy * CLIENT_FRAME_DT : y;
 }
 
 class RollingErrorStats {
@@ -568,11 +585,17 @@ class ShadowInputRuntime {
       const index = supportIndexAt(
         world.colliders,
         { x: finite(player.last.x), y: finite(player.last.y), z: finite(player.last.z) },
-        Number.isFinite(controller.clientPreviousY) ? controller.clientPreviousY : finite(player.last.y),
+        clientFramePreviousY(player.last),
         finite(player.last.vy),
         PLAYER_FOOT
       );
-      const serverFindsGround = index >= 0;
+      // Порогов по скорости вверх ДВА, и здесь обязан действовать тот же, что у клиента.
+      //
+      // `supportIndexAt` пропускает подъём до 2.2, но `resolveGroundContact` поверх него требует
+      // не быстрее 1.5, и клиент живёт по второму. Замер, звавший только первый, считал полом всё,
+      // что летело вверх со скоростью между 1.5 и 2.2, — то есть мерил более слабым правилом, чем
+      // то, которое проверяет. На прогоне ботов это давало 6 расхождений из 8.
+      const serverFindsGround = index >= 0 && finite(player.last.vy) <= GROUND_CONTACT_MAX_UPWARD_SPEED;
       this.groundModelDiagnostics.samples += 1;
       if (serverFindsGround === clientGrounded) this.groundModelDiagnostics.agreements += 1;
       else if (serverFindsGround) this.groundModelDiagnostics.serverGroundedOnly += 1;

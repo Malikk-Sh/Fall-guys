@@ -412,3 +412,45 @@ test('высота стояния меряется по опоре в точке
   assert.ok(heightError.count > 0, 'высота обязана меряться');
   assert.equal(heightError.max, 0, 'клиент стоит на своей опоре, и сервер находит ту же высоту');
 });
+
+// Модель мира обязана спрашивать теми же правилами, по которым живёт клиент.
+test('быстрый подъём не считается опорой: порог тот же, что у клиента', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+
+  // Игрок над самой площадкой, но летит вверх быстрее допустимого для контакта. Клиент в этот
+  // момент в воздухе, и сервер обязан ответить так же. `supportIndexAt` сам по себе пропускает
+  // подъём до 2.2 — если спрашивать только его, тут получился бы «пол из ниоткуда».
+  player.last = { ...player.last, state: 'air', vy: 2.0 };
+  tick(runtime, room, player, 5, room.startedAt);
+
+  const { groundModel } = runtime.metrics().shadowGroundContact;
+  assert.ok(groundModel.samples > 0);
+  assert.equal(groundModel.serverGroundedOnly, 0, 'подъём быстрее 1.5 опорой не считается');
+});
+
+test('свип-тест меряется кадром клиента, а не серверным тиком', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  const top = supportTop(recordRaceCourse(spec).platforms[0]);
+
+  // Клиент обязан реально падать между отсчётами, иначе растягивать свипу нечего и проверка
+  // становится пустой. Скорость 8.9 ед/с даёт за серверный тик 0.297, за кадр клиента 0.148.
+  const fall = 8.9 / 30;
+  player.last = { ...player.last, y: top + 0.097, vy: -8.9, state: 'air' };
+  tick(runtime, room, player, 1, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel.serverGroundedOnly;
+
+  // Следующий отсчёт: игрок ниже верха на 0.2. Прошлый СЕТЕВОЙ отсчёт был на 0.297 выше, то есть
+  // выше верха, и растянутый свип нашёл бы здесь опору. Свип длиной в кадр клиента даёт
+  // top - 0.052 и опоры не находит — а клиент как раз в воздухе.
+  player.last = { ...player.last, y: top + 0.097 - fall };
+  tick(runtime, room, player, 1, room.startedAt + SERVER_SIMULATION_DT * 1000);
+
+  const after = runtime.metrics().shadowGroundContact.groundModel.serverGroundedOnly;
+  assert.equal(after, before, 'свип не должен захватывать кадр, которого клиент не проходил');
+});

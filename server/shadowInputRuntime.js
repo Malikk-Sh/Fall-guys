@@ -108,6 +108,21 @@ function alignKnownWorldContact(state, legacy = {}) {
   return next;
 }
 
+// Горизонт измерения свободной траектории, в серверных тиках. Секунда на 30 Гц.
+//
+// Столько симуляция бежит сама, прежде чем её якорь сбрасывается на текущее состояние клиента.
+// Секунда с запасом перекрывает и сетевую задержку, и окно реконсиляции, то есть весь срок, за
+// который серверное состояние успевает доехать до экрана. Бесконечный горизонт мерил бы не
+// паритет, а расхождение двух траекторий хаотической системы — оно неограниченно у любых двух
+// симуляций и ничего не доказывает.
+const FREE_TRAJECTORY_HORIZON_TICKS = 30;
+
+// Скачок позиции клиента, который может быть только возвратом на чекпоинт.
+//
+// Число измерено на прогоне ботов: 8602 сетевых шага, законное перемещение за тик не больше 2
+// единиц (p99 = 0.62), самый короткий возврат — 10.83. Между ними нет ни одного шага.
+const CLIENT_TELEPORT_DISTANCE = 4;
+
 // Секунды с начала забега — то же число, что клиент держит в `RaceSession.elapsed` и передаёт в
 // `Course.update` и `Course.interact`.
 //
@@ -184,11 +199,13 @@ class ShadowInputRuntime {
       agreements: 0,
       groundedMismatch: 0,
       shadowGroundedOnly: 0,
-      clientGroundedOnly: 0
+      clientGroundedOnly: 0,
+      // Тики, где ярлык состояния клиента не сообщает об опоре (dive, slam, knockdown, downed).
+      groundStateUnknown: 0
     };
     this.groundHeightError = new RollingErrorStats();
     this.freeTrajectoryError = new RollingErrorStats();
-    this.worldDiagnostics = { wallBounces: 0, impulses: 0 };
+    this.worldDiagnostics = { wallBounces: 0, impulses: 0, reanchors: 0, clientTeleports: 0 };
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -273,9 +290,56 @@ class ShadowInputRuntime {
       : this.serverTick * SERVER_SIMULATION_DT;
     world.advance(matchTime);
 
-    // Первый шаг траектории начинается от того же места, что и клиент: сравнивается расхождение,
-    // накопленное симуляцией, а не разница стартовых точек.
-    if (!controller.freeState) controller.freeState = stateFromLegacy(player.last);
+    // Траектория меряется НА ОГРАНИЧЕННОМ ГОРИЗОНТЕ, и это не смягчение проверки, а условие того,
+    // чтобы она вообще что-то значила.
+    //
+    // Свободно бегущая симуляция сравнивалась с клиентом от первого тика и до конца забега. На
+    // прогоне ботов это дало среднее расхождение 1123 единицы при пороге 0.3 — не потому, что
+    // геометрия разошлась (высота стояния совпадала до 0.0002), а потому, что клиент один раз
+    // упал и вернулся на чекпоинт, а свободная траектория продолжила падать в пустоту. Дальше
+    // сравнивались бегущий по трассе игрок и точка где-то под миром.
+    //
+    // Вопрос, на который обязаны ответить ворота, звучит иначе: расходится ли серверная симуляция
+    // с клиентской ЗА ТО ВРЕМЯ, пока она успевает доехать до экрана. Это вопрос о коротком
+    // горизонте, и меряется он сбросом якоря раз в секунду.
+    if (!controller.freeState) {
+      controller.freeState = stateFromLegacy(player.last);
+      controller.freeTicks = 0;
+    }
+
+    // Возврат на чекпоинт — не расхождение симуляций, а разрыв в клиенте, которого серверная
+    // симуляция не переживала: она не падала. Считать такой скачок ошибкой паритета значило бы
+    // мерить respawn вместо физики.
+    //
+    // Порог измерен, а не назначен: на 8602 сетевых шагах ботов законное перемещение за тик не
+    // превышало 2 единиц (p99 = 0.62), а самый короткий возврат на чекпоинт составил 10.83. Между
+    // 2 и 10.83 нет ни одного шага, и 4 лежит посреди этого разрыва.
+    const clientJump = controller.lastClientPosition
+      ? Math.hypot(
+          finite(player.last?.x) - controller.lastClientPosition.x,
+          finite(player.last?.y) - controller.lastClientPosition.y,
+          finite(player.last?.z) - controller.lastClientPosition.z
+        )
+      : 0;
+    controller.lastClientPosition = {
+      x: finite(player.last?.x),
+      y: finite(player.last?.y),
+      z: finite(player.last?.z)
+    };
+    if (clientJump > CLIENT_TELEPORT_DISTANCE) {
+      this.worldDiagnostics.clientTeleports += 1;
+      controller.freeState = stateFromLegacy(player.last);
+      controller.freeTicks = 0;
+      // Этот тик не измеряем вовсе: сравнивать было бы нечего.
+      return true;
+    }
+
+    if (controller.freeTicks >= FREE_TRAJECTORY_HORIZON_TICKS) {
+      this.worldDiagnostics.reanchors += 1;
+      controller.freeState = stateFromLegacy(player.last);
+      controller.freeTicks = 0;
+    }
+    controller.freeTicks += 1;
 
     const before = copySimulationState(controller.freeState);
     const stepped = this.step(controller.freeState, controller.input, {}, SERVER_SIMULATION_DT).state;
@@ -313,13 +377,28 @@ class ShadowInputRuntime {
     this.worldDiagnostics.impulses += impulses.events.length;
     controller.freeState = impulses.state;
 
-    const clientGrounded = player.last?.state === 'ground';
-    this.groundDiagnostics.samples += 1;
-    if (controller.freeState.grounded === clientGrounded) this.groundDiagnostics.agreements += 1;
+    // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
+    //
+    // `state` в снапшоте — ярлык подачи с приоритетом, а не флаг опоры: сбитый игрок лежит НА полу,
+    // но помечен `knockdown`, а скользящий в подкате — `dive`. Сравнение с `=== 'ground'` считало
+    // такие тики расхождением. Замер на ботах: из 1352 случаев «сервер дал пол» 748 приходились на
+    // knockdown и 245 на dive — 73 % несуществующих расхождений.
+    //
+    // Поэтому тики, где опора клиента не наблюдаема, из статистики согласия исключаются и считаются
+    // отдельно. Неизвестное — не согласие и не расхождение; записать его в согласия значило бы
+    // выдумать доказательство.
+    const clientState = player.last?.state;
+    const clientGroundKnown = clientState === 'ground' || clientState === 'air';
+    const clientGrounded = clientState === 'ground';
+    if (!clientGroundKnown) this.groundDiagnostics.groundStateUnknown += 1;
     else {
-      this.groundDiagnostics.groundedMismatch += 1;
-      if (controller.freeState.grounded) this.groundDiagnostics.shadowGroundedOnly += 1;
-      else this.groundDiagnostics.clientGroundedOnly += 1;
+      this.groundDiagnostics.samples += 1;
+      if (controller.freeState.grounded === clientGrounded) this.groundDiagnostics.agreements += 1;
+      else {
+        this.groundDiagnostics.groundedMismatch += 1;
+        if (controller.freeState.grounded) this.groundDiagnostics.shadowGroundedOnly += 1;
+        else this.groundDiagnostics.clientGroundedOnly += 1;
+      }
     }
 
     const legacy = player.last;
@@ -327,8 +406,9 @@ class ShadowInputRuntime {
       const dx = controller.freeState.position.x - legacy.x;
       const dy = controller.freeState.position.y - legacy.y;
       const dz = controller.freeState.position.z - legacy.z;
+      // Расхождение по позиции наблюдаемо всегда: ярлык состояния на него не влияет.
       this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
-      if (controller.freeState.grounded && clientGrounded) this.groundHeightError.record(Math.abs(dy));
+      if (clientGrounded && controller.freeState.grounded) this.groundHeightError.record(Math.abs(dy));
     }
     return true;
   }

@@ -533,6 +533,12 @@ class ShadowInputRuntime {
     // Порог измерен, а не назначен: на 8602 сетевых шагах ботов законное перемещение за тик не
     // превышало 2 единиц (p99 = 0.62), а самый короткий возврат на чекпоинт составил 10.83. Между
     // 2 и 10.83 нет ни одного шага, и 4 лежит посреди этого разрыва.
+    // Первое наблюдение за игроком — тоже постановка, а не результат симуляции.
+    //
+    // Скачку в этот момент взяться неоткуда: предыдущей позиции ещё нет. Но игрок на старте так же
+    // ПОСТАВЛЕН на площадку, а не пришёл на неё шагом, и `grounded` у него пересчитает лишь
+    // следующий кадр. Замер на ботах показывал это ровно один раз на забег, на первом же тике.
+    const firstObservation = !controller.lastClientPosition;
     const clientJump = controller.lastClientPosition
       ? Math.hypot(
           finite(player.last?.x) - controller.lastClientPosition.x,
@@ -556,6 +562,13 @@ class ShadowInputRuntime {
       controller.placedSkipsLeft = PLACED_SKIP_LIMIT;
       // Этот тик не измеряем вовсе: сравнивать было бы нечего.
       return true;
+    }
+
+    // Первое наблюдение взводит латч постановки, но тик НЕ прерывает: свободная траектория и удары
+    // считаются как обычно, а под сомнением здесь только ярлык опоры.
+    if (firstObservation) {
+      controller.placedAt = { ...controller.lastClientPosition };
+      controller.placedSkipsLeft = PLACED_SKIP_LIMIT;
     }
 
     if (controller.freeTicks >= FREE_TRAJECTORY_HORIZON_TICKS) {

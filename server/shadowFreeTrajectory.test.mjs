@@ -68,6 +68,17 @@ function tick(runtime, room, player, count = 1, startNow = 1000, { freshClient =
   }
 }
 
+// Первое наблюдение за игроком измерение считает постановкой: `grounded` у только что
+// поставленного ещё не пересчитан, и ярлык опоры ничего не сообщает. Тестам, которым нужны
+// выборки, поэтому нужен прогрев — один снимок на месте и один со сдвигом, после которого латч
+// отпускает и измерение идёт как обычно.
+function warmUp(runtime, room, player, now) {
+  tick(runtime, room, player, 1, now);
+  player.last = { ...player.last, x: player.last.x + 0.01 };
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+  return now + 2 * SERVER_SIMULATION_DT * 1000;
+}
+
 test('свободная траектория считается и остаётся на полу под стоящим игроком', () => {
   const runtime = new ShadowInputRuntime();
   const room = raceRoom();
@@ -475,6 +486,7 @@ test('опора спрашивается у мира на момент снап
   // Снимок старше тика: за это время подвижные опоры успевают уехать. Время снимка приносит сам
   // клиент полем `courseTime` — момент приёма для этого не годится. Расхождение берём в пределах
   // допуска: дальше сервер клиенту не верит (см. отдельную проверку ниже).
+  warmUp(runtime, room, player, room.startedAt);
   const now = room.startedAt + 4000;
   player.lastAt = now - 300;
   player.lastCourseTime = 3.7;
@@ -504,15 +516,17 @@ test('один и тот же снапшот не засчитывается д�
   const room = raceRoom();
   room.startedAt = 1_760_000_000_000;
   const player = standingPlayer();
+  warmUp(runtime, room, player, room.startedAt);
+  const measured = runtime.metrics().shadowGroundContact.groundModel.samples;
   player.lastAt = room.startedAt + 100;
 
   // Три тика подряд с одним и тем же снимком: 66 мс рассылки против 33 мс тика — обычное дело.
   tick(runtime, room, player, 3, room.startedAt + 200, { freshClient: false });
-  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 1);
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, measured);
 
   // Новый пакет от клиента — новая выборка.
   tick(runtime, room, player, 1, room.startedAt + 400);
-  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 2);
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, measured + 1);
 });
 
 // Возрождение пишет сервер, а не клиент, и в доказательства такое состояние идти не должно.
@@ -528,9 +542,9 @@ test('состояние, записанное сервером при возр�
   const start = recordRaceCourse(spec).platforms[0];
 
   // Сначала обычный обмен: клиент прислал снимок, измерение его учло.
-  tick(runtime, room, player, 1, room.startedAt);
+  warmUp(runtime, room, player, room.startedAt);
   const before = runtime.metrics().shadowGroundContact.groundModel.samples;
-  assert.equal(before, 1, 'обычный клиентский снимок в выборку идёт');
+  assert.ok(before > 0, 'обычный клиентский снимок в выборку идёт');
 
   // А теперь ровно то, что пишет сервер: точка чекпоинта, «воздух», нули, номер пакета НЕ растёт.
   player.last = {
@@ -580,8 +594,10 @@ test('выборка на подвижной опоре не засчитыва�
     vy: 0,
     state: 'ground'
   };
-  // Перестановка через полтрассы — не возрождение: проверяем другое, поэтому защиту снимаем.
-  controller.lastClientPosition = null;
+  // Перестановка через полтрассы — не возрождение: проверяем другое, поэтому подставляем новую
+  // позицию как уже известную. Обнулять её нельзя — тогда тик считался бы первым наблюдением, и
+  // выборка отложилась бы как постановка.
+  controller.lastClientPosition = { x: player.last.x, y: player.last.y, z: player.last.z };
   tick(runtime, room, player, 1, room.startedAt + at * 1000);
 
   const after = runtime.metrics().shadowGroundContact.groundModel;
@@ -649,7 +665,7 @@ test('courseTime возвращает подвижные опоры в дока�
 
   const onMovingPlatform = runtime => {
     const player = standingPlayer();
-    tick(runtime, room, player, 1, room.startedAt);
+    warmUp(runtime, room, player, room.startedAt);
     const controller = runtime.controllers.get(player);
     player.last = {
       ...player.last,
@@ -659,7 +675,7 @@ test('courseTime возвращает подвижные опоры в дока�
       vy: 0,
       state: 'ground'
     };
-    controller.lastClientPosition = null;
+    controller.lastClientPosition = { x: player.last.x, y: player.last.y, z: player.last.z };
     return player;
   };
 
@@ -700,7 +716,7 @@ test('время трассы, не сходящееся с серверным, 
 
   const onMovingPlatform = (runtime, courseTime) => {
     const player = standingPlayer();
-    tick(runtime, room, player, 1, room.startedAt);
+    warmUp(runtime, room, player, room.startedAt);
     const controller = runtime.controllers.get(player);
     player.last = {
       ...player.last,
@@ -711,7 +727,7 @@ test('время трассы, не сходящееся с серверным, 
       state: 'ground'
     };
     player.lastCourseTime = courseTime;
-    controller.lastClientPosition = null;
+    controller.lastClientPosition = { x: player.last.x, y: player.last.y, z: player.last.z };
     tick(runtime, room, player, 1, room.startedAt + at * 1000);
     return runtime.metrics().shadowGroundContact.groundModel;
   };
@@ -739,8 +755,11 @@ test('откладывание после скачка ограничено и �
   const room = raceRoom();
   room.startedAt = 1000;
   const player = standingPlayer();
-  tick(runtime, room, player, 2, room.startedAt);
-  const before = runtime.metrics().shadowGroundContact.groundModel.samples;
+  warmUp(runtime, room, player, room.startedAt);
+  const start = runtime.metrics().shadowGroundContact.groundModel;
+  const before = start.samples;
+  // Прогрев сам тратит пропуск на первое наблюдение, поэтому считаем ПРИРОСТ от скачка.
+  const skippedBefore = start.placedSkipped;
 
   // Разрыв: игрок «перепрыгнул» дальше порога, хотя никакого возрождения не было.
   const far = { ...player.last, z: player.last.z - 30 };
@@ -756,8 +775,9 @@ test('откладывание после скачка ограничено и �
   }
 
   const model = runtime.metrics().shadowGroundContact.groundModel;
-  assert.ok(model.placedSkipped > 0, 'первые снимки после скачка откладываются');
-  assert.ok(model.placedSkipped <= 2, 'но не бесконечно: запас ограничен');
+  const skippedByJump = model.placedSkipped - skippedBefore;
+  assert.ok(skippedByJump > 0, 'первые снимки после скачка откладываются');
+  assert.ok(skippedByJump <= 2, 'но не бесконечно: запас ограничен');
   assert.ok(model.samples > before, 'дальше доказательства снова идут, а не пропадают');
 });
 
@@ -781,4 +801,33 @@ test('кадр постановки не попадает и в отрыв тр�
     before,
     'непригодный как свидетельство кадр не должен смещать и доли превышения отрыва'
   );
+});
+
+// Первое наблюдение за игроком — тоже постановка.
+//
+// Скачку в этот момент взяться неоткуда: предыдущей позиции ещё нет, поэтому распознавание по
+// расстоянию тут не срабатывает. Но на старте игрок так же ПОСТАВЛЕН на площадку, а не пришёл на
+// неё шагом, и `grounded` пересчитает лишь следующий кадр. На прогоне ботов это давало ровно один
+// случай «пол из ниоткуда» на забег, всегда на первом тике.
+test('первый снимок игрока доказательством об опоре не считается', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  const start = recordRaceCourse(spec).platforms[0];
+
+  // Ровно то, что видно на старте: игрок над площадкой, помечен воздухом, скорости нет.
+  player.last = {
+    ...player.last,
+    y: supportTop(start) + PLAYER_FOOT + 0.266,
+    vy: 0,
+    state: 'air'
+  };
+  tick(runtime, room, player, 2, room.startedAt);
+
+  const model = runtime.metrics().shadowGroundContact.groundModel;
+  assert.equal(model.serverGroundedOnly, 0, 'постановка на старт — не расхождение геометрии');
+  assert.ok(model.placedSkipped > 0, 'пропуск обязан быть виден');
+  // И возвратом на чекпоинт первое наблюдение считаться не должно.
+  assert.equal(runtime.metrics().shadowGroundContact.clientTeleports, 0);
 });

@@ -3,12 +3,17 @@
 const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const {
+  PLAYER_SIMULATION_CONSTANTS,
   createPlayerSimulationState,
   movementIntent,
   resolveGroundContact,
   stepPlayerMotion
 } = require('../shared/playerSimulation.js');
-const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
+
+const { JUMP_SPEED } = PLAYER_SIMULATION_CONSTANTS;
+const { PLAYER_BODY_RADIUS, PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } = require('../shared/playerDimensions.js');
+const { applyObstacleImpulses } = require('../shared/courseImpulses.js');
+const { applyWallBounce, wallBounceNormalAt } = require('../shared/courseWalls.js');
 const { shadowCourseWorldFor } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
@@ -171,6 +176,8 @@ class ShadowInputRuntime {
       clientGroundedOnly: 0
     };
     this.groundHeightError = new RollingErrorStats();
+    this.freeTrajectoryError = new RollingErrorStats();
+    this.worldDiagnostics = { wallBounces: 0, impulses: 0 };
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -192,6 +199,10 @@ class ShadowInputRuntime {
         input: neutralInput(),
         progress: raceProgressFor(room),
         world: shadowCourseWorldFor(room),
+        // Своя траектория и свои перезарядки ударов: у клиента они собственные, и делить их
+        // означало бы, что измерение подглядывает в измеряемое.
+        freeState: null,
+        hitTimes: new Map(),
         finishServerTime: null,
         legacyFinishedObserved: false,
         lastProcessedInput: -1,
@@ -225,7 +236,15 @@ class ShadowInputRuntime {
   // авторитет прогресса гонки, — сначала измерение на живом трафике, потом ворота готовности, и
   // только потом переключение. Разница здесь и есть то доказательство паритета, которого ждёт
   // guard движения: сегодня его провайдер отдаёт константу, потому что мерить было нечего.
-  measureGroundContact(controller, player, previousState, steppedState, now) {
+  // Своя, ничем не подправляемая траектория.
+  //
+  // Авторитетное shadow-состояние каждый тик берёт контакт с землёй у клиента, поэтому расхождение
+  // по нему не копится и мерить по нему нечего. Здесь идёт вторая траектория: тот же ввод, но мир
+  // целиком свой — стены, пол и импульсы по общим правилам. Именно её отрыв от клиента и есть
+  // доказательство паритета, которого ждёт guard движения.
+  //
+  // На игру не влияет ничем: результат только записывается.
+  measureFreeTrajectory(controller, player, now) {
     const world = controller.world;
     if (!world) {
       this.groundDiagnostics.worldMissing += 1;
@@ -235,24 +254,61 @@ class ShadowInputRuntime {
     // сдвигать трассу.
     world.advance(Number.isFinite(now) ? now / 1000 : this.serverTick * SERVER_SIMULATION_DT);
 
-    const settled = resolveGroundContact(steppedState, {
+    // Первый шаг траектории начинается от того же места, что и клиент: сравнивается расхождение,
+    // накопленное симуляцией, а не разница стартовых точек.
+    if (!controller.freeState) controller.freeState = stateFromLegacy(player.last);
+
+    const before = copySimulationState(controller.freeState);
+    const stepped = this.step(controller.freeState, controller.input, {}, SERVER_SIMULATION_DT).state;
+
+    const normal = wallBounceNormalAt(
+      world.walls,
+      stepped.position,
+      before.position,
+      stepped.velocity,
+      PLAYER_BODY_RADIUS
+    );
+    if (normal && !before.grounded && before.jumpBuffer > 0) {
+      applyWallBounce(stepped, normal, before.position, { jumpSpeed: JUMP_SPEED });
+      this.worldDiagnostics.wallBounces += 1;
+    }
+
+    const settled = resolveGroundContact(stepped, {
       colliders: world.colliders,
-      previousY: previousState.position.y,
+      previousY: before.position.y,
       footOffset: PLAYER_FOOT,
       intent: movementIntent(controller.input),
-      wasGrounded: previousState.grounded
+      wasGrounded: before.grounded
     }).state;
+
+    const impulses = applyObstacleImpulses(settled, {
+      obstacles: world.obstacles,
+      now: Number.isFinite(now) ? now / 1000 : this.serverTick * SERVER_SIMULATION_DT,
+      hitTimes: controller.hitTimes,
+      playerRadius: PLAYER_OBSTACLE_RADIUS,
+      footOffset: PLAYER_FOOT,
+      knockback: 1,
+      limpHitCooldown: 0
+    });
+    this.worldDiagnostics.impulses += impulses.events.length;
+    controller.freeState = impulses.state;
 
     const clientGrounded = player.last?.state === 'ground';
     this.groundDiagnostics.samples += 1;
-    if (settled.grounded === clientGrounded) this.groundDiagnostics.agreements += 1;
+    if (controller.freeState.grounded === clientGrounded) this.groundDiagnostics.agreements += 1;
     else {
       this.groundDiagnostics.groundedMismatch += 1;
-      if (settled.grounded) this.groundDiagnostics.shadowGroundedOnly += 1;
+      if (controller.freeState.grounded) this.groundDiagnostics.shadowGroundedOnly += 1;
       else this.groundDiagnostics.clientGroundedOnly += 1;
     }
-    if (settled.grounded && clientGrounded && Number.isFinite(player.last?.y)) {
-      this.groundHeightError.record(Math.abs(settled.position.y - player.last.y));
+
+    const legacy = player.last;
+    if (legacy && Number.isFinite(legacy.x) && Number.isFinite(legacy.y) && Number.isFinite(legacy.z)) {
+      const dx = controller.freeState.position.x - legacy.x;
+      const dy = controller.freeState.position.y - legacy.y;
+      const dz = controller.freeState.position.z - legacy.z;
+      this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      if (controller.freeState.grounded && clientGrounded) this.groundHeightError.record(Math.abs(dy));
     }
     return true;
   }
@@ -315,7 +371,7 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
-    this.measureGroundContact(controller, player, previousState, result.state, now);
+    this.measureFreeTrajectory(controller, player, now);
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;
@@ -390,6 +446,8 @@ class ShadowInputRuntime {
       },
       shadowGroundContact: {
         ...this.groundDiagnostics,
+        ...this.worldDiagnostics,
+        freeTrajectoryError: this.freeTrajectoryError.snapshot(),
         agreementRate: this.groundDiagnostics.samples
           ? this.groundDiagnostics.agreements / this.groundDiagnostics.samples
           : 0,

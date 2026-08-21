@@ -728,3 +728,57 @@ test('время трассы, не сходящееся с серверным, 
   const honest = onMovingPlatform(new ShadowInputRuntime(), at);
   assert.equal(honest.dynamicSkipped, 0, 'сошедшемуся времени верим');
 });
+
+// Разрыв в пакетах — не постановка, и доказательства из-за него не должны пропадать насовсем.
+//
+// Постановка распознаётся по скачку позиции, а скачок не отличает возрождение от обычного бега,
+// потерявшего несколько снимков. Остановись игрок после такого разрыва — его округлённая позиция
+// совпадала бы с «точкой постановки» сколь угодно долго.
+test('откладывание после скачка ограничено и само отпускает', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel.samples;
+
+  // Разрыв: игрок «перепрыгнул» дальше порога, хотя никакого возрождения не было.
+  const far = { ...player.last, z: player.last.z - 30 };
+  player.last = far;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+
+  // И замер на месте — позиция не меняется. Пропуски обязаны кончиться.
+  let now = room.startedAt + 3 * SERVER_SIMULATION_DT * 1000;
+  for (let step = 0; step < 8; step++) {
+    player.last = { ...far };
+    tick(runtime, room, player, 1, now);
+    now += SERVER_SIMULATION_DT * 1000;
+  }
+
+  const model = runtime.metrics().shadowGroundContact.groundModel;
+  assert.ok(model.placedSkipped > 0, 'первые снимки после скачка откладываются');
+  assert.ok(model.placedSkipped <= 2, 'но не бесконечно: запас ограничен');
+  assert.ok(model.samples > before, 'дальше доказательства снова идут, а не пропадают');
+});
+
+test('кадр постановки не попадает и в отрыв траектории', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 2, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.freeTrajectoryError.count;
+
+  // Возврат на чекпоинт: скачок, затем тот же снимок ещё раз.
+  const placed = { ...player.last, z: player.last.z - 40, vy: 0, state: 'air' };
+  player.last = placed;
+  tick(runtime, room, player, 1, room.startedAt + 2 * SERVER_SIMULATION_DT * 1000);
+  player.last = { ...placed };
+  tick(runtime, room, player, 1, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+
+  assert.equal(
+    runtime.metrics().shadowGroundContact.freeTrajectoryError.count,
+    before,
+    'непригодный как свидетельство кадр не должен смещать и доли превышения отрыва'
+  );
+});

@@ -134,6 +134,15 @@ const FREE_TRAJECTORY_SUB_DT = SERVER_SIMULATION_DT / FREE_TRAJECTORY_SUB_STEPS;
 // единиц (p99 = 0.62), самый короткий возврат — 10.83. Между ними нет ни одного шага.
 const CLIENT_TELEPORT_DISTANCE = 4;
 
+// Сколько снимков подряд можно отложить как «поставлен, но ещё не просимулирован».
+//
+// Постановка распознаётся по скачку позиции, а скачок не отличает возрождение от обычного бега,
+// потерявшего несколько пакетов состояния. Если после такого разрыва игрок остановится, его
+// округлённая позиция может совпадать с точкой «постановки» сколь угодно долго — и доказательства
+// молча выбрасывались бы вместо того, чтобы откладываться на кадр. Настоящему возрождению хватает
+// одного-двух снимков: следующий шаг физики уже ставит игрока на опору.
+const PLACED_SKIP_LIMIT = 2;
+
 // Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
 const CLIENT_FRAME_DT = 1 / 60;
 
@@ -541,8 +550,10 @@ class ShadowInputRuntime {
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
       // Пока по этой точке не прошёл шаг физики, ярлык опоры у клиента ничего не сообщает: см.
-      // `placedNotSimulated`.
+      // `placedNotSimulated`. Латч ограничен по числу снимков — распознавание идёт по расстоянию, а
+      // расстояние не отличает возрождение от потери пакетов.
       controller.placedAt = { ...controller.lastClientPosition };
+      controller.placedSkipsLeft = PLACED_SKIP_LIMIT;
       // Этот тик не измеряем вовсе: сравнивать было бы нечего.
       return true;
     }
@@ -683,13 +694,24 @@ class ShadowInputRuntime {
     //
     // Признак не гадательный: возврат уже распознан по скачку позиции выше, и выборки пропускаются,
     // пока клиент не сдвинется с точки постановки, то есть пока шаг физики действительно не пройдёт.
-    const placedNotSimulated =
+    const stillAtPlacement =
       !!controller.placedAt &&
       finite(player.last?.x) === controller.placedAt.x &&
       finite(player.last?.y) === controller.placedAt.y &&
       finite(player.last?.z) === controller.placedAt.z;
-    if (!placedNotSimulated) controller.placedAt = null;
-    else this.groundModelDiagnostics.placedSkipped += 1;
+    // Счётчик тратится ТОЛЬКО на свежих снимках: тик идёт на 30 Гц, состояние приходит на 15, и
+    // считать один и тот же снимок дважды значило бы и запас исчерпать вдвое быстрее, и счётчик
+    // сделать несопоставимым с `samples` и `dynamicSkipped`.
+    const placedNotSimulated = stillAtPlacement && controller.placedSkipsLeft > 0;
+    if (!stillAtPlacement) {
+      controller.placedAt = null;
+      controller.placedSkipsLeft = 0;
+    } else if (freshSnapshot) {
+      if (placedNotSimulated) {
+        this.groundModelDiagnostics.placedSkipped += 1;
+        controller.placedSkipsLeft -= 1;
+      }
+    }
 
     if (clientGroundKnown && freshSnapshot && !placedNotSimulated) {
       probeWorld.advance(snapshotAt);
@@ -760,7 +782,12 @@ class ShadowInputRuntime {
       // реконсиляции, оказался бы недостижим на живом трафике по построению. На свежем снимке фаза
       // одна и та же, а постоянная часть задержки взаимно уничтожается: якорь тоже ставится по
       // запоздавшему снимку.
-      if (freshSnapshot) this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      // Кадр постановки исключается и отсюда. Он объявлен непригодным как свидетельство об опоре,
+      // а доли превышения отрыва — такая же часть ворот: пустить его сюда значило бы выбросить его
+      // из одной решающей метрики и оставить в другой.
+      if (freshSnapshot && !placedNotSimulated) {
+        this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
+      }
     }
     return true;
   }

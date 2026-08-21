@@ -477,6 +477,32 @@ class ShadowInputRuntime {
     };
   }
 
+  // Закрывает сопоставление ударов игрока, учтя его ПОСЛЕДНЕЕ наблюдаемое состояние.
+  //
+  // Наблюдение обязано идти до закрытия. Финишный пакет вполне может быть первым снимком со
+  // сбиванием: проверка финиша у клиента (`client/game/Player.js`) сбитого не исключает, и игрока
+  // может занести за финишную плоскость лёжа. Ветка финиша не вызывает `consume`, поэтому без
+  // отдельного наблюдения такое сбивание не засчиталось бы вовсе — а ждущий пары удар сервера
+  // закрылся бы как выдуманный, хотя пара у него была.
+  finalizeHits(controller, player) {
+    const clientKnockdown = player?.last?.state === 'knockdown';
+    if (clientKnockdown && !controller.clientWasKnockedDown) {
+      controller.clientWasKnockedDown = true;
+      this.recordHitDecisions(controller.hitPairing.observe(this.serverTick, false, true));
+    }
+    this.recordHitDecisions(controller.hitPairing.finalize());
+  }
+
+  // Игрок уходит из комнаты. Вызывается снаружи: `dropPlayer` удаляет его из списка немедленно, и
+  // тик его больше не увидит — а контроллер лежит в WeakMap, откуда закрыть его уже нельзя.
+  release(player) {
+    const controller = this.controllers.get(player);
+    if (!controller) return false;
+    this.finalizeHits(controller, player);
+    this.controllers.delete(player);
+    return true;
+  }
+
   recordHitDecisions(decided) {
     this.hitTotals.left += decided.left;
     this.hitTotals.right += decided.right;
@@ -954,7 +980,18 @@ class ShadowInputRuntime {
   tick(rooms, now = Date.now()) {
     this.serverTick += 1;
     for (const room of rooms.values()) {
-      if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
+      if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) {
+        // Матч кончился — и кончился он синхронно: когда финиширует последний, ядро переводит
+        // комнату в RESULTS сразу (`checkMatchEnd` → `finishMatch`), поэтому ветка финиша игрока в
+        // следующем тике уже недостижима. Ожидания, оставшиеся в этот момент, висели бы вечно, а
+        // незакрытые в знаменатель доли совпадений не входят — то есть паритет выглядел бы лучше,
+        // чем он есть. Закрытие идемпотентно: на пустых очередях оно ничего не добавляет.
+        for (const player of room.players.values()) {
+          const controller = this.controllers.get(player);
+          if (controller && controller.matchId === room.matchId) this.finalizeHits(controller, player);
+        }
+        continue;
+      }
       const advance = room.state === ROOM_STATE.PLAYING || (room.startedAt && now >= room.startedAt);
       for (const player of room.players.values()) {
         const controller = this.controllers.get(player);
@@ -964,7 +1001,7 @@ class ShadowInputRuntime {
             controller.legacyFinishedObserved = true;
             this.recordProgressComparison(controller, player);
             // Тиков по этому игроку больше не будет, значит и пары ожиданиям взяться неоткуда.
-            this.recordHitDecisions(controller.hitPairing.finalize());
+            this.finalizeHits(controller, player);
           }
           continue;
         }

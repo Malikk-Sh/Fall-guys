@@ -4,6 +4,7 @@ const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const {
   PLAYER_SIMULATION_CONSTANTS,
+  applyKnockdown,
   createPlayerSimulationState,
   movementIntent,
   resolveGroundContact,
@@ -400,6 +401,14 @@ class ShadowInputRuntime {
         limpHitCooldown: 0
       });
       this.worldDiagnostics.impulses += impulses.events.length;
+      // Импульс препятствия несёт не только толчок, но и сбивание, и второе клиент применяет
+      // (`Course.interact` → `player.knockDown`). Пока здесь считались только толчки, каждое
+      // попадание разводило траектории на полторы секунды: клиент терял управление, а свободная
+      // симуляция бежала дальше. Замерено на ботах — расхождение начиналось ровно на первом
+      // попадании, с knockdownTimer 1.383 у клиента против нуля у сервера.
+      for (const event of impulses.events) {
+        if (event.knockdown) applyKnockdown(impulses.state, event.knockdown);
+      }
       controller.freeState = impulses.state;
     }
 

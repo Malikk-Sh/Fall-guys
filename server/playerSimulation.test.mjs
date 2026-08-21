@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PLAYER_SIMULATION_CONSTANTS,
+  applyKnockdown,
   createPlayerSimulationState,
   normalizePlayerInput,
   stepPlayerMotion
@@ -274,4 +275,53 @@ test('server input queue is memory-bounded without skipping rejected sequence nu
   queue.reset({ nextSequence: 20, nextClientTick: 50 });
   assert.equal(queue.size, 0);
   assert.equal(queue.accept(command(20, 50)).accepted, true);
+});
+
+// Вход в сбивание — общий код, а не вторая версия у клиента.
+//
+// Раньше длительность и сброс приёмов считались только в `Player.knockDown`, и серверная симуляция
+// про сбивание не знала вовсе: импульс препятствия она применяла, а потерю управления — нет.
+test('сбивание заводит таймер и гасит приёмы', () => {
+  const state = createPlayerSimulationState({
+    jumpBuffer: 0.1,
+    diveTimer: 0.3,
+    rollTimer: 0.2,
+    recoveryWindow: 0.1,
+    slamming: true,
+    gliding: true,
+    getupTimer: 0.2
+  });
+  assert.equal(applyKnockdown(state, 0.5), true);
+  assert.equal(state.knockdownTimer, 1.4);
+  assert.equal(state.jumpBuffer, 0);
+  assert.equal(state.diveTimer, 0);
+  assert.equal(state.rollTimer, 0);
+  assert.equal(state.recoveryWindow, 0);
+  assert.equal(state.slamming, false);
+  assert.equal(state.gliding, false);
+  assert.equal(state.getupTimer, 0);
+});
+
+test('длительность сбивания зажата в свои границы', () => {
+  const { KNOCKDOWN_MIN_TIME, KNOCKDOWN_MAX_TIME } = PLAYER_SIMULATION_CONSTANTS;
+  const weak = createPlayerSimulationState({});
+  applyKnockdown(weak, 0);
+  assert.equal(weak.knockdownTimer, KNOCKDOWN_MIN_TIME);
+
+  const strong = createPlayerSimulationState({});
+  applyKnockdown(strong, 1);
+  assert.equal(strong.knockdownTimer, KNOCKDOWN_MAX_TIME);
+});
+
+test('иммунитет, уже идущее сбивание и финиш второй раз не сбивают', () => {
+  const immune = createPlayerSimulationState({ knockdownImmunity: 0.3 });
+  assert.equal(applyKnockdown(immune, 0.5), false);
+  assert.equal(immune.knockdownTimer, 0);
+
+  const downed = createPlayerSimulationState({ knockdownTimer: 0.9 });
+  assert.equal(applyKnockdown(downed, 0.5), false);
+  assert.equal(downed.knockdownTimer, 0.9, 'повторный удар не продлевает уже идущее сбивание');
+
+  const finished = createPlayerSimulationState({ finished: true });
+  assert.equal(applyKnockdown(finished, 0.5), false);
 });

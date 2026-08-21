@@ -245,3 +245,42 @@ test('состояния без опоры не считаются расхож�
   tick(runtime, room, player, 5, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
   assert.equal(runtime.metrics().shadowGroundContact.samples, 5);
 });
+
+// Импульс препятствия несёт не только толчок, но и сбивание.
+//
+// Клиент применяет его через `Course.interact` → `player.knockDown`. Пока свободная траектория
+// сбивание игнорировала, каждое попадание разводило её с клиентом на полторы секунды: клиент терял
+// управление, а серверная симуляция бежала дальше. Замер на ботах показывал это прямо —
+// расхождение начиналось на первом же попадании, knockdownTimer 1.383 против нуля.
+test('сбивание от препятствия доходит до свободной траектории', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  // Заметно позже старта: выдержка между попаданиями считается от времени МАТЧА, и в самом его
+  // начале любой удар отсекается как «слишком ранний повтор».
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const world = controller.world;
+  const bumper = world.obstacles.find(o => o.type === 'bumper');
+  assert.ok(bumper, 'на трассе обязан быть бампер');
+
+  // Ставим свободную траекторию вплотную к бамперу — так, чтобы следующий шаг дал попадание.
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.freeState.knockdownTimer = 0;
+  controller.freeState.knockdownImmunity = 0;
+  controller.lastClientPosition = null;
+
+  const before = runtime.metrics().shadowGroundContact.impulses;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+
+  assert.ok(runtime.metrics().shadowGroundContact.impulses > before, 'удар обязан случиться');
+  assert.ok(
+    controller.freeState.knockdownTimer > 0,
+    'после удара свободная траектория обязана быть сбита, как и клиент'
+  );
+});

@@ -3,6 +3,7 @@ import { COLORS } from '../core/Config.js';
 import {
   PLAYER_SIMULATION_CONSTANTS,
   dampScalar,
+  applyKnockdown,
   movementIntent,
   playerTuning,
   resolveGroundContact
@@ -32,9 +33,6 @@ const {
 // истины теперь shared/playerSimulation.js, а не второй набор чисел в Player.js.
 export const RUN_SPEED = PLAYER_SIMULATION_CONSTANTS.RUN_SPEED;
 export { playerTuning };
-
-const KNOCKDOWN_MIN_TIME = 1.05;
-const KNOCKDOWN_MAX_TIME = 1.65;
 
 // Удар сверху: резкий разгон вниз. Им приводят в действие катапульту. Доступен всем — ролей нет,
 // и «кто именно бьёт» решают сами игроки, а не разметка уровня.
@@ -406,18 +404,32 @@ export class Player {
 
   // Сильный контакт не замораживает физику: персонаж продолжает лететь от импульса,
   // но на короткое время теряет управление и процедурно обмякает. Это НЕ coop-down state.
+  // Длительность и сброс приёмов считает общее ядро: сбивание — часть физики, и вторая его версия
+  // здесь означала бы, что серверная симуляция теряет управление в другой момент и на другой срок.
+  // `downed` остаётся клиентским: поднятие напарником живёт только в кооперативе.
   knockDown(strength = 0.5) {
-    if (this.finished || this.downed || this.knockdownTimer > 0 || this.knockdownImmunityTimer > 0)
-      return false;
-    const duration = THREE.MathUtils.clamp(0.8 + strength * 1.2, KNOCKDOWN_MIN_TIME, KNOCKDOWN_MAX_TIME);
-    this.knockdownTimer = Math.max(this.knockdownTimer, duration);
-    this.getupTimer = 0;
-    this.jumpBuffer = 0;
-    this.diveTimer = 0;
-    this.rollTimer = 0;
-    this.recoveryWindow = 0;
-    this.slamming = false;
-    this.gliding = false;
+    if (this.downed) return false;
+    const state = {
+      finished: this.finished,
+      knockdownTimer: this.knockdownTimer,
+      knockdownImmunity: this.knockdownImmunityTimer,
+      getupTimer: this.getupTimer,
+      jumpBuffer: this.jumpBuffer,
+      diveTimer: this.diveTimer,
+      rollTimer: this.rollTimer,
+      recoveryWindow: this.recoveryWindow,
+      slamming: this.slamming,
+      gliding: this.gliding
+    };
+    if (!applyKnockdown(state, strength)) return false;
+    this.knockdownTimer = state.knockdownTimer;
+    this.getupTimer = state.getupTimer;
+    this.jumpBuffer = state.jumpBuffer;
+    this.diveTimer = state.diveTimer;
+    this.rollTimer = state.rollTimer;
+    this.recoveryWindow = state.recoveryWindow;
+    this.slamming = state.slamming;
+    this.gliding = state.gliding;
     return true;
   }
 

@@ -31,17 +31,23 @@ function standingPlayer() {
       vy: 0,
       state: 'ground',
       sequence: 0
-    }
+    },
+    // Живой клиент нумерует свои пакеты, и измерение считает снимок свежим именно по этому номеру:
+    // состояния, которые сервер пишет сам (возрождение), его не двигают.
+    lastSequence: 0
   };
 }
 
 // Контроллер заводится только после первого принятого ввода — ровно как у живого клиента,
 // который шлёт CLIENT_INPUT на 30 Гц.
 let nextSequence = 0;
-function tick(runtime, room, player, count = 1, startNow = 1000) {
+function tick(runtime, room, player, count = 1, startNow = 1000, { freshClient = true } = {}) {
   const rooms = new Map([[room.matchId, room]]);
   room.players = new Map([['p1', player]]);
   for (let step = 0; step < count; step++) {
+    // Новый пакет от клиента: номер растёт. `freshClient: false` моделирует обратное — либо тот же
+    // снимок, растянутый на несколько тиков, либо состояние, записанное самим сервером.
+    if (freshClient) player.lastSequence = (player.lastSequence ?? -1) + 1;
     runtime.accept({
       player,
       room,
@@ -368,4 +374,214 @@ test('сброс якоря не стирает идущее сбивание', 
     controller.freeState.knockdownTimer > 0 || controller.freeState.knockdownImmunity > 0,
     'сбивание переживает сброс якоря: иначе сервер снова уязвим к тому же препятствию'
   );
+});
+
+// Модель мира спрашивается В ТОЧКЕ КЛИЕНТА, и это отделяет геометрию от дрейфа.
+//
+// Поиск опоры у клиента и сервера — один код на численно одинаковых записях, поэтому разойтись они
+// могут только из-за разных позиций. Пока вопрос задавался там, куда пришла свободная траектория,
+// метрика отвечала сразу на два вопроса, и дрейф забивал геометрию: 94.6 % против 99.64 % на одних
+// и тех же прогонах.
+test('модель мира не зависит от того, куда уехала свободная траектория', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 5, room.startedAt);
+
+  // Уводим свободную траекторию далеко под трассу — там опоры нет вовсе.
+  const controller = runtime.controllers.get(player);
+  controller.freeState.position.y -= 200;
+  tick(runtime, room, player, 5, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
+
+  const { shadowGroundContact } = runtime.metrics();
+  // Клиент всё это время стоит на стартовой площадке, и модель мира обязана это подтверждать.
+  assert.equal(shadowGroundContact.groundModel.serverGroundedOnly, 0);
+  assert.equal(shadowGroundContact.groundModel.clientGroundedOnly, 0);
+  assert.equal(shadowGroundContact.groundModel.agreementRate, 1);
+  // А замер по траектории обязан этот провал увидеть — иначе проверка ничего не значит.
+  assert.ok(shadowGroundContact.clientGroundedOnly > 0, 'дрейф обязан быть виден в справочной величине');
+});
+
+test('высота стояния меряется по опоре в точке клиента, а не по уехавшей траектории', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 3, room.startedAt);
+
+  const controller = runtime.controllers.get(player);
+  controller.freeState.position.y += 50;
+  tick(runtime, room, player, 3, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+
+  const { heightError } = runtime.metrics().shadowGroundContact;
+  assert.ok(heightError.count > 0, 'высота обязана меряться');
+  assert.equal(heightError.max, 0, 'клиент стоит на своей опоре, и сервер находит ту же высоту');
+});
+
+// Модель мира обязана спрашивать теми же правилами, по которым живёт клиент.
+test('быстрый подъём не считается опорой: порог тот же, что у клиента', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+
+  // Игрок над самой площадкой, но летит вверх быстрее допустимого для контакта. Клиент в этот
+  // момент в воздухе, и сервер обязан ответить так же. `supportIndexAt` сам по себе пропускает
+  // подъём до 2.2 — если спрашивать только его, тут получился бы «пол из ниоткуда».
+  player.last = { ...player.last, state: 'air', vy: 2.0 };
+  tick(runtime, room, player, 5, room.startedAt);
+
+  const { groundModel } = runtime.metrics().shadowGroundContact;
+  assert.ok(groundModel.samples > 0);
+  assert.equal(groundModel.serverGroundedOnly, 0, 'подъём быстрее 1.5 опорой не считается');
+});
+
+test('свип-тест меряется кадром клиента, а не серверным тиком', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  const top = supportTop(recordRaceCourse(spec).platforms[0]);
+
+  // Клиент обязан реально падать между отсчётами, иначе растягивать свипу нечего и проверка
+  // становится пустой. Скорость 8.9 ед/с даёт за серверный тик 0.297, за кадр клиента 0.148.
+  const fall = 8.9 / 30;
+  player.last = { ...player.last, y: top + 0.097, vy: -8.9, state: 'air' };
+  tick(runtime, room, player, 1, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel.serverGroundedOnly;
+
+  // Следующий отсчёт: игрок ниже верха на 0.2. Прошлый СЕТЕВОЙ отсчёт был на 0.297 выше, то есть
+  // выше верха, и растянутый свип нашёл бы здесь опору. Свип длиной в кадр клиента даёт
+  // top - 0.052 и опоры не находит — а клиент как раз в воздухе.
+  player.last = { ...player.last, y: top + 0.097 - fall };
+  tick(runtime, room, player, 1, room.startedAt + SERVER_SIMULATION_DT * 1000);
+
+  const after = runtime.metrics().shadowGroundContact.groundModel.serverGroundedOnly;
+  assert.equal(after, before, 'свип не должен захватывать кадр, которого клиент не проходил');
+});
+
+// Устаревший снапшот против подвижной опоры.
+//
+// Позиции рассылаются раз в 66 мс, тик идёт на 30 Гц, сверху сетевая задержка. Спрашивать про опору
+// в старой точке у платформы, уже уехавшей к текущему тику, значит сравнивать разные моменты. На
+// ботах этого не видно вовсе — там задержки нет, — поэтому проверка нужна отдельная.
+test('опора спрашивается у мира на момент снапшота, а не текущего тика', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+
+  // Снапшот на секунду старше тика: за это время подвижные опоры успевают уехать.
+  const now = room.startedAt + 4000;
+  player.lastAt = now - 1000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const probe = controller.probeWorld;
+  const live = controller.world;
+  assert.ok(probe && live && probe !== live, 'у замера обязан быть свой мир');
+  assert.ok(probe.dynamic.length, 'на трассе обязаны быть подвижные опоры');
+
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(3);
+  probe.dynamic.forEach((platform, index) => {
+    const axis = platform.motion.axis;
+    assert.equal(platform[axis], expected.dynamic[index][axis], `опора ${index} на момент снапшота`);
+  });
+  // А мир свободной траектории обязан стоять на времени ТИКА — иначе перенос опорой поедет.
+  const atTick = createShadowCourseWorld(spec);
+  atTick.advance(4);
+  const axis = live.dynamic[0].motion.axis;
+  assert.equal(live.dynamic[0][axis], atTick.dynamic[0][axis]);
+});
+
+test('один и тот же снапшот не засчитывается дважды', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  player.lastAt = room.startedAt + 100;
+
+  // Три тика подряд с одним и тем же снимком: 66 мс рассылки против 33 мс тика — обычное дело.
+  tick(runtime, room, player, 3, room.startedAt + 200, { freshClient: false });
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 1);
+
+  // Новый пакет от клиента — новая выборка.
+  tick(runtime, room, player, 1, room.startedAt + 400);
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 2);
+});
+
+// Возрождение пишет сервер, а не клиент, и в доказательства такое состояние идти не должно.
+//
+// Игрок ставится на чекпоинт с `state: 'air'` и нулевой скоростью раньше, чем исправленный клиент
+// пришлёт свой снимок. Опора под чекпоинтом при этом находится — и получилось бы расхождение из
+// ничего. При пороге в строгий ноль одно возрождение навсегда закрыло бы паритет столкновений.
+test('состояние, записанное сервером при возрождении, доказательством не считается', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const start = recordRaceCourse(spec).platforms[0];
+
+  // Сначала обычный обмен: клиент прислал снимок, измерение его учло.
+  tick(runtime, room, player, 1, room.startedAt);
+  const before = runtime.metrics().shadowGroundContact.groundModel.samples;
+  assert.equal(before, 1, 'обычный клиентский снимок в выборку идёт');
+
+  // А теперь ровно то, что пишет сервер: точка чекпоинта, «воздух», нули, номер пакета НЕ растёт.
+  player.last = {
+    x: start.x,
+    y: supportTop(start) + PLAYER_FOOT,
+    z: start.z,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    state: 'air'
+  };
+  player.lastAt = room.startedAt + 500;
+  tick(runtime, room, player, 4, room.startedAt + 600, { freshClient: false });
+
+  const { groundModel } = runtime.metrics().shadowGroundContact;
+  assert.equal(groundModel.samples, before, 'решение сервера — не наблюдение за клиентом');
+  assert.equal(groundModel.serverGroundedOnly, 0, 'и уж точно не расхождение');
+});
+
+// Подвижная опора в доказательства не идёт: её фазу к моменту снимка восстановить нечем.
+//
+// В `PLAYER_STATE` клиентского времени нет вовсе, а `lastAt` — момент приёма пакета. За время
+// задержки платформа уезжает, и сравнение старой позиции игрока с новой позицией опоры дало бы
+// расхождение из ничего.
+test('выборка на подвижной опоре не засчитывается, а откладывается отдельно', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 1, room.startedAt);
+
+  const controller = runtime.controllers.get(player);
+  const before = runtime.metrics().shadowGroundContact.groundModel;
+
+  // Позицию опоры берём на то же время матча, на котором её увидит замер.
+  const at = SERVER_SIMULATION_DT;
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(at);
+  const moving = expected.dynamic[0];
+  assert.ok(moving, 'на трассе обязана быть подвижная опора');
+
+  player.last = {
+    ...player.last,
+    x: moving.x,
+    y: supportTop(moving) + PLAYER_FOOT,
+    z: moving.z,
+    vy: 0,
+    state: 'ground'
+  };
+  // Перестановка через полтрассы — не возрождение: проверяем другое, поэтому защиту снимаем.
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, room.startedAt + at * 1000);
+
+  const after = runtime.metrics().shadowGroundContact.groundModel;
+  assert.equal(after.samples, before.samples, 'в согласие такая выборка не идёт');
+  assert.equal(after.dynamicSkipped, before.dynamicSkipped + 1, 'но и не теряется молча');
 });

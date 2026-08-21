@@ -14,6 +14,11 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   // Меньше этого числа шагов — статистики нет, а не «всё хорошо».
   minSamples: 3000,
   // Доля тиков, где сервер и клиент одинаково отвечают на вопрос «игрок на опоре».
+  //
+  // Спрашивается это В ТОЧКЕ КЛИЕНТА (`groundModel`), а не там, куда пришла свободная траектория.
+  // Разница решающая: поиск опоры у обеих сторон — один код на численно одинаковых записях, значит
+  // разойтись они могут только из-за разных позиций. Прежняя формулировка мерила сразу и модель
+  // мира, и дрейф траектории, и второе забивало первое — 94.6 % против 99.64 % на тех же данных.
   minGroundAgreementRate: 0.995,
   // Сервер, считающий игрока стоящим там, где клиент падает, опаснее обратного: так игрок мог бы
   // получить пол из воздуха. Такой перекос запрещён полностью.
@@ -23,6 +28,26 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   maxGroundHeightErrorMax: 0.12,
   // Ни одного тика без мира: матч, где геометрия не построилась, доказательством быть не может.
   maxWorldMissingSamples: 0,
+  // Отрыв свободной траектории — ОБЯЗАТЕЛЬНОЕ условие, и вот почему он вернулся.
+  //
+  // Согласие по опоре спрашивается в точке клиента, и это правильно: только так меряется модель
+  // мира, а не дрейф. Но у такой формулировки есть обратная сторона — она остаётся идеальной, даже
+  // если серверная симуляция уехала куда угодно. Паритет попаданий её тоже не ловит: обычный дрейф
+  // без единого сбивания в события не попадает. Значит, без ограничения на сам отрыв ворота можно
+  // было бы открыть симулятору, который просто не следует за клиентом.
+  //
+  // Пороги не выдуманы: это те же числа, по которым живёт реконсиляция. Мягкая коррекция начинается
+  // с 0.3, жёсткая — с 1.5, и жёсткая видна игроку рывком. Отсюда требование: типичный тик лежит в
+  // полосе мягкой коррекции, а до жёсткой доходит не чаще одного тика из двадцати.
+  //
+  // Проверяются ДОЛИ ПРЕВЫШЕНИЯ, а не квантили. Среднее не годится — у отрыва тяжёлый хвост, его
+  // задают редкие выбросы после попаданий. Но и квантили из метрики брать нельзя: они считаются по
+  // кольцу последних 512 значений, тогда как выборка требуется от 3000. Прогон, где 2488 плохих
+  // значений сменились 512 хорошими, показал бы проходящие квантили при почти целиком проваленной
+  // статистике. Доли превышения считаются двумя счётчиками по всей популяции и от длины окна не
+  // зависят вовсе.
+  maxOverSoftRate: 0.5,
+  maxOverHardRate: 0.05,
   // Импульсы обязаны хоть раз случиться, иначе про них нечего утверждать.
   minImpulseSamples: 50,
   // Паритет препятствий меряется СОБЫТИЯМИ, а не расстоянием.
@@ -51,6 +76,7 @@ const REASON = Object.freeze({
   GROUND_AGREEMENT: 'ground-agreement',
   SHADOW_GROUNDED_ONLY: 'shadow-grounded-only',
   GROUND_HEIGHT_ERROR: 'ground-height-error',
+  TRAJECTORY_ERROR: 'trajectory-error',
   INSUFFICIENT_IMPULSE_SAMPLES: 'insufficient-impulse-samples',
   INSUFFICIENT_HIT_SAMPLES: 'insufficient-hit-samples',
   HIT_MATCH_RATE: 'hit-match-rate',
@@ -82,6 +108,29 @@ function validHitParity(parity) {
   );
 }
 
+// Доля согласия НЕ берётся из метрики готовой: она считается здесь по счётчикам.
+//
+// Модуль fail-closed по построению, и доверять производному полю в испорченном снимке — дыра в
+// этом свойстве: запись вида `{ samples: 5000, agreements: 0, agreementRate: 1 }` проходила бы
+// проверку и открывала паритет столкновений, не имея ни одного совпадения. Заодно отвергается
+// набор, где совпадений больше, чем выборок.
+function validGroundModel(model) {
+  return (
+    !!model &&
+    typeof model === 'object' &&
+    finiteNonNegative(model.samples) &&
+    finiteNonNegative(model.agreements) &&
+    finiteNonNegative(model.serverGroundedOnly) &&
+    finiteNonNegative(model.clientGroundedOnly) &&
+    model.agreements <= model.samples &&
+    model.serverGroundedOnly + model.clientGroundedOnly + model.agreements === model.samples
+  );
+}
+
+function groundAgreementRate(model) {
+  return model.samples ? model.agreements / model.samples : 0;
+}
+
 function validMetrics(metrics) {
   return (
     !!metrics &&
@@ -89,9 +138,13 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.samples) &&
     finiteNonNegative(metrics.agreements) &&
     finiteNonNegative(metrics.shadowGroundedOnly) &&
+    validGroundModel(metrics.groundModel) &&
     finiteNonNegative(metrics.worldMissing) &&
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
+    validErrorStats(metrics.freeTrajectoryError) &&
+    finiteNonNegative(metrics.freeTrajectoryError.overSoftRate) &&
+    finiteNonNegative(metrics.freeTrajectoryError.overHardRate) &&
     validHitParity(metrics.hitParity)
   );
 }
@@ -110,12 +163,12 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
     });
   }
 
-  if (metrics.samples < policy.minSamples) reasons.push(REASON.INSUFFICIENT_SAMPLES);
+  const model = metrics.groundModel;
+  if (model.samples < policy.minSamples) reasons.push(REASON.INSUFFICIENT_SAMPLES);
   if (metrics.worldMissing > policy.maxWorldMissingSamples) reasons.push(REASON.WORLD_MISSING);
 
-  const agreementRate = metrics.samples ? metrics.agreements / metrics.samples : 0;
-  if (agreementRate < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
-  if (metrics.shadowGroundedOnly > policy.maxShadowGroundedOnlySamples) {
+  if (groundAgreementRate(model) < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
+  if (model.serverGroundedOnly > policy.maxShadowGroundedOnlySamples) {
     reasons.push(REASON.SHADOW_GROUNDED_ONLY);
   }
   if (
@@ -124,6 +177,13 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
   ) {
     reasons.push(REASON.GROUND_HEIGHT_ERROR);
   }
+  if (
+    metrics.freeTrajectoryError.overSoftRate > policy.maxOverSoftRate ||
+    metrics.freeTrajectoryError.overHardRate > policy.maxOverHardRate
+  ) {
+    reasons.push(REASON.TRAJECTORY_ERROR);
+  }
+
   // Паритет столкновений и паритет препятствий — разные утверждения. Первое про опору: находит ли
   // сервер тот же пол. Второе про удары: бьёт ли он по тем же препятствиям.
   const collisionParityVerified = reasons.length === 0;

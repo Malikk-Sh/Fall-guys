@@ -3,6 +3,7 @@
 const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const {
+  GROUND_CONTACT_MAX_UPWARD_SPEED,
   PLAYER_SIMULATION_CONSTANTS,
   applyKnockdown,
   createPlayerSimulationState,
@@ -14,6 +15,7 @@ const {
 const { JUMP_SPEED } = PLAYER_SIMULATION_CONSTANTS;
 const { PLAYER_BODY_RADIUS, PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } = require('../shared/playerDimensions.js');
 const { applyObstacleImpulses } = require('../shared/courseImpulses.js');
+const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
 const { applyWallBounce, wallBounceNormalAt } = require('../shared/courseWalls.js');
 const { shadowCourseWorldFor } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
@@ -132,6 +134,14 @@ const FREE_TRAJECTORY_SUB_DT = SERVER_SIMULATION_DT / FREE_TRAJECTORY_SUB_STEPS;
 // единиц (p99 = 0.62), самый короткий возврат — 10.83. Между ними нет ни одного шага.
 const CLIENT_TELEPORT_DISTANCE = 4;
 
+// Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
+const CLIENT_FRAME_DT = 1 / 60;
+
+// Полосы коррекции реконсиляции: мягкая правка начинается с 0.3, жёсткая — с 1.5, и жёсткая видна
+// игроку рывком (`client/net/ReconciliationPolicy.js`). Доли превышения считаются по ним.
+const TRAJECTORY_SOFT_LIMIT = 0.3;
+const TRAJECTORY_HARD_LIMIT = 1.5;
+
 // Секунды с начала забега — то же число, что клиент держит в `RaceSession.elapsed` и передаёт в
 // `Course.update` и `Course.interact`.
 //
@@ -171,13 +181,40 @@ function reanchoredState(legacy, previous) {
   return next;
 }
 
+// Откуда клиент пришёл за ОДИН СВОЙ кадр, а не за один серверный тик.
+//
+// Свип-тест спрашивает «не прошёл ли игрок сквозь поверхность с прошлой проверки». Клиент проверяет
+// каждые 1/60, а сервер видит его раз в 1/30, и подстановка прошлого сетевого отсчёта растягивала
+// свип вдвое: на падении со скоростью 8.9 он покрывал 0.30 вместо 0.15 и ловил опору, мимо которой
+// клиент пролетел. Поэтому исходная точка восстанавливается по скорости на один клиентский кадр —
+// единственное, что тут можно сделать честно: промежуточной позиции сервер не видит вовсе.
+//
+// Восстановление СИММЕТРИЧНО, и это не мелочь. Сначала здесь стояло «продлевать только при
+// падении», в расчёте на то, что подъём отсекут пороги по скорости. Они отсекают лишь БЫСТРЫЙ
+// подъём: игрок, поднимающийся медленнее 1.5, проходит guard, и подстановка текущей высоты вместо
+// прошлой превращала подход снизу в приземление сверху. При верхе опоры 0, y = 0.01 и vy = 1
+// клиент был на -0.0067 и контакт отвергает, а замер отвечал «пол» — и записывал несуществующее
+// расхождение.
+function clientFramePreviousY(legacy) {
+  return finite(legacy?.y) - finite(legacy?.vy) * CLIENT_FRAME_DT;
+}
+
 class RollingErrorStats {
-  constructor(limit = ERROR_SAMPLE_LIMIT) {
+  // `thresholds` — значения, доли превышения которых считаются по ВСЕЙ популяции, а не по окну.
+  //
+  // Квантили здесь живут в кольце последних 512 значений, и как справка это нормально. Но решение
+  // по ним принимать нельзя: 2488 плохих выборок, за которыми идут 512 хороших, дали бы проходящие
+  // p50 и p95 при том, что почти вся накопленная статистика провалена. Доля превышения порога
+  // считается двумя счётчиками и от длины окна не зависит вовсе.
+  constructor(limit = ERROR_SAMPLE_LIMIT, thresholds = null) {
     this.limit = limit;
     this.count = 0;
     this.sum = 0;
     this.max = 0;
     this.samples = [];
+    this.thresholds = thresholds;
+    this.overSoft = 0;
+    this.overHard = 0;
   }
 
   record(value) {
@@ -185,6 +222,10 @@ class RollingErrorStats {
     this.count += 1;
     this.sum += value;
     this.max = Math.max(this.max, value);
+    if (this.thresholds) {
+      if (value > this.thresholds.soft) this.overSoft += 1;
+      if (value > this.thresholds.hard) this.overHard += 1;
+    }
     this.samples.push(value);
     if (this.samples.length > this.limit) this.samples.shift();
     return true;
@@ -192,13 +233,19 @@ class RollingErrorStats {
 
   snapshot() {
     const sorted = [...this.samples].sort((a, b) => a - b);
-    const p95Index = sorted.length ? Math.max(0, Math.ceil(sorted.length * 0.95) - 1) : -1;
+    const quantile = share => (sorted.length ? sorted[Math.max(0, Math.ceil(sorted.length * share) - 1)] : 0);
     return {
       count: this.count,
       mean: this.count ? this.sum / this.count : 0,
-      p95: p95Index >= 0 ? sorted[p95Index] : 0,
+      // Медиана нужна отдельно от среднего: у отрыва траектории тяжёлый хвост, и среднее по нему
+      // задают редкие выбросы, а не типичное поведение.
+      p50: quantile(0.5),
+      p95: quantile(0.95),
       max: this.max,
-      recentSamples: this.samples.length
+      recentSamples: this.samples.length,
+      // Доли превышения — по всей популяции. Именно они и проверяются политикой.
+      overSoftRate: this.count ? this.overSoft / this.count : 0,
+      overHardRate: this.count ? this.overHard / this.count : 0
     };
   }
 }
@@ -315,8 +362,26 @@ class ShadowInputRuntime {
       // Тики, где ярлык состояния клиента не сообщает об опоре (dive, slam, knockdown, downed).
       groundStateUnknown: 0
     };
+    // Согласие о ПОЛЕ, проверенное в точке клиента. Отдельная величина, и это принципиально.
+    //
+    // `groundDiagnostics` выше спрашивает про опору там, куда пришла свободная траектория, и потому
+    // отвечает сразу на два вопроса: сходится ли модель мира и не уехала ли траектория. Второе
+    // забивает первое. Здесь задаётся только первый вопрос: нашёл бы сервер тот же пол ТАМ, ГДЕ
+    // СЕЙЧАС КЛИЕНТ.
+    this.groundModelDiagnostics = {
+      samples: 0,
+      agreements: 0,
+      serverGroundedOnly: 0,
+      clientGroundedOnly: 0,
+      // Выборки на подвижных опорах: сверить их нечем, пока в снимке нет клиентского времени.
+      dynamicSkipped: 0
+    };
     this.groundHeightError = new RollingErrorStats();
-    this.freeTrajectoryError = new RollingErrorStats();
+    // Пороги те же, по которым живёт реконсиляция: мягкая коррекция с 0.3, жёсткая с 1.5.
+    this.freeTrajectoryError = new RollingErrorStats(ERROR_SAMPLE_LIMIT, {
+      soft: TRAJECTORY_SOFT_LIMIT,
+      hard: TRAJECTORY_HARD_LIMIT
+    });
     this.worldDiagnostics = { wallBounces: 0, impulses: 0, reanchors: 0, clientTeleports: 0 };
     // Паритет попаданий: сбивающие удары сервера против сбиваний, видимых у клиента.
     //
@@ -345,6 +410,10 @@ class ShadowInputRuntime {
         input: neutralInput(),
         progress: raceProgressFor(room),
         world: shadowCourseWorldFor(room),
+        // Второй мир — только для замера в точке клиента. Он доводится до ВРЕМЕНИ СНАПШОТА, а не
+        // до текущего тика, поэтому не может быть тем же объектом: свободная траектория считает
+        // перенос движущейся опорой по её сдвигу за подшаг, и подмотка мира назад испортила бы его.
+        probeWorld: shadowCourseWorldFor(room),
         // Своя траектория и свои перезарядки ударов: у клиента они собственные, и делить их
         // означало бы, что измерение подглядывает в измеряемое.
         freeState: null,
@@ -390,7 +459,7 @@ class ShadowInputRuntime {
   // доказательство паритета, которого ждёт guard движения.
   //
   // На игру не влияет ничем: результат только записывается.
-  measureFreeTrajectory(controller, player, elapsedSeconds) {
+  measureFreeTrajectory(controller, player, elapsedSeconds, snapshotSeconds) {
     const world = controller.world;
     if (!world) {
       this.groundDiagnostics.worldMissing += 1;
@@ -545,6 +614,83 @@ class ShadowInputRuntime {
     const clientState = player.last?.state;
     const clientGroundKnown = clientState === 'ground' || clientState === 'air';
     const clientGrounded = clientState === 'ground';
+
+    // Модель мира, проверенная в точке клиента.
+    //
+    // Поиск опоры у клиента и у сервера — буквально один код (`supportIndexAt`) на численно
+    // одинаковых записях: совпадение записей доказывает `raceCourseRecorder.test.mjs`. Поэтому
+    // разойтись они могут только из-за разных позиций, и спрашивать надо в одной точке.
+    // Снапшот клиента СТАРШЕ текущего тика, и на подвижной опоре это принципиально.
+    //
+    // Позиции игроков рассылаются раз в 66 мс, тик идёт на 30 Гц, сверху ложится сетевая задержка —
+    // а `world` к этому моменту уже доведён до текущего времени. Спрашивать про опору в старой
+    // точке у новой платформы значит сравнивать разные моменты и получать расхождения из ничего.
+    // Поэтому замер идёт по своему миру, доведённому до времени того самого снапшота.
+    //
+    // Тот же снапшот приходит в несколько тиков подряд (66 мс против 33), и повторно он не
+    // засчитывается: иначе одно расхождение считалось бы дважды, а выборка была бы дутой.
+    const probeWorld = controller.probeWorld || world;
+    const snapshotAt = Number.isFinite(snapshotSeconds) ? snapshotSeconds : matchTime;
+    // Свежесть считается по КЛИЕНТСКОЙ последовательности, а не по времени приёма, и это закрывает
+    // сразу две дыры.
+    //
+    // Первая: возрождение. Сервер пишет `player.last` САМ — ставит игрока на чекпоинт с `state:
+    // 'air'` и нулевой скоростью, — и раньше, чем исправленный клиент пришлёт свой снимок. Такое
+    // состояние не наблюдение, а решение сервера: опора под чекпоинтом находится, у «клиента»
+    // помечен воздух, и выходит расхождение из ничего. При пороге в строгий ноль одно возрождение
+    // навсегда закрыло бы паритет столкновений. `lastSequence` сервер при возрождении не трогает,
+    // поэтому такие состояния сюда просто не попадают.
+    //
+    // Вторая: один и тот же снимок приходит в несколько тиков подряд — 66 мс рассылки против 33 мс
+    // тика. Повторно он не засчитывается.
+    const snapshotSequence = player.lastSequence;
+    const freshSnapshot =
+      Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
+    if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
+    if (clientGroundKnown && freshSnapshot) {
+      probeWorld.advance(snapshotAt);
+      const index = supportIndexAt(
+        probeWorld.colliders,
+        { x: finite(player.last.x), y: finite(player.last.y), z: finite(player.last.z) },
+        clientFramePreviousY(player.last),
+        finite(player.last.vy),
+        PLAYER_FOOT
+      );
+      // Порогов по скорости вверх ДВА, и здесь обязан действовать тот же, что у клиента.
+      //
+      // `supportIndexAt` пропускает подъём до 2.2, но `resolveGroundContact` поверх него требует
+      // не быстрее 1.5, и клиент живёт по второму. Замер, звавший только первый, считал полом всё,
+      // что летело вверх со скоростью между 1.5 и 2.2, — то есть мерил более слабым правилом, чем
+      // то, которое проверяет. На прогоне ботов это давало 6 расхождений из 8.
+      // Подвижная опора в доказательства не идёт: её фазу к моменту СНИМКА восстановить нечем.
+      //
+      // `player.lastAt` — время приёма пакета, а не время, когда клиент снял состояние: в
+      // `PLAYER_STATE` клиентской отметки нет вовсе (`{ state, matchId, sequence }`). За время
+      // задержки платформа уже уехала, и сравнение старой позиции игрока с новой позицией опоры
+      // дало бы расхождение из ничего. Неподвижного пола это не касается — он и через секунду там
+      // же. Счётчик отдельный, чтобы пропуск был виден, а не растворился в выборке.
+      if (index >= 0 && probeWorld.colliders[index]?.motion) {
+        this.groundModelDiagnostics.dynamicSkipped += 1;
+        controller.clientPreviousY = finite(player.last?.y);
+        return true;
+      }
+
+      const serverFindsGround = index >= 0 && finite(player.last.vy) <= GROUND_CONTACT_MAX_UPWARD_SPEED;
+      this.groundModelDiagnostics.samples += 1;
+      if (serverFindsGround === clientGrounded) this.groundModelDiagnostics.agreements += 1;
+      else if (serverFindsGround) this.groundModelDiagnostics.serverGroundedOnly += 1;
+      else this.groundModelDiagnostics.clientGroundedOnly += 1;
+
+      // Высота стояния меряется здесь же и по той же причине: у клиента она взята из его опоры, и
+      // сравнивать её надо с опорой, найденной В ЕГО ТОЧКЕ. Прежний замер брал высоту уехавшей
+      // траектории и потому показывал не разницу геометрии, а накопленный дрейф.
+      if (serverFindsGround && clientGrounded) {
+        this.groundHeightError.record(
+          Math.abs(supportTop(probeWorld.colliders[index]) + PLAYER_FOOT - finite(player.last.y))
+        );
+      }
+    }
+    controller.clientPreviousY = finite(player.last?.y);
     if (!clientGroundKnown) this.groundDiagnostics.groundStateUnknown += 1;
     else {
       this.groundDiagnostics.samples += 1;
@@ -562,8 +708,15 @@ class ShadowInputRuntime {
       const dy = controller.freeState.position.y - legacy.y;
       const dz = controller.freeState.position.z - legacy.z;
       // Расхождение по позиции наблюдаемо всегда: ярлык состояния на него не влияет.
-      this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
-      if (clientGrounded && controller.freeState.grounded) this.groundHeightError.record(Math.abs(dy));
+      // Отрыв записывается ТОЛЬКО на свежем клиентском снимке.
+      //
+      // `freeState` шагает каждые 33 мс, а `player.last` обновляется раз в 66 мс и приходит с
+      // задержкой. Замер на каждом тике поэтому пилообразный: даже у совпадающей симуляции набегало
+      // бы около 0.26 единицы за тик на беговой скорости 7.7, и порог, взятый из полос
+      // реконсиляции, оказался бы недостижим на живом трафике по построению. На свежем снимке фаза
+      // одна и та же, а постоянная часть задержки взаимно уничтожается: якорь тоже ставится по
+      // запоздавшему снимку.
+      if (freshSnapshot) this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
     }
     return true;
   }
@@ -626,7 +779,12 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
-    this.measureFreeTrajectory(controller, player, matchElapsedSeconds(room, now));
+    this.measureFreeTrajectory(
+      controller,
+      player,
+      matchElapsedSeconds(room, now),
+      matchElapsedSeconds(room, player.lastAt)
+    );
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;
@@ -707,6 +865,13 @@ class ShadowInputRuntime {
           ? this.groundDiagnostics.agreements / this.groundDiagnostics.samples
           : 0,
         heightError: this.groundHeightError.snapshot(),
+        // Модель мира: тот же поиск опоры, но в точке клиента. Дрейф траектории сюда не входит.
+        groundModel: {
+          ...this.groundModelDiagnostics,
+          agreementRate: this.groundModelDiagnostics.samples
+            ? this.groundModelDiagnostics.agreements / this.groundModelDiagnostics.samples
+            : 0
+        },
         // Паритет попаданий. `serverOnly` — удар, которого у клиента не было; `clientOnly` —
         // пропущенный сервером.
         hitParity: (() => {

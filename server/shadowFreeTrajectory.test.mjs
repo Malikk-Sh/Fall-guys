@@ -82,16 +82,23 @@ test('свободная траектория считается и остаёт
 test('свободная траектория не подглядывает в клиента', () => {
   const runtime = new ShadowInputRuntime();
   const room = raceRoom();
+  room.startedAt = 1000;
   const player = standingPlayer();
-  tick(runtime, room, player, 10);
+  tick(runtime, room, player, 10, room.startedAt);
 
-  // Клиента телепортируем далеко в сторону. Свободная траектория обязана остаться там, где её
-  // привела собственная симуляция: если бы она брала позицию у клиента, расхождение осталось бы
-  // нулевым и мерить снова было бы нечего.
-  player.last = { ...player.last, x: player.last.x + 40, z: player.last.z - 40 };
-  tick(runtime, room, player, 10, 1000 + 10 * SERVER_SIMULATION_DT * 1000);
+  // Клиента уводим в сторону — но ПОСТЕПЕННО, шагами меньше порога возврата на чекпоинт. Разом
+  // телепортировать нельзя: такой скачок измерение справедливо считает возрождением и сбрасывает
+  // якорь, а проверить надо другое — что свободная траектория идёт своей симуляцией и не
+  // подставляет себе клиентскую позицию. Подглядывай она — расхождение осталось бы нулевым.
+  let now = room.startedAt + 10 * SERVER_SIMULATION_DT * 1000;
+  for (let step = 0; step < 10; step++) {
+    player.last = { ...player.last, x: player.last.x + 2, z: player.last.z - 2 };
+    tick(runtime, room, player, 1, now);
+    now += SERVER_SIMULATION_DT * 1000;
+  }
 
   const { shadowGroundContact } = runtime.metrics();
+  assert.equal(shadowGroundContact.clientTeleports, 0, 'шаги по 2 единицы возвратом не считаются');
   assert.ok(
     shadowGroundContact.freeTrajectoryError.max > 10,
     'отрыв от уехавшего клиента обязан быть виден в измерении'
@@ -176,4 +183,65 @@ test('без времени старта измерение откатывает
   const expected = createShadowCourseWorld(spec);
   expected.advance(4 / 30);
   assert.equal(platform[axis], expected.dynamic[0][axis]);
+});
+
+// Горизонт измерения.
+//
+// Свободная траектория меряется отрезками, а не от старта до финиша. Без этого один возврат
+// клиента на чекпоинт разводил её навсегда: замер на ботах дал среднее расхождение 1123 единицы
+// при пороге 0.3, хотя высота стояния совпадала до 0.0002. Сравнивались бегущий игрок и точка,
+// продолжавшая падать в пустоту.
+test('якорь свободной траектории сбрасывается раз в горизонт', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+
+  tick(runtime, room, player, 10, room.startedAt);
+  assert.equal(runtime.metrics().shadowGroundContact.reanchors, 0, 'до горизонта сбросов нет');
+
+  tick(runtime, room, player, 70, room.startedAt + 10 * SERVER_SIMULATION_DT * 1000);
+  assert.ok(runtime.metrics().shadowGroundContact.reanchors >= 2, 'за 80 тиков горизонт пройден дважды');
+});
+
+test('возврат клиента на чекпоинт — не расхождение симуляций', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 6, room.startedAt);
+
+  const before = runtime.metrics().shadowGroundContact;
+  // Телепорт на десятки единиц: так выглядит возрождение на чекпоинте.
+  player.last = { ...player.last, x: player.last.x + 30, z: player.last.z - 30 };
+  tick(runtime, room, player, 1, room.startedAt + 6 * SERVER_SIMULATION_DT * 1000);
+
+  const after = runtime.metrics().shadowGroundContact;
+  assert.equal(after.clientTeleports, 1, 'скачок обязан быть распознан как возврат');
+  assert.equal(
+    after.freeTrajectoryError.count,
+    before.freeTrajectoryError.count,
+    'тик возврата в статистику расхождения не попадает'
+  );
+});
+
+test('состояния без опоры не считаются расхождением, а выносятся отдельно', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+
+  // Сбитый лежит НА полу, но снапшот помечает его knockdown: опора оттуда не читается.
+  player.last = { ...player.last, state: 'knockdown' };
+  tick(runtime, room, player, 5, room.startedAt);
+
+  const metrics = runtime.metrics().shadowGroundContact;
+  assert.equal(metrics.samples, 0, 'ненаблюдаемые тики в знаменатель согласия не входят');
+  assert.equal(metrics.groundedMismatch, 0, 'и расхождением они тоже не являются');
+  assert.equal(metrics.groundStateUnknown, 5);
+
+  // А `air` и `ground` наблюдаемы и в статистику идут.
+  player.last = { ...player.last, state: 'ground' };
+  tick(runtime, room, player, 5, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.samples, 5);
 });

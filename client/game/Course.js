@@ -161,8 +161,7 @@ export class Course extends CourseBuilder {
       footOffset: PLAYER_FOOT,
       // Пружина сюда не входит: она не бьёт, а помогает, и цель «без попаданий» не должна
       // запрещать пользоваться трамплином.
-      knockback: this.spec.modifier?.knockback || 1,
-      limpHitCooldown: player.knockdownTimer > 0 ? 1.5 : 0
+      knockback: this.spec.modifier?.knockback || 1
     });
 
     for (const event of events) {

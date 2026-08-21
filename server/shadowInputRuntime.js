@@ -2,7 +2,14 @@
 
 const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
-const { createPlayerSimulationState, stepPlayerMotion } = require('../shared/playerSimulation.js');
+const {
+  createPlayerSimulationState,
+  movementIntent,
+  resolveGroundContact,
+  stepPlayerMotion
+} = require('../shared/playerSimulation.js');
+const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
+const { shadowCourseWorldFor } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const SERVER_SIMULATION_HZ = 30;
@@ -153,6 +160,17 @@ class ShadowInputRuntime {
     };
     this.positionError = new RollingErrorStats();
     this.horizontalError = new RollingErrorStats();
+    // Расхождение по опоре измеряется, но ни на что не влияет: авторитетное shadow-состояние
+    // по-прежнему берёт контакт с землёй у клиента. Сначала доказательства, потом переключение.
+    this.groundDiagnostics = {
+      samples: 0,
+      worldMissing: 0,
+      agreements: 0,
+      groundedMismatch: 0,
+      shadowGroundedOnly: 0,
+      clientGroundedOnly: 0
+    };
+    this.groundHeightError = new RollingErrorStats();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -173,6 +191,7 @@ class ShadowInputRuntime {
         state: stateFromLegacy(player.last),
         input: neutralInput(),
         progress: raceProgressFor(room),
+        world: shadowCourseWorldFor(room),
         finishServerTime: null,
         legacyFinishedObserved: false,
         lastProcessedInput: -1,
@@ -198,6 +217,44 @@ class ShadowInputRuntime {
 
     this.rejected[rejectionBucket(result.reason)] += 1;
     return result;
+  }
+
+  // Сколько бы серверная симуляция расходилась с клиентом, если бы искала пол сама.
+  //
+  // Ничего не меняет: результат только записывается. Это тот же порядок, которым переводился
+  // авторитет прогресса гонки, — сначала измерение на живом трафике, потом ворота готовности, и
+  // только потом переключение. Разница здесь и есть то доказательство паритета, которого ждёт
+  // guard движения: сегодня его провайдер отдаёт константу, потому что мерить было нечего.
+  measureGroundContact(controller, player, previousState, steppedState, now) {
+    const world = controller.world;
+    if (!world) {
+      this.groundDiagnostics.worldMissing += 1;
+      return false;
+    }
+    // Подвижные опоры считаются от времени матча, а не от числа тиков: пропуск тика не должен
+    // сдвигать трассу.
+    world.advance(Number.isFinite(now) ? now / 1000 : this.serverTick * SERVER_SIMULATION_DT);
+
+    const settled = resolveGroundContact(steppedState, {
+      colliders: world.colliders,
+      previousY: previousState.position.y,
+      footOffset: PLAYER_FOOT,
+      intent: movementIntent(controller.input),
+      wasGrounded: previousState.grounded
+    }).state;
+
+    const clientGrounded = player.last?.state === 'ground';
+    this.groundDiagnostics.samples += 1;
+    if (settled.grounded === clientGrounded) this.groundDiagnostics.agreements += 1;
+    else {
+      this.groundDiagnostics.groundedMismatch += 1;
+      if (settled.grounded) this.groundDiagnostics.shadowGroundedOnly += 1;
+      else this.groundDiagnostics.clientGroundedOnly += 1;
+    }
+    if (settled.grounded && clientGrounded && Number.isFinite(player.last?.y)) {
+      this.groundHeightError.record(Math.abs(settled.position.y - player.last.y));
+    }
+    return true;
   }
 
   recordProgressComparison(controller, player) {
@@ -258,6 +315,7 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
+    this.measureGroundContact(controller, player, previousState, result.state, now);
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;
@@ -329,6 +387,13 @@ class ShadowInputRuntime {
           ? this.progressDiagnostics.checkpointMismatchSamples / comparisons
           : 0,
         finishMismatchRate: comparisons ? this.progressDiagnostics.finishMismatchSamples / comparisons : 0
+      },
+      shadowGroundContact: {
+        ...this.groundDiagnostics,
+        agreementRate: this.groundDiagnostics.samples
+          ? this.groundDiagnostics.agreements / this.groundDiagnostics.samples
+          : 0,
+        heightError: this.groundHeightError.snapshot()
       }
     };
   }

@@ -9,12 +9,18 @@ const { recordRaceCourse } = require('../shared/courseColliderRecorder.js');
 // потому что своей геометрии у сервера не было. Теперь геометрия строится безголово по той же
 // спецификации, что и у клиента, и живёт здесь — по одному миру на матч.
 //
-// Подвижные опоры считаются от времени той же формулой, что и у клиента: ось, центр, размах,
-// скорость и фаза. Никакой истории — положение любой опоры в любой момент считается заново.
+// Подвижные опоры и препятствия считаются от времени теми же формулами, что и у клиента: ось,
+// центр, размах, скорость и фаза. Никакой истории — положение любого объекта в любой момент
+// считается заново.
+//
+// `elapsedSeconds` — это время ОТ НАЧАЛА МАТЧА, ровно то же, что клиент передаёт в `Course.update`
+// и `Course.interact`. Не «сколько сейчас на часах»: фазы синусоид считаются от него напрямую, и
+// подстановка эпохи Unix увела бы каждую подвижную опору на произвольную точку её размаха.
 function createShadowCourseWorld(spec) {
   const recorded = recordRaceCourse(spec);
   const colliders = recorded.platforms;
   const dynamic = recorded.dynamic;
+  const obstacles = recorded.obstacles;
   let advancedTo = null;
 
   function advance(elapsedSeconds) {
@@ -33,13 +39,26 @@ function createShadowCourseWorld(spec) {
       platform.delta.z = 0;
       platform.delta[motion.axis] = value - previous;
     }
+    // Препятствия двигаются здесь же, и это не мелочь: геометрия удара вертушки берётся из
+    // `o.angle`, а поршня — из `o.x`. Оставленные на записанных значениях, они дали бы застывшую
+    // трассу, по которой импульсы считались бы не там, где они происходят у клиента.
+    // Формулы — те же, что в `Course.update`.
+    for (const obstacle of obstacles) {
+      if (obstacle.type === 'spinner') {
+        obstacle.angle = elapsedSeconds * obstacle.speed + obstacle.phase;
+      } else if (obstacle.type === 'puncher') {
+        obstacle.x =
+          obstacle.originX + Math.sin(elapsedSeconds * obstacle.speed + obstacle.phase) * obstacle.range;
+      }
+      // Бампер и пружина у клиента только дышат масштабом — на столкновения это не влияет.
+    }
     return true;
   }
 
   return {
     colliders,
     dynamic,
-    obstacles: recorded.obstacles,
+    obstacles,
     walls: recorded.skillWalls,
     advance
   };

@@ -76,6 +76,28 @@ test('сдвиг подвижной опоры за шаг переносит с
   assert.equal(platform.delta[axis], platform[axis] - before);
 });
 
+test('препятствия тоже живут по времени матча, а не стоят в записанном положении', () => {
+  const world = createShadowCourseWorld(spec);
+  const spinner = world.obstacles.find(o => o.type === 'spinner');
+  const puncher = world.obstacles.find(o => o.type === 'puncher');
+
+  // Геометрия удара вертушки берётся из `angle`, а поршня — из `x`. Застывшие на записанных
+  // значениях, они считали бы импульсы не там, где они происходят у клиента.
+  if (spinner) {
+    world.advance(4);
+    assert.equal(spinner.angle, 4 * spinner.speed + spinner.phase);
+    world.advance(9);
+    assert.equal(spinner.angle, 9 * spinner.speed + spinner.phase);
+  }
+  if (puncher) {
+    world.advance(4);
+    assert.equal(puncher.x, puncher.originX + Math.sin(4 * puncher.speed + puncher.phase) * puncher.range);
+    assert.notEqual(puncher.x, puncher.originX, 'поршень обязан сойти с центра');
+  }
+
+  assert.ok(spinner || puncher, 'на этой трассе обязано быть хотя бы одно подвижное препятствие');
+});
+
 test('кооперативу мир не строится: его главы рукотворные', () => {
   assert.equal(shadowCourseWorldFor({ mode: GAME_MODE.COOP, spec }), null);
   assert.equal(shadowCourseWorldFor({ mode: GAME_MODE.RACE }), null);

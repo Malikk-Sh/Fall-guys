@@ -11,6 +11,12 @@ function flatCourse({ wall = false } = {}) {
   return {
     spec: { segmentCount: 99, finishZ: -9999 },
     spawnFor: () => new THREE.Vector3(0, 0.48, 0),
+    // Пол описан теми же плоскими опорами, что и настоящая трасса: постановку на опору считает
+    // общее ядро, и подделывать здесь метод курса больше нечем.
+    platforms: [
+      { x: 0, y: -0.5, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null }
+    ],
+
     surfaceAt(position, previousY, velocityY) {
       const foot = position.y - 0.48;
       return velocityY <= 1.5 && foot <= 0.12 && previousY - 0.48 >= -0.48

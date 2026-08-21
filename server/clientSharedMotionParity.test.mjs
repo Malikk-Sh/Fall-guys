@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { Player } from '../client/game/Player.js';
 import { Effects } from '../client/game/Effects.js';
-import { createPlayerSimulationState, stepPlayerMotion } from '../shared/playerSimulation.js';
+import {
+  createPlayerSimulationState,
+  movementIntent,
+  resolveGroundContact,
+  stepPlayerMotion
+} from '../shared/playerSimulation.js';
+import { PLAYER_FOOT } from '../client/game/PlayerDimensions.js';
 
 // Движение игрока написано дважды: в client/game/Player.js — тот путь, по которому реально играют,
 // и в shared/playerSimulation.js — тот, которым считает сервер и по которому клиент переигрывает
@@ -13,8 +19,8 @@ import { createPlayerSimulationState, stepPlayerMotion } from '../shared/playerS
 // молча разводит клиент и сервер, и ни один тест этого не заметит. Здесь обе реализации гоняются
 // по одному сценарию и сверяются на каждом шаге — до последнего разряда.
 //
-// Курс пустой намеренно: опоры, стены и препятствия в общее ядро ещё не перенесены, и сравнивать
-// нужно ровно то, что реализовано в обеих версиях, — само движение.
+// Часть сценариев идёт над пустотой, часть — над полом: постановка на опору уже общая, а стены и
+// импульсы препятствий ещё нет, поэтому сравнивается ровно то, что реализовано в обеих версиях.
 function emptyCourse() {
   return {
     platforms: [],
@@ -115,6 +121,54 @@ function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000
   return { player, state };
 }
 
+// Тот же сценарий, но над полом: теперь сверяется и постановка на опору. Пол описан плоскими
+// опорами — ровно тем, что клиент строит из своей геометрии, а сервер получает безголовой сборкой.
+function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
+  const floor = () => [
+    { x: 0, y: -0.5, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null }
+  ];
+  const scene = new THREE.Scene();
+  const course = emptyCourse();
+  course.platforms = floor();
+  const player = new Player(scene, course, new Effects(scene));
+  player.teleport(new THREE.Vector3(0, startY, 0));
+  let state = createPlayerSimulationState({ position: { x: 0, y: startY, z: 0 } });
+  const colliders = floor();
+
+  script.forEach((frame, tick) => {
+    const move = { x: frame.moveX ?? 0, forward: frame.moveZ ?? 0, magnitude: frame.magnitude ?? 1 };
+    const input = {
+      movement: () => move,
+      consume: action => (action === 'jump' ? frame.jump === true : frame.dive === true),
+      isHeld: action => action === 'jump' && frame.jumpHeld === true
+    };
+    const rawInput = {
+      moveX: move.x,
+      moveZ: move.forward,
+      cameraYaw,
+      jumpPressed: frame.jump === true,
+      jumpHeld: frame.jumpHeld === true,
+      divePressed: frame.dive === true
+    };
+
+    player.step(dt, input, cameraYaw, tick * dt);
+
+    const wasGrounded = state.grounded;
+    const previousY = state.position.y;
+    state = stepPlayerMotion(state, rawInput, { knockdownControl: 0 }, dt).state;
+    state = resolveGroundContact(state, {
+      colliders,
+      previousY,
+      footOffset: PLAYER_FOOT,
+      intent: movementIntent(rawInput),
+      wasGrounded
+    }).state;
+
+    assertSameState(player, state, `на шаге ${tick} над полом`);
+  });
+  return { player, state };
+}
+
 const idle = count => Array.from({ length: count }, () => ({}));
 const running = (count, extra = {}) =>
   Array.from({ length: count }, () => ({ moveX: 0.6, moveZ: 1, ...extra }));
@@ -167,4 +221,16 @@ test('диагональное намерение не даёт скорости
   const diagonal = runScript([...running(45, { moveX: 1, moveZ: 1 })]);
   const speed = state => Math.hypot(state.velocity.x, state.velocity.z);
   assert.ok(speed(diagonal.state) <= speed(straight.state) + 1e-9);
+});
+
+test('падение, приземление и бег по полу совпадают у обеих реализаций', () => {
+  runOverFloor([...idle(40), ...running(60)]);
+});
+
+test('подкат с приземлением в перекат совпадает над полом', () => {
+  runOverFloor([...idle(20), ...running(15), { moveX: 0, moveZ: 1, dive: true }, ...running(60)]);
+});
+
+test('прыжок с пола и возвращение на него совпадают', () => {
+  runOverFloor([...idle(30), ...running(10), { moveX: 0.6, moveZ: 1, jump: true }, ...running(45)]);
 });

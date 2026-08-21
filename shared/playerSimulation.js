@@ -5,6 +5,12 @@
 // motion kernel on plain data lets both sides execute the same acceleration, jump, dive, timers
 // and gravity without importing Three.js or browser APIs.
 
+import { supportIndexAt, supportTop } from './courseCollision.js';
+
+// Выше этой скорости вверх опора не подхватывается вовсе. Отдельно от общего порога свип-теста:
+// тот отсекает пролёт снизу, этот — момент отрыва, когда игрок уже пошёл вверх.
+export const GROUND_CONTACT_MAX_UPWARD_SPEED = 1.5;
+
 export const PLAYER_SIMULATION_CONSTANTS = Object.freeze({
   GRAVITY: 22.5,
   JUMP_SPEED: 8.7,
@@ -23,6 +29,7 @@ export const PLAYER_SIMULATION_CONSTANTS = Object.freeze({
 });
 
 const {
+  ROLL_TIME,
   GRAVITY,
   JUMP_SPEED,
   DIVE_SPEED,
@@ -153,6 +160,73 @@ function cloneState(state) {
     position: { ...state.position },
     velocity: { ...state.velocity }
   };
+}
+
+// Постановка на опору после шага движения.
+//
+// Раньше это существовало только в клиенте и читалось из мешей, поэтому серверный игрок падал
+// сквозь трассу и авторитет движения не мог быть выдан честно. Здесь тот же расчёт работает над
+// плоским списком опор — тем самым, что клиент строит из своей геометрии, а сервер получает
+// безголовой сборкой.
+//
+// Возвращается новое состояние и события приземления: подача (звук, тряска, частицы) остаётся
+// снаружи, потому что физика от неё не зависит и зависеть не должна.
+export function resolveGroundContact(
+  state,
+  { colliders = [], previousY = state.position.y, footOffset = 0, intent = null, wasGrounded = null } = {}
+) {
+  const next = cloneState(createPlayerSimulationState(state));
+  const events = [];
+  const grounded = wasGrounded === null ? state.grounded === true : wasGrounded === true;
+  const landingVelocity = next.velocity.y;
+
+  next.grounded = false;
+  const index = supportIndexAt(colliders, next.position, previousY, landingVelocity, footOffset);
+  // Второй, более строгий порог: опора не подхватывается тем, кто ещё заметно летит вверх.
+  if (index < 0 || landingVelocity > GROUND_CONTACT_MAX_UPWARD_SPEED) return { state: next, events };
+
+  const support = colliders[index];
+  next.position.y = supportTop(support) + footOffset;
+  // Перенос движущейся платформой: её сдвиг за шаг добавляется к позиции игрока, иначе он
+  // соскальзывал бы с неё, стоя на месте.
+  const carry = support.delta;
+  if (carry) {
+    next.position.x += finite(carry.x);
+    next.position.y += finite(carry.y);
+    next.position.z += finite(carry.z);
+  }
+  next.velocity.y = 0;
+  next.grounded = true;
+  next.slamming = false;
+
+  const landingSpeed = Math.hypot(next.velocity.x, next.velocity.z);
+  if (!grounded && next.diveTimer > 0 && landingSpeed > RUN_SPEED + 0.45) {
+    next.rollTimer = ROLL_TIME;
+    next.recoveryWindow = 0.18;
+    next.landingRetention = LANDING_RETENTION_TIME;
+    next.diveTimer = 0;
+    events.push({ name: 'roll' });
+  } else if (
+    !grounded &&
+    landingVelocity > -7.5 &&
+    landingVelocity < -2.8 &&
+    landingSpeed > RUN_SPEED * 0.82 &&
+    alignedWithMotion(intent, next.velocity)
+  ) {
+    // Мягкое приземление по направлению движения не дарит скорость из воздуха — оно лишь
+    // ненадолго не даёт уже набранному импульсу исчезнуть.
+    next.landingRetention = LANDING_RETENTION_TIME;
+  }
+  if (!grounded && landingVelocity < -3.2) events.push({ name: 'land', landingVelocity });
+
+  return { state: next, events, supportIndex: index };
+}
+
+function alignedWithMotion(intent, velocity) {
+  if (!intent) return false;
+  const length = Math.hypot(velocity.x, velocity.z);
+  if (length === 0) return false;
+  return (intent.x * velocity.x + intent.z * velocity.z) / length > 0.82;
 }
 
 // Advances the collision-free motion slice by exactly one fixed step.

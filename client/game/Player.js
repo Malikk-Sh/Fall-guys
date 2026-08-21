@@ -4,7 +4,8 @@ import {
   PLAYER_SIMULATION_CONSTANTS,
   dampScalar,
   movementIntent,
-  playerTuning
+  playerTuning,
+  resolveGroundContact
 } from '/shared/playerSimulation.js';
 import { Character } from './Character.js';
 import { PLAYER_FOOT } from './PlayerDimensions.js';
@@ -17,7 +18,6 @@ const {
   DIVE_SPEED,
   ACCEL_GROUND,
   ACCEL_AIR,
-  ROLL_TIME,
   ROLL_SPEED,
   LANDING_RETENTION_TIME,
   KNOCKDOWN_IMMUNITY_TIME,
@@ -278,49 +278,50 @@ export class Player {
       this.haptics?.vibrate(0.42);
     }
 
-    const landingVelocity = this.velocity.y;
-    const surface = this.course.surfaceAt(this.physics, previousY, this.velocity.y);
-    const wasGrounded = this.grounded;
-    this.grounded = false;
-    if (surface && this.velocity.y <= 1.5) {
-      this.physics.y = surface.y + PLAYER_FOOT;
-      // Перенос движущейся платформой: сдвиг платформы за кадр добавляется к позиции игрока,
-      // иначе он соскальзывал бы с неё, стоя на месте.
-      this.physics.add(surface.delta);
-      this.velocity.y = 0;
-      this.grounded = true;
-      this.slamming = false;
-      const landingSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-      if (!wasGrounded && this.diveTimer > 0 && landingSpeed > RUN_SPEED + 0.45) {
-        this.rollTimer = ROLL_TIME;
-        this.recoveryWindow = 0.18;
-        this.landingRetention = LANDING_RETENTION_TIME;
-        this.diveTimer = 0;
-      } else if (
-        !wasGrounded &&
-        landingVelocity > -7.5 &&
-        landingVelocity < -2.8 &&
-        landingSpeed > RUN_SPEED * 0.82 &&
-        desired.dot(this._scratch.set(this.velocity.x, 0, this.velocity.z).normalize()) > 0.82
-      ) {
-        // Мягкое приземление по направлению движения не дарит скорость из воздуха — оно лишь
-        // ненадолго не даёт уже набранному импульсу исчезнуть.
-        this.landingRetention = LANDING_RETENTION_TIME;
+    // Постановка на опору живёт в общем ядре: серверная симуляция обязана ставить игрока на пол по
+    // тем же правилам, иначе паритет движения не на чем доказывать. Здесь остаётся только подача.
+    const contact = resolveGroundContact(
+      {
+        position: this.physics,
+        velocity: this.velocity,
+        grounded: this.grounded,
+        diveTimer: this.diveTimer,
+        rollTimer: this.rollTimer,
+        recoveryWindow: this.recoveryWindow,
+        landingRetention: this.landingRetention,
+        slamming: this.slamming
+      },
+      {
+        colliders: this.course.platforms,
+        previousY,
+        footOffset: PLAYER_FOOT,
+        intent,
+        wasGrounded: this.grounded
       }
-      if (!wasGrounded && landingVelocity < -3.2) {
-        const strength = Math.min(1, Math.abs(landingVelocity) / 12);
-        this.character.landed(strength);
-        this.effects.burst(
-          this._scratch.copy(this.physics).setY(this.physics.y - 0.4),
-          COLORS.white,
-          Math.min(12, 4 + Math.floor(Math.abs(landingVelocity))),
-          0.55
-        );
-        this.sfx?.land(strength);
-        this.haptics?.vibrate(strength * 0.8);
-        // Жёсткое приземление ощущается ударом — мягкое не должно трясти экран вовсе.
-        if (strength > 0.45) this.impact = Math.max(this.impact, (strength - 0.45) * 0.6);
-      }
+    );
+    const settled = contact.state;
+    this.physics.set(settled.position.x, settled.position.y, settled.position.z);
+    this.velocity.y = settled.velocity.y;
+    this.grounded = settled.grounded;
+    this.slamming = settled.slamming;
+    this.diveTimer = settled.diveTimer;
+    this.rollTimer = settled.rollTimer;
+    this.recoveryWindow = settled.recoveryWindow;
+    this.landingRetention = settled.landingRetention;
+    for (const event of contact.events) {
+      if (event.name !== 'land') continue;
+      const strength = Math.min(1, Math.abs(event.landingVelocity) / 12);
+      this.character.landed(strength);
+      this.effects.burst(
+        this._scratch.copy(this.physics).setY(this.physics.y - 0.4),
+        COLORS.white,
+        Math.min(12, 4 + Math.floor(Math.abs(event.landingVelocity))),
+        0.55
+      );
+      this.sfx?.land(strength);
+      this.haptics?.vibrate(strength * 0.8);
+      // Жёсткое приземление ощущается ударом — мягкое не должно трясти экран вовсе.
+      if (strength > 0.45) this.impact = Math.max(this.impact, (strength - 0.45) * 0.6);
     }
 
     this.course.interact(this, elapsed, this.effects, this.sfx);

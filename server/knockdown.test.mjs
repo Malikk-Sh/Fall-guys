@@ -16,7 +16,10 @@ function flatCourse() {
   return {
     spec: { segmentCount: 99, finishZ: -999 },
     spawnFor: () => new THREE.Vector3(0, 0.884, 0),
-    surfaceAt: () => ({ y: 0.5, delta: new THREE.Vector3() }),
+    // Ровный пол с верхом на 0.5 — теми же плоскими опорами, что и у настоящей трассы.
+    platforms: [
+      { x: 0, y: 0, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null }
+    ],
     interact() {},
     checkpointFor: (_position, checkpoint) => checkpoint
   };

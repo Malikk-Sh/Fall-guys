@@ -5,7 +5,8 @@ import { courseSpec } from '../client/core/Config.js';
 import { Course } from '../client/game/Course.js';
 import { recordRaceCourse } from '../shared/courseColliderRecorder.js';
 import { supportIndexAt, supportTop } from '../shared/courseCollision.js';
-import { PLAYER_FOOT } from '../client/game/PlayerDimensions.js';
+import { wallBounceNormalAt } from '../shared/courseWalls.js';
+import { PLAYER_BODY_RADIUS, PLAYER_FOOT } from '../client/game/PlayerDimensions.js';
 
 // Здесь и проверяется весь смысл этапа: безголовая запись обязана совпасть с настоящей трассой,
 // построенной со сценой. Совпадение по числам — единственное доказательство, что вторая модель
@@ -121,4 +122,46 @@ test('этапы трассы называются одинаково у обе�
     const built = withCourse(spec, course => [...course.stageNames]);
     assert.deepEqual(recorded.stageNames, built, `названия этапов разошлись на seed ${spec.seed}`);
   }
+});
+
+test('безголовая запись знает о тех же стенах отскока', () => {
+  const shape = wall => ({ x: wall.x, y: wall.y, z: wall.z, w: wall.w, h: wall.h, d: wall.d });
+  for (const spec of SPECS) {
+    const recorded = recordRaceCourse(spec);
+    const built = withCourse(spec, course => course.skillWalls.map(shape));
+    assert.deepEqual(
+      recorded.skillWalls.map(shape),
+      built,
+      `стены разошлись на seed ${spec.seed} / ${spec.difficulty}`
+    );
+  }
+});
+
+test('над одной и той же стеной обе сборки дают одну нормаль отскока', () => {
+  const spec = SPECS.find(candidate => recordRaceCourse(candidate).skillWalls.length > 0);
+  if (!spec) return;
+  const recorded = recordRaceCourse(spec);
+  withCourse(spec, course => {
+    for (const wall of recorded.skillWalls) {
+      // Подход к стене сбоку: игрок летит в неё по той оси, которая у стены тоньше.
+      const alongX = wall.w < wall.d;
+      const approach = alongX
+        ? { x: wall.x + wall.w / 2, y: wall.y, z: wall.z }
+        : { x: wall.x, y: wall.y, z: wall.z + wall.d / 2 };
+      const previous = alongX
+        ? { x: approach.x + 1, y: approach.y, z: approach.z }
+        : { x: approach.x, y: approach.y, z: approach.z + 1 };
+      const velocity = alongX ? { x: -6, y: 0, z: 0 } : { x: 0, y: 0, z: -6 };
+
+      const clientNormal = course.wallBounceAt(approach, previous, velocity);
+      const serverNormal = wallBounceNormalAt(
+        recorded.skillWalls,
+        approach,
+        previous,
+        velocity,
+        PLAYER_BODY_RADIUS
+      );
+      assert.deepEqual(serverNormal, clientNormal, 'нормаль отскока обязана совпасть');
+    }
+  });
 });

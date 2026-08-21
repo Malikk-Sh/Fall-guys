@@ -40,6 +40,7 @@ function createShadowCourseWorld(spec) {
     colliders,
     dynamic,
     obstacles: recorded.obstacles,
+    walls: recorded.skillWalls,
     advance
   };
 }

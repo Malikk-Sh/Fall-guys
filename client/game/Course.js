@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CourseBuilder } from './CourseBuilder.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
-import { buildSegment } from './segments.js';
+import { buildSegment } from '/shared/courseSegments.js';
 import {
   COLORS,
   DIFFICULTIES,
@@ -123,7 +123,7 @@ export class Course extends CourseBuilder {
         crosswind: 'ДОРОГА ВЕТРОВ'
       }[type]
     );
-    // Сама расстановка живёт в segments.js: там у каждого типа несколько структурно разных
+    // Сама расстановка живёт в shared/courseSegments.js: там у каждого типа несколько структурно разных
     // вариантов, и добавление нового не требует трогать ни Course, ни генератор плана.
     //
     // Зеркало оставлено как множитель для тех вариантов, где оно осмысленно: несимметричную

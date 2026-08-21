@@ -454,3 +454,55 @@ test('свип-тест меряется кадром клиента, а не с
   const after = runtime.metrics().shadowGroundContact.groundModel.serverGroundedOnly;
   assert.equal(after, before, 'свип не должен захватывать кадр, которого клиент не проходил');
 });
+
+// Устаревший снапшот против подвижной опоры.
+//
+// Позиции рассылаются раз в 66 мс, тик идёт на 30 Гц, сверху сетевая задержка. Спрашивать про опору
+// в старой точке у платформы, уже уехавшей к текущему тику, значит сравнивать разные моменты. На
+// ботах этого не видно вовсе — там задержки нет, — поэтому проверка нужна отдельная.
+test('опора спрашивается у мира на момент снапшота, а не текущего тика', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+
+  // Снапшот на секунду старше тика: за это время подвижные опоры успевают уехать.
+  const now = room.startedAt + 4000;
+  player.lastAt = now - 1000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const probe = controller.probeWorld;
+  const live = controller.world;
+  assert.ok(probe && live && probe !== live, 'у замера обязан быть свой мир');
+  assert.ok(probe.dynamic.length, 'на трассе обязаны быть подвижные опоры');
+
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(3);
+  probe.dynamic.forEach((platform, index) => {
+    const axis = platform.motion.axis;
+    assert.equal(platform[axis], expected.dynamic[index][axis], `опора ${index} на момент снапшота`);
+  });
+  // А мир свободной траектории обязан стоять на времени ТИКА — иначе перенос опорой поедет.
+  const atTick = createShadowCourseWorld(spec);
+  atTick.advance(4);
+  const axis = live.dynamic[0].motion.axis;
+  assert.equal(live.dynamic[0][axis], atTick.dynamic[0][axis]);
+});
+
+test('один и тот же снапшот не засчитывается дважды', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  player.lastAt = room.startedAt + 100;
+
+  // Три тика подряд с одним и тем же снапшотом: 66 мс рассылки против 33 мс тика — обычное дело.
+  tick(runtime, room, player, 3, room.startedAt + 200);
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 1);
+
+  // Новый снапшот — новая выборка.
+  player.lastAt = room.startedAt + 300;
+  tick(runtime, room, player, 1, room.startedAt + 400);
+  assert.equal(runtime.metrics().shadowGroundContact.groundModel.samples, 2);
+});

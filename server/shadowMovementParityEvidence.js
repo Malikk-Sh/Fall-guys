@@ -28,6 +28,22 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   maxGroundHeightErrorMax: 0.12,
   // Ни одного тика без мира: матч, где геометрия не построилась, доказательством быть не может.
   maxWorldMissingSamples: 0,
+  // Отрыв свободной траектории — ОБЯЗАТЕЛЬНОЕ условие, и вот почему он вернулся.
+  //
+  // Согласие по опоре спрашивается в точке клиента, и это правильно: только так меряется модель
+  // мира, а не дрейф. Но у такой формулировки есть обратная сторона — она остаётся идеальной, даже
+  // если серверная симуляция уехала куда угодно. Паритет попаданий её тоже не ловит: обычный дрейф
+  // без единого сбивания в события не попадает. Значит, без ограничения на сам отрыв ворота можно
+  // было бы открыть симулятору, который просто не следует за клиентом.
+  //
+  // Пороги не выдуманы: это те же числа, по которым живёт реконсиляция. Мягкая коррекция начинается
+  // с 0.3, жёсткая — с 1.5, и жёсткая видна игроку рывком. Отсюда требование: типичный тик лежит в
+  // полосе мягкой коррекции, а до жёсткой доходит не чаще одного тика из двадцати.
+  //
+  // Среднее для этого не годится: у отрыва тяжёлый хвост, и его задают редкие выбросы после
+  // попаданий, а не типичное поведение. Поэтому меряются квантили.
+  maxFreeTrajectoryErrorP50: 0.3,
+  maxFreeTrajectoryErrorP95: 1.5,
   // Импульсы обязаны хоть раз случиться, иначе про них нечего утверждать.
   minImpulseSamples: 50,
   // Паритет препятствий меряется СОБЫТИЯМИ, а не расстоянием.
@@ -56,6 +72,7 @@ const REASON = Object.freeze({
   GROUND_AGREEMENT: 'ground-agreement',
   SHADOW_GROUNDED_ONLY: 'shadow-grounded-only',
   GROUND_HEIGHT_ERROR: 'ground-height-error',
+  TRAJECTORY_ERROR: 'trajectory-error',
   INSUFFICIENT_IMPULSE_SAMPLES: 'insufficient-impulse-samples',
   INSUFFICIENT_HIT_SAMPLES: 'insufficient-hit-samples',
   HIT_MATCH_RATE: 'hit-match-rate',
@@ -87,6 +104,12 @@ function validHitParity(parity) {
   );
 }
 
+// Доля согласия НЕ берётся из метрики готовой: она считается здесь по счётчикам.
+//
+// Модуль fail-closed по построению, и доверять производному полю в испорченном снимке — дыра в
+// этом свойстве: запись вида `{ samples: 5000, agreements: 0, agreementRate: 1 }` проходила бы
+// проверку и открывала паритет столкновений, не имея ни одного совпадения. Заодно отвергается
+// набор, где совпадений больше, чем выборок.
 function validGroundModel(model) {
   return (
     !!model &&
@@ -94,8 +117,14 @@ function validGroundModel(model) {
     finiteNonNegative(model.samples) &&
     finiteNonNegative(model.agreements) &&
     finiteNonNegative(model.serverGroundedOnly) &&
-    finiteNonNegative(model.agreementRate)
+    finiteNonNegative(model.clientGroundedOnly) &&
+    model.agreements <= model.samples &&
+    model.serverGroundedOnly + model.clientGroundedOnly + model.agreements === model.samples
   );
+}
+
+function groundAgreementRate(model) {
+  return model.samples ? model.agreements / model.samples : 0;
 }
 
 function validMetrics(metrics) {
@@ -109,6 +138,9 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.worldMissing) &&
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
+    validErrorStats(metrics.freeTrajectoryError) &&
+    finiteNonNegative(metrics.freeTrajectoryError.p50) &&
+    finiteNonNegative(metrics.freeTrajectoryError.p95) &&
     validHitParity(metrics.hitParity)
   );
 }
@@ -131,7 +163,7 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
   if (model.samples < policy.minSamples) reasons.push(REASON.INSUFFICIENT_SAMPLES);
   if (metrics.worldMissing > policy.maxWorldMissingSamples) reasons.push(REASON.WORLD_MISSING);
 
-  if (model.agreementRate < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
+  if (groundAgreementRate(model) < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
   if (model.serverGroundedOnly > policy.maxShadowGroundedOnlySamples) {
     reasons.push(REASON.SHADOW_GROUNDED_ONLY);
   }
@@ -141,6 +173,13 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
   ) {
     reasons.push(REASON.GROUND_HEIGHT_ERROR);
   }
+  if (
+    metrics.freeTrajectoryError.p50 > policy.maxFreeTrajectoryErrorP50 ||
+    metrics.freeTrajectoryError.p95 > policy.maxFreeTrajectoryErrorP95
+  ) {
+    reasons.push(REASON.TRAJECTORY_ERROR);
+  }
+
   // Паритет столкновений и паритет препятствий — разные утверждения. Первое про опору: находит ли
   // сервер тот же пол. Второе про удары: бьёт ли он по тем же препятствиям.
   const collisionParityVerified = reasons.length === 0;

@@ -29,7 +29,7 @@ function goodMetrics(overrides = {}) {
     impulses: 200,
     wallBounces: 12,
     heightError: { count: 5000, mean: 0.004, p95: 0.01, max: 0.03 },
-    freeTrajectoryError: { count: 5000, mean: 0.08, p95: 0.2, max: 0.5 },
+    freeTrajectoryError: { count: 5000, mean: 0.08, p50: 0.05, p95: 0.2, max: 0.5 },
     hitParity: {
       serverHits: 84,
       clientHits: 85,
@@ -107,15 +107,30 @@ test('расхождение по высоте стояния закрывает
   assert.equal(byMax.collisionParityVerified, false);
 });
 
-// Отрыв траектории больше НЕ порог, и это осознанно: внутри окна его определяет одно попадание, а
-// попадания усиливают расхождение скачком. Среднее по такой величине не описывает ничего, поэтому
-// она осталась справочной, а паритет препятствий меряется событиями.
-test('отрыв траектории сам по себе ворота не закрывает', () => {
+// Отрыв меряется квантилями, а не средним: у него тяжёлый хвост, и среднее задают выбросы после
+// попаданий. Но САМ отрыв обязан быть ограничен — без этого ворота открылись бы симулятору, чья
+// траектория уехала куда угодно: согласие по опоре спрашивается в точке клиента и остаётся
+// идеальным, а паритет попаданий обычный дрейф без сбиваний не ловит.
+test('редкий выброс отрыва воротам не мешает, если типичный тик в норме', () => {
   const evaluation = evaluateMovementParity(
-    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 2, p95: 4, max: 9 } })
+    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 2, p50: 0.1, p95: 0.9, max: 90 } })
   );
   assert.equal(evaluation.collisionParityVerified, true);
   assert.equal(evaluation.obstacleParityVerified, true);
+});
+
+test('уехавшая траектория закрывает ворота, даже когда опора и удары сходятся', () => {
+  const byTypical = evaluateMovementParity(
+    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 1, p50: 0.9, p95: 1.2, max: 3 } })
+  );
+  assert.equal(byTypical.collisionParityVerified, false, 'типичный тик вне полосы мягкой коррекции');
+  assert.ok(byTypical.reasons.includes(REASON.TRAJECTORY_ERROR));
+
+  const byTail = evaluateMovementParity(
+    goodMetrics({ freeTrajectoryError: { count: 5000, mean: 1, p50: 0.1, p95: 4.2, max: 17 } })
+  );
+  assert.equal(byTail.collisionParityVerified, false, 'жёсткая коррекция чаще одного тика из двадцати');
+  assert.equal(byTail.obstacleParityVerified, false, 'условие общее для обоих признаков');
 });
 
 test('удар, которого у клиента не было, запрещён полностью', () => {
@@ -209,6 +224,38 @@ test('провайдер отдаёт признаки runtime, а падени�
   assert.deepEqual(missing(), { collisionParityVerified: false, obstacleParityVerified: false });
 });
 
+test('испорченный снимок не открывает ворота производным полем', () => {
+  // Доля согласия считается по счётчикам, а не берётся из метрики: иначе такой набор прошёл бы
+  // проверку и открыл паритет столкновений, не имея ни одного совпадения.
+  const lying = evaluateMovementParity(
+    goodMetrics({
+      groundModel: {
+        samples: 5000,
+        agreements: 0,
+        serverGroundedOnly: 0,
+        clientGroundedOnly: 5000,
+        agreementRate: 1
+      }
+    })
+  );
+  assert.equal(lying.collisionParityVerified, false);
+  assert.ok(lying.reasons.includes(REASON.GROUND_AGREEMENT));
+
+  // Несходящиеся счётчики — испорченный снимок, а не «почти правда».
+  const inconsistent = evaluateMovementParity(
+    goodMetrics({
+      groundModel: {
+        samples: 5000,
+        agreements: 4000,
+        serverGroundedOnly: 0,
+        clientGroundedOnly: 0,
+        agreementRate: 0.8
+      }
+    })
+  );
+  assert.deepEqual(inconsistent.reasons, [REASON.INVALID_METRICS]);
+});
+
 test('пороги политики остаются консервативными', () => {
   assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minSamples >= 1000);
   assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxShadowGroundedOnlySamples, 0);
@@ -216,6 +263,9 @@ test('пороги политики остаются консервативны�
   assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minGroundAgreementRate >= 0.99);
   assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxServerOnlyHits, 0);
   assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minHitMatchRate >= 0.9);
+  // Пороги отрыва — те же числа, по которым живёт реконсиляция: мягкая коррекция и жёсткая.
+  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxFreeTrajectoryErrorP50, 0.3);
+  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxFreeTrajectoryErrorP95, 1.5);
 });
 
 test('singleton guard не пользуется живым провайдером и остаётся закрытым', () => {

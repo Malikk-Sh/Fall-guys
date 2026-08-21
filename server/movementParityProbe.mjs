@@ -60,7 +60,15 @@ function latchingInput(input) {
 function runRace(runtime, { seed, difficulty, skill, index }) {
   const spec = createCourseSpec(seed, difficulty);
   const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
-  const bot = new RaceBot(course, { skill, seed, index });
+  // Устойчивость после удара приравнивается к живому клиенту, и это не настройка сложности.
+  //
+  // `RaceBot` по умолчанию раздаёт себе 0.86–0.98: сбитый бот почти не теряет управление, иначе он
+  // не доезжал бы до финиша. Живой клиент (`client/main.js`) не передаёт `knockdownControl` вовсе,
+  // то есть играет с нулём, и ровно ноль подставляет серверная симуляция. Пока бот бежал со своим
+  // значением, замер сравнивал во время каждого сбивания РАЗНЫЕ правила: бот рулил, а серверная
+  // копия лежала. Расхождение при этом накапливалось метрами и попадало в статистику как «дрейф
+  // физики», которым оно не было.
+  const bot = new RaceBot(course, { skill, seed, index, knockdownControl: 0 });
   const field = new BotField(course, [bot]);
   const latched = latchingInput(bot.input);
 

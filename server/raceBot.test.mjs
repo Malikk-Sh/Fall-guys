@@ -221,3 +221,32 @@ test('имена ботов не выдают в них ботов', () => {
   }
   course.dispose();
 });
+
+test('устойчивость после удара переопределяется только явно', () => {
+  // Замер паритета движения обязан гонять бота по правилам ЖИВОГО клиента: тот не передаёт
+  // `knockdownControl` вовсе, то есть теряет управление полностью, и ровно ноль подставляет
+  // серверная симуляция. Пока бот бежал со своими 0.86–0.98, во время каждого сбивания
+  // сравнивались разные правила, и накопленные метры записывались в «дрейф физики».
+  //
+  // Переопределение при этом обязано оставаться местным. Соперник в настоящем матче сохраняет
+  // прежний разброс: это не сложность, а разная реакция на одинаковый контакт.
+  const spec = createCourseSpec(SEEDS[0], 'normal');
+  const course = new Course(new THREE.Scene(), spec, { quality: 'low' });
+
+  const defaults = [0, 1, 2, 3, 4].map(index => {
+    const bot = new RaceBot(course, { seed: SEEDS[0], index });
+    const value = bot.player.knockdownControl;
+    bot.dispose();
+    return value;
+  });
+  assert.deepEqual(defaults, [0.86, 0.9, 0.94, 0.98, 0.86]);
+
+  const limp = new RaceBot(course, { seed: SEEDS[0], index: 1, knockdownControl: 0 });
+  assert.equal(limp.player.knockdownControl, 0, 'ноль обязан доезжать до игрока, а не считаться пустым');
+  // Переопределение переживает reset: реванш не должен возвращать боту управление.
+  limp.reset(1);
+  assert.equal(limp.player.knockdownControl, 0);
+  limp.dispose();
+
+  course.dispose();
+});

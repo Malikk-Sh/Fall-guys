@@ -3,6 +3,7 @@ import { CourseBuilder } from './CourseBuilder.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
 import { buildRaceGeometry } from '/shared/raceCourseGeometry.js';
+import { applyObstacleImpulses } from '/shared/courseImpulses.js';
 import { COLORS, courseName, courseSpec, seededRandom } from '../core/Config.js';
 
 const palette = [
@@ -146,113 +147,42 @@ export class Course extends CourseBuilder {
   // `pos` — это позиция ФИЗИКИ, а не отрисовки. Разница принципиальна: выталкивание из препятствия
   // меняет позицию напрямую, а позиция отрисовки пересчитывается заново каждый кадр интерполяцией,
   // так что записанное в неё было бы немедленно затёрто.
+  // Реакция на препятствия. Вызывается из шага физики.
+  //
+  // Сами импульсы считает общее ядро: серверная симуляция обязана получать от трассы тот же
+  // отскок и тот же удар, иначе паритет движения не на чем доказывать. Здесь остаётся подача и то,
+  // что физика не решает, — счётчик попаданий и сбивание с его собственными правилами.
   interact(player, now, effects, sfx = null) {
-    const pos = player.position,
-      radius = PLAYER_OBSTACLE_RADIUS,
+    const { events } = applyObstacleImpulses(player, {
+      obstacles: this.obstacles,
+      now,
+      hitTimes: player.hitTimes,
+      playerRadius: PLAYER_OBSTACLE_RADIUS,
+      footOffset: PLAYER_FOOT,
       // Пружина сюда не входит: она не бьёт, а помогает, и цель «без попаданий» не должна
       // запрещать пользоваться трамплином.
-      knockback = this.spec.modifier?.knockback || 1,
-      limpHitCooldown = player.knockdownTimer > 0 ? 1.5 : 0;
-    for (const o of this.obstacles) {
-      const key = o.id,
-        last = player.hitTimes.get(key) || 0;
-      if (o.type === 'spring') {
-        const dx = pos.x - o.x,
-          dz = pos.z - o.z;
-        if (
-          Math.hypot(dx, dz) < o.radius * 0.82 &&
-          Math.abs(pos.y - PLAYER_FOOT - (o.y + 0.13)) < 0.38 &&
-          player.velocity.y <= 1 &&
-          now - last > 0.35
-        ) {
-          player.velocity.y = 11.4;
-          player.grounded = false;
-          player.hitTimes.set(key, now);
-          effects.burst(pos, COLORS.yellow, 14, 1.1);
-          player.character.landed(0.6);
-          sfx?.spring();
-          player.impact = Math.max(player.impact, 0.25);
-        }
-        continue;
+      knockback: this.spec.modifier?.knockback || 1,
+      limpHitCooldown: player.knockdownTimer > 0 ? 1.5 : 0
+    });
+
+    for (const event of events) {
+      if (event.counted) player.hits++;
+      player.impact = Math.max(player.impact, event.impact);
+      if (event.name === 'spring') {
+        effects.burst(event.at, COLORS.yellow, 14, 1.1);
+        player.character.landed(0.6);
+        sfx?.spring();
+      } else if (event.name === 'bumper') {
+        effects.burst(event.at, event.color, 16, 1.15);
+        sfx?.bumper();
+      } else if (event.name === 'spinner') {
+        effects.burst(event.at, COLORS.yellow, 12, 1);
+        sfx?.spinner();
+      } else if (event.name === 'puncher') {
+        effects.burst(event.at, COLORS.pink, 12, 1);
+        sfx?.puncher();
       }
-      if (o.type === 'bumper') {
-        const dx = pos.x - o.x,
-          dz = pos.z - o.z,
-          dist = Math.hypot(dx, dz) || 0.01,
-          min = o.radius + radius;
-        if (dist < min && Math.abs(pos.y - o.y) < 1.55 && now - last > Math.max(0.28, limpHitCooldown)) {
-          const nx = dx / dist,
-            nz = dz / dist;
-          pos.x = o.x + nx * min;
-          pos.z = o.z + nz * min;
-          player.velocity.x = nx * 10 * knockback;
-          player.velocity.z = nz * 10 * knockback;
-          player.velocity.y = Math.max(6.2 * knockback, player.velocity.y);
-          player.grounded = false;
-          player.hitTimes.set(key, now);
-          player.hits++;
-          effects.burst(pos, o.color, 16, 1.15);
-          sfx?.bumper();
-          player.impact = Math.max(player.impact, 0.4);
-          player.knockDown?.(0.4);
-        }
-        continue;
-      }
-      if (o.type === 'spinner') {
-        const dx = pos.x - o.x,
-          dz = pos.z - o.z,
-          cos = Math.cos(o.angle),
-          sin = Math.sin(o.angle),
-          along = dx * cos - dz * sin,
-          cross = dx * sin + dz * cos;
-        if (
-          Math.abs(along) < o.length / 2 + radius &&
-          Math.abs(cross) < o.width / 2 + radius &&
-          Math.abs(pos.y - o.y) < 1.05 &&
-          now - last > Math.max(0.32, limpHitCooldown)
-        ) {
-          const side = Math.sign(cross) || 1,
-            nx = sin * side,
-            nz = cos * side;
-          pos.x += nx * (o.width / 2 + radius - Math.abs(cross) + 0.04);
-          pos.z += nz * (o.width / 2 + radius - Math.abs(cross) + 0.04);
-          const tangential = Math.min(12, Math.abs(o.speed) * Math.abs(along) * 0.72 + 5.5);
-          player.velocity.x = (nx * tangential + o.speed * dz * 0.22) * knockback;
-          player.velocity.z = (nz * tangential - o.speed * dx * 0.22) * knockback;
-          player.velocity.y = Math.max(4.6 * knockback, player.velocity.y);
-          player.grounded = false;
-          player.hitTimes.set(key, now);
-          player.hits++;
-          effects.burst(pos, COLORS.yellow, 12, 1);
-          sfx?.spinner();
-          player.impact = Math.max(player.impact, 0.5);
-          player.knockDown?.(0.5);
-        }
-        continue;
-      }
-      if (o.type === 'puncher') {
-        const dx = pos.x - o.x,
-          dz = pos.z - o.z;
-        if (
-          Math.abs(dx) < o.w / 2 + radius &&
-          Math.abs(dz) < o.d / 2 + radius &&
-          Math.abs(pos.y - o.y) < 1.5 &&
-          now - last > Math.max(0.34, limpHitCooldown)
-        ) {
-          const dir = Math.sign(dx) || Math.sign(Math.cos(now * o.speed + o.phase)) || 1;
-          pos.x += dir * (o.w / 2 + radius - Math.abs(dx) + 0.05);
-          player.velocity.x = dir * 10.5 * knockback;
-          player.velocity.z -= 3 * knockback;
-          player.velocity.y = Math.max(4.2 * knockback, player.velocity.y);
-          player.grounded = false;
-          player.hitTimes.set(key, now);
-          player.hits++;
-          effects.burst(pos, COLORS.pink, 12, 1);
-          sfx?.puncher();
-          player.impact = Math.max(player.impact, 0.55);
-          player.knockDown?.(0.55);
-        }
-      }
+      if (event.knockdown) player.knockDown?.(event.knockdown);
     }
   }
   checkpointFor(position, current) {

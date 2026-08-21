@@ -143,6 +143,34 @@ function matchElapsedSeconds(room, now) {
   return (now - room.startedAt) / 1000;
 }
 
+// Сброс якоря переносит позицию и скорость, но НЕ стирает сбивание.
+//
+// Якорь существует, чтобы ограничить накопленный отрыв позиции, — и только для этого. Состояние
+// сбивания к отрыву отношения не имеет: это последствие удара, который симуляция сама наблюдала, и
+// клиент его не забывает. Пока якорь обнулял иммунитет, сервер после каждого сброса снова
+// становился уязвим, тогда как клиент был неуязвим свои 0.7 с. Замер на ботах: 131 удар у сервера
+// против 85 сбиваний у клиента, 51 выдуманный удар. С переносом — 84 против 85 и 3 выдуманных.
+//
+// Существен именно ТАЙМЕР, а не иммунитет: пока сбивание идёт, `applyKnockdown` отказывает, и
+// стирание таймера возвращало серверу уязвимость к тому самому препятствию, на котором он лежит.
+// Проверено раздельно — перенос одного лишь иммунитета не даёт ничего (те же 131 удар и 58.8 %).
+//
+// Цена у переноса есть, и она честная: сервер теперь остаётся сбитым все свои 1.4 с, поэтому там,
+// где сбивания разъезжаются по времени, он лежит, пока клиент уже бежит. Согласие по опоре из-за
+// этого падает с 96.4 % до 94.6 %. Это настоящее расхождение, а не артефакт, и прятать его,
+// возвращая обнуление, значило бы улучшать число ценой правдивости измерения.
+//
+// Остальная машина состояний намеренно НЕ переносится: подкат, перекат и планирование выводятся из
+// ввода заново, и их перенос измерение ухудшал.
+function reanchoredState(legacy, previous) {
+  const next = stateFromLegacy(legacy);
+  if (!previous) return next;
+  next.knockdownTimer = previous.knockdownTimer;
+  next.knockdownImmunity = previous.knockdownImmunity;
+  next.getupTimer = previous.getupTimer;
+  return next;
+}
+
 class RollingErrorStats {
   constructor(limit = ERROR_SAMPLE_LIMIT) {
     this.limit = limit;
@@ -171,6 +199,81 @@ class RollingErrorStats {
       p95: p95Index >= 0 ? sorted[p95Index] : 0,
       max: this.max,
       recentSamples: this.samples.length
+    };
+  }
+}
+
+// Допуск при сопоставлении событий, в серверных тиках. Треть секунды на 30 Гц.
+//
+// Совпадать в один тик события не обязаны и не могут: сервер получает ввод на 30 Гц, а клиент
+// действует на 60, поэтому один и тот же удар случается у них с точностью до кадра-двух. Допуск
+// должен покрывать этот разброс и при этом не склеивать два РАЗНЫХ удара — выдержка между
+// попаданиями по одному препятствию 0.28–0.35 с, так что треть секунды это верхняя граница, за
+// которой сопоставление начало бы врать в свою пользу.
+const HIT_MATCH_TOLERANCE_TICKS = 10;
+
+// Сопоставление двух потоков событий во времени.
+//
+// Зачем оно вместо расстояния. Отрыв позиции внутри окна определяется одним попаданием: попал или
+// нет решают доли единицы, а после попадания расхождение измеряется метрами. Среднее по такой
+// величине не описывает ничего. Вопрос, на который обязаны отвечать ворота, звучит прямо: бьёт ли
+// сервер по тем же препятствиям, что и клиент, — и меряется он сопоставлением самих событий.
+//
+// Событие, не нашедшее пары в пределах допуска, считается односторонним. Просроченные ожидания
+// закрываются по времени, а не в конце: иначе последние события забега оставались бы неучтёнными.
+class EventPairing {
+  constructor(toleranceTicks = HIT_MATCH_TOLERANCE_TICKS) {
+    this.tolerance = toleranceTicks;
+    this.pendingLeft = [];
+    this.pendingRight = [];
+    this.left = 0;
+    this.right = 0;
+    this.matched = 0;
+    this.leftOnly = 0;
+    this.rightOnly = 0;
+  }
+
+  // Оба флага относятся к одному тику. Возвращать ничего не нужно: всё видно в счётчиках.
+  observe(tick, leftFired, rightFired) {
+    if (leftFired) {
+      this.left += 1;
+      if (this.pendingRight.length) {
+        this.pendingRight.shift();
+        this.matched += 1;
+      } else this.pendingLeft.push(tick);
+    }
+    if (rightFired) {
+      this.right += 1;
+      if (this.pendingLeft.length) {
+        this.pendingLeft.shift();
+        this.matched += 1;
+      } else this.pendingRight.push(tick);
+    }
+    this.expire(tick);
+  }
+
+  expire(tick) {
+    while (this.pendingLeft.length && tick - this.pendingLeft[0] > this.tolerance) {
+      this.pendingLeft.shift();
+      this.leftOnly += 1;
+    }
+    while (this.pendingRight.length && tick - this.pendingRight[0] > this.tolerance) {
+      this.pendingRight.shift();
+      this.rightOnly += 1;
+    }
+  }
+
+  // Ожидания, ещё не закрытые допуском, в итог не входят: они пока ни совпадение, ни промах.
+  snapshot() {
+    const decided = this.matched + this.leftOnly + this.rightOnly;
+    return {
+      left: this.left,
+      right: this.right,
+      matched: this.matched,
+      leftOnly: this.leftOnly,
+      rightOnly: this.rightOnly,
+      pending: this.pendingLeft.length + this.pendingRight.length,
+      matchRate: decided ? this.matched / decided : 0
     };
   }
 }
@@ -215,6 +318,12 @@ class ShadowInputRuntime {
     this.groundHeightError = new RollingErrorStats();
     this.freeTrajectoryError = new RollingErrorStats();
     this.worldDiagnostics = { wallBounces: 0, impulses: 0, reanchors: 0, clientTeleports: 0 };
+    // Паритет попаданий: сбивающие удары сервера против сбиваний, видимых у клиента.
+    //
+    // Слева сервер, справа клиент — порядок важен для чтения: `leftOnly` это удар, который сервер
+    // выдумал, `rightOnly` — удар, который сервер прозевал. Первое опаснее: так игрока сбивало бы
+    // на ровном месте.
+    this.hitPairing = new EventPairing();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -337,7 +446,7 @@ class ShadowInputRuntime {
     };
     if (clientJump > CLIENT_TELEPORT_DISTANCE) {
       this.worldDiagnostics.clientTeleports += 1;
-      controller.freeState = stateFromLegacy(player.last);
+      controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
       // Этот тик не измеряем вовсе: сравнивать было бы нечего.
       return true;
@@ -345,7 +454,7 @@ class ShadowInputRuntime {
 
     if (controller.freeTicks >= FREE_TRAJECTORY_HORIZON_TICKS) {
       this.worldDiagnostics.reanchors += 1;
-      controller.freeState = stateFromLegacy(player.last);
+      controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
     }
     controller.freeTicks += 1;
@@ -362,6 +471,7 @@ class ShadowInputRuntime {
     // отскок, опора и импульсы. Здесь тот же цикл, дважды за тик: сравнивается одинаковое с
     // одинаковым. Замерено: 0.93 мкс на подшаг, то есть 0.17 % ядра на шестьдесят игроков.
     let impulses = null;
+    let serverKnockdown = false;
     for (let sub = 0; sub < FREE_TRAJECTORY_SUB_STEPS; sub++) {
       // Мир доводится до времени каждого подшага: перенос движущейся опорой считается по её сдвигу
       // за подшаг, ровно как у клиента за кадр.
@@ -407,10 +517,20 @@ class ShadowInputRuntime {
       // симуляция бежала дальше. Замерено на ботах — расхождение начиналось ровно на первом
       // попадании, с knockdownTimer 1.383 у клиента против нуля у сервера.
       for (const event of impulses.events) {
-        if (event.knockdown) applyKnockdown(impulses.state, event.knockdown);
+        // Сбивание засчитывается в событие только если оно СОСТОЯЛОСЬ: иммунитет и уже идущее
+        // сбивание отменяют его и у клиента тоже, поэтому сравнивать надо результат, а не намерение.
+        if (event.knockdown && applyKnockdown(impulses.state, event.knockdown)) serverKnockdown = true;
       }
       controller.freeState = impulses.state;
     }
+
+    // Сбивание у клиента наблюдаемо прямо в снапшоте: ярлык состояния встаёт в `knockdown`.
+    // Считается ПЕРЕХОД, а не само состояние, — иначе одно сбивание длиной в полторы секунды
+    // насчитало бы себе полсотни событий.
+    const clientKnockdown = player.last?.state === 'knockdown';
+    const clientKnockdownStarted = clientKnockdown && !controller.clientWasKnockedDown;
+    controller.clientWasKnockedDown = clientKnockdown;
+    this.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted);
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
     //
@@ -586,7 +706,21 @@ class ShadowInputRuntime {
         agreementRate: this.groundDiagnostics.samples
           ? this.groundDiagnostics.agreements / this.groundDiagnostics.samples
           : 0,
-        heightError: this.groundHeightError.snapshot()
+        heightError: this.groundHeightError.snapshot(),
+        // Паритет попаданий. `serverOnly` — удар, которого у клиента не было; `clientOnly` —
+        // пропущенный сервером.
+        hitParity: (() => {
+          const pairing = this.hitPairing.snapshot();
+          return {
+            serverHits: pairing.left,
+            clientHits: pairing.right,
+            matched: pairing.matched,
+            serverOnly: pairing.leftOnly,
+            clientOnly: pairing.rightOnly,
+            pending: pairing.pending,
+            matchRate: pairing.matchRate
+          };
+        })()
       }
     };
   }

@@ -284,3 +284,88 @@ test('сбивание от препятствия доходит до своб�
     'после удара свободная траектория обязана быть сбита, как и клиент'
   );
 });
+
+// Паритет попаданий: сопоставление событий вместо расстояния.
+test('сбивание у клиента и удар у сервера сходятся в одно событие', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+
+  // Клиент в тот же момент помечен сбитым — событие обязано сойтись в пару.
+  player.last = { ...player.last, state: 'knockdown' };
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.serverHits, 1);
+  assert.equal(hitParity.clientHits, 1);
+  assert.equal(hitParity.matched, 1);
+  assert.equal(hitParity.serverOnly, 0);
+});
+
+test('затянувшееся сбивание клиента считается одним событием, а не полусотней', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  player.last = { ...player.last, state: 'knockdown' };
+  tick(runtime, room, player, 40, room.startedAt);
+
+  // Считается ПЕРЕХОД в сбивание, а не каждый тик в нём.
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.clientHits, 1);
+});
+
+test('удар у сервера без сбивания у клиента остаётся односторонним', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+
+  // Пока допуск не истёк, событие ещё ждёт пару и в итог не входит.
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 0);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1);
+
+  // За допуском оно закрывается как выдуманный сервером удар.
+  tick(runtime, room, player, 15, now + 2 * SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 1);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.matched, 0);
+});
+
+test('сброс якоря не стирает идущее сбивание', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 1, room.startedAt);
+
+  const controller = runtime.controllers.get(player);
+  controller.freeState.knockdownTimer = 1.2;
+  controller.freeState.knockdownImmunity = 0.4;
+
+  // Прогоняем через горизонт: якорь обязан сброситься, а сбивание — уцелеть.
+  tick(runtime, room, player, 40, room.startedAt + SERVER_SIMULATION_DT * 1000);
+  assert.ok(runtime.metrics().shadowGroundContact.reanchors > 0, 'якорь обязан был сброситься');
+  assert.ok(
+    controller.freeState.knockdownTimer > 0 || controller.freeState.knockdownImmunity > 0,
+    'сбивание переживает сброс якоря: иначе сервер снова уязвим к тому же препятствию'
+  );
+});

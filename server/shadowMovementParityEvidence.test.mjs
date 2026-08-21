@@ -23,6 +23,15 @@ function goodMetrics(overrides = {}) {
     wallBounces: 12,
     heightError: { count: 5000, mean: 0.004, p95: 0.01, max: 0.03 },
     freeTrajectoryError: { count: 5000, mean: 0.08, p95: 0.2, max: 0.5 },
+    hitParity: {
+      serverHits: 84,
+      clientHits: 85,
+      matched: 81,
+      serverOnly: 0,
+      clientOnly: 4,
+      pending: 0,
+      matchRate: 81 / 85
+    },
     ...overrides
   };
 }
@@ -76,12 +85,73 @@ test('расхождение по высоте стояния закрывает
   assert.equal(byMax.collisionParityVerified, false);
 });
 
-test('слишком большой отрыв траектории закрывает ворота', () => {
+// Отрыв траектории больше НЕ порог, и это осознанно: внутри окна его определяет одно попадание, а
+// попадания усиливают расхождение скачком. Среднее по такой величине не описывает ничего, поэтому
+// она осталась справочной, а паритет препятствий меряется событиями.
+test('отрыв траектории сам по себе ворота не закрывает', () => {
   const evaluation = evaluateMovementParity(
     goodMetrics({ freeTrajectoryError: { count: 5000, mean: 2, p95: 4, max: 9 } })
   );
-  assert.equal(evaluation.collisionParityVerified, false);
-  assert.ok(evaluation.reasons.includes(REASON.TRAJECTORY_ERROR));
+  assert.equal(evaluation.collisionParityVerified, true);
+  assert.equal(evaluation.obstacleParityVerified, true);
+});
+
+test('удар, которого у клиента не было, запрещён полностью', () => {
+  const evaluation = evaluateMovementParity(
+    goodMetrics({
+      hitParity: {
+        serverHits: 85,
+        clientHits: 85,
+        matched: 81,
+        serverOnly: 1,
+        clientOnly: 3,
+        pending: 0,
+        matchRate: 81 / 85
+      }
+    })
+  );
+  // Опора тут ни при чём: сервер по-прежнему находит тот же пол.
+  assert.equal(evaluation.collisionParityVerified, true);
+  assert.equal(evaluation.obstacleParityVerified, false);
+  assert.ok(evaluation.reasons.includes(REASON.SERVER_ONLY_HITS));
+});
+
+test('низкая доля совпадений попаданий закрывает паритет препятствий', () => {
+  const evaluation = evaluateMovementParity(
+    goodMetrics({
+      hitParity: {
+        serverHits: 131,
+        clientHits: 85,
+        matched: 80,
+        serverOnly: 0,
+        clientOnly: 56,
+        pending: 0,
+        matchRate: 80 / 136
+      }
+    })
+  );
+  assert.equal(evaluation.obstacleParityVerified, false);
+  assert.ok(evaluation.reasons.includes(REASON.HIT_MATCH_RATE));
+});
+
+test('без ударов доказывать паритет препятствий не на чем', () => {
+  const evaluation = evaluateMovementParity(
+    goodMetrics({
+      hitParity: {
+        serverHits: 0,
+        clientHits: 0,
+        matched: 0,
+        serverOnly: 0,
+        clientOnly: 0,
+        pending: 0,
+        matchRate: 0
+      }
+    })
+  );
+  assert.equal(evaluation.collisionParityVerified, true, 'опора доказывается отдельно');
+  assert.equal(evaluation.obstacleParityVerified, false);
+  assert.ok(evaluation.reasons.includes(REASON.INSUFFICIENT_HIT_SAMPLES));
+  assert.ok(evaluation.reasons.includes(REASON.HIT_MATCH_RATE), 'нулевая доля не «нейтральна»');
 });
 
 test('матч без построенной геометрии доказательством быть не может', () => {
@@ -122,6 +192,8 @@ test('пороги политики остаются консервативны�
   assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxShadowGroundedOnlySamples, 0);
   assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxWorldMissingSamples, 0);
   assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minGroundAgreementRate >= 0.99);
+  assert.equal(DEFAULT_MOVEMENT_PARITY_POLICY.maxServerOnlyHits, 0);
+  assert.ok(DEFAULT_MOVEMENT_PARITY_POLICY.minHitMatchRate >= 0.9);
 });
 
 test('singleton guard не пользуется живым провайдером и остаётся закрытым', () => {

@@ -685,14 +685,14 @@ class ShadowInputRuntime {
       // не быстрее 1.5, и клиент живёт по второму. Замер, звавший только первый, считал полом всё,
       // что летело вверх со скоростью между 1.5 и 2.2, — то есть мерил более слабым правилом, чем
       // то, которое проверяет. На прогоне ботов это давало 6 расхождений из 8.
-      // Подвижная опора в доказательства не идёт: её фазу к моменту СНИМКА восстановить нечем.
+      // Подвижная опора идёт в доказательства только тогда, когда её фазу есть на что навести.
       //
-      // `player.lastAt` — время приёма пакета, а не время, когда клиент снял состояние: в
-      // `PLAYER_STATE` клиентской отметки нет вовсе (`{ state, matchId, sequence }`). За время
-      // задержки платформа уже уехала, и сравнение старой позиции игрока с новой позицией опоры
-      // дало бы расхождение из ничего. Неподвижного пола это не касается — он и через секунду там
-      // же. Счётчик отдельный, чтобы пропуск был виден, а не растворился в выборке.
-      if (index >= 0 && probeWorld.colliders[index]?.motion) {
+      // Клиент присылает `courseTime` — то самое время трассы, на котором он снял состояние. Есть
+      // оно — мир доведён ровно до этого момента, и подвижная опора сверяется наравне с полом. Нет
+      // (старый клиент, пакет без поля) — сверять нечем: момент приёма для этого не годится, за
+      // задержку платформа уезжает. Тогда выборка откладывается в свой счётчик, а не молча
+      // растворяется. Неподвижного пола это не касается вовсе — он и через секунду там же.
+      if (index >= 0 && probeWorld.colliders[index]?.motion && !Number.isFinite(snapshotSeconds)) {
         this.groundModelDiagnostics.dynamicSkipped += 1;
         controller.clientPreviousY = finite(player.last?.y);
         return true;
@@ -802,11 +802,14 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
+    // Время снимка берётся у КЛИЕНТА, а не по моменту приёма: за сетевую задержку подвижная опора
+    // уезжает, и сверка старой позиции игрока с новой позицией платформы дала бы расхождение из
+    // ничего. Поля может не быть — тогда подвижные опоры в доказательства не идут (см. измерение).
     this.measureFreeTrajectory(
       controller,
       player,
       matchElapsedSeconds(room, now),
-      matchElapsedSeconds(room, player.lastAt)
+      Number.isFinite(player.lastCourseTime) ? player.lastCourseTime : null
     );
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;

@@ -472,9 +472,11 @@ test('опора спрашивается у мира на момент снап
   room.startedAt = 1_760_000_000_000;
   const player = standingPlayer();
 
-  // Снапшот на секунду старше тика: за это время подвижные опоры успевают уехать.
+  // Снимок на секунду старше тика: за это время подвижные опоры успевают уехать. Время снимка
+  // приносит сам клиент полем `courseTime` — момент приёма для этого не годится.
   const now = room.startedAt + 4000;
   player.lastAt = now - 1000;
+  player.lastCourseTime = 3;
   tick(runtime, room, player, 1, now);
 
   const controller = runtime.controllers.get(player);
@@ -630,4 +632,53 @@ test('кадр сразу после постановки в доказател�
     runtime.metrics().shadowGroundContact.groundModel.samples > before.samples,
     'после первого же шага измерение возобновляется'
   );
+});
+
+// Подвижная опора сверяется, когда клиент прислал время трассы, и откладывается, когда не прислал.
+test('courseTime возвращает подвижные опоры в доказательства', () => {
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const at = 3;
+
+  // Позиция опоры на том самом моменте трассы, который клиент и сообщает.
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(at);
+  const moving = expected.dynamic[0];
+  assert.ok(moving, 'на трассе обязана быть подвижная опора');
+
+  const onMovingPlatform = runtime => {
+    const player = standingPlayer();
+    tick(runtime, room, player, 1, room.startedAt);
+    const controller = runtime.controllers.get(player);
+    player.last = {
+      ...player.last,
+      x: moving.x,
+      y: supportTop(moving) + PLAYER_FOOT,
+      z: moving.z,
+      vy: 0,
+      state: 'ground'
+    };
+    controller.lastClientPosition = null;
+    return player;
+  };
+
+  // Без времени трассы сверять нечем: момент приёма для подвижной опоры не годится.
+  const without = new ShadowInputRuntime();
+  const a = onMovingPlatform(without);
+  const beforeA = without.metrics().shadowGroundContact.groundModel;
+  tick(without, room, a, 1, room.startedAt + at * 1000);
+  const afterA = without.metrics().shadowGroundContact.groundModel;
+  assert.equal(afterA.samples, beforeA.samples);
+  assert.equal(afterA.dynamicSkipped, beforeA.dynamicSkipped + 1);
+
+  // С временем трассы мир доводится ровно до момента снимка, и выборка идёт в согласие.
+  const withTime = new ShadowInputRuntime();
+  const b = onMovingPlatform(withTime);
+  const beforeB = withTime.metrics().shadowGroundContact.groundModel;
+  b.lastCourseTime = at;
+  tick(withTime, room, b, 1, room.startedAt + at * 1000);
+  const afterB = withTime.metrics().shadowGroundContact.groundModel;
+  assert.equal(afterB.dynamicSkipped, beforeB.dynamicSkipped, 'откладывать больше нечего');
+  assert.equal(afterB.samples, beforeB.samples + 1, 'выборка засчитана');
+  assert.equal(afterB.serverGroundedOnly, 0, 'и опора совпала');
 });

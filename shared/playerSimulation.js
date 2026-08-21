@@ -22,6 +22,8 @@ export const PLAYER_SIMULATION_CONSTANTS = Object.freeze({
   ROLL_SPEED: 10.2,
   LANDING_RETENTION_TIME: 0.34,
   KNOCKDOWN_IMMUNITY_TIME: 0.7,
+  KNOCKDOWN_MIN_TIME: 1.05,
+  KNOCKDOWN_MAX_TIME: 1.65,
   GETUP_TIME: 0.24,
   JUMP_BUFFER: 0.14,
   COYOTE_TIME: 0.11,
@@ -39,6 +41,8 @@ const {
   ROLL_SPEED,
   LANDING_RETENTION_TIME,
   KNOCKDOWN_IMMUNITY_TIME,
+  KNOCKDOWN_MIN_TIME,
+  KNOCKDOWN_MAX_TIME,
   GETUP_TIME,
   JUMP_BUFFER,
   COYOTE_TIME,
@@ -125,6 +129,31 @@ export function normalizePlayerInput(input = {}) {
 
 export function dampScalar(current, target, smoothing, dt) {
   return current + (target - current) * (1 - Math.exp(-smoothing * dt));
+}
+
+// Вход в сбивание.
+//
+// Машина состояний сбивания уже жила здесь — отсчёт, иммунитет, подъём, — но ВХОДА в неё не было:
+// длительность и сброс приёмов считались только в `Player.knockDown`, а сервер их не знал вовсе.
+// Из-за этого свободная траектория получала от препятствий импульс, но не получала само сбивание:
+// клиент на полторы секунды терял управление, а серверная симуляция бежала дальше как ни в чём не
+// бывало. На тридцатигерцевом тике это сорок с лишним тиков расхождения на каждое попадание —
+// больше, чем весь горизонт измерения.
+//
+// `finished` и `downed` сюда не входят: первое проверяется здесь, второе существует только у
+// клиента (кооперативное поднятие напарником), поэтому его проверка остаётся на стороне клиента.
+export function applyKnockdown(state, strength = 0.5) {
+  if (state.finished || state.knockdownTimer > 0 || state.knockdownImmunity > 0) return false;
+  const duration = clamp(0.8 + finite(strength) * 1.2, KNOCKDOWN_MIN_TIME, KNOCKDOWN_MAX_TIME);
+  state.knockdownTimer = Math.max(state.knockdownTimer, duration);
+  state.getupTimer = 0;
+  state.jumpBuffer = 0;
+  state.diveTimer = 0;
+  state.rollTimer = 0;
+  state.recoveryWindow = 0;
+  state.slamming = false;
+  state.gliding = false;
+  return true;
 }
 
 // Куда игрок хочет двигаться с учётом поворота камеры.

@@ -831,3 +831,24 @@ test('первый снимок игрока доказательством об
   // И возвратом на чекпоинт первое наблюдение считаться не должно.
   assert.equal(runtime.metrics().shadowGroundContact.clientTeleports, 0);
 });
+
+// Не всякое первое наблюдение — постановка.
+//
+// Контроллер заводится по первому `CLIENT_INPUT`, а не в начале матча, и клиент вполне может успеть
+// шагнуть раньше: браузер снимает ввод рядом с `Player.step`, а состояние уходит до того, как
+// `net.tick()` вытолкнет ввод. Тогда первый снимок — законное состояние на опоре, и выбрасывать его
+// значило бы терять настоящее доказательство, а у стоящего игрока ещё и следующее.
+test('первый снимок просимулированного игрока в доказательства идёт', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+
+  // Обычный игрок на опоре: скорость есть, помечен `ground` — на постановку не похож.
+  player.last = { ...player.last, vx: 1.2, vy: 0, vz: -3.4, state: 'ground' };
+  tick(runtime, room, player, 1, room.startedAt);
+
+  const model = runtime.metrics().shadowGroundContact.groundModel;
+  assert.equal(model.samples, 1, 'просимулированное состояние — полноценное свидетельство');
+  assert.equal(model.placedSkipped, 0, 'и откладывать его не за что');
+});

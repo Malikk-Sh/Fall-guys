@@ -16,7 +16,6 @@ const options = (obstacles, extra = {}) => ({
   playerRadius: PLAYER_OBSTACLE_RADIUS,
   footOffset: PLAYER_FOOT,
   knockback: 1,
-  limpHitCooldown: 0,
   ...extra
 });
 
@@ -65,14 +64,45 @@ test('перезарядка удара не даёт бить дважды по
   assert.equal(later.events.length, 1, 'после перезарядки удар снова возможен');
 });
 
-test('сбитый игрок получает более длинную перезарядку', () => {
+test('сбитый игрок получает более длинную перезарядку, и она берётся из его состояния', () => {
   // 0.5 с после прошлого удара: обычная перезарядка (0.28) уже прошла, а перезарядка сбитого
   // игрока (1.5) — ещё нет.
+  //
+  // Выдержка выводится ИЗ СОСТОЯНИЯ, а не из аргумента. Аргументом она была, и стороны разошлись:
+  // клиент передавал 1.5 лежащему игроку, серверная свободная траектория — всегда 0.
   const hitTimes = new Map([['b1', 9.5]]);
-  const limp = applyObstacleImpulses(at(0.4, 1, 0), options([bumper], { hitTimes, limpHitCooldown: 1.5 }));
-  assert.equal(limp.events.length, 0);
+
+  const downed = at(0.4, 1, 0);
+  downed.knockdownTimer = 1.2;
+  assert.equal(applyObstacleImpulses(downed, options([bumper], { hitTimes })).events.length, 0);
+
   const upright = applyObstacleImpulses(at(0.4, 1, 0), options([bumper], { hitTimes }));
   assert.equal(upright.events.length, 1);
+});
+
+test('лежащего игрока повторный удар не двигает вообще, а не только не считает', () => {
+  // Толчок меняет позицию и скорость ВНУТРИ `applyObstacleImpulses`, а `applyKnockdown` вызывается
+  // уже после него — и его отказ повторно сбивать ничего не откатывает. Поэтому проверяется не
+  // отсутствие события, а отсутствие физики: иначе серверная копия уезжала бы молча.
+  const hitTimes = new Map([['b1', 9.5]]);
+  const downed = at(0.4, 1, 0, { x: 1.5, y: -2, z: -0.5 });
+  downed.knockdownTimer = 1.2;
+  const before = { ...downed.position };
+  const beforeVelocity = { ...downed.velocity };
+
+  const { events } = applyObstacleImpulses(downed, options([bumper], { hitTimes }));
+
+  assert.equal(events.length, 0);
+  assert.deepEqual(downed.position, before, 'позиция лежащего не должна меняться повторным ударом');
+  assert.deepEqual(downed.velocity, beforeVelocity, 'скорость лежащего не должна меняться');
+  assert.equal(hitTimes.get('b1'), 9.5, 'время последнего удара не должно переписываться');
+});
+
+test('после подъёма удар снова разрешён', () => {
+  const hitTimes = new Map([['b1', 9.5]]);
+  const risen = at(0.4, 1, 0);
+  risen.knockdownTimer = 0;
+  assert.equal(applyObstacleImpulses(risen, options([bumper], { hitTimes })).events.length, 1);
 });
 
 test('пружина подбрасывает, но не считается попаданием и не сбивает', () => {

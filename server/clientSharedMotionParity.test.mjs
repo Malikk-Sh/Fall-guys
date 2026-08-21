@@ -66,6 +66,27 @@ function assertSameState(player, state, when) {
   }
 }
 
+// Ввод собирается ровно так, как его отдаёт `InputManager.movement()`.
+//
+// Раньше магнитуда бралась из кадра (`frame.magnitude ?? 1`), а общее ядро выводило её само —
+// `min(1, hypot(moveX, moveZ))`. То есть две реализации получали РАЗНУЮ магнитуду, и сравнение
+// держалось на том, что `movementIntent` всё равно нормирует направление, а единственная ветка, где
+// магнитуда решает сама по себе (торможение на опоре), при нуле скорости ничего не меняла.
+//
+// Здесь она выводится тем же выражением, что и у настоящего ввода. Протокол это же и требует:
+// `CLIENT_INPUT` несёт moveX и moveZ, но не магнитуду, поэтому сервер обязан её вывести — и вывести
+// так же.
+function harnessMovement(frame) {
+  const moveX = frame.moveX ?? 0;
+  const moveZ = frame.moveZ ?? 0;
+  const length = Math.hypot(moveX, moveZ);
+  return {
+    x: length > 1 ? moveX / length : moveX,
+    forward: length > 1 ? moveZ / length : moveZ,
+    magnitude: Math.min(1, length)
+  };
+}
+
 // Один шаг подаётся обеим реализациям в одном виде: клиент читает ввод через объект, общее ядро —
 // через плоскую запись, и это единственная разница между вызовами.
 function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000, z: 0 } } = {}) {
@@ -75,7 +96,7 @@ function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000
   let state = createPlayerSimulationState({ position: { ...start } });
 
   script.forEach((frame, tick) => {
-    const move = { x: frame.moveX ?? 0, forward: frame.moveZ ?? 0, magnitude: frame.magnitude ?? 1 };
+    const move = harnessMovement(frame);
     const input = {
       movement: () => move,
       consume: action => (action === 'jump' ? frame.jump === true : frame.dive === true),
@@ -136,7 +157,7 @@ function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
   const colliders = floor();
 
   script.forEach((frame, tick) => {
-    const move = { x: frame.moveX ?? 0, forward: frame.moveZ ?? 0, magnitude: frame.magnitude ?? 1 };
+    const move = harnessMovement(frame);
     const input = {
       movement: () => move,
       consume: action => (action === 'jump' ? frame.jump === true : frame.dive === true),
@@ -150,6 +171,26 @@ function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
       jumpHeld: frame.jumpHeld === true,
       divePressed: frame.dive === true
     };
+
+    // Сбивание вносится так же, как в `runScript`, — и до сих пор здесь этого не было вовсе.
+    //
+    // Из-за пропуска сценарий со сбиванием над полом проходил ВХОЛОСТУЮ: кадр `knockDown` молча
+    // игнорировался, игрок продолжал бежать, и сверялся обычный бег. Ветка торможения лёжа
+    // (`magnitude < 0.05 && grounded`) при этом не достигалась ни разу.
+    if (frame.knockDown) {
+      player.knockDown(frame.knockDown);
+      state = createPlayerSimulationState({
+        ...state,
+        knockdownTimer: player.knockdownTimer,
+        getupTimer: player.getupTimer,
+        jumpBuffer: player.jumpBuffer,
+        diveTimer: player.diveTimer,
+        rollTimer: player.rollTimer,
+        recoveryWindow: player.recoveryWindow,
+        slamming: player.slamming,
+        gliding: player.gliding
+      });
+    }
 
     player.step(dt, input, cameraYaw, tick * dt);
 
@@ -233,4 +274,74 @@ test('подкат с приземлением в перекат совпада�
 
 test('прыжок с пола и возвращение на него совпадают', () => {
   runOverFloor([...idle(30), ...running(10), { moveX: 0.6, moveZ: 1, jump: true }, ...running(45)]);
+});
+
+// Сбивание НА ПОЛУ — отдельный сценарий, и раньше его не было ни одного.
+//
+// Сбивание в воздухе сверяется выше, но там не достаётся ветка, которая работает только на опоре:
+//
+//   if (move.magnitude < 0.05 && grounded) {
+//     const stop = (knockedDown ? 3.2 : 12) * groundGrip;
+//
+// У сбитого игрока намерение домножается на `knockdownControl` (у живого клиента это ноль), поэтому
+// магнитуда обращается в ноль, и лежащий на полу игрок тормозит с темпом 3.2. Ветка есть в обеих
+// реализациях, написана в них порознь — и до сих пор ни один тест их здесь не сравнивал: над полом
+// сбивания не случалось, а в воздухе `grounded` ложный.
+function knockdownOnFloor(strength) {
+  return [
+    ...idle(40),
+    ...running(20),
+    { moveX: 0.4, moveZ: 1, knockDown: strength },
+    // Ввод продолжает поступать: важно, что обе стороны одинаково его ИГНОРИРУЮТ, пока таймер идёт,
+    // и одинаково возвращают управление после подъёма.
+    ...running(150)
+  ];
+}
+
+test('сбивание на полу и торможение лёжа совпадают до разряда', () => {
+  for (const strength of [0.4, 0.5, 0.55]) {
+    runOverFloor(knockdownOnFloor(strength));
+  }
+});
+
+test('сбитый на полу игрок останавливается, а после подъёма снова разгоняется', () => {
+  // Проверка не про паритет, а про то, что сценарий выше вообще проходит через нужные состояния:
+  // тест, где игрок не тормозил и не вставал, сравнивал бы одинаковую пустоту.
+  const { player } = runOverFloor([...idle(40), ...running(20), { moveX: 0.4, moveZ: 1, knockDown: 0.5 }]);
+  assert.ok(player.grounded, 'сбивание должно случиться на опоре, иначе ветка торможения не работает');
+  assert.ok(player.knockdownTimer > 0, 'таймер сбивания должен идти');
+
+  const speedAt = frames => {
+    const { player: p } = runOverFloor([
+      ...idle(40),
+      ...running(20),
+      { moveX: 0.4, moveZ: 1, knockDown: 0.5 },
+      ...running(frames)
+    ]);
+    return { speed: Math.hypot(p.velocity.x, p.velocity.z), knocked: p.knockdownTimer > 0 };
+  };
+
+  const downed = speedAt(30);
+  assert.ok(downed.knocked, 'через 30 шагов игрок ещё должен лежать');
+  assert.ok(
+    downed.speed < 0.5,
+    `лёжа игрок обязан почти остановиться, а не ехать со скоростью ${downed.speed}`
+  );
+
+  const recovered = speedAt(150);
+  assert.ok(!recovered.knocked, 'через 150 шагов сбивание должно кончиться');
+  assert.ok(
+    recovered.speed > 5,
+    `после подъёма игрок обязан разогнаться, а не ползти со скоростью ${recovered.speed}`
+  );
+});
+
+test('еле отклонённый стик тормозит обе реализации одинаково', () => {
+  // Порог `magnitude < 0.05` — единственное место, где магнитуда решает сама по себе, а не через
+  // направление. Ни один сценарий выше его не задевал: магнитуда в них либо 1 (бег), либо 0 (стоя
+  // или лёжа), и подмена порога на 0.04 не роняла ничего.
+  //
+  // 0.045 лежит между ними, поэтому расходится ответ на вопрос «тормозить ли»: при 0.05 торможение
+  // включается, при 0.04 — нет. Обе реализации обязаны отвечать одинаково.
+  runOverFloor([...idle(40), ...running(25), ...Array.from({ length: 40 }, () => ({ moveZ: 0.045 }))]);
 });

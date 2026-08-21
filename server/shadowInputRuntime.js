@@ -646,8 +646,7 @@ class ShadowInputRuntime {
         hitTimes: controller.hitTimes,
         playerRadius: PLAYER_OBSTACLE_RADIUS,
         footOffset: PLAYER_FOOT,
-        knockback: 1,
-        limpHitCooldown: 0
+        knockback: 1
       });
       this.worldDiagnostics.impulses += impulses.events.length;
       // Импульс препятствия несёт не только толчок, но и сбивание, и второе клиент применяет

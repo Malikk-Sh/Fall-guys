@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
-import { PLAYER_SIMULATION_CONSTANTS, dampScalar, playerTuning } from '/shared/playerSimulation.js';
+import {
+  PLAYER_SIMULATION_CONSTANTS,
+  dampScalar,
+  movementIntent,
+  playerTuning
+} from '/shared/playerSimulation.js';
 import { Character } from './Character.js';
 import { PLAYER_FOOT } from './PlayerDimensions.js';
 
@@ -139,16 +144,12 @@ export class Player {
       forward: rawMove.forward * moveScale,
       magnitude: rawMove.magnitude * moveScale
     };
-    const sin = Math.sin(cameraYaw);
-    const cos = Math.cos(cameraYaw);
     // Движение задаётся относительно камеры: «вперёд» — это туда, куда смотрит игрок, а не
-    // фиксированное направление мира.
-    const desired = this._desired.set(
-      cos * move.x - sin * move.forward,
-      0,
-      -sin * move.x - cos * move.forward
-    );
-    if (desired.lengthSq() > 1) desired.normalize();
+    // фиксированное направление мира. Сам поворот и нормализация живут в общем ядре: пока это была
+    // отдельная формула здесь, клиент играл по одной арифметике, а предсказание переигрывало ввод
+    // по другой.
+    const intent = movementIntent({ moveX: move.x, moveZ: move.forward, cameraYaw });
+    const desired = this._desired.set(intent.x, 0, intent.z);
     // Куда игрок ХОЧЕТ двигаться по X, независимо от того, что с ним делают внешние силы.
     // Ветру нужно именно намерение: сама скорость к моменту проверки уже содержит его снос,
     // и по ней выходило бы, что сдуваемый игрок «бежит по ветру».

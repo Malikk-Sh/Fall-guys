@@ -39,11 +39,15 @@ export function createCourseColliderRecorder({ rng = () => 0 } = {}) {
     // Билдер клиента держит эти списки ради отрисовки и камеры; здесь они существуют лишь для того,
     // чтобы расстановка могла в них писать, не зная, кто её исполняет.
     cameraMeshes: [],
+    // Стены, участвующие в отскоке: сервер обязан знать о них, иначе оттолкнувшийся игрок
+    // разойдётся с клиентом.
     skillWalls: [],
     rng,
 
-    box({ x = 0, y = 0, z = 0, w = 1, h = 1, d = 1, collider = true } = {}) {
+    box({ x = 0, y = 0, z = 0, w = 1, h = 1, d = 1, collider = true, wallBounce = false } = {}) {
       const mesh = decorStub(x, y, z);
+      // Стена отскока может быть и без опоры: помечается она отдельно от коллайдера.
+      if (wallBounce) recorder.skillWalls.push({ mesh, x, y, z, w, h, d });
       if (!collider) return { mesh, w, h, d, type: 'decor' };
       return support({
         mesh,

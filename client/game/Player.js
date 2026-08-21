@@ -7,6 +7,7 @@ import {
   playerTuning,
   resolveGroundContact
 } from '/shared/playerSimulation.js';
+import { applyWallBounce } from '/shared/courseWalls.js';
 import { Character } from './Character.js';
 import { PLAYER_FOOT } from './PlayerDimensions.js';
 
@@ -32,7 +33,6 @@ const {
 export const RUN_SPEED = PLAYER_SIMULATION_CONSTANTS.RUN_SPEED;
 export { playerTuning };
 
-const WALL_BOUNCE_SPEED = 8.8;
 const KNOCKDOWN_MIN_TIME = 1.05;
 const KNOCKDOWN_MAX_TIME = 1.65;
 
@@ -257,18 +257,25 @@ export class Player {
         ? this.course.wallBounceAt?.(this.physics, this.previous, this.velocity)
         : null;
     if (wallNormal) {
-      if (wallNormal.x) this.physics.x = this.previous.x;
-      if (wallNormal.z) this.physics.z = this.previous.z;
-      const tangentX = wallNormal.z;
-      const tangentZ = -wallNormal.x;
-      const along = this.velocity.x * tangentX + this.velocity.z * tangentZ;
-      this.velocity.x = wallNormal.x * WALL_BOUNCE_SPEED + tangentX * along * 0.72;
-      this.velocity.z = wallNormal.z * WALL_BOUNCE_SPEED + tangentZ * along * 0.72;
-      this.velocity.y = Math.max(this.velocity.y, JUMP_SPEED * 0.82);
-      this.jumpBuffer = 0;
-      this.diveTimer = 0;
-      this.rollTimer = 0;
-      this.recoveryWindow = 0;
+      // Сам отскок считает общее ядро: серверная симуляция обязана разворачивать игрока тем же
+      // правилом, иначе оттолкнувшийся от стены разойдётся с сервером на ровном месте.
+      const bounced = applyWallBounce(
+        {
+          position: this.physics,
+          velocity: this.velocity,
+          jumpBuffer: this.jumpBuffer,
+          diveTimer: this.diveTimer,
+          rollTimer: this.rollTimer,
+          recoveryWindow: this.recoveryWindow
+        },
+        wallNormal,
+        this.previous,
+        { jumpSpeed: JUMP_SPEED }
+      ).state;
+      this.jumpBuffer = bounced.jumpBuffer;
+      this.diveTimer = bounced.diveTimer;
+      this.rollTimer = bounced.rollTimer;
+      this.recoveryWindow = bounced.recoveryWindow;
       // Presentation запускается здесь, а не по скорости или близости к стене: только физика знает,
       // что wall-bounce действительно состоялся. На gameplay-state этот сигнал не влияет.
       this.character.wallBounced?.(wallNormal);

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { supportIndexAt, supportTop } from '/shared/courseCollision.js';
+import { wallBounceNormalAt } from '/shared/courseWalls.js';
 import { COLORS } from '../core/Config.js';
 import { PLAYER_BODY_RADIUS, PLAYER_FOOT } from './PlayerDimensions.js';
 
@@ -111,7 +112,8 @@ export class CourseBuilder {
     mesh.castShadow = this.quality !== 'low';
     mesh.receiveShadow = true;
     this.group.add(mesh);
-    if (wallBounce) this.skillWalls.push({ mesh, w, h, d });
+    // Стена, как и опора, описана числами: отскок обязан считаться без сцены.
+    if (wallBounce) this.skillWalls.push({ mesh, x, y, z, w, h, d });
     if (collider) {
       const platform = {
         mesh,
@@ -220,22 +222,7 @@ export class CourseBuilder {
 
   // Возвращает нормаль специальной стены, пересечённой за текущий физический шаг.
   wallBounceAt(position, previous, velocity) {
-    for (const wall of this.skillWalls) {
-      const m = wall.mesh;
-      if (Math.abs(position.y - m.position.y) > wall.h / 2 + 0.45) continue;
-      const withinX = Math.abs(position.x - m.position.x) <= wall.w / 2 + PLAYER_BODY_RADIUS;
-      const withinZ = Math.abs(position.z - m.position.z) <= wall.d / 2 + PLAYER_BODY_RADIUS;
-      if (!withinX || !withinZ) continue;
-
-      if (wall.w < wall.d) {
-        const side = Math.sign(previous.x - m.position.x) || -Math.sign(velocity.x) || 1;
-        if (velocity.x * side < -1.5) return { x: side, z: 0 };
-      } else {
-        const side = Math.sign(previous.z - m.position.z) || -Math.sign(velocity.z) || 1;
-        if (velocity.z * side < -1.5) return { x: 0, z: side };
-      }
-    }
-    return null;
+    return wallBounceNormalAt(this.skillWalls, position, previous, velocity, PLAYER_BODY_RADIUS);
   }
 
   // Сдвиг движущихся платформ за шаг. Игрок, стоящий сверху, получает этот сдвиг в surfaceAt.

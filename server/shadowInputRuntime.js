@@ -14,6 +14,7 @@ const {
 const { JUMP_SPEED } = PLAYER_SIMULATION_CONSTANTS;
 const { PLAYER_BODY_RADIUS, PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } = require('../shared/playerDimensions.js');
 const { applyObstacleImpulses } = require('../shared/courseImpulses.js');
+const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
 const { applyWallBounce, wallBounceNormalAt } = require('../shared/courseWalls.js');
 const { shadowCourseWorldFor } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
@@ -315,6 +316,18 @@ class ShadowInputRuntime {
       // Тики, где ярлык состояния клиента не сообщает об опоре (dive, slam, knockdown, downed).
       groundStateUnknown: 0
     };
+    // Согласие о ПОЛЕ, проверенное в точке клиента. Отдельная величина, и это принципиально.
+    //
+    // `groundDiagnostics` выше спрашивает про опору там, куда пришла свободная траектория, и потому
+    // отвечает сразу на два вопроса: сходится ли модель мира и не уехала ли траектория. Второе
+    // забивает первое. Здесь задаётся только первый вопрос: нашёл бы сервер тот же пол ТАМ, ГДЕ
+    // СЕЙЧАС КЛИЕНТ.
+    this.groundModelDiagnostics = {
+      samples: 0,
+      agreements: 0,
+      serverGroundedOnly: 0,
+      clientGroundedOnly: 0
+    };
     this.groundHeightError = new RollingErrorStats();
     this.freeTrajectoryError = new RollingErrorStats();
     this.worldDiagnostics = { wallBounces: 0, impulses: 0, reanchors: 0, clientTeleports: 0 };
@@ -545,6 +558,36 @@ class ShadowInputRuntime {
     const clientState = player.last?.state;
     const clientGroundKnown = clientState === 'ground' || clientState === 'air';
     const clientGrounded = clientState === 'ground';
+
+    // Модель мира, проверенная в точке клиента.
+    //
+    // Поиск опоры у клиента и у сервера — буквально один код (`supportIndexAt`) на численно
+    // одинаковых записях: совпадение записей доказывает `raceCourseRecorder.test.mjs`. Поэтому
+    // разойтись они могут только из-за разных позиций, и спрашивать надо в одной точке.
+    if (clientGroundKnown) {
+      const index = supportIndexAt(
+        world.colliders,
+        { x: finite(player.last.x), y: finite(player.last.y), z: finite(player.last.z) },
+        Number.isFinite(controller.clientPreviousY) ? controller.clientPreviousY : finite(player.last.y),
+        finite(player.last.vy),
+        PLAYER_FOOT
+      );
+      const serverFindsGround = index >= 0;
+      this.groundModelDiagnostics.samples += 1;
+      if (serverFindsGround === clientGrounded) this.groundModelDiagnostics.agreements += 1;
+      else if (serverFindsGround) this.groundModelDiagnostics.serverGroundedOnly += 1;
+      else this.groundModelDiagnostics.clientGroundedOnly += 1;
+
+      // Высота стояния меряется здесь же и по той же причине: у клиента она взята из его опоры, и
+      // сравнивать её надо с опорой, найденной В ЕГО ТОЧКЕ. Прежний замер брал высоту уехавшей
+      // траектории и потому показывал не разницу геометрии, а накопленный дрейф.
+      if (serverFindsGround && clientGrounded) {
+        this.groundHeightError.record(
+          Math.abs(supportTop(world.colliders[index]) + PLAYER_FOOT - finite(player.last.y))
+        );
+      }
+    }
+    controller.clientPreviousY = finite(player.last?.y);
     if (!clientGroundKnown) this.groundDiagnostics.groundStateUnknown += 1;
     else {
       this.groundDiagnostics.samples += 1;
@@ -563,7 +606,6 @@ class ShadowInputRuntime {
       const dz = controller.freeState.position.z - legacy.z;
       // Расхождение по позиции наблюдаемо всегда: ярлык состояния на него не влияет.
       this.freeTrajectoryError.record(Math.hypot(dx, dy, dz));
-      if (clientGrounded && controller.freeState.grounded) this.groundHeightError.record(Math.abs(dy));
     }
     return true;
   }
@@ -707,6 +749,13 @@ class ShadowInputRuntime {
           ? this.groundDiagnostics.agreements / this.groundDiagnostics.samples
           : 0,
         heightError: this.groundHeightError.snapshot(),
+        // Модель мира: тот же поиск опоры, но в точке клиента. Дрейф траектории сюда не входит.
+        groundModel: {
+          ...this.groundModelDiagnostics,
+          agreementRate: this.groundModelDiagnostics.samples
+            ? this.groundModelDiagnostics.agreements / this.groundModelDiagnostics.samples
+            : 0
+        },
         // Паритет попаданий. `serverOnly` — удар, которого у клиента не было; `clientOnly` —
         // пропущенный сервером.
         hitParity: (() => {

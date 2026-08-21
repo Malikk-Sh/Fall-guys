@@ -14,6 +14,11 @@ const DEFAULT_MOVEMENT_PARITY_POLICY = Object.freeze({
   // Меньше этого числа шагов — статистики нет, а не «всё хорошо».
   minSamples: 3000,
   // Доля тиков, где сервер и клиент одинаково отвечают на вопрос «игрок на опоре».
+  //
+  // Спрашивается это В ТОЧКЕ КЛИЕНТА (`groundModel`), а не там, куда пришла свободная траектория.
+  // Разница решающая: поиск опоры у обеих сторон — один код на численно одинаковых записях, значит
+  // разойтись они могут только из-за разных позиций. Прежняя формулировка мерила сразу и модель
+  // мира, и дрейф траектории, и второе забивало первое — 94.6 % против 99.64 % на тех же данных.
   minGroundAgreementRate: 0.995,
   // Сервер, считающий игрока стоящим там, где клиент падает, опаснее обратного: так игрок мог бы
   // получить пол из воздуха. Такой перекос запрещён полностью.
@@ -82,6 +87,17 @@ function validHitParity(parity) {
   );
 }
 
+function validGroundModel(model) {
+  return (
+    !!model &&
+    typeof model === 'object' &&
+    finiteNonNegative(model.samples) &&
+    finiteNonNegative(model.agreements) &&
+    finiteNonNegative(model.serverGroundedOnly) &&
+    finiteNonNegative(model.agreementRate)
+  );
+}
+
 function validMetrics(metrics) {
   return (
     !!metrics &&
@@ -89,6 +105,7 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.samples) &&
     finiteNonNegative(metrics.agreements) &&
     finiteNonNegative(metrics.shadowGroundedOnly) &&
+    validGroundModel(metrics.groundModel) &&
     finiteNonNegative(metrics.worldMissing) &&
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
@@ -110,12 +127,12 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
     });
   }
 
-  if (metrics.samples < policy.minSamples) reasons.push(REASON.INSUFFICIENT_SAMPLES);
+  const model = metrics.groundModel;
+  if (model.samples < policy.minSamples) reasons.push(REASON.INSUFFICIENT_SAMPLES);
   if (metrics.worldMissing > policy.maxWorldMissingSamples) reasons.push(REASON.WORLD_MISSING);
 
-  const agreementRate = metrics.samples ? metrics.agreements / metrics.samples : 0;
-  if (agreementRate < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
-  if (metrics.shadowGroundedOnly > policy.maxShadowGroundedOnlySamples) {
+  if (model.agreementRate < policy.minGroundAgreementRate) reasons.push(REASON.GROUND_AGREEMENT);
+  if (model.serverGroundedOnly > policy.maxShadowGroundedOnlySamples) {
     reasons.push(REASON.SHADOW_GROUNDED_ONLY);
   }
   if (

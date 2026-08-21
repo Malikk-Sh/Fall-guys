@@ -15,6 +15,13 @@ function goodMetrics(overrides = {}) {
   return {
     samples: 5000,
     agreements: 5000,
+    groundModel: {
+      samples: 5000,
+      agreements: 5000,
+      serverGroundedOnly: 0,
+      clientGroundedOnly: 0,
+      agreementRate: 1
+    },
     groundedMismatch: 0,
     shadowGroundedOnly: 0,
     clientGroundedOnly: 0,
@@ -48,8 +55,13 @@ test('без измерения доказательств нет', () => {
 test('пустое измерение отказывает по нехватке выборок, а не проходит', () => {
   const evaluation = evaluateMovementParity(
     goodMetrics({
-      samples: 0,
-      agreements: 0,
+      groundModel: {
+        samples: 0,
+        agreements: 0,
+        serverGroundedOnly: 0,
+        clientGroundedOnly: 0,
+        agreementRate: 0
+      },
       impulses: 0,
       heightError: { count: 0, mean: 0, p95: 0, max: 0 }
     })
@@ -67,7 +79,17 @@ test('достаточное и сходящееся измерение подт
 });
 
 test('сервер, дающий пол там, где клиент падает, запрещён полностью', () => {
-  const evaluation = evaluateMovementParity(goodMetrics({ shadowGroundedOnly: 1, agreements: 4999 }));
+  const evaluation = evaluateMovementParity(
+    goodMetrics({
+      groundModel: {
+        samples: 5000,
+        agreements: 4999,
+        serverGroundedOnly: 1,
+        clientGroundedOnly: 0,
+        agreementRate: 0.9998
+      }
+    })
+  );
   assert.equal(evaluation.collisionParityVerified, false);
   assert.ok(evaluation.reasons.includes(REASON.SHADOW_GROUNDED_ONLY));
 });

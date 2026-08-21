@@ -369,3 +369,46 @@ test('сброс якоря не стирает идущее сбивание', 
     'сбивание переживает сброс якоря: иначе сервер снова уязвим к тому же препятствию'
   );
 });
+
+// Модель мира спрашивается В ТОЧКЕ КЛИЕНТА, и это отделяет геометрию от дрейфа.
+//
+// Поиск опоры у клиента и сервера — один код на численно одинаковых записях, поэтому разойтись они
+// могут только из-за разных позиций. Пока вопрос задавался там, куда пришла свободная траектория,
+// метрика отвечала сразу на два вопроса, и дрейф забивал геометрию: 94.6 % против 99.64 % на одних
+// и тех же прогонах.
+test('модель мира не зависит от того, куда уехала свободная траектория', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 5, room.startedAt);
+
+  // Уводим свободную траекторию далеко под трассу — там опоры нет вовсе.
+  const controller = runtime.controllers.get(player);
+  controller.freeState.position.y -= 200;
+  tick(runtime, room, player, 5, room.startedAt + 5 * SERVER_SIMULATION_DT * 1000);
+
+  const { shadowGroundContact } = runtime.metrics();
+  // Клиент всё это время стоит на стартовой площадке, и модель мира обязана это подтверждать.
+  assert.equal(shadowGroundContact.groundModel.serverGroundedOnly, 0);
+  assert.equal(shadowGroundContact.groundModel.clientGroundedOnly, 0);
+  assert.equal(shadowGroundContact.groundModel.agreementRate, 1);
+  // А замер по траектории обязан этот провал увидеть — иначе проверка ничего не значит.
+  assert.ok(shadowGroundContact.clientGroundedOnly > 0, 'дрейф обязан быть виден в справочной величине');
+});
+
+test('высота стояния меряется по опоре в точке клиента, а не по уехавшей траектории', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1000;
+  const player = standingPlayer();
+  tick(runtime, room, player, 3, room.startedAt);
+
+  const controller = runtime.controllers.get(player);
+  controller.freeState.position.y += 50;
+  tick(runtime, room, player, 3, room.startedAt + 3 * SERVER_SIMULATION_DT * 1000);
+
+  const { heightError } = runtime.metrics().shadowGroundContact;
+  assert.ok(heightError.count > 0, 'высота обязана меряться');
+  assert.equal(heightError.max, 0, 'клиент стоит на своей опоре, и сервер находит ту же высоту');
+});

@@ -137,6 +137,19 @@ const CLIENT_TELEPORT_DISTANCE = 4;
 // Кадр клиента: его физика крутится фиксированным циклом 1/60 (`client/main.js`).
 const CLIENT_FRAME_DT = 1 / 60;
 
+// Насколько время трассы от клиента может расходиться с серверным, чтобы ему ещё верили.
+//
+// Поле `courseTime` приходит от клиента, а клиент — не источник истины. Само по себе оно безобидно:
+// читает его только диагностика, и попадает оно лишь в отдельный мир для сверки опоры. Но метрики
+// паритета общие на процесс, и подставленное значение навело бы платформу на чужую фазу — то есть
+// испортило бы или, наоборот, приукрасило доказательства, по которым однажды будут открывать
+// ворота. Поэтому значение принимается, только если сходится с собственным временем сервера.
+//
+// Полсекунды с запасом покрывают задержку и интервал рассылки. Внутри этого окна клиент по-прежнему
+// волен соврать, и это неустранимо без доверенных часов; за окном — значение просто не берётся, и
+// подвижные опоры откладываются, как будто поля нет.
+const CLIENT_COURSE_TIME_TOLERANCE = 0.5;
+
 // Полосы коррекции реконсиляции: мягкая правка начинается с 0.3, жёсткая — с 1.5, и жёсткая видна
 // игроку рывком (`client/net/ReconciliationPolicy.js`). Доли превышения считаются по ним.
 const TRAJECTORY_SOFT_LIMIT = 0.3;
@@ -151,6 +164,14 @@ const TRAJECTORY_HARD_LIMIT = 1.5;
 function matchElapsedSeconds(room, now) {
   if (!Number.isFinite(now) || !Number.isFinite(room?.startedAt)) return null;
   return (now - room.startedAt) / 1000;
+}
+
+// Время трассы от клиента, если ему можно верить. Иначе null — и подвижные опоры не сверяются.
+function trustedCourseTime(player, matchTime) {
+  const reported = player?.lastCourseTime;
+  if (!Number.isFinite(reported) || reported < 0) return null;
+  if (!Number.isFinite(matchTime)) return null;
+  return Math.abs(reported - matchTime) <= CLIENT_COURSE_TIME_TOLERANCE ? reported : null;
 }
 
 // Сброс якоря переносит позицию и скорость, но НЕ стирает сбивание.
@@ -804,13 +825,10 @@ class ShadowInputRuntime {
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
     // Время снимка берётся у КЛИЕНТА, а не по моменту приёма: за сетевую задержку подвижная опора
     // уезжает, и сверка старой позиции игрока с новой позицией платформы дала бы расхождение из
-    // ничего. Поля может не быть — тогда подвижные опоры в доказательства не идут (см. измерение).
-    this.measureFreeTrajectory(
-      controller,
-      player,
-      matchElapsedSeconds(room, now),
-      Number.isFinite(player.lastCourseTime) ? player.lastCourseTime : null
-    );
+    // ничего. Но верят ему только в пределах допуска — см. CLIENT_COURSE_TIME_TOLERANCE. Не сошлось
+    // или поля нет — подвижные опоры в доказательства не идут.
+    const matchTime = matchElapsedSeconds(room, now);
+    this.measureFreeTrajectory(controller, player, matchTime, trustedCourseTime(player, matchTime));
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;

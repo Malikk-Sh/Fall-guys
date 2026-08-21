@@ -472,11 +472,12 @@ test('опора спрашивается у мира на момент снап
   room.startedAt = 1_760_000_000_000;
   const player = standingPlayer();
 
-  // Снимок на секунду старше тика: за это время подвижные опоры успевают уехать. Время снимка
-  // приносит сам клиент полем `courseTime` — момент приёма для этого не годится.
+  // Снимок старше тика: за это время подвижные опоры успевают уехать. Время снимка приносит сам
+  // клиент полем `courseTime` — момент приёма для этого не годится. Расхождение берём в пределах
+  // допуска: дальше сервер клиенту не верит (см. отдельную проверку ниже).
   const now = room.startedAt + 4000;
-  player.lastAt = now - 1000;
-  player.lastCourseTime = 3;
+  player.lastAt = now - 300;
+  player.lastCourseTime = 3.7;
   tick(runtime, room, player, 1, now);
 
   const controller = runtime.controllers.get(player);
@@ -486,7 +487,7 @@ test('опора спрашивается у мира на момент снап
   assert.ok(probe.dynamic.length, 'на трассе обязаны быть подвижные опоры');
 
   const expected = createShadowCourseWorld(spec);
-  expected.advance(3);
+  expected.advance(3.7);
   probe.dynamic.forEach((platform, index) => {
     const axis = platform.motion.axis;
     assert.equal(platform[axis], expected.dynamic[index][axis], `опора ${index} на момент снапшота`);
@@ -681,4 +682,49 @@ test('courseTime возвращает подвижные опоры в дока�
   assert.equal(afterB.dynamicSkipped, beforeB.dynamicSkipped, 'откладывать больше нечего');
   assert.equal(afterB.samples, beforeB.samples + 1, 'выборка засчитана');
   assert.equal(afterB.serverGroundedOnly, 0, 'и опора совпала');
+});
+
+// Время трассы приходит от клиента, а клиент не источник истины.
+//
+// Само поле безобидно — читает его только диагностика, — но метрики паритета общие на процесс, и
+// подставленное значение навело бы платформу на чужую фазу: испортило бы доказательства или,
+// наоборот, приукрасило их. Поэтому оно принимается лишь в пределах допуска от собственного времени
+// сервера, а за ним не берётся вовсе.
+test('время трассы, не сходящееся с серверным, во внимание не принимается', () => {
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const at = 3;
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(at);
+  const moving = expected.dynamic[0];
+
+  const onMovingPlatform = (runtime, courseTime) => {
+    const player = standingPlayer();
+    tick(runtime, room, player, 1, room.startedAt);
+    const controller = runtime.controllers.get(player);
+    player.last = {
+      ...player.last,
+      x: moving.x,
+      y: supportTop(moving) + PLAYER_FOOT,
+      z: moving.z,
+      vy: 0,
+      state: 'ground'
+    };
+    player.lastCourseTime = courseTime;
+    controller.lastClientPosition = null;
+    tick(runtime, room, player, 1, room.startedAt + at * 1000);
+    return runtime.metrics().shadowGroundContact.groundModel;
+  };
+
+  // Заявленное время расходится с серверным на минуту — верить нечему.
+  const lying = onMovingPlatform(new ShadowInputRuntime(), at + 60);
+  assert.equal(lying.dynamicSkipped, 1, 'подвижная опора отложена, как будто поля нет');
+
+  // И отрицательное время тоже не берётся.
+  const negative = onMovingPlatform(new ShadowInputRuntime(), -5);
+  assert.equal(negative.dynamicSkipped, 1);
+
+  // А сошедшееся — принимается.
+  const honest = onMovingPlatform(new ShadowInputRuntime(), at);
+  assert.equal(honest.dynamicSkipped, 0, 'сошедшемуся времени верим');
 });

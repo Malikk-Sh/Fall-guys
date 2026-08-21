@@ -108,6 +108,17 @@ function alignKnownWorldContact(state, legacy = {}) {
   return next;
 }
 
+// Секунды с начала забега — то же число, что клиент держит в `RaceSession.elapsed` и передаёт в
+// `Course.update` и `Course.interact`.
+//
+// `room.startedAt` — момент старта в эпохе (`Date.now() + COUNTDOWN_MS`), поэтому разница с `now`
+// и даёт время матча. Пока комната не стартовала или часы неполны, времени матча ещё нет: возврат
+// `null` переводит измерение на счётчик тиков, а не подставляет эпоху под синусоиды.
+function matchElapsedSeconds(room, now) {
+  if (!Number.isFinite(now) || !Number.isFinite(room?.startedAt)) return null;
+  return (now - room.startedAt) / 1000;
+}
+
 class RollingErrorStats {
   constructor(limit = ERROR_SAMPLE_LIMIT) {
     this.limit = limit;
@@ -244,15 +255,23 @@ class ShadowInputRuntime {
   // доказательство паритета, которого ждёт guard движения.
   //
   // На игру не влияет ничем: результат только записывается.
-  measureFreeTrajectory(controller, player, now) {
+  measureFreeTrajectory(controller, player, elapsedSeconds) {
     const world = controller.world;
     if (!world) {
       this.groundDiagnostics.worldMissing += 1;
       return false;
     }
-    // Подвижные опоры считаются от времени матча, а не от числа тиков: пропуск тика не должен
-    // сдвигать трассу.
-    world.advance(Number.isFinite(now) ? now / 1000 : this.serverTick * SERVER_SIMULATION_DT);
+    // Время матча, а не число тиков: пропуск тика не должен сдвигать трассу.
+    //
+    // Именно ВРЕМЯ МАТЧА, а не значение часов. Клиент считает фазы подвижных опор и препятствий от
+    // `elapsed` — секунд с начала забега, — и здесь обязано быть то же самое число. Подстановка
+    // `Date.now()` расставляла опоры по произвольным точкам их размаха (замерено: до 4.7 единицы
+    // при размахе 3.4), и расхождение читалось бы как несовпадение геометрии, хотя не совпадали
+    // часы.
+    const matchTime = Number.isFinite(elapsedSeconds)
+      ? elapsedSeconds
+      : this.serverTick * SERVER_SIMULATION_DT;
+    world.advance(matchTime);
 
     // Первый шаг траектории начинается от того же места, что и клиент: сравнивается расхождение,
     // накопленное симуляцией, а не разница стартовых точек.
@@ -283,7 +302,8 @@ class ShadowInputRuntime {
 
     const impulses = applyObstacleImpulses(settled, {
       obstacles: world.obstacles,
-      now: Number.isFinite(now) ? now / 1000 : this.serverTick * SERVER_SIMULATION_DT,
+      // Тот же счётчик времени матча: от него зависят и фаза поршня, и выдержка между попаданиями.
+      now: matchTime,
       hitTimes: controller.hitTimes,
       playerRadius: PLAYER_OBSTACLE_RADIUS,
       footOffset: PLAYER_FOOT,
@@ -371,7 +391,7 @@ class ShadowInputRuntime {
     const aligned = alignKnownWorldContact(controller.state, player.last);
     const previousState = copySimulationState(aligned);
     const result = this.step(aligned, controller.input, {}, SERVER_SIMULATION_DT);
-    this.measureFreeTrajectory(controller, player, now);
+    this.measureFreeTrajectory(controller, player, matchElapsedSeconds(room, now));
     controller.state = result.state;
     controller.lastServerTick = this.serverTick;
     this.simulatedSteps += 1;

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import * as THREE from 'three';
 import { courseSpec } from '../client/core/Config.js';
 import { Course } from '../client/game/Course.js';
@@ -164,4 +165,46 @@ test('над одной и той же стеной обе сборки дают
       assert.deepEqual(serverNormal, clientNormal, 'нормаль отскока обязана совпасть');
     }
   });
+});
+
+// Совпадения статической геометрии мало: половина трассы движется. Клиент считает положение
+// подвижных опор и препятствий от времени МАТЧА, и серверный мир обязан считать его от того же
+// числа — иначе опоры расходятся по своему размаху, а вертушки стоят под другим углом.
+//
+// Проверка сделана после того, как обе ошибки уже были в коде: мир двигал только опоры (вертушки
+// и поршни оставались в записанном положении), а время бралось из `Date.now()`, то есть из эпохи
+// Unix. На трассе с размахом 3.4 это уводило опору на 4.7 единицы — измерение паритета показывало
+// бы расхождение геометрии там, где не совпадали часы.
+test('в один и тот же момент матча подвижная трасса у сервера и клиента одна', () => {
+  const require = createRequire(import.meta.url);
+  const { createShadowCourseWorld } = require('./shadowCourseWorld');
+
+  for (const spec of SPECS) {
+    const world = createShadowCourseWorld(spec);
+    withCourse(spec, course => {
+      for (const elapsed of [0, 1.5, 7.25, 33.5]) {
+        world.advance(elapsed);
+        course.update(1 / 60, elapsed);
+
+        world.dynamic.forEach((platform, index) => {
+          const axis = platform.motion.axis;
+          assert.equal(
+            platform[axis],
+            course.dynamic[index][axis],
+            `опора ${index} по оси ${axis} разошлась на ${elapsed} с (seed ${spec.seed})`
+          );
+        });
+
+        world.obstacles.forEach((obstacle, index) => {
+          const mirror = course.obstacles[index];
+          assert.equal(obstacle.type, mirror.type);
+          if (obstacle.type === 'spinner') {
+            assert.equal(obstacle.angle, mirror.angle, `вертушка ${index} на ${elapsed} с`);
+          } else if (obstacle.type === 'puncher') {
+            assert.equal(obstacle.x, mirror.x, `поршень ${index} на ${elapsed} с`);
+          }
+        });
+      }
+    });
+  }
 });

@@ -9,6 +9,7 @@ const { ShadowInputRuntime, SERVER_SIMULATION_DT } = require('./shadowInputRunti
 const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
 const { recordRaceCourse } = require('../shared/courseColliderRecorder.js');
 const { supportTop } = require('../shared/courseCollision.js');
+const { createShadowCourseWorld } = require('./shadowCourseWorld');
 
 const spec = createCourseSpec(20260821, 'normal');
 
@@ -119,4 +120,60 @@ test('измерение не трогает авторитетное shadow-с�
   // Авторитетное состояние по-прежнему держится за клиентский контакт, поэтому стоящий игрок
   // остаётся на своей высоте: переключения не произошло.
   assert.ok(Math.abs(snapshot.state.position.y - player.last.y) < 0.5);
+});
+
+// Время матча, а не показания часов.
+//
+// Клиент считает фазы подвижных опор и препятствий от секунд с начала забега. Сервер обязан
+// подставлять в те же формулы то же число. В первой редакции сюда уходил `Date.now() / 1000`, то
+// есть эпоха Unix: опоры расставлялись по произвольным точкам своего размаха, и измерение паритета
+// показывало бы расхождение геометрии там, где расходились часы.
+test('мир двигается по времени матча, а не по показаниям часов', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  const startedAt = 1_760_000_000_000;
+  room.startedAt = startedAt;
+  const player = standingPlayer();
+
+  const matchSeconds = 6;
+  const now = startedAt + matchSeconds * 1000;
+  tick(runtime, room, player, 1, now);
+
+  const world = runtime.controllers.get(player).world;
+  assert.ok(world.dynamic.length, 'на этой трассе обязаны быть подвижные опоры');
+
+  // Эталон: тот же мир, доведённый до того же момента МАТЧА.
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(matchSeconds);
+  world.dynamic.forEach((platform, index) => {
+    const axis = platform.motion.axis;
+    assert.equal(platform[axis], expected.dynamic[index][axis], `опора ${index} по оси ${axis}`);
+  });
+
+  // И то же самое, посчитанное от эпохи, обязано быть ДРУГИМ — иначе проверка ничего не значит.
+  const byClock = createShadowCourseWorld(spec);
+  byClock.advance(now / 1000);
+  const differs = world.dynamic.some((platform, index) => {
+    const axis = platform.motion.axis;
+    return Math.abs(platform[axis] - byClock.dynamic[index][axis]) > 1e-6;
+  });
+  assert.ok(differs, 'подстановка эпохи обязана давать заметно другую трассу');
+});
+
+test('без времени старта измерение откатывается на счётчик тиков, а не на эпоху', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  const player = standingPlayer();
+  // startedAt нет вовсе: комната ещё не проставила старт.
+  tick(runtime, room, player, 4, 1_760_000_000_000);
+
+  const world = runtime.controllers.get(player).world;
+  const platform = world.dynamic[0];
+  const axis = platform.motion.axis;
+  const withinSwing = Math.abs(platform[axis] - platform.motion.origin) <= platform.motion.range + 1e-9;
+  assert.ok(withinSwing, 'опора обязана остаться в пределах своего размаха');
+  // Счётчик тиков — маленькое число, поэтому опора недалеко ушла от старта своей синусоиды.
+  const expected = createShadowCourseWorld(spec);
+  expected.advance(4 / 30);
+  assert.equal(platform[axis], expected.dynamic[0][axis]);
 });

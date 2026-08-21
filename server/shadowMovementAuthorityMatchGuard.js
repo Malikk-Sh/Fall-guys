@@ -6,6 +6,7 @@ const {
   MOVEMENT_AUTHORITY_SOURCE,
   evaluateShadowMovementAuthorityReadiness
 } = require('./shadowMovementAuthorityReadiness');
+const { createMovementParityProvider } = require('./shadowMovementParityEvidence');
 
 const MATCH_FALLBACK_REASON = Object.freeze({
   INVALID_CONTEXT: 'invalid-match-context',
@@ -14,10 +15,24 @@ const MATCH_FALLBACK_REASON = Object.freeze({
   SHADOW_REVOKED: 'match-shadow-revoked'
 });
 
+// Пока доказательств нет, признаки отрицательные. Это не заглушка на будущее, а требуемое
+// поведение: ворота движения обязаны быть закрыты, пока паритет не предъявлен.
 const DEFAULT_MOVEMENT_PARITY_EVIDENCE = Object.freeze({
   collisionParityVerified: false,
   obstacleParityVerified: false
 });
+
+// Провайдер, читающий измерение свободной траектории runtime, существует и проверен тестами, но
+// singleton им НЕ пользуется — и это осознанно.
+//
+// Пороги его политики выбраны рассуждением, а не по живым прогонам: сколько выборок достаточно и
+// какой отрыв траектории приемлем, честно знает только production-статистика. Подключить его сюда
+// значило бы открыть ворота по придуманным числам — то есть ровно то, что запрещено: выставить
+// parity-флаг руками, только окольным путём.
+//
+// Порядок остаётся прежним: сначала накопить измерения на живом трафике, потом свериться с ними и
+// осознанно подключить провайдер, и только потом переключать границу.
+const movementParityProvider = createMovementParityProvider({ runtime: shadowRuntimeService.runtime });
 
 function validShadowSnapshot(snapshot, matchId) {
   const state = snapshot?.state;
@@ -166,6 +181,7 @@ const singleton = createShadowMovementAuthorityMatchGuard();
 module.exports = Object.freeze({
   ...singleton,
   DEFAULT_MOVEMENT_PARITY_EVIDENCE,
+  movementParityProvider,
   MATCH_FALLBACK_REASON,
   createShadowMovementAuthorityMatchGuard,
   normalizeParityEvidence,

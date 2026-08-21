@@ -117,6 +117,14 @@ function alignKnownWorldContact(state, legacy = {}) {
 // симуляций и ничего не доказывает.
 const FREE_TRAJECTORY_HORIZON_TICKS = 30;
 
+// Подшаги свободной траектории: серверный тик 30 Гц считается двумя шагами клиентской частоты.
+//
+// Полунеявный Эйлер зависит от частоты: два шага по h и один по 2h расходятся на g·h² за шаг. При
+// g = 22.5 и h = 1/60 это 0.223 единицы за секунду свободного падения — при полностью одинаковых
+// физике, вводе и геометрии. Без подшагов измерение мерило бы не паритет, а разницу частот.
+const FREE_TRAJECTORY_SUB_STEPS = 2;
+const FREE_TRAJECTORY_SUB_DT = SERVER_SIMULATION_DT / FREE_TRAJECTORY_SUB_STEPS;
+
 // Скачок позиции клиента, который может быть только возвратом на чекпоинт.
 //
 // Число измерено на прогоне ботов: 8602 сетевых шага, законное перемещение за тик не больше 2
@@ -341,41 +349,59 @@ class ShadowInputRuntime {
     }
     controller.freeTicks += 1;
 
-    const before = copySimulationState(controller.freeState);
-    const stepped = this.step(controller.freeState, controller.input, {}, SERVER_SIMULATION_DT).state;
+    // Серверный тик считается ПОДШАГАМИ клиентской частоты, а не одним шагом своей.
+    //
+    // Полушаг здесь не оптимизация и не сглаживание. Полунеявный Эйлер даёт разный ответ на разной
+    // частоте: два шага по 1/60 и один по 1/30 расходятся на g·h² за шаг, и на секунде свободного
+    // падения это 0.223 единицы — при одинаковой физике, одинаковом вводе и одинаковой геометрии.
+    // То есть порог в 0.3 по среднему был недостижим не из-за расхождения физики, а из-за того,
+    // что сервер интегрировал не с той частотой, что клиент.
+    //
+    // Клиент крутит фиксированный цикл 1/60 (`client/main.js`), и каждый его кадр — это движение,
+    // отскок, опора и импульсы. Здесь тот же цикл, дважды за тик: сравнивается одинаковое с
+    // одинаковым. Замерено: 0.93 мкс на подшаг, то есть 0.17 % ядра на шестьдесят игроков.
+    let impulses = null;
+    for (let sub = 0; sub < FREE_TRAJECTORY_SUB_STEPS; sub++) {
+      // Мир доводится до времени каждого подшага: перенос движущейся опорой считается по её сдвигу
+      // за подшаг, ровно как у клиента за кадр.
+      world.advance(matchTime - SERVER_SIMULATION_DT + (sub + 1) * FREE_TRAJECTORY_SUB_DT);
 
-    const normal = wallBounceNormalAt(
-      world.walls,
-      stepped.position,
-      before.position,
-      stepped.velocity,
-      PLAYER_BODY_RADIUS
-    );
-    if (normal && !before.grounded && before.jumpBuffer > 0) {
-      applyWallBounce(stepped, normal, before.position, { jumpSpeed: JUMP_SPEED });
-      this.worldDiagnostics.wallBounces += 1;
+      const before = copySimulationState(controller.freeState);
+      const stepped = this.step(controller.freeState, controller.input, {}, FREE_TRAJECTORY_SUB_DT).state;
+
+      const normal = wallBounceNormalAt(
+        world.walls,
+        stepped.position,
+        before.position,
+        stepped.velocity,
+        PLAYER_BODY_RADIUS
+      );
+      if (normal && !before.grounded && before.jumpBuffer > 0) {
+        applyWallBounce(stepped, normal, before.position, { jumpSpeed: JUMP_SPEED });
+        this.worldDiagnostics.wallBounces += 1;
+      }
+
+      const settled = resolveGroundContact(stepped, {
+        colliders: world.colliders,
+        previousY: before.position.y,
+        footOffset: PLAYER_FOOT,
+        intent: movementIntent(controller.input),
+        wasGrounded: before.grounded
+      }).state;
+
+      impulses = applyObstacleImpulses(settled, {
+        obstacles: world.obstacles,
+        // Тот же счётчик времени матча: от него зависят и фаза поршня, и выдержка между попаданиями.
+        now: matchTime - SERVER_SIMULATION_DT + (sub + 1) * FREE_TRAJECTORY_SUB_DT,
+        hitTimes: controller.hitTimes,
+        playerRadius: PLAYER_OBSTACLE_RADIUS,
+        footOffset: PLAYER_FOOT,
+        knockback: 1,
+        limpHitCooldown: 0
+      });
+      this.worldDiagnostics.impulses += impulses.events.length;
+      controller.freeState = impulses.state;
     }
-
-    const settled = resolveGroundContact(stepped, {
-      colliders: world.colliders,
-      previousY: before.position.y,
-      footOffset: PLAYER_FOOT,
-      intent: movementIntent(controller.input),
-      wasGrounded: before.grounded
-    }).state;
-
-    const impulses = applyObstacleImpulses(settled, {
-      obstacles: world.obstacles,
-      // Тот же счётчик времени матча: от него зависят и фаза поршня, и выдержка между попаданиями.
-      now: matchTime,
-      hitTimes: controller.hitTimes,
-      playerRadius: PLAYER_OBSTACLE_RADIUS,
-      footOffset: PLAYER_FOOT,
-      knockback: 1,
-      limpHitCooldown: 0
-    });
-    this.worldDiagnostics.impulses += impulses.events.length;
-    controller.freeState = impulses.state;
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
     //

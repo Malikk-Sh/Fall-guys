@@ -7,6 +7,8 @@ const { buildIdentity } = buildInfo;
 const install = readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
 const smoke = readFileSync(new URL('../deploy/smoke.sh', import.meta.url), 'utf8');
 const restore = readFileSync(new URL('../deploy/restore.sh', import.meta.url), 'utf8');
+const service = readFileSync(new URL('../deploy/wobble.service', import.meta.url), 'utf8');
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /RELEASE_TAG="\$\{RELEASE_TAG-\$\{SAVED_RELEASE_TAG:-\}\}"/);
@@ -19,6 +21,18 @@ test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /release \$\{RELEASE_TAG\} ещё не опубликован/);
   assert.match(install, /check-release\.mjs" "\$RELEASE_TAG"/);
   assert.match(install, /SAVED_RELEASE_TAG='\$\{RELEASE_TAG\}'/);
+});
+
+test('production systemd starts the same shadow-preloaded entrypoint as npm start', () => {
+  const execStart = service.match(/^ExecStart=(.+)$/m)?.[1];
+  assert.ok(execStart, 'wobble.service must define ExecStart');
+
+  // systemd uses the absolute Node path while package.json uses PATH. Everything after that must
+  // stay byte-for-byte equivalent, otherwise a production-only startup path can silently omit
+  // migration wiring while smoke tests still see a healthy legacy server.
+  const normalizedServiceStart = execStart.replace(/^\/usr\/bin\/node\b/, 'node');
+  assert.equal(normalizedServiceStart, packageJson.scripts.start);
+  assert.match(normalizedServiceStart, /--require \.\/server\/shadowInputPreload\.js/);
 });
 
 test('deploy smoke can require the exact version, commit and release identity', () => {

@@ -10,6 +10,7 @@ const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
 const { recordRaceCourse } = require('../shared/courseColliderRecorder.js');
 const { supportTop } = require('../shared/courseCollision.js');
 const { createShadowCourseWorld } = require('./shadowCourseWorld');
+const { evaluateMovementParity } = require('./shadowMovementParityEvidence');
 
 const spec = createCourseSpec(20260821, 'normal');
 
@@ -129,7 +130,10 @@ test('кооперативу мир не строится, и это видно 
   tick(runtime, room, player, 5);
 
   const { shadowGroundContact } = runtime.metrics();
-  assert.ok(shadowGroundContact.worldMissing > 0);
+  // Считается он ОТДЕЛЬНО от `worldMissing`: тот означает «геометрия не построилась», то есть отказ,
+  // и порог по нему строгий ноль. У кооператива геометрии нет по устройству, а не по ошибке.
+  assert.equal(shadowGroundContact.worldMissing, 0, 'кооператив не отказ геометрии');
+  assert.ok(shadowGroundContact.worldUnsupportedMode > 0);
   assert.equal(shadowGroundContact.samples, 0, 'без мира измерять нечего');
 });
 
@@ -1009,4 +1013,95 @@ test('ушедший игрок закрывает свои ожидания, а
   // Повторный отпуск ничего не досчитывает: иначе один удар считался бы дважды.
   assert.equal(runtime.release(player), false);
   assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 1);
+});
+
+test('кооператив не выдаёт себя за сломанную геометрию', () => {
+  // `maxWorldMissingSamples` требует строгий ноль и означает «матч, у которого геометрия не
+  // построилась, доказательством быть не может». Кооператив не сломанная сборка: безголовой
+  // геометрии у него нет вовсе, потому что главы рукотворные.
+  //
+  // Метрики общие на процесс, а один процесс держит комнаты обоих режимов. Пока оба случая шли в
+  // один счётчик, любой кооперативный матч закрывал паритет столкновений НАВСЕГДА — и не потому,
+  // что паритет плох, а потому, что рядом играли в другой режим.
+  const runtime = new ShadowInputRuntime();
+  const coop = {
+    mode: GAME_MODE.COOP,
+    state: ROOM_STATE.PLAYING,
+    matchId: 'coop-1',
+    spec: { chapterId: 'ch1' },
+    startedAt: 1_760_000_000_000,
+    players: new Map()
+  };
+  const player = standingPlayer();
+  coop.players.set('c', player);
+  const rooms = new Map([[coop.matchId, coop]]);
+  runtime.accept({
+    player,
+    room: coop,
+    message: {
+      matchId: coop.matchId,
+      sequence: 0,
+      clientTick: 0,
+      moveX: 0,
+      moveZ: 0,
+      cameraYaw: 0,
+      jumpPressed: false,
+      jumpHeld: false,
+      divePressed: false
+    }
+  });
+  for (let step = 1; step <= 12; step++) {
+    player.lastSequence += 1;
+    runtime.tick(rooms, coop.startedAt + step * SERVER_SIMULATION_DT * 1000);
+  }
+
+  const metrics = runtime.metrics().shadowGroundContact;
+  assert.equal(metrics.worldMissing, 0, 'кооператив не отказ геометрии');
+  assert.ok(metrics.worldUnsupportedMode > 0, 'но и молчать о нём нельзя: паритет там не проверен');
+  assert.ok(
+    !evaluateMovementParity(metrics).reasons.includes('world-missing'),
+    'кооператив не должен закрывать паритет столкновений'
+  );
+});
+
+test('гонка со сломанной геометрией по-прежнему закрывает паритет', () => {
+  // Обратная сторона: разделение не должно превратиться в способ спрятать настоящий отказ.
+  const runtime = new ShadowInputRuntime();
+  const broken = {
+    mode: GAME_MODE.RACE,
+    state: ROOM_STATE.PLAYING,
+    matchId: 'race-broken',
+    // Именно ОТСУТСТВИЕ спеки: сломанный `segmentCount` мир всё равно строит, и настоящим отказом
+    // это не является. Проверять надо тот случай, который действительно оставляет гонку без пола.
+    spec: null,
+    startedAt: 1_760_000_000_000,
+    players: new Map()
+  };
+  const player = standingPlayer();
+  broken.players.set('p', player);
+  const rooms = new Map([[broken.matchId, broken]]);
+  runtime.accept({
+    player,
+    room: broken,
+    message: {
+      matchId: broken.matchId,
+      sequence: 0,
+      clientTick: 0,
+      moveX: 0,
+      moveZ: 0,
+      cameraYaw: 0,
+      jumpPressed: false,
+      jumpHeld: false,
+      divePressed: false
+    }
+  });
+  for (let step = 1; step <= 12; step++) {
+    player.lastSequence += 1;
+    runtime.tick(rooms, broken.startedAt + step * SERVER_SIMULATION_DT * 1000);
+  }
+
+  const metrics = runtime.metrics().shadowGroundContact;
+  assert.ok(metrics.worldMissing > 0, 'гоночная комната без геометрии — именно отказ');
+  assert.equal(metrics.worldUnsupportedMode, 0);
+  assert.ok(evaluateMovementParity(metrics).reasons.includes('world-missing'));
 });

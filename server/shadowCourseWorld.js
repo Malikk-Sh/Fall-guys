@@ -64,9 +64,20 @@ function createShadowCourseWorld(spec) {
   };
 }
 
+// Строится ли безголовая геометрия для этого режима ВООБЩЕ.
+//
+// Вопрос отдельный от «построилась ли»: у гоночной комнаты со сломанной спекой мира нет по ошибке, а
+// у кооперативной — по устройству, потому что главы рукотворные и рекордера у них пока нет. Для
+// доказательств это разные вещи, и мерить их одним счётчиком нельзя: порог `maxWorldMissingSamples`
+// требует строгий ноль, метрики общие на процесс, и один кооперативный матч на том же сервере
+// закрывал бы паритет столкновений навсегда — по причине, к паритету отношения не имеющей.
+function shadowWorldSupported(room) {
+  return room?.mode === GAME_MODE.RACE;
+}
+
 // Мир нужен только гонке: кооперативные главы рукотворные, их геометрия безголово ещё не строится.
 function shadowCourseWorldFor(room) {
-  if (room?.mode !== GAME_MODE.RACE || !room?.spec) return null;
+  if (!shadowWorldSupported(room) || !room?.spec) return null;
   try {
     return createShadowCourseWorld(room.spec);
   } catch {
@@ -75,4 +86,4 @@ function shadowCourseWorldFor(room) {
   }
 }
 
-module.exports = Object.freeze({ createShadowCourseWorld, shadowCourseWorldFor });
+module.exports = Object.freeze({ createShadowCourseWorld, shadowCourseWorldFor, shadowWorldSupported });

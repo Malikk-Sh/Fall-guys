@@ -5,7 +5,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { GAME_MODE } = require('../shared/protocol.js');
 const { createCourseSpec } = require('../shared/courseSpec.js');
-const { createShadowCourseWorld, shadowCourseWorldFor } = require('./shadowCourseWorld');
+const {
+  WORLD_SUPPORT,
+  createShadowCourseWorld,
+  shadowCourseWorldFor,
+  shadowWorldSupport,
+  shadowWorldSupported
+} = require('./shadowCourseWorld');
 const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
 const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
 const { resolveGroundContact } = require('../shared/playerSimulation.js');
@@ -116,4 +122,26 @@ test('нечитаемая спецификация не роняет матч �
   const segmentZ = -20;
   const probe = { x: 0, y: 1, z: segmentZ };
   assert.equal(supportIndexAt(world.colliders, probe, 1.5, 0, PLAYER_FOOT), -1);
+});
+
+test('неизвестный режим — не неприменимость, а отказ', () => {
+  // Состояний три, и двух не хватает принципиально: «поддержан», «не поддержан по устройству» и
+  // «неизвестен». При делении надвое последние два неразличимы, и неизвестный режим молча
+  // переставал бы блокировать ворота — хотя геометрия ему могла быть положена.
+  assert.equal(shadowWorldSupport({ mode: GAME_MODE.RACE }), WORLD_SUPPORT.SUPPORTED);
+  assert.equal(shadowWorldSupport({ mode: GAME_MODE.COOP }), WORLD_SUPPORT.UNSUPPORTED);
+
+  // Всё остальное обязано попадать в «неизвестно», а не в «неприменимо».
+  for (const room of [{ mode: 'режим-которого-нет' }, {}, null, undefined, { mode: null }]) {
+    assert.equal(
+      shadowWorldSupport(room),
+      WORLD_SUPPORT.UNKNOWN,
+      `неизвестный режим не должен считаться неприменимым: ${JSON.stringify(room)}`
+    );
+  }
+
+  // Мир при этом строится только поддержанному режиму.
+  assert.equal(shadowWorldSupported({ mode: GAME_MODE.RACE }), true);
+  assert.equal(shadowWorldSupported({ mode: GAME_MODE.COOP }), false);
+  assert.equal(shadowWorldSupported({ mode: 'режим-которого-нет' }), false);
 });

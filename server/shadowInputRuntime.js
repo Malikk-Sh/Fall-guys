@@ -17,7 +17,7 @@ const { PLAYER_BODY_RADIUS, PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } = require('../
 const { applyObstacleImpulses } = require('../shared/courseImpulses.js');
 const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
 const { applyWallBounce, wallBounceNormalAt } = require('../shared/courseWalls.js');
-const { shadowCourseWorldFor } = require('./shadowCourseWorld');
+const { WORLD_SUPPORT, shadowCourseWorldFor, shadowWorldSupport } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const SERVER_SIMULATION_HZ = 30;
@@ -429,6 +429,8 @@ class ShadowInputRuntime {
     this.groundDiagnostics = {
       samples: 0,
       worldMissing: 0,
+      // Тики режимов, для которых геометрия не строится по устройству. Не отказ, а неприменимость.
+      worldUnsupportedMode: 0,
       agreements: 0,
       groundedMismatch: 0,
       shadowGroundedOnly: 0,
@@ -523,6 +525,8 @@ class ShadowInputRuntime {
         input: neutralInput(),
         progress: raceProgressFor(room),
         world: shadowCourseWorldFor(room),
+        // Ожидается ли геометрия для этого режима вообще — см. `shadowWorldSupport`.
+        worldSupport: shadowWorldSupport(room),
         // Второй мир — только для замера в точке клиента. Он доводится до ВРЕМЕНИ СНАПШОТА, а не
         // до текущего тика, поэтому не может быть тем же объектом: свободная траектория считает
         // перенос движущейся опорой по её сдвигу за подшаг, и подмотка мира назад испортила бы его.
@@ -577,7 +581,18 @@ class ShadowInputRuntime {
   measureFreeTrajectory(controller, player, elapsedSeconds, snapshotSeconds) {
     const world = controller.world;
     if (!world) {
-      this.groundDiagnostics.worldMissing += 1;
+      // Отсутствие мира по ошибке и отсутствие по устройству режима — разные вещи.
+      //
+      // `maxWorldMissingSamples` требует строгий ноль и означает «матч, у которого геометрия не
+      // построилась, доказательством быть не может». Кооператив не сломанная сборка: у него
+      // безголовой геометрии нет вовсе. Пока оба случая шли в один счётчик, любой кооперативный
+      // матч на том же процессе закрывал паритет столкновений навсегда — замерено: 20 тиков
+      // кооператива дают `worldMissing: 20` при пороге ноль.
+      // Неприменимостью считается ТОЛЬКО явно перечисленный режим без геометрии. Неизвестный режим
+      // идёт в отказ: не зная, положена ли ему геометрия, ослаблять доказательства нельзя.
+      if (controller.worldSupport === WORLD_SUPPORT.UNSUPPORTED) {
+        this.groundDiagnostics.worldUnsupportedMode += 1;
+      } else this.groundDiagnostics.worldMissing += 1;
       return false;
     }
     // Время матча, а не число тиков: пропуск тика не должен сдвигать трассу.

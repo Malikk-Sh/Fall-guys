@@ -5,7 +5,11 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { GAME_MODE } = require('../shared/protocol.js');
 const { createCourseSpec } = require('../shared/courseSpec.js');
-const { createShadowCourseWorld, shadowCourseWorldFor } = require('./shadowCourseWorld');
+const {
+  createShadowCourseWorld,
+  shadowCourseWorldFor,
+  shadowWorldSupported
+} = require('./shadowCourseWorld');
 const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
 const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
 const { resolveGroundContact } = require('../shared/playerSimulation.js');
@@ -116,4 +120,16 @@ test('нечитаемая спецификация не роняет матч �
   const segmentZ = -20;
   const probe = { x: 0, y: 1, z: segmentZ };
   assert.equal(supportIndexAt(world.colliders, probe, 1.5, 0, PLAYER_FOOT), -1);
+});
+
+test('режимы с безголовой геометрией перечислены списком, а не подразумеваются', () => {
+  // Классификация идёт по режиму, а спросить хочется про намерение: «должна ли у этой комнаты быть
+  // геометрия». Пока это совпадает, но умолчание обязано быть на стороне ОТКАЗА: неизвестный режим
+  // не должен молча оказываться «неприменимым» и потому не блокирующим ворота.
+  assert.equal(shadowWorldSupported({ mode: GAME_MODE.RACE }), true);
+  assert.equal(shadowWorldSupported({ mode: GAME_MODE.COOP }), false);
+  assert.equal(shadowWorldSupported({ mode: 'режим-которого-нет' }), false);
+  assert.equal(shadowWorldSupported({}), false);
+  assert.equal(shadowWorldSupported(null), false);
+  assert.equal(shadowWorldSupported(undefined), false);
 });

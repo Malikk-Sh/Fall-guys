@@ -344,14 +344,34 @@ function createBridge() {
     return true;
   }
 
+  // Игроки, которых runtime сейчас считает своими. Пересобирается каждый тик.
+  //
+  // Нужен он ровно за одним: заметить УХОД. Контроллеры лежат в WeakMap и не перечисляются, а
+  // `dropPlayer` удаляет игрока из комнаты немедленно — по `LEAVE_ROOM`, по обрыву связи, по
+  // исключению из комнаты. После этого тик его больше не видит, и закрыть его сопоставление ударов
+  // уже неоткуда: ожидания остались бы вечно незакрытыми, а незакрытое не входит ни в односторонние
+  // счётчики, ни в знаменатель доли совпадений — то есть паритет выглядел бы лучше, чем он есть.
+  //
+  // Разница множеств ловит все пути ухода сразу и не зависит ни от разбора сообщений, ни от порядка
+  // обработчиков. Ушедший держится не дольше одного тика: набор пересобирается целиком.
+  let trackedPlayers = new Set();
+
   function scan() {
     if (!core) return;
+    const present = new Set();
     for (const room of core.rooms.values()) {
-      if (!ACTIVE_STATES.has(room.state)) continue;
+      // Присутствие считается по ВСЕМ комнатам, а не только по активным: игрок на карточке итогов
+      // никуда не ушёл, и закрывать его как ушедшего было бы неверно.
       for (const player of room.players.values()) {
-        if (!player.bot) attachPlayer(player, room);
+        if (player.bot) continue;
+        present.add(player);
+        if (ACTIVE_STATES.has(room.state)) attachPlayer(player, room);
       }
     }
+    for (const player of trackedPlayers) {
+      if (!present.has(player)) shadowRuntimeService.release(player);
+    }
+    trackedPlayers = present;
   }
 
   function tick() {

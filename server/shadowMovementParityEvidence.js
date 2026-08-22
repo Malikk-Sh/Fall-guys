@@ -97,6 +97,29 @@ function validErrorStats(stats) {
   );
 }
 
+// Превышения проверяются по СЧЁТЧИКАМ, а не по готовым долям.
+//
+// Модуль fail-closed по построению, и доверять производному полю — дыра в этом свойстве: запись
+// вида `{ count: 5000, overHard: 500, overHardRate: 0 }` открывала бы паритет столкновений, имея
+// каждый десятый тик за жёсткой полосой. Для согласия по опоре это правило действовало с самого
+// начала (`groundAgreementRate`), здесь оно было пропущено.
+//
+// Заодно отвергается набор, где превышений больше, чем выборок, или где за жёсткой полосой
+// оказалось больше значений, чем за мягкой: 1.5 больше 0.3, поэтому всякое превышение жёсткой
+// полосы превышает и мягкую.
+function validExceedance(stats) {
+  return (
+    finiteNonNegative(stats.overSoft) &&
+    finiteNonNegative(stats.overHard) &&
+    stats.overHard <= stats.overSoft &&
+    stats.overSoft <= stats.count
+  );
+}
+
+function exceedanceRate(stats, key) {
+  return stats.count ? stats[key] / stats.count : 0;
+}
+
 function validHitParity(parity) {
   return (
     !!parity &&
@@ -143,8 +166,7 @@ function validMetrics(metrics) {
     finiteNonNegative(metrics.impulses) &&
     validErrorStats(metrics.heightError) &&
     validErrorStats(metrics.freeTrajectoryError) &&
-    finiteNonNegative(metrics.freeTrajectoryError.overSoftRate) &&
-    finiteNonNegative(metrics.freeTrajectoryError.overHardRate) &&
+    validExceedance(metrics.freeTrajectoryError) &&
     validHitParity(metrics.hitParity)
   );
 }
@@ -178,8 +200,8 @@ function evaluateMovementParity(metrics, policy = DEFAULT_MOVEMENT_PARITY_POLICY
     reasons.push(REASON.GROUND_HEIGHT_ERROR);
   }
   if (
-    metrics.freeTrajectoryError.overSoftRate > policy.maxOverSoftRate ||
-    metrics.freeTrajectoryError.overHardRate > policy.maxOverHardRate
+    exceedanceRate(metrics.freeTrajectoryError, 'overSoft') > policy.maxOverSoftRate ||
+    exceedanceRate(metrics.freeTrajectoryError, 'overHard') > policy.maxOverHardRate
   ) {
     reasons.push(REASON.TRAJECTORY_ERROR);
   }

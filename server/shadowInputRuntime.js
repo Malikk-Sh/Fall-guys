@@ -288,7 +288,15 @@ class RollingErrorStats {
       p95: quantile(0.95),
       max: this.max,
       recentSamples: this.samples.length,
-      // Доли превышения — по всей популяции. Именно они и проверяются политикой.
+      // Превышения отдаются СЧЁТЧИКАМИ, а доли — производными от них.
+      //
+      // Наружу шли только доли, и это ломало ровно то свойство, ради которого всё построено:
+      // оценщик обязан пересчитывать долю сам, иначе испорченный снимок с `overHardRate: 0` при
+      // пятистах превышениях прошёл бы проверку. Для согласия по опоре счётчики отдавались всегда,
+      // и здесь тот же порядок. Заодно складывать замеры по забегам можно точно, а не через
+      // округление доли обратно в счётчик.
+      overSoft: this.overSoft,
+      overHard: this.overHard,
       overSoftRate: this.count ? this.overSoft / this.count : 0,
       overHardRate: this.count ? this.overHard / this.count : 0
     };
@@ -311,63 +319,84 @@ const HIT_MATCH_TOLERANCE_TICKS = 10;
 // величине не описывает ничего. Вопрос, на который обязаны отвечать ворота, звучит прямо: бьёт ли
 // сервер по тем же препятствиям, что и клиент, — и меряется он сопоставлением самих событий.
 //
-// Событие, не нашедшее пары в пределах допуска, считается односторонним. Просроченные ожидания
-// закрываются по времени, а не в конце: иначе последние события забега оставались бы неучтёнными.
+// Событие, не нашедшее пары в пределах допуска, считается односторонним.
+//
+// Сопоставление ведётся ПОИГРОКОВО, а счётчики общие, и разделение это не косметическое. Ожидания
+// жили одним набором на весь runtime, тогда как измерение вызывается на каждого игрока отдельно, —
+// то есть удар сервера по игроку A мог закрыться сбиванием игрока B, оказавшимся рядом по времени.
+// Складывать статистику между игроками можно, сопоставлять события — нельзя, и ошибка эта
+// приукрашивающая: чужая пара повышает долю совпадений и снижает число выдуманных ударов, то есть
+// двигает доказательства в сторону открытия ворот. На одном игроке (замер на ботах) её не видно
+// вовсе.
+//
+// Поэтому здесь остаются только ОЖИДАНИЯ, а решённое отдаётся наружу и складывается вызывающим.
 class EventPairing {
   constructor(toleranceTicks = HIT_MATCH_TOLERANCE_TICKS) {
     this.tolerance = toleranceTicks;
     this.pendingLeft = [];
     this.pendingRight = [];
-    this.left = 0;
-    this.right = 0;
-    this.matched = 0;
-    this.leftOnly = 0;
-    this.rightOnly = 0;
   }
 
-  // Оба флага относятся к одному тику. Возвращать ничего не нужно: всё видно в счётчиках.
+  get pending() {
+    return this.pendingLeft.length + this.pendingRight.length;
+  }
+
+  // Оба флага относятся к одному тику. Возвращается то, что решилось ИМЕННО НА ЭТОМ шаге.
   observe(tick, leftFired, rightFired) {
+    // Просрочка закрывается ДО сопоставления, а не после.
+    //
+    // Обратный порядок расширял окно на тик: ожидание возраста 11 успевало найти пару прежде, чем
+    // его удаляли, и заявленная треть секунды на деле была 0.367 с. Допуск обязан значить ровно то,
+    // что написано, — иначе он не граница, а пожелание.
+    const decided = this.expire(tick);
     if (leftFired) {
-      this.left += 1;
+      decided.left += 1;
       if (this.pendingRight.length) {
         this.pendingRight.shift();
-        this.matched += 1;
+        decided.matched += 1;
       } else this.pendingLeft.push(tick);
     }
     if (rightFired) {
-      this.right += 1;
+      decided.right += 1;
       if (this.pendingLeft.length) {
         this.pendingLeft.shift();
-        this.matched += 1;
+        decided.matched += 1;
       } else this.pendingRight.push(tick);
     }
-    this.expire(tick);
+    return decided;
   }
 
   expire(tick) {
+    const decided = noHitDecisions();
     while (this.pendingLeft.length && tick - this.pendingLeft[0] > this.tolerance) {
       this.pendingLeft.shift();
-      this.leftOnly += 1;
+      decided.leftOnly += 1;
     }
     while (this.pendingRight.length && tick - this.pendingRight[0] > this.tolerance) {
       this.pendingRight.shift();
-      this.rightOnly += 1;
+      decided.rightOnly += 1;
     }
+    return decided;
   }
 
-  // Ожидания, ещё не закрытые допуском, в итог не входят: они пока ни совпадение, ни промах.
-  snapshot() {
-    const decided = this.matched + this.leftOnly + this.rightOnly;
-    return {
-      left: this.left,
-      right: this.right,
-      matched: this.matched,
-      leftOnly: this.leftOnly,
-      rightOnly: this.rightOnly,
-      pending: this.pendingLeft.length + this.pendingRight.length,
-      matchRate: decided ? this.matched / decided : 0
-    };
+  // Забег кончился — пары уже не будет.
+  //
+  // Пока матч идёт, незакрытое ожидание правильно не считать ни совпадением, ни промахом: пара ещё
+  // может прийти. Но после финиша тиков по этому игроку больше нет, и без явного закрытия хвостовые
+  // события просто исчезали — в том числе выдуманный сервером удар за пару тиков до финиша, то есть
+  // ровно тот случай, который порог `maxServerOnlyHits: 0` обязан ловить.
+  finalize() {
+    const decided = noHitDecisions();
+    decided.leftOnly = this.pendingLeft.length;
+    decided.rightOnly = this.pendingRight.length;
+    this.pendingLeft = [];
+    this.pendingRight = [];
+    return decided;
   }
+}
+
+function noHitDecisions() {
+  return { left: 0, right: 0, matched: 0, leftOnly: 0, rightOnly: 0 };
 }
 
 function rejectionBucket(reason) {
@@ -435,7 +464,8 @@ class ShadowInputRuntime {
     // Слева сервер, справа клиент — порядок важен для чтения: `leftOnly` это удар, который сервер
     // выдумал, `rightOnly` — удар, который сервер прозевал. Первое опаснее: так игрока сбивало бы
     // на ровном месте.
-    this.hitPairing = new EventPairing();
+    // Счётчики попаданий общие на процесс, а ОЖИДАНИЯ живут у каждого игрока (см. EventPairing).
+    this.hitTotals = noHitDecisions();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -447,9 +477,45 @@ class ShadowInputRuntime {
     };
   }
 
+  // Закрывает сопоставление ударов игрока, учтя его ПОСЛЕДНЕЕ наблюдаемое состояние.
+  //
+  // Наблюдение обязано идти до закрытия. Финишный пакет вполне может быть первым снимком со
+  // сбиванием: проверка финиша у клиента (`client/game/Player.js`) сбитого не исключает, и игрока
+  // может занести за финишную плоскость лёжа. Ветка финиша не вызывает `consume`, поэтому без
+  // отдельного наблюдения такое сбивание не засчиталось бы вовсе — а ждущий пары удар сервера
+  // закрылся бы как выдуманный, хотя пара у него была.
+  finalizeHits(controller, player) {
+    const clientKnockdown = player?.last?.state === 'knockdown';
+    if (clientKnockdown && !controller.clientWasKnockedDown) {
+      controller.clientWasKnockedDown = true;
+      this.recordHitDecisions(controller.hitPairing.observe(this.serverTick, false, true));
+    }
+    this.recordHitDecisions(controller.hitPairing.finalize());
+  }
+
+  // Игрок уходит из комнаты. Вызывается снаружи: `dropPlayer` удаляет его из списка немедленно, и
+  // тик его больше не увидит — а контроллер лежит в WeakMap, откуда закрыть его уже нельзя.
+  release(player) {
+    const controller = this.controllers.get(player);
+    if (!controller) return false;
+    this.finalizeHits(controller, player);
+    this.controllers.delete(player);
+    return true;
+  }
+
+  recordHitDecisions(decided) {
+    this.hitTotals.left += decided.left;
+    this.hitTotals.right += decided.right;
+    this.hitTotals.matched += decided.matched;
+    this.hitTotals.leftOnly += decided.leftOnly;
+    this.hitTotals.rightOnly += decided.rightOnly;
+  }
+
   controllerFor(player, room) {
     let controller = this.controllers.get(player);
     if (!controller || controller.matchId !== room.matchId) {
+      // Матч сменился — ожидания прошлого забега пары уже не дождутся.
+      if (controller) this.recordHitDecisions(controller.hitPairing.finalize());
       controller = {
         matchId: room.matchId,
         queue: new ClientInputQueue(),
@@ -465,6 +531,8 @@ class ShadowInputRuntime {
         // означало бы, что измерение подглядывает в измеряемое.
         freeState: null,
         hitTimes: new Map(),
+        // Своё сопоставление ударов: события одного игрока не должны закрываться событиями другого.
+        hitPairing: new EventPairing(),
         finishServerTime: null,
         legacyFinishedObserved: false,
         lastProcessedInput: -1,
@@ -668,7 +736,9 @@ class ShadowInputRuntime {
     const clientKnockdown = player.last?.state === 'knockdown';
     const clientKnockdownStarted = clientKnockdown && !controller.clientWasKnockedDown;
     controller.clientWasKnockedDown = clientKnockdown;
-    this.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted);
+    this.recordHitDecisions(
+      controller.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted)
+    );
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
     //
@@ -910,7 +980,18 @@ class ShadowInputRuntime {
   tick(rooms, now = Date.now()) {
     this.serverTick += 1;
     for (const room of rooms.values()) {
-      if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) continue;
+      if (room.state !== ROOM_STATE.COUNTDOWN && room.state !== ROOM_STATE.PLAYING) {
+        // Матч кончился — и кончился он синхронно: когда финиширует последний, ядро переводит
+        // комнату в RESULTS сразу (`checkMatchEnd` → `finishMatch`), поэтому ветка финиша игрока в
+        // следующем тике уже недостижима. Ожидания, оставшиеся в этот момент, висели бы вечно, а
+        // незакрытые в знаменатель доли совпадений не входят — то есть паритет выглядел бы лучше,
+        // чем он есть. Закрытие идемпотентно: на пустых очередях оно ничего не добавляет.
+        for (const player of room.players.values()) {
+          const controller = this.controllers.get(player);
+          if (controller && controller.matchId === room.matchId) this.finalizeHits(controller, player);
+        }
+        continue;
+      }
       const advance = room.state === ROOM_STATE.PLAYING || (room.startedAt && now >= room.startedAt);
       for (const player of room.players.values()) {
         const controller = this.controllers.get(player);
@@ -919,6 +1000,8 @@ class ShadowInputRuntime {
           if (!controller.legacyFinishedObserved) {
             controller.legacyFinishedObserved = true;
             this.recordProgressComparison(controller, player);
+            // Тиков по этому игроку больше не будет, значит и пары ожиданиям взяться неоткуда.
+            this.finalizeHits(controller, player);
           }
           continue;
         }
@@ -978,15 +1061,19 @@ class ShadowInputRuntime {
         // Паритет попаданий. `serverOnly` — удар, которого у клиента не было; `clientOnly` —
         // пропущенный сервером.
         hitParity: (() => {
-          const pairing = this.hitPairing.snapshot();
+          const totals = this.hitTotals;
+          const decided = totals.matched + totals.leftOnly + totals.rightOnly;
           return {
-            serverHits: pairing.left,
-            clientHits: pairing.right,
-            matched: pairing.matched,
-            serverOnly: pairing.leftOnly,
-            clientOnly: pairing.rightOnly,
-            pending: pairing.pending,
-            matchRate: pairing.matchRate
+            serverHits: totals.left,
+            clientHits: totals.right,
+            matched: totals.matched,
+            serverOnly: totals.leftOnly,
+            clientOnly: totals.rightOnly,
+            // Ожидания разложены по игрокам, и обойти их нельзя: контроллеры лежат в WeakMap.
+            // Но каждое событие ровно один раз становится либо половиной пары, либо односторонним,
+            // поэтому незакрытых ровно столько, сколько ещё не разошлось по этим двум исходам.
+            pending: totals.left + totals.right - 2 * totals.matched - totals.leftOnly - totals.rightOnly,
+            matchRate: decided ? totals.matched / decided : 0
           };
         })()
       }
@@ -999,6 +1086,7 @@ module.exports = {
   SERVER_SIMULATION_DT,
   SERVER_SIMULATION_HZ,
   SERVER_SIMULATION_INTERVAL_MS,
+  EventPairing,
   RollingErrorStats,
   ShadowInputRuntime,
   alignKnownWorldContact,

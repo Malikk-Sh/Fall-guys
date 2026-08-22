@@ -33,6 +33,10 @@ test('shadow runtime service facade delegates to one supplied runtime', () => {
     metrics: () => {
       calls.push(['metrics']);
       return { processed: 3 };
+    },
+    release: player => {
+      calls.push(['release', player]);
+      return true;
     }
   };
   const isolated = service.createShadowRuntimeService({ runtime });
@@ -45,7 +49,10 @@ test('shadow runtime service facade delegates to one supplied runtime', () => {
   assert.equal(isolated.tick(rooms, 123), 17);
   assert.deepEqual(isolated.snapshot(player), { matchId: 'm1' });
   assert.deepEqual(isolated.metrics(), { processed: 3 });
-  assert.equal(calls.length, 4);
+  // Уход игрока обязан доходить до runtime: без него сопоставление ударов ушедшего остаётся
+  // незакрытым, а незакрытое в знаменатель доли совпадений не входит.
+  assert.equal(isolated.release(player), true);
+  assert.equal(calls.length, 5);
   assert.equal(calls[0][0], 'accept');
   assert.equal(calls[0][1], options);
   assert.equal(calls[1][0], 'tick');
@@ -54,6 +61,8 @@ test('shadow runtime service facade delegates to one supplied runtime', () => {
   assert.equal(calls[2][0], 'snapshot');
   assert.equal(calls[2][1], player);
   assert.equal(calls[3][0], 'metrics');
+  assert.equal(calls[4][0], 'release');
+  assert.equal(calls[4][1], player);
 });
 
 test('shadow runtime service rejects incomplete runtime implementations', () => {
@@ -64,5 +73,5 @@ test('shadow runtime service rejects incomplete runtime implementations', () => 
     failure = error;
   }
   assert.ok(failure instanceof TypeError);
-  assert.match(failure.message, /requires accept, tick, snapshot and metrics/);
+  assert.match(failure.message, /requires accept, tick, snapshot, metrics and release/);
 });

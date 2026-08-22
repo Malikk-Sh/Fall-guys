@@ -852,3 +852,161 @@ test('первый снимок просимулированного игрок�
   assert.equal(model.samples, 1, 'просимулированное состояние — полноценное свидетельство');
   assert.equal(model.placedSkipped, 0, 'и откладывать его не за что');
 });
+
+test('удар по одному игроку не закрывается сбиванием другого', () => {
+  // Ожидания сопоставления живут у КАЖДОГО игрока свои. Пока набор был один на весь runtime, а
+  // измерение вызывалось на каждого игрока отдельно, удар сервера по игроку A мог закрыться
+  // сбиванием игрока B, оказавшимся рядом по времени.
+  //
+  // Ошибка приукрашивающая: чужая пара повышает долю совпадений и снижает число выдуманных ударов,
+  // то есть двигает доказательства в сторону открытия ворот. На одном игроке её не видно вовсе —
+  // именно поэтому замер на ботах её не поймал бы, сколько его ни гоняй.
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const now = room.startedAt + 5000;
+
+  const struck = standingPlayer();
+  const downed = standingPlayer();
+  const rooms = new Map([[room.matchId, room]]);
+  room.players = new Map([
+    ['struck', struck],
+    ['downed', downed]
+  ]);
+
+  // Оба игрока живые: контроллеры заводятся по первому вводу.
+  for (const [id, player] of room.players) {
+    runtime.accept({
+      player,
+      room,
+      message: {
+        matchId: room.matchId,
+        sequence: 0,
+        clientTick: 0,
+        moveX: 0,
+        moveZ: 0,
+        cameraYaw: 0,
+        jumpPressed: false,
+        jumpHeld: false,
+        divePressed: false
+      }
+    });
+    assert.ok(runtime.controllers.get(player), `контроллер игрока ${id} обязан существовать`);
+  }
+  runtime.tick(rooms, now);
+
+  // Сервер бьёт ПЕРВОГО игрока, а сбивание видно у ВТОРОГО. Пары здесь нет ни у кого.
+  const controller = runtime.controllers.get(struck);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  downed.last = { ...downed.last, state: 'knockdown' };
+
+  for (let step = 1; step <= 16; step++) {
+    for (const player of room.players.values()) player.lastSequence += 1;
+    runtime.tick(rooms, now + step * SERVER_SIMULATION_DT * 1000);
+  }
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.serverHits, 1, 'сервер ударил ровно одного игрока');
+  assert.equal(hitParity.clientHits, 1, 'сбивание видно ровно у одного игрока');
+  assert.equal(hitParity.matched, 0, 'события разных игроков совпадением быть не могут');
+  assert.equal(hitParity.serverOnly, 1, 'удар без своей пары обязан остаться выдуманным');
+  assert.equal(hitParity.clientOnly, 1, 'сбивание без своей пары обязано остаться прозеванным');
+});
+
+test('конец матча закрывает ожидания, а не оставляет их висеть', () => {
+  // Когда финиширует последний игрок, ядро переводит комнату в RESULTS СИНХРОННО
+  // (`checkMatchEnd` → `finishMatch`), поэтому следующий тик пропускает комнату по состоянию и до
+  // ветки финиша игрока не доходит. Незакрытое ожидание в знаменатель доли совпадений не входит,
+  // значит паритет выглядел бы лучше, чем он есть.
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1, 'удар ждёт пару');
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 0);
+
+  // Матч кончился. Комната больше не активна, и тиков по игроку не будет.
+  room.state = ROOM_STATE.RESULTS;
+  runtime.tick(new Map([[room.matchId, room]]), now + 2 * SERVER_SIMULATION_DT * 1000);
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.serverOnly, 1, 'ожидание обязано закрыться выдуманным ударом');
+  assert.equal(hitParity.pending, 0);
+});
+
+test('сбивание в финишном пакете успевает попасть в пару', () => {
+  // Проверка финиша у клиента (`client/game/Player.js`) сбитого не исключает: игрока может занести
+  // за финишную плоскость лёжа, и тогда финишный пакет — первый снимок со сбиванием. Ветка финиша
+  // `consume` не вызывает, поэтому без отдельного наблюдения такое сбивание пропало бы, а ждущий
+  // пары удар сервера закрылся бы как выдуманный, хотя пара у него была.
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1);
+
+  // Финиш приходит вместе с первым снимком, где игрок сбит.
+  player.finished = true;
+  player.last = { ...player.last, state: 'knockdown' };
+  runtime.tick(new Map([[room.matchId, room]]), now + 2 * SERVER_SIMULATION_DT * 1000);
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.clientHits, 1, 'сбивание из финишного снимка обязано быть замечено');
+  assert.equal(hitParity.matched, 1, 'и обязано сойтись с ждущим ударом сервера');
+  assert.equal(hitParity.serverOnly, 0, 'иначе удар записался бы в выдуманные при живой паре');
+});
+
+test('ушедший игрок закрывает свои ожидания, а не уносит их с собой', () => {
+  // `dropPlayer` удаляет игрока из комнаты немедленно — по `LEAVE_ROOM`, по обрыву, по исключению.
+  // Контроллер после этого лежит в WeakMap и недостижим, поэтому закрытие обязано идти снаружи.
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1);
+
+  assert.equal(runtime.release(player), true);
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.serverOnly, 1, 'ожидание ушедшего обязано стать выдуманным ударом');
+  assert.equal(hitParity.pending, 0);
+  assert.equal(runtime.controllers.get(player), undefined, 'контроллер обязан быть отпущен');
+
+  // Повторный отпуск ничего не досчитывает: иначе один удар считался бы дважды.
+  assert.equal(runtime.release(player), false);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 1);
+});

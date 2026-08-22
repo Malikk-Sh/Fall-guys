@@ -35,8 +35,8 @@ function goodMetrics(overrides = {}) {
       p50: 0.05,
       p95: 0.2,
       max: 0.5,
-      overSoftRate: 0.02,
-      overHardRate: 0
+      overSoft: 100,
+      overHard: 0
     },
     hitParity: {
       serverHits: 84,
@@ -128,8 +128,8 @@ test('редкий выброс отрыва воротам не мешает, �
         p50: 0.1,
         p95: 0.9,
         max: 90,
-        overSoftRate: 0.1,
-        overHardRate: 0.01
+        overSoft: 500,
+        overHard: 50
       }
     })
   );
@@ -146,8 +146,8 @@ test('уехавшая траектория закрывает ворота, д�
         p50: 0.9,
         p95: 1.2,
         max: 3,
-        overSoftRate: 0.7,
-        overHardRate: 0.01
+        overSoft: 3500,
+        overHard: 50
       }
     })
   );
@@ -162,8 +162,8 @@ test('уехавшая траектория закрывает ворота, д�
         p50: 0.1,
         p95: 4.2,
         max: 17,
-        overSoftRate: 0.2,
-        overHardRate: 0.2
+        overSoft: 1000,
+        overHard: 1000
       }
     })
   );
@@ -335,4 +335,78 @@ test('singleton guard не пользуется живым провайдеро�
     })
     .decide({ room, player });
   assert.equal(decision.source, 'legacy', 'ворота движения обязаны быть закрыты по умолчанию');
+});
+
+test('подделанная доля превышения ворота не открывает', () => {
+  // Оценщик обязан считать долю САМ, по счётчикам. Пока он брал готовую, снимок с честным числом
+  // превышений и обнулённой долей проходил проверку: каждый десятый тик за жёсткой полосой, а
+  // паритет столкновений подтверждён. Для согласия по опоре это правило действовало с самого
+  // начала, здесь оно было пропущено.
+  const forged = evaluateMovementParity(
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 5000,
+        mean: 1,
+        p50: 0.1,
+        p95: 4.2,
+        max: 17,
+        overSoft: 1000,
+        overHard: 500,
+        overSoftRate: 0,
+        overHardRate: 0
+      }
+    })
+  );
+  assert.equal(
+    forged.collisionParityVerified,
+    false,
+    'десятая часть тиков за жёсткой полосой закрывает ворота'
+  );
+  assert.ok(forged.reasons.includes(REASON.TRAJECTORY_ERROR));
+});
+
+test('несогласованные счётчики превышений — недоказательство, а не ноль', () => {
+  // Отсутствие счётчиков не должно читаться как «превышений не было»: это неизвестность, а
+  // неизвестность у fail-closed модуля равна отказу.
+  const missing = evaluateMovementParity(
+    goodMetrics({
+      freeTrajectoryError: { count: 5000, mean: 0.08, p50: 0.05, p95: 0.2, max: 0.5 }
+    })
+  );
+  assert.equal(missing.collisionParityVerified, false);
+  assert.ok(missing.reasons.includes(REASON.INVALID_METRICS));
+
+  // За жёсткой полосой не может оказаться больше значений, чем за мягкой: 1.5 больше 0.3.
+  const impossible = evaluateMovementParity(
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 5000,
+        mean: 0.08,
+        p50: 0.05,
+        p95: 0.2,
+        max: 0.5,
+        overSoft: 10,
+        overHard: 40
+      }
+    })
+  );
+  assert.equal(impossible.collisionParityVerified, false);
+  assert.ok(impossible.reasons.includes(REASON.INVALID_METRICS));
+
+  // И превышений не может быть больше, чем самих выборок.
+  const overflow = evaluateMovementParity(
+    goodMetrics({
+      freeTrajectoryError: {
+        count: 100,
+        mean: 0.08,
+        p50: 0.05,
+        p95: 0.2,
+        max: 0.5,
+        overSoft: 400,
+        overHard: 0
+      }
+    })
+  );
+  assert.equal(overflow.collisionParityVerified, false);
+  assert.ok(overflow.reasons.includes(REASON.INVALID_METRICS));
 });

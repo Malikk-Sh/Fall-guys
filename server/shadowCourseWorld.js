@@ -71,17 +71,40 @@ function createShadowCourseWorld(spec) {
 // доказательств это разные вещи, и мерить их одним счётчиком нельзя: порог `maxWorldMissingSamples`
 // требует строгий ноль, метрики общие на процесс, и один кооперативный матч на том же сервере
 // закрывал бы паритет столкновений навсегда — по причине, к паритету отношения не имеющей.
-// Режимы перечислены СПИСКОМ, а не сравнением с одним значением, и это не стилистика.
+// Состояний ТРИ, а не два, и двух здесь не хватает принципиально.
 //
-// Классификация идёт по режиму, тогда как спросить хочется про намерение: «должна ли у этой комнаты
-// быть безголовая геометрия». Пока это одно и то же, но при равенстве `mode === RACE` новый режим
-// молча попадал бы в «неприменимо» — то есть по умолчанию НЕ БЛОКИРОВАЛ бы ворота, даже если
-// геометрия ему положена и просто не строится. Умолчание должно быть на стороне отказа, а не
-// послабления, поэтому добавление режима сюда обязано быть отдельным решением.
+// Отсутствие мира бывает по трём разным причинам, и обходиться с ними надо по-разному:
+//
+//   есть геометрия (гонка)      → её отсутствие есть ОТКАЗ, порог `maxWorldMissingSamples` = 0
+//   нет по устройству (co-op)   → неприменимость, ворота не закрывает
+//   режим неизвестен            → блокирует, потому что мы НЕ ЗНАЕМ
+//
+// Третий случай — единственное честное умолчание. Прошлая редакция делила режимы надвое, и всё, что
+// не гонка, попадало в неприменимость; неизвестный режим тем самым молча переставал блокировать
+// ворота, хотя геометрия ему могла быть положена. Это ровно то послабление, которое я в прошлом
+// коммите объявил закрытым, — а закрыто оно не было: при делении надвое «не поддержан» и «не знаем»
+// неразличимы по построению.
+//
+// Поэтому оба списка явные, а всё, чего нет ни в одном, блокирует.
 const MODES_WITH_HEADLESS_GEOMETRY = Object.freeze(new Set([GAME_MODE.RACE]));
+const MODES_WITHOUT_HEADLESS_GEOMETRY = Object.freeze(new Set([GAME_MODE.COOP]));
 
+const WORLD_SUPPORT = Object.freeze({
+  SUPPORTED: 'supported',
+  UNSUPPORTED: 'unsupported',
+  UNKNOWN: 'unknown'
+});
+
+function shadowWorldSupport(room) {
+  if (MODES_WITH_HEADLESS_GEOMETRY.has(room?.mode)) return WORLD_SUPPORT.SUPPORTED;
+  if (MODES_WITHOUT_HEADLESS_GEOMETRY.has(room?.mode)) return WORLD_SUPPORT.UNSUPPORTED;
+  return WORLD_SUPPORT.UNKNOWN;
+}
+
+// Строить мир имеет смысл только там, где геометрия есть. Неизвестный режим её не получает — но и
+// неприменимостью не считается: см. `shadowWorldSupport`.
 function shadowWorldSupported(room) {
-  return MODES_WITH_HEADLESS_GEOMETRY.has(room?.mode);
+  return shadowWorldSupport(room) === WORLD_SUPPORT.SUPPORTED;
 }
 
 // Мир нужен только гонке: кооперативные главы рукотворные, их геометрия безголово ещё не строится.
@@ -95,4 +118,10 @@ function shadowCourseWorldFor(room) {
   }
 }
 
-module.exports = Object.freeze({ createShadowCourseWorld, shadowCourseWorldFor, shadowWorldSupported });
+module.exports = Object.freeze({
+  WORLD_SUPPORT,
+  createShadowCourseWorld,
+  shadowCourseWorldFor,
+  shadowWorldSupport,
+  shadowWorldSupported
+});

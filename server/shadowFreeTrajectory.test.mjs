@@ -1105,3 +1105,45 @@ test('гонка со сломанной геометрией по-прежне�
   assert.equal(metrics.worldUnsupportedMode, 0);
   assert.ok(evaluateMovementParity(metrics).reasons.includes('world-missing'));
 });
+
+test('неизвестный режим закрывает ворота, а не проходит как неприменимый', () => {
+  // Прошлая редакция делила режимы надвое, и всё, что не гонка, шло в неприменимость. Неизвестный
+  // режим тем самым переставал блокировать ворота — при том, что геометрия ему могла быть положена
+  // и просто не строиться. Умолчание обязано стоять на стороне отказа.
+  const runtime = new ShadowInputRuntime();
+  const room = {
+    mode: 'режим-которого-нет',
+    state: ROOM_STATE.PLAYING,
+    matchId: 'unknown-1',
+    spec,
+    startedAt: 1_760_000_000_000,
+    players: new Map()
+  };
+  const player = standingPlayer();
+  room.players.set('p', player);
+  const rooms = new Map([[room.matchId, room]]);
+  runtime.accept({
+    player,
+    room,
+    message: {
+      matchId: room.matchId,
+      sequence: 0,
+      clientTick: 0,
+      moveX: 0,
+      moveZ: 0,
+      cameraYaw: 0,
+      jumpPressed: false,
+      jumpHeld: false,
+      divePressed: false
+    }
+  });
+  for (let step = 1; step <= 12; step++) {
+    player.lastSequence += 1;
+    runtime.tick(rooms, room.startedAt + step * SERVER_SIMULATION_DT * 1000);
+  }
+
+  const metrics = runtime.metrics().shadowGroundContact;
+  assert.ok(metrics.worldMissing > 0, 'неизвестный режим обязан считаться отказом');
+  assert.equal(metrics.worldUnsupportedMode, 0, 'неприменимость только для явно перечисленных');
+  assert.ok(evaluateMovementParity(metrics).reasons.includes('world-missing'));
+});

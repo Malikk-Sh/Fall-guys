@@ -24,8 +24,10 @@ const {
   verifyMovement,
   resetHistory,
   canFinish,
-  leaderboard
+  leaderboard,
+  budgetFor: raceAnomalyBudget
 } = require('./gameRules');
+const { anomalyMeasurements } = require('./movementAnomalyTelemetry');
 
 const {
   PROTOCOL_VERSION,
@@ -81,7 +83,8 @@ const {
   verifyCoopCheckpoint,
   verifyCoopFinish,
   noteAuthoritativeLaunch,
-  resetCoopMotionHistory
+  resetCoopMotionHistory,
+  budgetFor: coopAnomalyBudget
 } = require('./coopMovementAudit');
 
 const app = express();
@@ -1639,6 +1642,28 @@ function finishMatch(room) {
       entry.time,
       dims(room, player, entry.verified ? 'verified' : 'unverified')
     );
+    // Сколько отклонений насчитала проверка движения за этот забег — и насколько это близко к
+    // запасу. Только отчёт: счётчики уже посчитаны проверкой, ни одно правило отсюда не меняется.
+    //
+    // Пороги в `movementAudit.js` выведены прогонами ботов, живых людей за ними нет. Сегодняшний
+    // замер показал, чего это стоит: на ботах отрыв траектории давал 6.947 %, на живых игроках
+    // 9.44 %. Прежде чем трогать запасы отклонений, надо увидеть то же самое про них.
+    //
+    // Считается по ФИНИШИРОВАВШИМ, а не по всем в комнате: у оборвавшегося забег неполный, и его
+    // расход не сравним с полным прохождением. Население то же, что у `finish_time` рядом.
+    const anomalies =
+      room.mode === GAME_MODE.COOP ? player?.coopMovementAnomalies : player?.movementAnomalies;
+    const budget = room.mode === GAME_MODE.COOP ? coopAnomalyBudget : raceAnomalyBudget;
+    for (const measurement of anomalyMeasurements(anomalies, budget)) {
+      // Сколько раз признак сработал за забег: даёт и число забегов с ним, и среднее по ним.
+      gameplay.observe('movement_anomaly', measurement.count, dims(room, player, measurement.reason));
+      // И насколько это доля запаса. Корзина `over` — ровно те забеги, где признак стал находкой;
+      // остальные показывают, кто насколько не дошёл, а этого сейчас не видно вовсе.
+      gameplay.count(
+        'movement_anomaly_headroom',
+        dims(room, player, `${measurement.reason}:${measurement.bucket}`)
+      );
+    }
     incidentForSocket(player?.ws, {
       accountId: player?.accountId,
       kind: 'match',

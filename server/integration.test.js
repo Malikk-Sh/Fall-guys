@@ -1398,6 +1398,11 @@ test('непроверенный финиш соседа не отменяет �
   const flaggedPlayer = [...room.players.values()].find(item => item.accountId === flaggedAccount.id);
   assert.ok(flaggedPlayer, 'подготовка: помеченный игрок обязан найтись');
   flaggedPlayer.verificationReasons.push('sustained-speed');
+  // Расход запаса ставится отдельно от признака: это разные вещи. Признак означает «запас кончился»,
+  // а телеметрия отвечает на вопрос, которого сейчас никто не задаёт, — насколько близко подходят те,
+  // у кого не кончился. `flight` при запасе 2 израсходован наполовину, `horizontal-acceleration` при
+  // запасе 30 — на две трети.
+  flaggedPlayer.movementAnomalies = { flight: 1, 'horizontal-acceleration': 20 };
 
   await Promise.all([
     runHonestly(honest, started.spec, started.matchId),
@@ -1433,6 +1438,35 @@ test('непроверенный финиш соседа не отменяет �
   // Комнатная причина в гонке больше не содержит проверку движения: она личная, и общая плашка
   // сообщала бы честному игроку, что его время не записано, ровно тогда, когда оно записано.
   assert.equal(results.unranked, null, 'провал проверки у одного не делает комнату непроверенной');
+
+  // Отклонения проверки движения доезжают до сводки — иначе калибровать пороги будет не по чему.
+  //
+  // Счётчики ставятся прямо, как и признак проверки выше: что их ПОРОЖДАЕТ, проверяют movementAudit
+  // и gameRules, а здесь меряется проводка — читает ли `finishMatch` расход забега и раскладывает
+  // ли его по признакам и долям запаса.
+  const anomalyRows = gameplay
+    .summary({ days: 1, limit: 1000 })
+    .rows.filter(row => row.metric === 'movement_anomaly' || row.metric === 'movement_anomaly_headroom');
+
+  // `flight` при запасе 2 израсходован ровно наполовину, `horizontal-acceleration` при запасе 30 —
+  // на две трети. Обе корзины различимы, и обе не `over`: признак не сработал ни разу, а расход
+  // виден — ровно то, чего сейчас не видно вовсе.
+  const flight = anomalyRows.find(row => row.metric === 'movement_anomaly' && row.detail === 'flight');
+  assert.ok(flight, 'расход по признаку записан');
+  assert.ok(flight.samples >= 1, 'забег с этим признаком учтён');
+  assert.ok(flight.average > 0, 'у расхода есть величина — в отличие от простого счётчика');
+
+  // Сводка общая на процесс: в ней лежат и настоящие нарушения из соседних тестов. Поэтому
+  // проверяется наличие своих строк, а не отсутствие чужих — точное равенство меряло бы порядок
+  // выполнения тестов, а не раскладку.
+  const buckets = new Set(
+    anomalyRows.filter(row => row.metric === 'movement_anomaly_headroom').map(row => row.detail)
+  );
+  assert.ok(buckets.has('flight:25-50'), `flight обязан лечь в 25-50: ${[...buckets].join(', ')}`);
+  assert.ok(
+    buckets.has('horizontal-acceleration:50-75'),
+    `horizontal-acceleration обязан лечь в 50-75: ${[...buckets].join(', ')}`
+  );
 
   const board = await fetch(
     `http://127.0.0.1:${port}/leaderboard?${new URLSearchParams({

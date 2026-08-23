@@ -20,7 +20,9 @@ test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /releases\/tags\/\$\{RELEASE_TAG\}/);
   assert.match(install, /release \$\{RELEASE_TAG\} ещё не опубликован/);
   assert.match(install, /check-release\.mjs" "\$RELEASE_TAG"/);
-  assert.match(install, /SAVED_RELEASE_TAG='\$\{RELEASE_TAG\}'/);
+  // Значение экранируется, а не подставляется внутрь литеральных кавычек: конфиг исполняется при
+  // чтении, и апостроф в значении сломал бы следующий запуск. См. отдельный тест на экранирование.
+  assert.match(install, /SAVED_RELEASE_TAG=\$\(shell_quote "\$RELEASE_TAG"\)/);
 });
 
 test('production systemd starts the same shadow-preloaded entrypoint as npm start', () => {
@@ -106,6 +108,149 @@ test('установщик кладёт на прод именно тот юни
   // пока на прод едет именно этот файл: замени установщик источник или сгенерируй он юнит на
   // месте — проверка осталась бы зелёной, сторожа файл, который никуда не попадает.
   assert.match(install, /cp "\$APP_DIR\/deploy\/wobble\.service" \/etc\/systemd\/system\/wobble\.service/);
+});
+
+test('обрыв после перезапуска говорит, куда возвращаться', () => {
+  // До перезапуска обрыв безобиден: работает старый процесс, и «смотрите journalctl» —
+  // исчерпывающий совет. После перезапуска на машине уже новый код, и тот же текст оставляет
+  // человека наедине с лежащим сайтом. Так и вышло: релиз, собранный до исправления запуска,
+  // ушёл в crash-loop, установщик сказал «сервер не отвечает» и вышел.
+  //
+  // Первая редакция этой проверки сторожила ОДНО НАПИСАНИЕ отказа — что все `fail` после
+  // перезапуска заменены на `fail_deployed`. Codex показал дыру: не всякий обрыв идёт через
+  // `fail`. Проба публичного WebSocket в shared-443 — это `node`, который сам выходит с кодом 1,
+  // и при `set -e` скрипт умирал бы молча, а проверка на `fail "` этого не видела бы вовсе.
+  //
+  // Поэтому сторожится КОНСТРУКЦИЯ, а не написание: ловушка на EXIT срабатывает независимо от
+  // того, как именно оборвались.
+  assert.match(install, /^trap outage_hint EXIT$/m, 'подсказка обязана висеть на выходе процесса');
+
+  // Ловушка обязана быть взведена ДО первого перезапуска, иначе ранний обрыв её не застанет.
+  assert.ok(
+    install.indexOf('trap outage_hint EXIT') < install.indexOf('restart_gameplay\n'),
+    'ловушка обязана взводиться до первого перезапуска службы'
+  );
+
+  // Молчит, пока служба не перезапущена, и молчит при успехе. Иначе обычный отказ конфигурации
+  // пугал бы разговором об откате там, где откатывать нечего.
+  assert.match(install, /\[ "\$code" -ne 0 \] \|\| return 0/);
+  assert.match(install, /\[ "\$service_restarted" -eq 1 \] \|\| return 0/);
+});
+
+test('перезапуск игрового процесса идёт только через хелпер', () => {
+  // Флаг, включающий подсказку, живёт внутри `restart_gameplay`. Допиши кто-нибудь ещё один
+  // `systemctl restart wobble` напрямую — и обрывы после него снова стали бы молчаливыми, причём
+  // ровно тем же способом, каким подсказка терялась до сих пор.
+  const direct = install
+    .split('\n')
+    .map((line, index) => [index + 1, line.trim()])
+    .filter(([, line]) => line === 'systemctl restart wobble');
+
+  assert.equal(direct.length, 1, 'единственный прямой перезапуск обязан быть внутри restart_gameplay');
+  const helper = install.indexOf('restart_gameplay() {');
+  const helperEnd = install.indexOf('\n}', helper);
+  const directOffset = install.indexOf('\n  systemctl restart wobble\n');
+  assert.ok(
+    helper >= 0 && directOffset > helper && directOffset < helperEnd,
+    'прямой `systemctl restart wobble` допустим только внутри restart_gameplay'
+  );
+
+  // Флаг обязан выставляться ДО перезапуска, и это самая тонкая часть всей затеи.
+  //
+  // `systemctl restart` сначала останавливает старый процесс и только потом поднимает новый. Не
+  // поднялся — возвращает ненулевой код, и `set -e` убивает скрипт немедленно. Стой присваивание
+  // после вызова, оно бы не выполнилось, и подсказка молчала бы ровно в том случае, ради которого
+  // написана: юнит в crash-loop, сайт лежит. Проверено имитацией падающего systemctl — при старом
+  // порядке подсказки нет вовсе.
+  const helperBody = install.slice(helper, helperEnd);
+  assert.ok(
+    helperBody.indexOf('service_restarted=1') < helperBody.indexOf('systemctl restart wobble'),
+    'флаг обязан выставляться до перезапуска: иначе провал самого перезапуска гасит подсказку'
+  );
+});
+
+test('подсказка на возврат называет прошлое состояние, а не просто существует', () => {
+  // Прошлые значения обязаны считываться ДО подстановки новых: иначе «предыдущий релиз» окажется
+  // тем же, что и текущий, и подсказка предложит вернуться туда, где уже стоим.
+  assert.ok(
+    install.indexOf('PREVIOUS_RELEASE_TAG=') < install.indexOf('RELEASE_TAG="${RELEASE_TAG-'),
+    'предыдущий релиз обязан считываться до подстановки нового'
+  );
+  assert.ok(
+    install.indexOf('PREVIOUS_RELEASE_REPOSITORY=') <
+      install.indexOf('RELEASE_REPOSITORY="${RELEASE_REPOSITORY'),
+    'предыдущий репозиторий обязан считываться до подстановки нового'
+  );
+
+  // Репозиторий закрепляется вместе с тегом. Без этого команда возврата после разового
+  // развёртывания с чужого форка увела бы в репозиторий по умолчанию — то есть не туда.
+  assert.match(install, /SAVED_RELEASE_REPOSITORY=\$\(shell_quote "\$RELEASE_REPOSITORY"\)/);
+  assert.match(
+    install,
+    /repo_prefix="RELEASE_REPOSITORY=\$\(shell_quote "\$PREVIOUS_RELEASE_REPOSITORY"\) "/
+  );
+
+  // Ветка — из того же ряда. `RELEASE_TAG= bash …` без неё уходит на `main`, которой в
+  // конфигурации с `BRANCH=stable` может не быть вовсе: тогда восстановление падает, не дойдя до
+  // перезапуска, а сломанная сборка остаётся работать.
+  assert.match(install, /SAVED_BRANCH=\$\(shell_quote "\$BRANCH"\)/);
+  assert.match(install, /branch_prefix="BRANCH=\$\(shell_quote "\$PREVIOUS_BRANCH"\) "/);
+
+  // Печатаемая команда — тоже код: её копируют в оболочку. Ветка `feature/o'hare` без кавычек даёт
+  // неработающую команду, а ветка с `;` или `$()` — команду, которая делает не то, что написано.
+  // Экранирование при записи в конфиг этого не покрывает: там значение защищено от чтения, здесь —
+  // от вставки. Проверено кругом: значение доезжает до установщика буквально.
+  const hint = install.slice(install.indexOf('outage_hint() {'), install.indexOf('\ntrap outage_hint EXIT'));
+  const rawInterpolations = hint
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /(prefix=|printf)/.test(line))
+    .filter(line => /\$\{PREVIOUS_[A-Z_]+\}/.test(line));
+  assert.deepEqual(
+    rawInterpolations,
+    [],
+    `эти значения печатаются в команду без экранирования:\n  ${rawInterpolations.join('\n  ')}`
+  );
+  assert.match(install, /"\$\(shell_quote "\$PREVIOUS_RELEASE_TAG"\)"/);
+  assert.ok(
+    install.indexOf('PREVIOUS_BRANCH=') > install.indexOf('BRANCH="${BRANCH:-${SAVED_BRANCH'),
+    'предыдущая ветка обязана читаться из сохранённой, а не из подставленной'
+  );
+
+  // Первая установка и прошлое развёртывание с ветки — разные ответы, и пустой тег их не различает.
+  assert.match(install, /DEPLOY_CONF_EXISTED=1/);
+  assert.ok(
+    install.indexOf('DEPLOY_CONF_EXISTED=1') < install.indexOf('. "$DEPLOY_CONF"'),
+    'наличие конфига обязано проверяться до того, как он будет прочитан'
+  );
+});
+
+test('сохраняемые настройки пишутся как данные, а не как код', () => {
+  // `$DEPLOY_CONF` читается через `.`, то есть ИСПОЛНЯЕТСЯ. Значение, подставленное прямо внутрь
+  // литеральных одинарных кавычек, ломается на первом апострофе: ветка `feature/o'hare` даёт
+  // незакрытую строку, и следующий запуск установщика падает при чтении конфига — до того, как
+  // успеет что-либо починить. Тег и репозиторий проверяются регуляркой на входе, ветка нет,
+  // поэтому дыра была живой именно там.
+  //
+  // Проверяется КАЖДОЕ значение, а не только ветка: полагаться на то, что проверка формата выше
+  // не изменится, — это ровно та молчаливая связь, которая здесь уже дорого обошлась.
+  const confBlock = install.slice(install.indexOf('cat >"$DEPLOY_CONF"'), install.indexOf('\nCONF\n'));
+  const raw = confBlock
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^SAVED_[A-Z0-9_]+='/.test(line));
+
+  assert.deepEqual(
+    raw,
+    [],
+    `эти значения подставляются в кавычки без экранирования и ломают конфиг на апострофе:\n  ${raw.join('\n  ')}`
+  );
+
+  const saved = confBlock.split('\n').filter(line => /^SAVED_[A-Z0-9_]+=/.test(line.trim()));
+  assert.ok(saved.length >= 7, 'конфиг обязан сохранять все параметры развёртывания');
+  for (const line of saved) {
+    assert.match(line, /^SAVED_[A-Z0-9_]+=\$\(shell_quote "\$[A-Z0-9_]+"\)$/, `не экранировано: ${line}`);
+  }
 });
 
 test('deploy smoke can require the exact version, commit and release identity', () => {

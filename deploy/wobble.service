@@ -21,9 +21,9 @@ Type=simple
 User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
-# Production обязан загружать тот же shadow preload, что npm start/dev: без него игра работает,
-# но bridge CLIENT_INPUT → ShadowInputRuntime не устанавливается и migration/parity metrics молчат.
-ExecStart=/usr/bin/node --require ./server/shadowInputPreload.js server/bootstrap.js
+# Production загружает shadow bridge до bootstrap, но откладывает регистрацию bot-only ESM loader
+# до конца синхронной CommonJS-загрузки. Иначе Node 22 падает на require(ESM) с resolveSync().
+ExecStart=/usr/bin/node --require ./server/productionShadowPreload.js server/bootstrap.js
 
 # Настройки берутся из файла, а не пишутся здесь: так их можно менять, не трогая юнит,
 # и не хранить в git. Для Google-входа добавить GOOGLE_CLIENT_ID=<OAuth Web client id>.

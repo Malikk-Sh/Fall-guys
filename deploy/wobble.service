@@ -21,16 +21,8 @@ Type=simple
 User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
-# bootstrap устанавливает Auth V2 (sessions/Google) поверх того же HTTP/WebSocket сервера.
-#
-# `--require` обязателен и обязан совпадать с `npm start`. Preload — единственное место, где
-# обрабатывается `CLIENT_INPUT` и откуда пишется строка `shadow_simulation_metrics`: в `index.js`
-# этого сообщения нет вовсе. Юнит без него поднимает сервер, который молча выбрасывает поток ввода
-# от клиентов и не ведёт ни одной серверной симуляции.
-#
-# Так и было: `add24ef` добавил preload в `start` и `dev`, юнит не тронул, и на проде диагностика не
-# работала ни дня. Заметить это по логам нельзя — отсутствие строки метрик выглядит ровно как
-# отсутствие игроков. Расхождение сторожит тест в `server/releaseDeploy.test.mjs`.
+# Production обязан загружать тот же shadow preload, что npm start/dev: без него игра работает,
+# но bridge CLIENT_INPUT → ShadowInputRuntime не устанавливается и migration/parity metrics молчат.
 ExecStart=/usr/bin/node --require ./server/shadowInputPreload.js server/bootstrap.js
 
 # Настройки берутся из файла, а не пишутся здесь: так их можно менять, не трогая юнит,

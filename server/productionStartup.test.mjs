@@ -36,15 +36,21 @@ function productionArgs() {
   return execStart[1].trim().split(/\s+/).slice(1);
 }
 
-async function waitForHealth(port, deadlineMs = 30_000) {
+// Ждать `/health`, но не дольше, чем процесс жив: `hasExited` обрывает ожидание сразу.
+//
+// Без этого падение при старте — то самое, ради которого тест написан, — стоило бы полного срока
+// ожидания, потраченного на опрос порта, за которым уже никого нет. Сигнал приходил бы через
+// полминуты после того, как всё стало ясно.
+async function waitForHealth(port, hasExited, deadlineMs = 30_000) {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${port}/health`);
       if (response.ok) return await response.json();
     } catch {
-      // Сервер ещё не слушает — это нормально, пока не вышел срок.
+      // Сервер ещё не слушает — это нормально, пока он жив и срок не вышел.
     }
+    if (hasExited()) return null;
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   return null;
@@ -73,13 +79,22 @@ test('production-команда из юнита поднимает сервер 
   let exited = null;
   child.on('exit', code => (exited = code));
 
+  // Промис закрытия берётся СРАЗУ, а не в уборке.
+  //
+  // Иначе тест вешается ровно в том случае, ради которого написан. Упади сервер при старте — он
+  // отдаст `close` задолго до уборки; `kill()` по мёртвому процессу вернёт false, а подписка,
+  // сделанная только сейчас, не сработает уже никогда. Тест ждал бы до внешнего таймаута CI и
+  // сообщил бы «зависло» вместо «сервер не запустился». Подписка при спавне срабатывает одинаково
+  // и когда процесс умер сам, и когда его убили здесь.
+  const closed = new Promise(resolve => child.once('close', resolve));
+
   t.after(async () => {
-    child.kill('SIGKILL');
-    await new Promise(resolve => child.once('close', resolve));
+    if (exited === null) child.kill('SIGKILL');
+    await closed;
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  const health = await waitForHealth(port);
+  const health = await waitForHealth(port, () => exited !== null);
 
   assert.equal(exited, null, `сервер вышел вместо того, чтобы работать:\n${output.slice(-2000)}`);
   assert.ok(health, `сервер не ответил на /health:\n${output.slice(-2000)}`);

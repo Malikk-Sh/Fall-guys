@@ -152,6 +152,19 @@ test('перезапуск игрового процесса идёт тольк
     helper >= 0 && directOffset > helper && directOffset < helperEnd,
     'прямой `systemctl restart wobble` допустим только внутри restart_gameplay'
   );
+
+  // Флаг обязан выставляться ДО перезапуска, и это самая тонкая часть всей затеи.
+  //
+  // `systemctl restart` сначала останавливает старый процесс и только потом поднимает новый. Не
+  // поднялся — возвращает ненулевой код, и `set -e` убивает скрипт немедленно. Стой присваивание
+  // после вызова, оно бы не выполнилось, и подсказка молчала бы ровно в том случае, ради которого
+  // написана: юнит в crash-loop, сайт лежит. Проверено имитацией падающего systemctl — при старом
+  // порядке подсказки нет вовсе.
+  const helperBody = install.slice(helper, helperEnd);
+  assert.ok(
+    helperBody.indexOf('service_restarted=1') < helperBody.indexOf('systemctl restart wobble'),
+    'флаг обязан выставляться до перезапуска: иначе провал самого перезапуска гасит подсказку'
+  );
 });
 
 test('подсказка на возврат называет прошлое состояние, а не просто существует', () => {
@@ -171,6 +184,16 @@ test('подсказка на возврат называет прошлое с�
   // развёртывания с чужого форка увела бы в репозиторий по умолчанию — то есть не туда.
   assert.match(install, /SAVED_RELEASE_REPOSITORY='\$\{RELEASE_REPOSITORY\}'/);
   assert.match(install, /repo_prefix="RELEASE_REPOSITORY=\$\{PREVIOUS_RELEASE_REPOSITORY\} "/);
+
+  // Ветка — из того же ряда. `RELEASE_TAG= bash …` без неё уходит на `main`, которой в
+  // конфигурации с `BRANCH=stable` может не быть вовсе: тогда восстановление падает, не дойдя до
+  // перезапуска, а сломанная сборка остаётся работать.
+  assert.match(install, /SAVED_BRANCH='\$\{BRANCH\}'/);
+  assert.match(install, /branch_prefix="BRANCH=\$\{PREVIOUS_BRANCH\} "/);
+  assert.ok(
+    install.indexOf('PREVIOUS_BRANCH=') > install.indexOf('BRANCH="${BRANCH:-${SAVED_BRANCH'),
+    'предыдущая ветка обязана читаться из сохранённой, а не из подставленной'
+  );
 
   // Первая установка и прошлое развёртывание с ветки — разные ответы, и пустой тег их не различает.
   assert.match(install, /DEPLOY_CONF_EXISTED=1/);

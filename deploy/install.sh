@@ -30,6 +30,7 @@ SAVED_SHARED_HTTPS_443="0"
 SAVED_SHARED_443_FALLBACK="127.0.0.1:14443"
 SAVED_RELEASE_TAG=""
 SAVED_RELEASE_REPOSITORY=""
+SAVED_BRANCH=""
 # Было ли вообще прошлое удачное развёртывание. Пустой `SAVED_RELEASE_TAG` сам по себе неоднозначен:
 # это и «разворачивали ветку», и «первая установка на чистой машине». Для подсказки при аварии это
 # разные ответы — во втором случае возвращаться просто некуда.
@@ -39,7 +40,12 @@ DEPLOY_CONF_EXISTED=0
 [ -f "$DEPLOY_CONF" ] && . "$DEPLOY_CONF"
 
 REPO="${REPO:-https://github.com/Malikk-Sh/Fall-guys.git}"
-BRANCH="${BRANCH:-main}"
+BRANCH_DEFAULT="main"
+# Ветка закрепляется наравне с остальным: разовый запуск с `BRANCH=stable` иначе не пережил бы
+# обычное обновление без переменных, а команда возврата к ветке увела бы на `main` — которой в этой
+# конфигурации может не быть вовсе, и тогда восстановление падает, не дойдя до перезапуска.
+BRANCH="${BRANCH:-${SAVED_BRANCH:-$BRANCH_DEFAULT}}"
+PREVIOUS_BRANCH="${SAVED_BRANCH:-}"
 RELEASE_REPOSITORY_DEFAULT="Malikk-Sh/Fall-guys"
 # Что стояло до этого запуска. `$DEPLOY_CONF` пишется в самом конце, только после всех проверок,
 # поэтому после неудачного развёртывания здесь всё ещё лежит последнее УДАЧНОЕ состояние — то есть
@@ -122,8 +128,14 @@ outage_hint() {
     printf '\033[1;33m!! восстанавливает запуск без разовых переменных:\033[0m\n' >&2
     printf '     bash %s/deploy/install.sh\n' "$APP_DIR" >&2
   elif [ "$DEPLOY_CONF_EXISTED" -eq 1 ]; then
+    # Ветка называется явно, если она не стандартная: `RELEASE_TAG= bash …` ушёл бы на `main`,
+    # которой в такой конфигурации может не быть, и восстановление упало бы до перезапуска.
+    local branch_prefix=""
+    if [ -n "$PREVIOUS_BRANCH" ] && [ "$PREVIOUS_BRANCH" != "$BRANCH_DEFAULT" ]; then
+      branch_prefix="BRANCH=${PREVIOUS_BRANCH} "
+    fi
     printf '\033[1;33m!! Прошлое развёртывание шло с ветки, закреплённого релиза нет. Вернуться к ней:\033[0m\n' >&2
-    printf '     RELEASE_TAG= bash %s/deploy/install.sh\n' "$APP_DIR" >&2
+    printf '     %sRELEASE_TAG= bash %s/deploy/install.sh\n' "$branch_prefix" "$APP_DIR" >&2
   else
     printf '\033[1;33m!! Это первая установка на этой машине — предыдущего состояния нет.\033[0m\n' >&2
   fi
@@ -134,8 +146,17 @@ trap outage_hint EXIT
 # Перезапуск игрового процесса. Только через эту функцию: флаг, включающий подсказку выше, забыть
 # здесь невозможно, а забыть его при добавлении ещё одного `systemctl restart wobble` — легко.
 restart_gameplay() {
-  systemctl restart wobble
+  # Флаг выставляется ДО перезапуска, и это не перестраховка.
+  #
+  # `systemctl restart` сначала останавливает старый процесс, и только потом пытается поднять
+  # новый. Не поднялся — команда возвращает ненулевой код, а `set -e` убивает скрипт немедленно.
+  # Стой присваивание после, оно бы не выполнилось, и подсказка молчала бы ровно в том случае,
+  # ради которого написана: юнит в crash-loop, сайт лежит.
+  #
+  # Смысловая граница проходит не по «перезапуск удался», а по «старый процесс уже не работает» —
+  # то есть по самому вызову.
   service_restarted=1
+  systemctl restart wobble
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -761,6 +782,7 @@ SAVED_SHARED_HTTPS_443='${SHARED_HTTPS_443}'
 SAVED_SHARED_443_FALLBACK='${SHARED_443_FALLBACK}'
 SAVED_RELEASE_TAG='${RELEASE_TAG}'
 SAVED_RELEASE_REPOSITORY='${RELEASE_REPOSITORY}'
+SAVED_BRANCH='${BRANCH}'
 CONF
 chmod 600 "$DEPLOY_CONF"
 

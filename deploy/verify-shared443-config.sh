@@ -32,8 +32,12 @@ grep -Fq 'location ~* ^/api/admin(?:/|$)' "$locations"
 grep -Fq 'location ~* ^/admin(?:/|$)' "$locations"
 grep -Fq 'proxy_pass http://127.0.0.1:3000;' "$locations"
 
-grep -Fq "SAVED_SHARED_HTTPS_443='\${SHARED_HTTPS_443}'" "$install"
-grep -Fq "SAVED_SHARED_443_FALLBACK='\${SHARED_443_FALLBACK}'" "$install"
+# Значения конфига развёртывания экранируются, а не подставляются внутрь литеральных кавычек:
+# `$DEPLOY_CONF` исполняется при чтении, и апостроф в значении сломал бы следующий запуск
+# установщика. Проверяется здесь только сам факт сохранения этих двух настроек shared-443 —
+# полноту экранирования держит `server/releaseDeploy.test.mjs`.
+grep -Fq 'SAVED_SHARED_HTTPS_443=$(shell_quote "$SHARED_HTTPS_443")' "$install"
+grep -Fq 'SAVED_SHARED_443_FALLBACK=$(shell_quote "$SHARED_443_FALLBACK")' "$install"
 grep -Fq 'ufw delete allow "${HTTPS_PORT}/tcp"' "$install"
 grep -Fq 'shared HTTPS 443 + public WebSocket verified' "$install"
 

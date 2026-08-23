@@ -108,6 +108,48 @@ test('установщик кладёт на прод именно тот юни
   assert.match(install, /cp "\$APP_DIR\/deploy\/wobble\.service" \/etc\/systemd\/system\/wobble\.service/);
 });
 
+test('отказ после перезапуска говорит, куда возвращаться', () => {
+  // До перезапуска службы `fail` безобиден: старый процесс продолжает работать, и «смотрите
+  // journalctl» — исчерпывающий совет. После перезапуска всё иначе: служба лежит на неисправном
+  // релизе, и тот же текст оставляет человека наедине с лежащим сайтом.
+  //
+  // Так и вышло. Релиз, собранный до исправления запуска, ушёл в crash-loop; установщик честно
+  // сказал «сервер не отвечает» — и замолчал. Куда возвращаться, выяснялось отдельно и при
+  // лежащем проде, хотя ответ был у самого установщика: `$DEPLOY_CONF` пишется в самом конце,
+  // поэтому после неудачи там всё ещё лежит последний УДАЧНЫЙ релиз.
+  //
+  // Проверяется именно разделение: все проверки ПОСЛЕ первого `systemctl restart wobble` обязаны
+  // идти через `fail_deployed`. Разъехаться это может молча — новую проверку допишут привычным
+  // `fail`, и подсказка тихо исчезнет ровно для того случая, ради которого она есть.
+  const restart = install.indexOf('systemctl restart wobble\n');
+  assert.ok(restart > 0, 'установщик обязан перезапускать службу');
+
+  const afterRestart = install.slice(restart);
+  const silent = afterRestart
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^fail "/.test(line))
+    // Отказы, где сломан НЕ релиз, а окружение. Оба про то, что внешний 443 держит чужой сервис:
+    // приложение при этом может быть совершенно исправным, и предлагать откат значило бы врать о
+    // причине. Список именной, потому что молчаливая дыра — это то, с чего началась вся история.
+    .filter(line => !/порт 443 ещё занят не Nginx|shared-443 fallback .* не слушает/.test(line));
+
+  assert.deepEqual(
+    silent,
+    [],
+    `эти отказы происходят на уже перезапущенной службе и обязаны звать fail_deployed:\n  ${silent.join('\n  ')}`
+  );
+
+  // И сама подсказка обязана называть предыдущий релиз, а не просто существовать.
+  assert.match(install, /PREVIOUS_RELEASE_TAG="\$\{SAVED_RELEASE_TAG:-\}"/);
+  assert.match(install, /RELEASE_TAG=%s bash %s\/deploy\/install\.sh/);
+  // Считать предыдущий релиз надо ДО того, как `RELEASE_TAG` подменят на новый.
+  assert.ok(
+    install.indexOf('PREVIOUS_RELEASE_TAG=') < install.indexOf('RELEASE_TAG="${RELEASE_TAG-'),
+    'предыдущий релиз обязан считываться до подстановки нового'
+  );
+});
+
 test('deploy smoke can require the exact version, commit and release identity', () => {
   assert.match(smoke, /SMOKE_EXPECT_VERSION/);
   assert.match(smoke, /SMOKE_EXPECT_COMMIT/);

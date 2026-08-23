@@ -34,6 +34,10 @@ SAVED_RELEASE_TAG=""
 
 REPO="${REPO:-https://github.com/Malikk-Sh/Fall-guys.git}"
 BRANCH="${BRANCH:-main}"
+# Релиз, который стоял до этого запуска. `$DEPLOY_CONF` пишется в самом конце, только после всех
+# проверок, поэтому после неудачного развёртывания здесь всё ещё лежит последний УДАЧНЫЙ релиз —
+# то есть ровно то, куда надо возвращаться. Считывается ДО подстановки нового значения ниже.
+PREVIOUS_RELEASE_TAG="${SAVED_RELEASE_TAG:-}"
 # An explicitly empty RELEASE_TAG switches back to branch deployment; otherwise the last
 # successful release remains pinned across ordinary no-argument updates.
 RELEASE_TAG="${RELEASE_TAG-${SAVED_RELEASE_TAG:-}}"
@@ -52,6 +56,40 @@ reexeced=0
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Отказ ПОСЛЕ того, как служба уже перезапущена на новом коде.
+#
+# Отличается от `fail` не строгостью, а тем, что говорит оператору, где он оказался и как выйти.
+# Обычный `fail` до перезапуска безобиден: старый процесс продолжает работать. После перезапуска
+# всё иначе — служба лежит на неисправном релизе, и сообщение «смотрите journalctl» оставляет
+# человека наедине с лежащим сайтом.
+#
+# Так и вышло: релиз, собранный до исправления запуска, ушёл в crash-loop, установщик честно сказал
+# «сервер не отвечает» — и замолчал. Куда возвращаться, оператор выяснял отдельно, при лежащем
+# проде.
+#
+# Откат не делается автоматически: это решение оператора, и здесь для него есть всё, чтобы принять
+# его за секунду вместо десяти минут раскопок.
+fail_deployed() {
+  local deployed="релиз ${RELEASE_TAG}"
+  [ -n "$RELEASE_TAG" ] || deployed="ветка ${BRANCH}"
+  printf '\033[1;31m!! %s\033[0m\n' "$*" >&2
+  printf '\n\033[1;33m!! Служба осталась на том, что сейчас развёрнуто (%s), и оно не работает.\033[0m\n' \
+    "$deployed" >&2
+  if [ -n "$PREVIOUS_RELEASE_TAG" ] && [ "$PREVIOUS_RELEASE_TAG" != "$RELEASE_TAG" ]; then
+    printf '\033[1;33m!! Вернуться на предыдущий работавший релиз %s:\033[0m\n' \
+      "$PREVIOUS_RELEASE_TAG" >&2
+    printf '     RELEASE_TAG=%s bash %s/deploy/install.sh\n' \
+      "$PREVIOUS_RELEASE_TAG" "$APP_DIR" >&2
+  elif [ -n "$PREVIOUS_RELEASE_TAG" ]; then
+    # Тот же тег, что и раньше: возвращаться некуда, потому что вернулись бы в то же самое.
+    printf '\033[1;33m!! Это тот же релиз, что стоял раньше, — откат вернёт то же самое.\033[0m\n' >&2
+    printf '\033[1;33m!! Нужен другой тег или разбор причины.\033[0m\n' >&2
+  else
+    printf '\033[1;33m!! Закреплённого предыдущего релиза нет: разворачивалась ветка.\033[0m\n' >&2
+  fi
+  exit 1
+}
 
 if [ "$(id -u)" -ne 0 ]; then
   fail "Запускать нужно от root: sudo bash deploy/install.sh"
@@ -378,7 +416,7 @@ if [ ! -f "$database_file" ]; then
     sleep 1
   done
   [ "$bootstrap_ready" -eq 1 ] ||
-    fail "Wobble не смог создать/migrate persistent DB на первой установке"
+    fail_deployed "Wobble не смог создать/migrate persistent DB на первой установке"
 fi
 
 say "Независимый Wobble Control"
@@ -405,7 +443,7 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 [ "$control_ready" -eq 1 ] ||
-  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
+  fail_deployed "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 if [ "$telegram_alerts_enabled" = "1" ]; then
   say "Telegram Alert Delivery"
@@ -605,9 +643,9 @@ fi
 say "Проверка"
 sleep 2
 curl -fsS --max-time 5 http://127.0.0.1:3000/health/live >/dev/null ||
-  fail "сервер не отвечает — смотрите journalctl -u wobble -n 50 --no-pager"
+  fail_deployed "сервер не отвечает — смотрите journalctl -u wobble -n 50 --no-pager"
 curl -fsS --max-time 5 http://127.0.0.1:3001/health/control >/dev/null ||
-  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
+  fail_deployed "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 say "Проверенная резервная копия после запуска"
 systemctl start wobble-backup.service
@@ -621,13 +659,13 @@ if SMOKE_EXPECT_VERSION="$expected_version" \
   bash "$APP_DIR/deploy/smoke.sh" --require-backup; then
   echo "server, health, WebSocket and fresh backup verified"
 else
-  fail "deploy smoke не прошёл — смотрите journalctl -u wobble -n 100 --no-pager"
+  fail_deployed "deploy smoke не прошёл — смотрите journalctl -u wobble -n 100 --no-pager"
 fi
 
 if [ "$SHARED_HTTPS_443" = "1" ] && [ "$have_cert" -eq 1 ]; then
   say "Shared-443 public smoke"
   curl -fsS --max-time 7 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/health/live" >/dev/null ||
-    fail "https://${DOMAIN} не проходит через shared-443 SNI frontend"
+    fail_deployed "https://${DOMAIN} не проходит через shared-443 SNI frontend"
 
   node - "$DOMAIN" <<'NODE'
 const WebSocket = require('ws');

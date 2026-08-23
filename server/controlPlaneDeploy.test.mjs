@@ -30,9 +30,19 @@ test('existing-production cutover starts Control Plane before Nginx switch and g
     'normal gameplay restart must happen only after admin routing cutover'
   );
 
+  // На чистой машине gameplay поднимается коротко и РАНЬШЕ Control Plane: схему создаёт
+  // единственный migration owner, и Control Plane обязан увидеть её уже готовой.
+  //
+  // Искать здесь литерал `systemctl restart wobble` нельзя по двум причинам. Во-первых, перезапуск
+  // теперь идёт через `restart_gameplay` — там же выставляется флаг, включающий подсказку на
+  // возврат при аварии. Во-вторых, префикс `systemctl restart wobble` совпадает и с
+  // `systemctl restart wobble-control`, поэтому поиск молча находил бы Control Plane и сравнивал
+  // его сам с собой.
   const freshGuard = install.indexOf('if [ ! -f "$database_file" ]; then');
-  const freshBootstrap = install.indexOf('systemctl restart wobble', freshGuard);
-  assert.ok(freshGuard >= 0 && freshBootstrap > freshGuard && freshBootstrap < controlStart);
+  const freshBootstrap = install.indexOf('restart_gameplay', freshGuard);
+  assert.ok(freshGuard >= 0, 'ветка первичной инициализации БД обязана существовать');
+  assert.ok(freshBootstrap > freshGuard, 'на чистой БД gameplay обязан подниматься внутри этой ветки');
+  assert.ok(freshBootstrap < controlStart, 'схему создаёт gameplay, и это происходит до Control Plane');
 });
 
 test('Nginx keeps lowercase admin routes on Control Plane and rejects case variants', () => {

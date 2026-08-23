@@ -29,19 +29,29 @@ SAVED_HTTPS_PORT=""
 SAVED_SHARED_HTTPS_443="0"
 SAVED_SHARED_443_FALLBACK="127.0.0.1:14443"
 SAVED_RELEASE_TAG=""
+SAVED_RELEASE_REPOSITORY=""
+# Было ли вообще прошлое удачное развёртывание. Пустой `SAVED_RELEASE_TAG` сам по себе неоднозначен:
+# это и «разворачивали ветку», и «первая установка на чистой машине». Для подсказки при аварии это
+# разные ответы — во втором случае возвращаться просто некуда.
+DEPLOY_CONF_EXISTED=0
+[ -f "$DEPLOY_CONF" ] && DEPLOY_CONF_EXISTED=1
 # shellcheck source=/dev/null
 [ -f "$DEPLOY_CONF" ] && . "$DEPLOY_CONF"
 
 REPO="${REPO:-https://github.com/Malikk-Sh/Fall-guys.git}"
 BRANCH="${BRANCH:-main}"
-# Релиз, который стоял до этого запуска. `$DEPLOY_CONF` пишется в самом конце, только после всех
-# проверок, поэтому после неудачного развёртывания здесь всё ещё лежит последний УДАЧНЫЙ релиз —
-# то есть ровно то, куда надо возвращаться. Считывается ДО подстановки нового значения ниже.
+RELEASE_REPOSITORY_DEFAULT="Malikk-Sh/Fall-guys"
+# Что стояло до этого запуска. `$DEPLOY_CONF` пишется в самом конце, только после всех проверок,
+# поэтому после неудачного развёртывания здесь всё ещё лежит последнее УДАЧНОЕ состояние — то есть
+# ровно то, куда надо возвращаться. Считывается ДО подстановки новых значений ниже.
 PREVIOUS_RELEASE_TAG="${SAVED_RELEASE_TAG:-}"
+PREVIOUS_RELEASE_REPOSITORY="${SAVED_RELEASE_REPOSITORY:-}"
 # An explicitly empty RELEASE_TAG switches back to branch deployment; otherwise the last
 # successful release remains pinned across ordinary no-argument updates.
 RELEASE_TAG="${RELEASE_TAG-${SAVED_RELEASE_TAG:-}}"
-RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-Malikk-Sh/Fall-guys}"
+# Репозиторий релизов закрепляется так же, как домен и порт: разовый запуск с чужим форком иначе не
+# пережил бы обычное обновление без переменных, и подсказка на возврат увела бы не туда.
+RELEASE_REPOSITORY="${RELEASE_REPOSITORY:-${SAVED_RELEASE_REPOSITORY:-$RELEASE_REPOSITORY_DEFAULT}}"
 DOMAIN="${DOMAIN:-$SAVED_DOMAIN}"
 HTTPS_PORT="${HTTPS_PORT:-$SAVED_HTTPS_PORT}"
 HTTPS_PORT="${HTTPS_PORT:-443}"
@@ -57,38 +67,75 @@ say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
 
-# Отказ ПОСЛЕ того, как служба уже перезапущена на новом коде.
+# Подсказка на выход, если развёртывание прервалось ПОСЛЕ перезапуска службы.
 #
-# Отличается от `fail` не строгостью, а тем, что говорит оператору, где он оказался и как выйти.
-# Обычный `fail` до перезапуска безобиден: старый процесс продолжает работать. После перезапуска
-# всё иначе — служба лежит на неисправном релизе, и сообщение «смотрите journalctl» оставляет
-# человека наедине с лежащим сайтом.
+# До перезапуска обрыв безобиден: работает старый процесс. После — на машине уже новый код, и
+# сообщение «смотрите journalctl» оставляет человека наедине с лежащим сайтом. Так и вышло: релиз,
+# собранный до исправления запуска, ушёл в crash-loop, установщик честно сказал «сервер не
+# отвечает» — и замолчал. Куда возвращаться, оператор выяснял отдельно, при лежащем проде, хотя
+# ответ был прямо здесь: `$DEPLOY_CONF` пишется в самом конце, и после неудачи в нём всё ещё лежит
+# последнее удачное состояние.
 #
-# Так и вышло: релиз, собранный до исправления запуска, ушёл в crash-loop, установщик честно сказал
-# «сервер не отвечает» — и замолчал. Куда возвращаться, оператор выяснял отдельно, при лежащем
-# проде.
+# Почему TRAP, а не отдельная функция отказа. Первая редакция вводила `fail_deployed`, и проверка
+# сторожила ОДНО НАПИСАНИЕ отказа вместо самого отказа. Но не всякий обрыв здесь проходит через
+# `fail`: проба публичного WebSocket в shared-443 — это `node`, который сам выходит с кодом 1, и при
+# `set -e` скрипт умирал бы вообще молча, а проверка на `fail "` этого не видела. Ловушка на EXIT
+# срабатывает независимо от того, как именно оборвались, — включая пути, о которых не подумали.
+#
+# Формулировка намеренно условная. Не всякий обрыв после перезапуска означает сломанный релиз:
+# занятый чужим сервисом порт 443 — это отказ окружения, и утверждать там «релиз не работает» было
+# бы неправдой. Поэтому говорится, что развёрнуто сейчас, и предлагается возврат ЕСЛИ причина в
+# релизе.
 #
 # Откат не делается автоматически: это решение оператора, и здесь для него есть всё, чтобы принять
 # его за секунду вместо десяти минут раскопок.
-fail_deployed() {
+service_restarted=0
+
+outage_hint() {
+  local code=$?
+  [ "$code" -ne 0 ] || return 0
+  [ "$service_restarted" -eq 1 ] || return 0
+
   local deployed="релиз ${RELEASE_TAG}"
   [ -n "$RELEASE_TAG" ] || deployed="ветка ${BRANCH}"
-  printf '\033[1;31m!! %s\033[0m\n' "$*" >&2
-  printf '\n\033[1;33m!! Служба осталась на том, что сейчас развёрнуто (%s), и оно не работает.\033[0m\n' \
+  printf '\n\033[1;33m!! Развёртывание прервано ПОСЛЕ перезапуска службы: сейчас на машине %s.\033[0m\n' \
     "$deployed" >&2
-  if [ -n "$PREVIOUS_RELEASE_TAG" ] && [ "$PREVIOUS_RELEASE_TAG" != "$RELEASE_TAG" ]; then
-    printf '\033[1;33m!! Вернуться на предыдущий работавший релиз %s:\033[0m\n' \
-      "$PREVIOUS_RELEASE_TAG" >&2
-    printf '     RELEASE_TAG=%s bash %s/deploy/install.sh\n' \
-      "$PREVIOUS_RELEASE_TAG" "$APP_DIR" >&2
-  elif [ -n "$PREVIOUS_RELEASE_TAG" ]; then
-    # Тот же тег, что и раньше: возвращаться некуда, потому что вернулись бы в то же самое.
-    printf '\033[1;33m!! Это тот же релиз, что стоял раньше, — откат вернёт то же самое.\033[0m\n' >&2
-    printf '\033[1;33m!! Нужен другой тег или разбор причины.\033[0m\n' >&2
-  else
-    printf '\033[1;33m!! Закреплённого предыдущего релиза нет: разворачивалась ветка.\033[0m\n' >&2
+
+  # Репозиторий подставляется, только если он не стандартный: лишняя переменная в команде, которую
+  # человек копирует при аварии, — это лишний шанс ошибиться.
+  local repo_prefix=""
+  if [ -n "$PREVIOUS_RELEASE_REPOSITORY" ] &&
+    [ "$PREVIOUS_RELEASE_REPOSITORY" != "$RELEASE_REPOSITORY_DEFAULT" ]; then
+    repo_prefix="RELEASE_REPOSITORY=${PREVIOUS_RELEASE_REPOSITORY} "
   fi
-  exit 1
+
+  if [ -n "$PREVIOUS_RELEASE_TAG" ] && [ "$PREVIOUS_RELEASE_TAG" != "$RELEASE_TAG" ]; then
+    printf '\033[1;33m!! Если причина в релизе, вернуться на предыдущий работавший %s:\033[0m\n' \
+      "$PREVIOUS_RELEASE_TAG" >&2
+    printf '     %sRELEASE_TAG=%s bash %s/deploy/install.sh\n' \
+      "$repo_prefix" "$PREVIOUS_RELEASE_TAG" "$APP_DIR" >&2
+  elif [ -n "$PREVIOUS_RELEASE_TAG" ]; then
+    # Тег тот же — но настройки могли поменяться. Разовые переменные (DOMAIN, HTTPS_PORT и прочие)
+    # в `$DEPLOY_CONF` не попали, поэтому запуск БЕЗ них возвращает последнюю удачную конфигурацию.
+    # Это тоже полноценное восстановление, и молчать о нём нельзя.
+    printf '\033[1;33m!! Тег тот же, но сохранённые настройки последнего удачного развёртывания\033[0m\n' >&2
+    printf '\033[1;33m!! восстанавливает запуск без разовых переменных:\033[0m\n' >&2
+    printf '     bash %s/deploy/install.sh\n' "$APP_DIR" >&2
+  elif [ "$DEPLOY_CONF_EXISTED" -eq 1 ]; then
+    printf '\033[1;33m!! Прошлое развёртывание шло с ветки, закреплённого релиза нет. Вернуться к ней:\033[0m\n' >&2
+    printf '     RELEASE_TAG= bash %s/deploy/install.sh\n' "$APP_DIR" >&2
+  else
+    printf '\033[1;33m!! Это первая установка на этой машине — предыдущего состояния нет.\033[0m\n' >&2
+  fi
+}
+
+trap outage_hint EXIT
+
+# Перезапуск игрового процесса. Только через эту функцию: флаг, включающий подсказку выше, забыть
+# здесь невозможно, а забыть его при добавлении ещё одного `systemctl restart wobble` — легко.
+restart_gameplay() {
+  systemctl restart wobble
+  service_restarted=1
 }
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -405,7 +452,7 @@ if [ ! -f "$database_file" ]; then
   say "Первичная инициализация persistent DB"
   # На совершенно новой установке старой админ-панели ещё нет. Коротко запускаем gameplay,
   # чтобы единственный migration owner создал схему, затем уже поднимаем независимый Control Plane.
-  systemctl restart wobble
+  restart_gameplay
   bootstrap_ready=0
   for _ in $(seq 1 30); do
     if [ -f "$database_file" ] &&
@@ -416,7 +463,7 @@ if [ ! -f "$database_file" ]; then
     sleep 1
   done
   [ "$bootstrap_ready" -eq 1 ] ||
-    fail_deployed "Wobble не смог создать/migrate persistent DB на первой установке"
+    fail "Wobble не смог создать/migrate persistent DB на первой установке"
 fi
 
 say "Независимый Wobble Control"
@@ -443,7 +490,7 @@ for _ in $(seq 1 20); do
   sleep 1
 done
 [ "$control_ready" -eq 1 ] ||
-  fail_deployed "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
+  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 if [ "$telegram_alerts_enabled" = "1" ]; then
   say "Telegram Alert Delivery"
@@ -603,7 +650,7 @@ fi
 # На fresh install gameplay уже был запущен выше только ради первичной migration; перезапускаем его
 # ещё раз после cutover, чтобы порядок и итоговое состояние были одинаковыми во всех режимах.
 say "Перезапуск gameplay после переключения Wobble Control"
-systemctl restart wobble
+restart_gameplay
 
 if [ -n "$DOMAIN" ] && [ -d /etc/letsencrypt ]; then
   install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
@@ -643,9 +690,9 @@ fi
 say "Проверка"
 sleep 2
 curl -fsS --max-time 5 http://127.0.0.1:3000/health/live >/dev/null ||
-  fail_deployed "сервер не отвечает — смотрите journalctl -u wobble -n 50 --no-pager"
+  fail "сервер не отвечает — смотрите journalctl -u wobble -n 50 --no-pager"
 curl -fsS --max-time 5 http://127.0.0.1:3001/health/control >/dev/null ||
-  fail_deployed "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
+  fail "Wobble Control не отвечает — смотрите journalctl -u wobble-control -n 50 --no-pager"
 
 say "Проверенная резервная копия после запуска"
 systemctl start wobble-backup.service
@@ -659,13 +706,13 @@ if SMOKE_EXPECT_VERSION="$expected_version" \
   bash "$APP_DIR/deploy/smoke.sh" --require-backup; then
   echo "server, health, WebSocket and fresh backup verified"
 else
-  fail_deployed "deploy smoke не прошёл — смотрите journalctl -u wobble -n 100 --no-pager"
+  fail "deploy smoke не прошёл — смотрите journalctl -u wobble -n 100 --no-pager"
 fi
 
 if [ "$SHARED_HTTPS_443" = "1" ] && [ "$have_cert" -eq 1 ]; then
   say "Shared-443 public smoke"
   curl -fsS --max-time 7 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/health/live" >/dev/null ||
-    fail_deployed "https://${DOMAIN} не проходит через shared-443 SNI frontend"
+    fail "https://${DOMAIN} не проходит через shared-443 SNI frontend"
 
   node - "$DOMAIN" <<'NODE'
 const WebSocket = require('ws');
@@ -713,6 +760,7 @@ SAVED_HTTPS_PORT='${HTTPS_PORT}'
 SAVED_SHARED_HTTPS_443='${SHARED_HTTPS_443}'
 SAVED_SHARED_443_FALLBACK='${SHARED_443_FALLBACK}'
 SAVED_RELEASE_TAG='${RELEASE_TAG}'
+SAVED_RELEASE_REPOSITORY='${RELEASE_REPOSITORY}'
 CONF
 chmod 600 "$DEPLOY_CONF"
 

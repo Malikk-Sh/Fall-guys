@@ -58,7 +58,9 @@ const LAUNCH_PARITY_EXEMPT = new Map([
 ]);
 
 function launchSites() {
-  const sources = [['playwright.config.js', readFileSync(new URL('../playwright.config.js', import.meta.url), 'utf8')]];
+  const sources = [
+    ['playwright.config.js', readFileSync(new URL('../playwright.config.js', import.meta.url), 'utf8')]
+  ];
   for (const name of readdirSync(workflowsDir).filter(file => file.endsWith('.yml'))) {
     sources.push([name, readFileSync(new URL(name, workflowsDir), 'utf8')]);
   }

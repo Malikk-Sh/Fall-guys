@@ -1316,6 +1316,136 @@ test('честный забег попадает в таблицу рекорд�
   assert.ok(verified.average > 0, 'у времени есть среднее — в отличие от простого счётчика');
 });
 
+// Разница между режимами в воротах таблицы — смысловая, и стереть её одной правкой условия легко.
+// Сквозной прогон кооперативного матча ради одной ветки дорог, поэтому решение проверяется прямо.
+test('ворота таблицы: гонка по игроку, кооператив по команде', () => {
+  const { leaderboardRecordEligible } = require('./index');
+  const { GAME_MODE } = require('../shared/protocol.js');
+  const race = GAME_MODE.RACE;
+  const coop = GAME_MODE.COOP;
+
+  // Дисквалификация комнаты (вышел напарник, добор ботами, обрыв) закрывает таблицу обоим режимам.
+  for (const mode of [race, coop]) {
+    assert.equal(
+      leaderboardRecordEligible({ mode, unranked: 'disconnect', verificationFailed: false }),
+      false,
+      'дисквалифицированная комната не пишет ничего'
+    );
+  }
+
+  // Гонка: провал проверки у одного не закрывает таблицу — отбор идёт по игроку внутри record().
+  assert.equal(leaderboardRecordEligible({ mode: race, unranked: null, verificationFailed: false }), true);
+  assert.equal(
+    leaderboardRecordEligible({ mode: race, unranked: null, verificationFailed: true }),
+    true,
+    'в гонке чужой провал не отменяет запись: отбор по игроку делает record()'
+  );
+
+  // Кооператив: время общее, глава засчитывается команде — половину команды писать бессмысленно.
+  assert.equal(leaderboardRecordEligible({ mode: coop, unranked: null, verificationFailed: false }), true);
+  assert.equal(
+    leaderboardRecordEligible({ mode: coop, unranked: null, verificationFailed: true }),
+    false,
+    'в кооперативе непроверенный напарник снимает зачёт со всей главы'
+  );
+});
+
+// Провал проверки у одного не должен стоить рекорда другому.
+//
+// `verifiedLeaderboard.record()` и так отбирает записи по `entry.verified`, но раньше этот отбор не
+// получал шанса сработать: вызов стоял под комнатными воротами `room.results.trusted`, и один
+// непроверенный финиш отменял запись сразу всем. Честный игрок терял рекорд из-за джиттера у
+// соседа по комнате — при том, что гонка это личное соревнование.
+//
+// Признак ставится напрямую в состояние игрока, а не добывается настоящим нарушением. Так проверка
+// меряет ИМЕННО ворота: что именно порождает признаки, проверяют movementAudit и gameRules, и
+// подделывать здесь их работу значило бы завязать этот тест на калибровку порогов.
+test('непроверенный финиш соседа не отменяет чужой рекорд', async t => {
+  await listen();
+  const port = server.address().port;
+  const url = `ws://127.0.0.1:${port}/ws`;
+  const { AuthService } = require('./auth');
+  const { networkIdentity } = require('./networkIdentity');
+  const auth = new AuthService({ db: accounts.db });
+  networkIdentity.configure(ticket => auth.consumeSocketTicket(ticket));
+  const honestAccount = accounts.create('Честный');
+  const flaggedAccount = accounts.create('Помеченный');
+  const honest = new TestClient(url);
+  const flagged = new TestClient(url);
+
+  t.after(async () => {
+    await Promise.all([honest.close(), flagged.close()]);
+    await shutdown();
+  });
+
+  await Promise.all([honest.wait('hello'), flagged.wait('hello')]);
+  honest.send('auth', { ticket: auth.createSocketTicket(honestAccount.id).token });
+  flagged.send('auth', { ticket: auth.createSocketTicket(flaggedAccount.id).token });
+  await Promise.all([honest.wait('authenticated'), flagged.wait('authenticated')]);
+  honest.send('create', { name: 'Честный', mode: 'race', difficulty: 'easy' });
+  const created = await honest.wait('lobby', m => m.players.length === 1);
+  flagged.send('join', { name: 'Помеченный', code: created.code });
+  await honest.wait('lobby', m => m.players.length === 2);
+  honest.send('ready', { ready: true });
+  flagged.send('ready', { ready: true });
+  await honest.wait('lobby', m => m.players.every(p => p.ready));
+  honest.send('start');
+  const started = await honest.wait('start');
+  await waitForStart(started.at);
+
+  const room = [...rooms.values()].find(item => item.matchId === started.matchId);
+  assert.ok(room, 'подготовка: комната обязана найтись по matchId');
+  const flaggedPlayer = [...room.players.values()].find(item => item.accountId === flaggedAccount.id);
+  assert.ok(flaggedPlayer, 'подготовка: помеченный игрок обязан найтись');
+  flaggedPlayer.verificationReasons.push('sustained-speed');
+
+  await Promise.all([
+    runHonestly(honest, started.spec, started.matchId),
+    runHonestly(flagged, started.spec, started.matchId, { step: HONEST_STEP * 0.9 })
+  ]);
+  const results = await honest.wait('results', () => true, WAIT_MS);
+
+  // Личная причина не уезжает всей комнате.
+  //
+  // Сообщение о финише получают все, и пока в нём ехала причина финишировавшего, она попадала в
+  // сессию каждого клиента: тот применяет её до проверки `message.id`. Честный сосед получал плашку
+  // «без зачёта» за чужую проверку и переставал сохранять даже свой локальный рекорд — при том, что
+  // сервер его строку записывает. Заодно имя сигнала говорило всей комнате, на чём именно споткнулся
+  // конкретный игрок.
+  const finishes = honest.messages.filter(message => message.type === 'finish');
+  assert.equal(finishes.length, 2, 'подготовка: финиш приходит на каждого участника');
+  for (const finish of finishes) {
+    assert.equal(finish.unranked, null, 'в сообщении о финише нет личной причины');
+    assert.equal(finish.trusted, true, 'комната не дисквалифицирована, и сообщение говорит именно о ней');
+  }
+  // Свой статус при этом никуда не делся — он в собственной строке доски.
+  assert.equal(
+    finishes.at(-1).board.find(entry => entry.name === 'Помеченный')?.verified,
+    false,
+    'личный статус остаётся в строке доски'
+  );
+
+  const honestEntry = results.board.find(entry => entry.name === 'Честный');
+  const flaggedEntry = results.board.find(entry => entry.name === 'Помеченный');
+  assert.ok(honestEntry?.verified, 'подготовка: честный забег обязан пройти проверку');
+  assert.equal(flaggedEntry?.verified, false, 'подготовка: помеченный забег проверку не проходит');
+
+  // Комнатная причина в гонке больше не содержит проверку движения: она личная, и общая плашка
+  // сообщала бы честному игроку, что его время не записано, ровно тогда, когда оно записано.
+  assert.equal(results.unranked, null, 'провал проверки у одного не делает комнату непроверенной');
+
+  const board = await fetch(
+    `http://127.0.0.1:${port}/leaderboard?${new URLSearchParams({
+      seed: started.spec.seed,
+      difficulty: started.spec.difficulty,
+      limit: '10'
+    })}`
+  ).then(response => response.json());
+
+  assert.equal(board.entries.length, 1, 'в таблицу попадает ровно один — проверенный');
+  assert.equal(board.entries[0].name, 'Честный');
+});
+
 // Сессия для переподключения не должна протухать под играющим человеком.
 //
 // Срок ставился при входе и обновлялся только на обрыве и на возвращении, но НЕ во время игры. У

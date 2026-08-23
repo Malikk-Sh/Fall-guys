@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isResultsSkipKey,
+  raceUnrankedReason,
   primaryResultAction,
   racePodiumEntries,
   racePodiumSkin,
@@ -125,4 +126,27 @@ test('invalid reveal plans fail closed', () => {
     }),
     false
   );
+});
+
+// Плашка «без зачёта» обязана называть СВОЮ причину.
+//
+// Гонка — личное соревнование, и сервер записывает строку в таблицу каждому проверенному игроку
+// отдельно. Общая комнатная причина означала бы, что человеку, чей рекорд записан, сообщают
+// обратное: «время никуда не записалось». Раньше так и было — проверка соседа снимала зачёт со
+// всех, и плашка не врала лишь потому, что не врал и сервер.
+test('причина «без зачёта» в гонке берётся своя, а не комнатная', () => {
+  // Проверенный игрок рядом с непроверенным плашки не видит: его строка записана.
+  assert.equal(raceUnrankedReason(null, { verified: true }), null);
+  // Непроверенный видит, и причина названа одним понятным словом, а не именем сигнала.
+  assert.equal(raceUnrankedReason(null, { verified: false }), 'verification');
+
+  // Комнатная причина старше личной: если забег и так не в зачёте из-за обрыва, назвать надо
+  // именно обрыв. Иначе игрок пойдёт разбираться не с тем.
+  assert.equal(raceUnrankedReason('disconnect', { verified: false }), 'disconnect');
+  assert.equal(raceUnrankedReason('left', { verified: true }), 'left');
+
+  // Своей строки может не быть вовсе — например, у вернувшегося по resume до записи финиша.
+  // Отсутствие строки не повод объявлять забег незачётным.
+  assert.equal(raceUnrankedReason(null, null), null);
+  assert.equal(raceUnrankedReason(null, undefined), null);
 });

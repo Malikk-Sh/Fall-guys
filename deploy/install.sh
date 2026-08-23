@@ -69,6 +69,21 @@ reexeced=0
 [ "${1:-}" = "--reexec" ] && reexeced=1
 [ "${WOBBLE_REEXEC:-0}" = "1" ] && reexeced=1
 
+# Значение для записи в `$DEPLOY_CONF` как ДАННЫЕ, а не как кусок кода.
+#
+# Конфиг читается через `.`, то есть исполняется. Подстановка значения прямо внутрь литеральных
+# одинарных кавычек ломается на первом же апострофе: ветка `feature/o'hare` даёт незакрытую строку,
+# и СЛЕДУЮЩИЙ запуск установщика падает при чтении конфига — до того, как успеет что-либо починить.
+#
+# Тег и репозиторий проверяются регуляркой на входе, а ветка нет, поэтому дыра была живой именно
+# там. Но экранируется всё: полагаться на то, что проверка формата где-то выше не изменится, —
+# это ровно тот вид молчаливой связи, который здесь уже дорого обошёлся.
+shell_quote() {
+  local value="$1"
+  # Одинарная кавычка внутри строки закрывает её, экранируется отдельно и открывает заново.
+  printf "'%s'" "${value//\'/\'\\\'\'}"
+}
+
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m!! %s\033[0m\n' "$*" >&2; exit 1; }
@@ -776,13 +791,13 @@ fi
 cat >"$DEPLOY_CONF" <<CONF
 # Настройки последнего удачного развёртывания Wobble Rush 3D.
 # Их подставляет deploy/install.sh, когда запущен без переменных окружения.
-SAVED_DOMAIN='${DOMAIN}'
-SAVED_HTTPS_PORT='${HTTPS_PORT}'
-SAVED_SHARED_HTTPS_443='${SHARED_HTTPS_443}'
-SAVED_SHARED_443_FALLBACK='${SHARED_443_FALLBACK}'
-SAVED_RELEASE_TAG='${RELEASE_TAG}'
-SAVED_RELEASE_REPOSITORY='${RELEASE_REPOSITORY}'
-SAVED_BRANCH='${BRANCH}'
+SAVED_DOMAIN=$(shell_quote "$DOMAIN")
+SAVED_HTTPS_PORT=$(shell_quote "$HTTPS_PORT")
+SAVED_SHARED_HTTPS_443=$(shell_quote "$SHARED_HTTPS_443")
+SAVED_SHARED_443_FALLBACK=$(shell_quote "$SHARED_443_FALLBACK")
+SAVED_RELEASE_TAG=$(shell_quote "$RELEASE_TAG")
+SAVED_RELEASE_REPOSITORY=$(shell_quote "$RELEASE_REPOSITORY")
+SAVED_BRANCH=$(shell_quote "$BRANCH")
 CONF
 chmod 600 "$DEPLOY_CONF"
 

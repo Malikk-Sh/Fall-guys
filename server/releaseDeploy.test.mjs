@@ -20,7 +20,9 @@ test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /releases\/tags\/\$\{RELEASE_TAG\}/);
   assert.match(install, /release \$\{RELEASE_TAG\} ещё не опубликован/);
   assert.match(install, /check-release\.mjs" "\$RELEASE_TAG"/);
-  assert.match(install, /SAVED_RELEASE_TAG='\$\{RELEASE_TAG\}'/);
+  // Значение экранируется, а не подставляется внутрь литеральных кавычек: конфиг исполняется при
+  // чтении, и апостроф в значении сломал бы следующий запуск. См. отдельный тест на экранирование.
+  assert.match(install, /SAVED_RELEASE_TAG=\$\(shell_quote "\$RELEASE_TAG"\)/);
 });
 
 test('production systemd starts the same shadow-preloaded entrypoint as npm start', () => {
@@ -182,13 +184,13 @@ test('подсказка на возврат называет прошлое с�
 
   // Репозиторий закрепляется вместе с тегом. Без этого команда возврата после разового
   // развёртывания с чужого форка увела бы в репозиторий по умолчанию — то есть не туда.
-  assert.match(install, /SAVED_RELEASE_REPOSITORY='\$\{RELEASE_REPOSITORY\}'/);
+  assert.match(install, /SAVED_RELEASE_REPOSITORY=\$\(shell_quote "\$RELEASE_REPOSITORY"\)/);
   assert.match(install, /repo_prefix="RELEASE_REPOSITORY=\$\{PREVIOUS_RELEASE_REPOSITORY\} "/);
 
   // Ветка — из того же ряда. `RELEASE_TAG= bash …` без неё уходит на `main`, которой в
   // конфигурации с `BRANCH=stable` может не быть вовсе: тогда восстановление падает, не дойдя до
   // перезапуска, а сломанная сборка остаётся работать.
-  assert.match(install, /SAVED_BRANCH='\$\{BRANCH\}'/);
+  assert.match(install, /SAVED_BRANCH=\$\(shell_quote "\$BRANCH"\)/);
   assert.match(install, /branch_prefix="BRANCH=\$\{PREVIOUS_BRANCH\} "/);
   assert.ok(
     install.indexOf('PREVIOUS_BRANCH=') > install.indexOf('BRANCH="${BRANCH:-${SAVED_BRANCH'),
@@ -201,6 +203,34 @@ test('подсказка на возврат называет прошлое с�
     install.indexOf('DEPLOY_CONF_EXISTED=1') < install.indexOf('. "$DEPLOY_CONF"'),
     'наличие конфига обязано проверяться до того, как он будет прочитан'
   );
+});
+
+test('сохраняемые настройки пишутся как данные, а не как код', () => {
+  // `$DEPLOY_CONF` читается через `.`, то есть ИСПОЛНЯЕТСЯ. Значение, подставленное прямо внутрь
+  // литеральных одинарных кавычек, ломается на первом апострофе: ветка `feature/o'hare` даёт
+  // незакрытую строку, и следующий запуск установщика падает при чтении конфига — до того, как
+  // успеет что-либо починить. Тег и репозиторий проверяются регуляркой на входе, ветка нет,
+  // поэтому дыра была живой именно там.
+  //
+  // Проверяется КАЖДОЕ значение, а не только ветка: полагаться на то, что проверка формата выше
+  // не изменится, — это ровно та молчаливая связь, которая здесь уже дорого обошлась.
+  const confBlock = install.slice(install.indexOf('cat >"$DEPLOY_CONF"'), install.indexOf('\nCONF\n'));
+  const raw = confBlock
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^SAVED_[A-Z0-9_]+='/.test(line));
+
+  assert.deepEqual(
+    raw,
+    [],
+    `эти значения подставляются в кавычки без экранирования и ломают конфиг на апострофе:\n  ${raw.join('\n  ')}`
+  );
+
+  const saved = confBlock.split('\n').filter(line => /^SAVED_[A-Z0-9_]+=/.test(line.trim()));
+  assert.ok(saved.length >= 7, 'конфиг обязан сохранять все параметры развёртывания');
+  for (const line of saved) {
+    assert.match(line, /^SAVED_[A-Z0-9_]+=\$\(shell_quote "\$[A-Z0-9_]+"\)$/, `не экранировано: ${line}`);
+  }
 });
 
 test('deploy smoke can require the exact version, commit and release identity', () => {

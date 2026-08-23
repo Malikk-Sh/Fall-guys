@@ -316,3 +316,53 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   assert.equal(movementAuthority.shadow, 0, 'default parity evidence never grants shadow movement');
   assert.equal(movementAuthority.errors, 0, 'movement authority evaluation stays free of errors');
 });
+
+test('/health показывает мост по живому состоянию, а не по флагу запуска', async t => {
+  // Юнит systemd подключает preload флагом `--require`, и разъехавшись с `npm start` на этот один
+  // флаг он поднимает сервер, который молча выбрасывает `CLIENT_INPUT` и не ведёт ни одной
+  // серверной симуляции. Ничто другое в `/health` при этом не меняется, поэтому поле обязано быть
+  // честным — иначе `deploy/smoke.sh` проходил бы вечно и мы вернулись бы ровно туда же.
+  //
+  // Честность здесь в двух вещах, и вторая была ошибкой первой редакции.
+  //
+  // Первая: три состояния действительно различаются.
+  //
+  // Вторая: `started` означает «мост работает СЕЙЧАС», а не «запуск когда-то удался». Прошлая
+  // редакция спрашивала `bridge.started` — флаг, выставляемый один раз и переживающий `stop()`.
+  // Показательно, что тест на этом и проходил: предыдущий тест в этом файле закрывает сервер, чем
+  // останавливает мост, а `/health` всё равно отвечал `started`. Проверка подтверждала ровно ту
+  // слепоту, которую должна была ловить.
+  await listen();
+  const base = `http://127.0.0.1:${server.address().port}/health`;
+  t.after(async () => {
+    await closeServer();
+  });
+
+  const key = Symbol.for('wobble.shadow-input-bridge');
+  const real = globalThis[key];
+  assert.ok(real, 'preload обязан регистрировать мост в globalThis');
+
+  // Мост здесь уже остановлен предыдущим тестом — и обязан это признавать.
+  assert.equal(real.running, false, 'остановленный мост не может считать себя работающим');
+  assert.equal(
+    (await (await fetch(base)).json()).shadowBridge,
+    'loaded',
+    'остановленный мост — это `loaded`, а не `started`: smoke обязан такой сервер отвергнуть'
+  );
+
+  try {
+    globalThis[key] = { running: true };
+    assert.equal((await (await fetch(base)).json()).shadowBridge, 'started');
+    globalThis[key] = { running: false };
+    assert.equal((await (await fetch(base)).json()).shadowBridge, 'loaded');
+    delete globalThis[key];
+    assert.equal((await (await fetch(base)).json()).shadowBridge, 'absent');
+  } finally {
+    globalThis[key] = real;
+  }
+});
+
+// Живой `started` проверяется не здесь, а в `server/productionStartup.test.mjs`: там процесс
+// свежий, поднятый строкой запуска из юнита, и мост в нём действительно работает. В этом файле
+// сервер к моменту проверки уже останавливали, и требовать от него `started` значило бы требовать
+// неправды.

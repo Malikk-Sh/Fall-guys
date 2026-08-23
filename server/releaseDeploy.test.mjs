@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 import buildInfo from './buildInfo.js';
 
@@ -33,6 +33,79 @@ test('production systemd starts the same shadow-preloaded entrypoint as npm star
   const normalizedServiceStart = execStart.replace(/^\/usr\/bin\/node\b/, 'node');
   assert.equal(normalizedServiceStart, packageJson.scripts.start);
   assert.match(normalizedServiceStart, /--require \.\/server\/shadowInputPreload\.js/);
+});
+
+// Все места, где вообще запускают сервер, и то, чем они его запускают.
+//
+// Юнит — не единственная копия строки запуска, и предыдущий тест сторожит только его. Копий было
+// шесть: smoke в CI, Playwright, ночной стресс (две), недельный soak и сам юнит. Preload не грузила
+// ни одна, кроме юнита, — то есть E2E, стресс и soak гоняли сервер БЕЗ моста `CLIENT_INPUT` →
+// серверная симуляция и были при этом зелёными. Юнит-тесты моста грузят preload сами, поэтому дыра
+// пришлась ровно на сквозные проверки: там, где её тяжелее всего заметить.
+const PRELOAD_FLAG = '--require ./server/shadowInputPreload.js';
+const workflowsDir = new URL('../.github/workflows/', import.meta.url);
+
+// Где запуск без preload ОСОЗНАНЕН. Список именной и с причиной: молчаливая дыра — это то, с чего
+// всё началось, и заменять её на молчаливое исключение смысла нет.
+//
+// Обе задачи меряют НАГРУЗКУ. Мост добавляет тик 30 Гц и обработчик на сокет, поэтому включение его
+// сдвинет их базовые числа — а пороги там настроены по прежним замерам. Сдвиг базы это отдельное
+// решение с отдельной калибровкой, а не побочный эффект чужого исправления. Пока оно не принято,
+// нужно помнить, что их зелёный цвет описывает не тот сервер, который стоит на проде.
+const LAUNCH_PARITY_EXEMPT = new Map([
+  ['nightly-stress.yml', 'меряет нагрузку: включение моста сдвинет базовые числа и пороги'],
+  ['weekly-soak.yml', 'меряет нагрузку: включение моста сдвинет базовые числа и пороги']
+]);
+
+function launchSites() {
+  const sources = [
+    ['playwright.config.js', readFileSync(new URL('../playwright.config.js', import.meta.url), 'utf8')]
+  ];
+  for (const name of readdirSync(workflowsDir).filter(file => file.endsWith('.yml'))) {
+    sources.push([name, readFileSync(new URL(name, workflowsDir), 'utf8')]);
+  }
+  return sources.map(([name, source]) => [
+    name,
+    source
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.includes('server/bootstrap.js') && !line.startsWith('#'))
+  ]);
+}
+
+test('всё, что запускает сервер, запускает его с preload', () => {
+  const offenders = [];
+  const staleExemptions = [...LAUNCH_PARITY_EXEMPT.keys()];
+
+  for (const [name, lines] of launchSites()) {
+    if (!lines.length) continue;
+    const bare = lines.filter(line => !line.includes(PRELOAD_FLAG));
+    if (LAUNCH_PARITY_EXEMPT.has(name)) {
+      // Исключение обязано быть живым: как только задачу починят, запись становится враньём и
+      // должна быть удалена, а не остаться прикрывать следующую дыру.
+      if (bare.length) staleExemptions.splice(staleExemptions.indexOf(name), 1);
+      continue;
+    }
+    for (const line of bare) offenders.push(`${name}: ${line}`);
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `сервер запускают без preload, и эти проверки не видят серверную симуляцию:\n  ${offenders.join('\n  ')}`
+  );
+  assert.deepEqual(
+    staleExemptions,
+    [],
+    `исключения больше не нужны, удалите их из LAUNCH_PARITY_EXEMPT:\n  ${staleExemptions.join('\n  ')}`
+  );
+});
+
+test('установщик кладёт на прод именно тот юнит, который сверяется', () => {
+  // Предыдущий тест сверяет `deploy/wobble.service` с `npm start`. Он держит инвариант только
+  // пока на прод едет именно этот файл: замени установщик источник или сгенерируй он юнит на
+  // месте — проверка осталась бы зелёной, сторожа файл, который никуда не попадает.
+  assert.match(install, /cp "\$APP_DIR\/deploy\/wobble\.service" \/etc\/systemd\/system\/wobble\.service/);
 });
 
 test('deploy smoke can require the exact version, commit and release identity', () => {

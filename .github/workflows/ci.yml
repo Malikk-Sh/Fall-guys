@@ -95,7 +95,7 @@ jobs:
           export PORT=3100
           export HOST=127.0.0.1
           export ALLOWED_ORIGINS=http://127.0.0.1:3100
-          node server/bootstrap.js >"$server_log" 2>&1 &
+          node --require ./server/shadowInputPreload.js server/bootstrap.js >"$server_log" 2>&1 &
           server_pid=$!
           cleanup() {
             kill "$server_pid" >/dev/null 2>&1 || true

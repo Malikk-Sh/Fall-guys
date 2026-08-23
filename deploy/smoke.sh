@@ -47,6 +47,15 @@ const expectedRelease = process.argv[6];
 if (health.ok !== true || health.service !== 'wobble-rush-3d') {
   throw new Error('unexpected /health payload');
 }
+// The shadow-input preload is loaded by a --require flag in the systemd unit, and a unit that has
+// drifted from `npm start` starts a server that silently drops CLIENT_INPUT and runs no server-side
+// simulation at all. Nothing else in /health moves when that happens, so the deploy has to ask.
+if (health.shadowBridge !== 'started') {
+  throw new Error(
+    `shadow input bridge is not running: ${health.shadowBridge ?? 'field missing'} ` +
+      '(check ExecStart in /etc/systemd/system/wobble.service against `npm start`)'
+  );
+}
 if (expectedVersion && health.version !== expectedVersion) {
   throw new Error(`unexpected version: ${health.version}, expected ${expectedVersion}`);
 }

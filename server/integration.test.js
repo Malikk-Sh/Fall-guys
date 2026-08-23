@@ -1405,6 +1405,26 @@ test('непроверенный финиш соседа не отменяет �
   ]);
   const results = await honest.wait('results', () => true, WAIT_MS);
 
+  // Личная причина не уезжает всей комнате.
+  //
+  // Сообщение о финише получают все, и пока в нём ехала причина финишировавшего, она попадала в
+  // сессию каждого клиента: тот применяет её до проверки `message.id`. Честный сосед получал плашку
+  // «без зачёта» за чужую проверку и переставал сохранять даже свой локальный рекорд — при том, что
+  // сервер его строку записывает. Заодно имя сигнала говорило всей комнате, на чём именно споткнулся
+  // конкретный игрок.
+  const finishes = honest.messages.filter(message => message.type === 'finish');
+  assert.equal(finishes.length, 2, 'подготовка: финиш приходит на каждого участника');
+  for (const finish of finishes) {
+    assert.equal(finish.unranked, null, 'в сообщении о финише нет личной причины');
+    assert.equal(finish.trusted, true, 'комната не дисквалифицирована, и сообщение говорит именно о ней');
+  }
+  // Свой статус при этом никуда не делся — он в собственной строке доски.
+  assert.equal(
+    finishes.at(-1).board.find(entry => entry.name === 'Помеченный')?.verified,
+    false,
+    'личный статус остаётся в строке доски'
+  );
+
   const honestEntry = results.board.find(entry => entry.name === 'Честный');
   const flaggedEntry = results.board.find(entry => entry.name === 'Помеченный');
   assert.ok(honestEntry?.verified, 'подготовка: честный забег обязан пройти проверку');

@@ -2415,8 +2415,19 @@ wss.on('connection', (ws, req) => {
         time: player.time,
         board: leaderboard(room),
         racing: stillRacing(room),
-        unranked: room.unranked || player.verificationReasons[0] || null,
-        trusted: !room.unranked && player.verificationReasons.length === 0
+        // Причина здесь только КОМНАТНАЯ, и это не косметика.
+        //
+        // Сообщение о финише уходит всем в комнате. Пока в нём ехала личная причина финишировавшего,
+        // она попадала в сессию КАЖДОГО клиента: `receiveFinish` применял её до проверки `message.id`.
+        // Честный сосед получал плашку «без зачёта» за чужую проверку и переставал сохранять даже
+        // свой локальный рекорд — при том, что сервер его строку в таблицу записывает.
+        //
+        // Заодно закрывается утечка: имя сработавшего сигнала (`sustained-speed` и прочие) говорило
+        // всей комнате, на какой именно проверке споткнулся конкретный игрок.
+        //
+        // Свой статус каждый берёт из собственной строки `board`: там есть и `verified`, и причина.
+        unranked: room.unranked || null,
+        trusted: !room.unranked
       });
       return checkMatchEnd(room);
     },

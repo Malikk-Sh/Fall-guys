@@ -600,7 +600,14 @@ class Game {
     this.finishedPlace = own < 0 ? null : own + 1;
     // Рекорд сохраняется по своему финишу, а не по концу матча: это личный результат, и он уже
     // известен. Показ итогов может подождать, запись — нет.
-    if (!this.session.unranked) this.account.save('race', this.course?.spec, raceTime);
+    //
+    // Условие то же, что и у плашки, и намеренно одно на двоих: разойдись они — игрок увидел бы
+    // «без зачёта» при сохранённом рекорде или наоборот. Комнатная причина берётся из сессии,
+    // личная — из своей строки доски; `session.unranked` в одиночку тут уже не годится, потому что
+    // проверка движения в гонке личная и в сессию больше не попадает.
+    const ownEntry = this.latestBoard.find(entry => entry.id === this.net.id);
+    if (!raceUnrankedReason(this.session.unranked, ownEntry))
+      this.account.save('race', this.course?.spec, raceTime);
 
     // Гонка продолжается без нас — досматриваем её.
     //

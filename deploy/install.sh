@@ -122,19 +122,26 @@ outage_hint() {
   printf '\n\033[1;33m!! Развёртывание прервано ПОСЛЕ перезапуска службы: сейчас на машине %s.\033[0m\n' \
     "$deployed" >&2
 
-  # Репозиторий подставляется, только если он не стандартный: лишняя переменная в команде, которую
-  # человек копирует при аварии, — это лишний шанс ошибиться.
+  # Значения в ПЕЧАТАЕМОЙ команде экранируются так же, как в конфиге.
+  #
+  # Команда пишется, чтобы её скопировали в оболочку, — то есть это тоже код, а не текст. Ветка
+  # `feature/o'hare` без кавычек даёт незакрывающуюся строку и неработающую команду; ветка с `;`
+  # или `$()` — команду, которая делает не то, что написано. Значение при этом остаётся вполне
+  # законным именем ветки.
+  #
+  # Экранирование при записи в конфиг этого не покрывает: там значение защищено от чтения, здесь —
+  # от вставки. Разные места, одна и та же ошибка.
   local repo_prefix=""
   if [ -n "$PREVIOUS_RELEASE_REPOSITORY" ] &&
     [ "$PREVIOUS_RELEASE_REPOSITORY" != "$RELEASE_REPOSITORY_DEFAULT" ]; then
-    repo_prefix="RELEASE_REPOSITORY=${PREVIOUS_RELEASE_REPOSITORY} "
+    repo_prefix="RELEASE_REPOSITORY=$(shell_quote "$PREVIOUS_RELEASE_REPOSITORY") "
   fi
 
   if [ -n "$PREVIOUS_RELEASE_TAG" ] && [ "$PREVIOUS_RELEASE_TAG" != "$RELEASE_TAG" ]; then
     printf '\033[1;33m!! Если причина в релизе, вернуться на предыдущий работавший %s:\033[0m\n' \
       "$PREVIOUS_RELEASE_TAG" >&2
     printf '     %sRELEASE_TAG=%s bash %s/deploy/install.sh\n' \
-      "$repo_prefix" "$PREVIOUS_RELEASE_TAG" "$APP_DIR" >&2
+      "$repo_prefix" "$(shell_quote "$PREVIOUS_RELEASE_TAG")" "$APP_DIR" >&2
   elif [ -n "$PREVIOUS_RELEASE_TAG" ]; then
     # Тег тот же — но настройки могли поменяться. Разовые переменные (DOMAIN, HTTPS_PORT и прочие)
     # в `$DEPLOY_CONF` не попали, поэтому запуск БЕЗ них возвращает последнюю удачную конфигурацию.
@@ -147,7 +154,7 @@ outage_hint() {
     # которой в такой конфигурации может не быть, и восстановление упало бы до перезапуска.
     local branch_prefix=""
     if [ -n "$PREVIOUS_BRANCH" ] && [ "$PREVIOUS_BRANCH" != "$BRANCH_DEFAULT" ]; then
-      branch_prefix="BRANCH=${PREVIOUS_BRANCH} "
+      branch_prefix="BRANCH=$(shell_quote "$PREVIOUS_BRANCH") "
     fi
     printf '\033[1;33m!! Прошлое развёртывание шло с ветки, закреплённого релиза нет. Вернуться к ней:\033[0m\n' >&2
     printf '     %sRELEASE_TAG= bash %s/deploy/install.sh\n' "$branch_prefix" "$APP_DIR" >&2

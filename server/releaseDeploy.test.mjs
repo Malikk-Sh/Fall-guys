@@ -185,13 +185,33 @@ test('подсказка на возврат называет прошлое с�
   // Репозиторий закрепляется вместе с тегом. Без этого команда возврата после разового
   // развёртывания с чужого форка увела бы в репозиторий по умолчанию — то есть не туда.
   assert.match(install, /SAVED_RELEASE_REPOSITORY=\$\(shell_quote "\$RELEASE_REPOSITORY"\)/);
-  assert.match(install, /repo_prefix="RELEASE_REPOSITORY=\$\{PREVIOUS_RELEASE_REPOSITORY\} "/);
+  assert.match(
+    install,
+    /repo_prefix="RELEASE_REPOSITORY=\$\(shell_quote "\$PREVIOUS_RELEASE_REPOSITORY"\) "/
+  );
 
   // Ветка — из того же ряда. `RELEASE_TAG= bash …` без неё уходит на `main`, которой в
   // конфигурации с `BRANCH=stable` может не быть вовсе: тогда восстановление падает, не дойдя до
   // перезапуска, а сломанная сборка остаётся работать.
   assert.match(install, /SAVED_BRANCH=\$\(shell_quote "\$BRANCH"\)/);
-  assert.match(install, /branch_prefix="BRANCH=\$\{PREVIOUS_BRANCH\} "/);
+  assert.match(install, /branch_prefix="BRANCH=\$\(shell_quote "\$PREVIOUS_BRANCH"\) "/);
+
+  // Печатаемая команда — тоже код: её копируют в оболочку. Ветка `feature/o'hare` без кавычек даёт
+  // неработающую команду, а ветка с `;` или `$()` — команду, которая делает не то, что написано.
+  // Экранирование при записи в конфиг этого не покрывает: там значение защищено от чтения, здесь —
+  // от вставки. Проверено кругом: значение доезжает до установщика буквально.
+  const hint = install.slice(install.indexOf('outage_hint() {'), install.indexOf('\ntrap outage_hint EXIT'));
+  const rawInterpolations = hint
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /(prefix=|printf)/.test(line))
+    .filter(line => /\$\{PREVIOUS_[A-Z_]+\}/.test(line));
+  assert.deepEqual(
+    rawInterpolations,
+    [],
+    `эти значения печатаются в команду без экранирования:\n  ${rawInterpolations.join('\n  ')}`
+  );
+  assert.match(install, /"\$\(shell_quote "\$PREVIOUS_RELEASE_TAG"\)"/);
   assert.ok(
     install.indexOf('PREVIOUS_BRANCH=') > install.indexOf('BRANCH="${BRANCH:-${SAVED_BRANCH'),
     'предыдущая ветка обязана читаться из сохранённой, а не из подставленной'

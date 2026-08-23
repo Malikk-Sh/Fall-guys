@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const {
@@ -308,8 +309,34 @@ test('пороги политики остаются консервативны�
 
 test('singleton guard не пользуется живым провайдером и остаётся закрытым', () => {
   const guard = require('./shadowMovementAuthorityMatchGuard');
-  // Провайдер существует и работает — но подключён он не будет, пока пороги не сверены с живой
-  // статистикой. Значение по умолчанию у guard обязано остаться отрицательным.
+  // Провайдер существует и работает — но подключён не будет.
+  //
+  // Раньше здесь стояло «пока пороги не сверены с живой статистикой». Статистика получена: 37 507
+  // выборок с прода, паритет опоры сошёлся (99.92 %), отрыв траектории и совпадение ударов — нет.
+  // Решением цель изменена, полный server-authoritative movement снят с плана, и подключать
+  // провайдер не надо вовсе, пока решение не пересмотрят. Разбор в `docs/NETCODE-MIGRATION.md`.
+  //
+  // Инвариант от этого не меняется, меняется только его причина: значение по умолчанию у guard
+  // обязано остаться отрицательным, а решение — legacy.
+  //
+  // ЧТО ЭТОТ ТЕСТ ДОЛГО НЕ ПРОВЕРЯЛ. Ниже он строит СВОЙ guard через фабрику и потому меряет
+  // умолчание фабрики, а не проводку боевого singleton. Тот собирается отдельной строкой в конце
+  // модуля, и подмени её кто-нибудь на `createShadowMovementAuthorityMatchGuard({ parityProvider:
+  // movementParityProvider })` — всё здесь продолжало бы проходить, а production выбирал бы shadow.
+  // То есть решение «движение остаётся legacy до явного пересмотра» держалось тестом, который его
+  // не держал.
+  //
+  // Поэтому проводка проверяется прямо по исходнику. Поведением её не достать: singleton завязан на
+  // два других singleton — гоночный guard и runtime, — и до ветки паритета решение не доходит, пока
+  // они не выданы. Проверка текста здесь честнее сложной подмены: строка сборки И ЕСТЬ решение, а
+  // менять её иначе как осознанно невозможно.
+  const source = readFileSync(new URL('./shadowMovementAuthorityMatchGuard.js', import.meta.url), 'utf8');
+  assert.match(
+    source,
+    /^const singleton = createShadowMovementAuthorityMatchGuard\(\);$/m,
+    'боевой singleton обязан строиться без провайдера паритета: с ним движение перестанет быть legacy'
+  );
+
   assert.equal(typeof guard.movementParityProvider, 'function');
   assert.deepEqual(guard.DEFAULT_MOVEMENT_PARITY_EVIDENCE, {
     collisionParityVerified: false,

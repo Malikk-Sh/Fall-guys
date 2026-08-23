@@ -1,5 +1,26 @@
 'use strict';
 
+// В loader-треде этот модуль не делает НИЧЕГО, и без этого production не поднимается вовсе.
+//
+// Сервер запускается как `node --require ./server/shadowInputPreload.js server/bootstrap.js`.
+// Позже `roomBots.enableClientModules()` зовёт `register('./client-loader.mjs')`, и node поднимает
+// для хуков ОТДЕЛЬНЫЙ worker-тред. Флаги `--require` наследуются этим тредом, поэтому node пытается
+// загрузить preload ещё раз — уже внутри загрузчика. Там он тянет `shared/validation.js` и прочий
+// серверный граф, а в нём есть `.js` с ESM-синтаксисом; их подъём идёт через `loadESMFromCJS` →
+// `Hooks.resolveSync`, которого в loader-треде нет. Процесс падает с ERR_METHOD_NOT_IMPLEMENTED.
+//
+// Симптом при этом обманчив: до `register()` сервер успевает написать `server_started`, и падение
+// выглядит поздней случайностью, а не отказом запуска. На VPS это дало бы crash-loop, который
+// systemd погасил бы через StartLimitBurst, оставив службу лежать.
+//
+// Мост нужен только главному потоку: он вешается на сокеты боевого сервера, которых в loader-треде
+// не существует. Ранний выход — не заглушка, а точное описание того, где этому модулю место.
+const { isMainThread } = require('node:worker_threads');
+if (!isMainThread) {
+  module.exports = null;
+  return;
+}
+
 const { C2S, S2C, ROOM_STATE } = require('../shared/protocol.js');
 const { validateMessage, RateLimiter } = require('../shared/validation.js');
 const { SERVER_SIMULATION_INTERVAL_MS } = require('./shadowInputRuntime');

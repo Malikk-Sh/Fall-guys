@@ -81,7 +81,11 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: 'node server/bootstrap.js',
+    // Тот же preload, что у production и `npm start`. Без него E2E гоняет сервер, у которого нет
+    // моста `CLIENT_INPUT` → серверная симуляция: сквозной путь «браузер → WebSocket → симуляция»
+    // не проверяется вовсе, а набор при этом зелёный. Юнит-тесты моста грузят preload сами, так
+    // что дыра была именно в сквозной проверке — там, где её тяжелее всего заметить.
+    command: 'node --require ./server/shadowInputPreload.js server/bootstrap.js',
     url: 'http://127.0.0.1:4173/health/ready',
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,

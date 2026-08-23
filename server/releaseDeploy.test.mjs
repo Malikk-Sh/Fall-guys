@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import buildInfo from './buildInfo.js';
 
 const { buildIdentity } = buildInfo;
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const install = readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
 const smoke = readFileSync(new URL('../deploy/smoke.sh', import.meta.url), 'utf8');
 const restore = readFileSync(new URL('../deploy/restore.sh', import.meta.url), 'utf8');
 const service = readFileSync(new URL('../deploy/wobble.service', import.meta.url), 'utf8');
-const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /RELEASE_TAG="\$\{RELEASE_TAG-\$\{SAVED_RELEASE_TAG:-\}\}"/);
@@ -23,16 +25,40 @@ test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /SAVED_RELEASE_TAG='\$\{RELEASE_TAG\}'/);
 });
 
-test('production systemd starts the same shadow-preloaded entrypoint as npm start', () => {
+test('production systemd uses the loader-safe shadow preload', () => {
   const execStart = service.match(/^ExecStart=(.+)$/m)?.[1];
   assert.ok(execStart, 'wobble.service must define ExecStart');
+  assert.equal(
+    execStart,
+    '/usr/bin/node --require ./server/productionShadowPreload.js server/bootstrap.js'
+  );
+});
 
-  // systemd uses the absolute Node path while package.json uses PATH. Everything after that must
-  // stay byte-for-byte equivalent, otherwise a production-only startup path can silently omit
-  // migration wiring while smoke tests still see a healthy legacy server.
-  const normalizedServiceStart = execStart.replace(/^\/usr\/bin\/node\b/, 'node');
-  assert.equal(normalizedServiceStart, packageJson.scripts.start);
-  assert.match(normalizedServiceStart, /--require \.\/server\/shadowInputPreload\.js/);
+test('production shadow preload survives synchronous server startup and loads bot modules', () => {
+  const script = [
+    "const roomBots = require('./server/roomBots');",
+    "require('./server/index.js');",
+    'roomBots.preloadBots().then(',
+    '  () => process.exit(0),',
+    '  error => { console.error(error); process.exit(1); }',
+    ');'
+  ].join('\n');
+  const result = spawnSync(
+    process.execPath,
+    ['--require', './server/productionShadowPreload.js', '-e', script],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: { ...process.env, NODE_ENV: 'test', LEADERBOARD_DB: ':memory:' }
+    }
+  );
+
+  assert.equal(
+    result.status,
+    0,
+    `production preload child failed: ${result.error?.message || result.stderr || result.stdout}`
+  );
 });
 
 test('deploy smoke can require the exact version, commit and release identity', () => {

@@ -12,6 +12,7 @@ import { GAME_MODE } from '/shared/protocol.js';
 import { Player } from './game/Player.js';
 import { resolvePlayerCrowd } from './game/PlayerCollisions.js';
 import { resolveTether } from './game/CoopSignatureMechanics.js';
+import { raceUnrankedReason } from './game/ResultsPresentation.js';
 import { CameraController } from './game/CameraController.js';
 import { PostFX } from './game/PostFX.js';
 import { NetworkManager } from './net/NetworkManager.js';
@@ -664,7 +665,8 @@ class Game {
       time: this.finishedTime ?? own?.time ?? this.session.finalTime,
       board: this.latestBoard,
       selfId: this.net?.id,
-      unranked: this.session.unranked,
+      // Причина «без зачёта» — своя, а не комнатная; разбор в `raceUnrankedReason`.
+      unranked: raceUnrankedReason(this.session.unranked, own),
       canChoose: !pending
     });
   }

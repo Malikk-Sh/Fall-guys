@@ -22,7 +22,16 @@ User=wobble
 Group=wobble
 WorkingDirectory=/opt/wobble
 # bootstrap устанавливает Auth V2 (sessions/Google) поверх того же HTTP/WebSocket сервера.
-ExecStart=/usr/bin/node server/bootstrap.js
+#
+# `--require` обязателен и обязан совпадать с `npm start`. Preload — единственное место, где
+# обрабатывается `CLIENT_INPUT` и откуда пишется строка `shadow_simulation_metrics`: в `index.js`
+# этого сообщения нет вовсе. Юнит без него поднимает сервер, который молча выбрасывает поток ввода
+# от клиентов и не ведёт ни одной серверной симуляции.
+#
+# Так и было: `add24ef` добавил preload в `start` и `dev`, юнит не тронул, и на проде диагностика не
+# работала ни дня. Заметить это по логам нельзя — отсутствие строки метрик выглядит ровно как
+# отсутствие игроков. Расхождение сторожит тест в `server/releaseDeploy.test.mjs`.
+ExecStart=/usr/bin/node --require ./server/shadowInputPreload.js server/bootstrap.js
 
 # Настройки берутся из файла, а не пишутся здесь: так их можно менять, не трогая юнит,
 # и не хранить в git. Для Google-входа добавить GOOGLE_CLIENT_ID=<OAuth Web client id>.

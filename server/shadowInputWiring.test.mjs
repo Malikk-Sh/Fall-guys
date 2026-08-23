@@ -316,3 +316,41 @@ test('live shadow bridge follows the socket while legacy gameplay remains defaul
   assert.equal(movementAuthority.shadow, 0, 'default parity evidence never grants shadow movement');
   assert.equal(movementAuthority.errors, 0, 'movement authority evaluation stays free of errors');
 });
+
+test('/health tells whether the preload is actually loaded', async t => {
+  // Юнит systemd подключает preload флагом `--require`, и разъехавшись с `npm start` на этот один
+  // флаг он поднимает сервер, который молча выбрасывает `CLIENT_INPUT` и не ведёт ни одной
+  // серверной симуляции. Ничто другое в `/health` при этом не меняется: сервер отвечает, матчи
+  // идут, а единственный симптом — отсутствие строки `shadow_simulation_metrics` в журнале —
+  // неотличим от «сегодня никто не играл». Так и было, и прожило это не один месяц.
+  //
+  // Поэтому поле обязано быть ЧЕСТНЫМ: если бы оно всегда отвечало `started`, `deploy/smoke.sh`
+  // проходил бы вечно и мы вернулись бы ровно туда же. Здесь проверяется и то, что при живом
+  // мосте оно говорит `started`, и то, что три состояния действительно различаются.
+  await listen();
+  const base = `http://127.0.0.1:${server.address().port}/health`;
+  t.after(async () => {
+    await closeServer();
+  });
+
+  const live = await (await fetch(base)).json();
+  assert.equal(live.shadowBridge, 'started', 'при загруженном preload мост обязан числиться живым');
+
+  const key = Symbol.for('wobble.shadow-input-bridge');
+  const real = globalThis[key];
+  assert.ok(real, 'preload обязан регистрировать мост в globalThis');
+  try {
+    globalThis[key] = { started: false };
+    assert.equal((await (await fetch(base)).json()).shadowBridge, 'loaded');
+    delete globalThis[key];
+    assert.equal((await (await fetch(base)).json()).shadowBridge, 'absent');
+  } finally {
+    globalThis[key] = real;
+  }
+
+  assert.equal(
+    (await (await fetch(base)).json()).shadowBridge,
+    'started',
+    'состояние обязано вернуться: следующий тест в этом файле работает с тем же мостом'
+  );
+});

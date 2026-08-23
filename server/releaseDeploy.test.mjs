@@ -7,6 +7,70 @@ const { buildIdentity } = buildInfo;
 const install = readFileSync(new URL('../deploy/install.sh', import.meta.url), 'utf8');
 const smoke = readFileSync(new URL('../deploy/smoke.sh', import.meta.url), 'utf8');
 const restore = readFileSync(new URL('../deploy/restore.sh', import.meta.url), 'utf8');
+const unit = readFileSync(new URL('../deploy/wobble.service', import.meta.url), 'utf8');
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+// Флаги node, которые ЗАГРУЖАЮТ КОД. Их расхождение между `npm start` и юнитом меняет то, ЧТО
+// выполняется, а не то, как быстро. Флаги настройки (`--max-old-space-size=…`) юнит вправе иметь
+// свои: у прода другая машина, чем у разработчика, и заставлять его совпадать по ним незачем.
+const CODE_LOADING_FLAGS = new Set(['--require', '-r', '--import', '--loader', '--experimental-loader']);
+
+// Разбор строки запуска node на то, что она загружает. Первый токен — сам бинарник, и он намеренно
+// отбрасывается: юнит обязан звать node по абсолютному пути, а `npm start` зовёт его из PATH.
+//
+// Оговорка: флаг настройки, отделённый от значения ПРОБЕЛОМ (`--max-old-space-size 512`), будет
+// принят за точку входа. Канонической записи с `=` это не касается, и ошибка получится громкой —
+// тест упадёт с несовпадением точек входа, а не пропустит расхождение молча.
+function nodeInvocation(command) {
+  const argv = command.trim().split(/\s+/).slice(1);
+  const loads = [];
+  let entry = null;
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (!token.startsWith('-')) {
+      if (entry === null) entry = token;
+      continue;
+    }
+    const separator = token.indexOf('=');
+    const flag = separator === -1 ? token : token.slice(0, separator);
+    if (!CODE_LOADING_FLAGS.has(flag)) continue;
+    const value = separator === -1 ? argv[++index] : token.slice(separator + 1);
+    // `./server/x.js` и `server/x.js` — один файл; расхождением это считать нельзя.
+    loads.push(`${flag} ${String(value).replace(/^\.\//, '')}`);
+  }
+  return { entry: entry?.replace(/^\.\//, '') ?? null, loads: loads.sort() };
+}
+
+test('systemd-юнит запускает сервер тем же способом, что и npm start', () => {
+  // Расхождение здесь не ломает сервер — оно молча выключает часть его. Preload обрабатывает
+  // `CLIENT_INPUT` и пишет `shadow_simulation_metrics`; в `index.js` этого сообщения нет вовсе.
+  // Юнит без `--require` поднимает сервер, который выбрасывает поток ввода от клиентов и не ведёт
+  // ни одной серверной симуляции, — и выглядит при этом полностью здоровым: `/health` отвечает,
+  // матчи идут, а отсутствие строки метрик неотличимо от отсутствия игроков.
+  //
+  // Так и было. `add24ef` добавил preload в `start` и `dev`, юнит не тронул, и на проде симуляция
+  // не работала ни дня. Диагностику писали, мерили и обсуждали поверх прода, где её не запускали.
+  const execStart = unit.match(/^ExecStart=(.+)$/m);
+  assert.ok(execStart, 'в юните обязана быть строка ExecStart');
+
+  const production = nodeInvocation(execStart[1]);
+  const development = nodeInvocation(pkg.scripts.start);
+
+  assert.equal(production.entry, development.entry, 'юнит и npm start обязаны звать один файл входа');
+  assert.deepEqual(
+    production.loads,
+    development.loads,
+    'юнит и npm start обязаны загружать одни и те же модули до входа'
+  );
+  // Пустой список сошёлся бы сам с собой, и проверка стала бы декоративной ровно в тот момент,
+  // когда preload убрали бы из обоих мест.
+  assert.ok(development.loads.length > 0, 'npm start обязан загружать preload');
+});
+
+test('установщик кладёт на прод именно тот юнит, который проверен', () => {
+  // Без этой связки предыдущий тест сторожил бы файл, который никуда не едет.
+  assert.match(install, /cp "\$APP_DIR\/deploy\/wobble\.service" \/etc\/systemd\/system\/wobble\.service/);
+});
 
 test('production installer can pin and persist an exact release tag', () => {
   assert.match(install, /RELEASE_TAG="\$\{RELEASE_TAG-\$\{SAVED_RELEASE_TAG:-\}\}"/);

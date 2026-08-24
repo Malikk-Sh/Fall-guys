@@ -1,9 +1,19 @@
 'use strict';
 
+const {
+  RACE_FINISH_Z_TOLERANCE,
+  isRaceCourseSpec,
+  raceProgressCrossingAllowed
+} = require('./raceProgressSpatialGuard');
+
+// Kept as the coarse crossing predicate for compatibility with the existing pure helpers. Full
+// gameplay specs validate the interpolated crossing point against the canonical course corridor.
+// Minimal diagnostic/test specs historically contain only checkpoints + finishZ; they deliberately
+// retain this coarse contract.
 const CHECKPOINT_HALF_WIDTH = 11;
 const CHECKPOINT_MIN_Y = -3;
 const FINISH_MIN_Y = -4;
-const FINISH_Z_TOLERANCE = 1;
+const FINISH_Z_TOLERANCE = RACE_FINISH_Z_TOLERANCE;
 
 function finitePosition(state) {
   const position = state?.position;
@@ -48,13 +58,20 @@ function checkpointCrossed(previous, current, line) {
   );
 }
 
-function canFinishFromShadow(progress, current, spec) {
-  return (
+function checkpointCrossedForSpec(previous, current, line, spec) {
+  if (isRaceCourseSpec(spec)) return raceProgressCrossingAllowed(spec, previous, current, line);
+  return checkpointCrossed(previous, current, line);
+}
+
+function canFinishFromShadow(progress, current, spec, previous = null) {
+  const eligible =
     !progress.finished &&
     progress.checkpoint === spec.checkpoints.length &&
     current.z < spec.finishZ + FINISH_Z_TOLERANCE &&
-    current.y > FINISH_MIN_Y
-  );
+    current.y > FINISH_MIN_Y;
+  if (!eligible) return false;
+  if (!isRaceCourseSpec(spec)) return true;
+  return raceProgressCrossingAllowed(spec, previous, current, spec.finishZ + FINISH_Z_TOLERANCE);
 }
 
 function advanceShadowRaceProgress(progress, previousState, currentState, spec, serverTick = null) {
@@ -66,12 +83,12 @@ function advanceShadowRaceProgress(progress, previousState, currentState, spec, 
 
   const events = [];
   const line = spec.checkpoints[next.checkpoint];
-  if (line !== undefined && checkpointCrossed(previous, current, line)) {
+  if (line !== undefined && checkpointCrossedForSpec(previous, current, line, spec)) {
     next.checkpoint += 1;
     events.push({ type: 'checkpoint', checkpoint: next.checkpoint });
   }
 
-  if (canFinishFromShadow(next, current, spec)) {
+  if (canFinishFromShadow(next, current, spec, previous)) {
     next.finished = true;
     next.finishServerTick = Number.isSafeInteger(serverTick) && serverTick >= 0 ? serverTick : null;
     events.push({ type: 'finish', checkpoint: next.checkpoint, serverTick: next.finishServerTick });

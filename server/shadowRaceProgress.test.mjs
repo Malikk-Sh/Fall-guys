@@ -6,7 +6,9 @@ const require = createRequire(import.meta.url);
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const spec = Object.freeze({
-  checkpoints: [-18, -36],
+  segmentCount: 2,
+  segments: Object.freeze([{ type: 'sweepers' }, { type: 'bridge' }]),
+  checkpoints: Object.freeze([-18, -36]),
   finishZ: -49
 });
 
@@ -49,24 +51,46 @@ test('one fixed server step can advance at most one checkpoint', () => {
   assert.deepEqual(result.events, [{ type: 'checkpoint', checkpoint: 1 }]);
 });
 
-test('checkpoint crossing preserves the existing server gate for width and height', () => {
-  const tooWide = advanceShadowRaceProgress(
+test('checkpoint validation uses the interpolated plane crossing rather than the packet endpoint', () => {
+  const beside = advanceShadowRaceProgress(
     createShadowRaceProgress(spec),
-    state(0, 1, -17),
-    state(11, 1, -19),
+    state(20, 1, -17.9),
+    state(0, 1, -19),
     spec,
     30
   );
-  assert.equal(tooWide.progress.checkpoint, 0);
+  assert.equal(beside.progress.checkpoint, 0, 'inside endpoint cannot repair an outside crossing');
 
   const tooLow = advanceShadowRaceProgress(
     createShadowRaceProgress(spec),
-    state(0, 1, -17),
-    state(0, -3, -19),
+    state(0, -4, -17.9),
+    state(0, 1, -19),
     spec,
     31
   );
   assert.equal(tooLow.progress.checkpoint, 0);
+
+  const tooHigh = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec),
+    state(0, 7, -17.9),
+    state(0, 1, -19),
+    spec,
+    32
+  );
+  assert.equal(tooHigh.progress.checkpoint, 0);
+
+  const validCrossingWithOutsideEndpoint = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec),
+    state(0, 1, -17.9),
+    state(7, 1, -19),
+    spec,
+    33
+  );
+  assert.equal(
+    validCrossingWithOutsideEndpoint.progress.checkpoint,
+    1,
+    'only the point on the checkpoint plane decides spatial progress'
+  );
 });
 
 test('server shadow finish is impossible until every checkpoint is owned by server progress', () => {
@@ -92,6 +116,39 @@ test('server shadow finish is impossible until every checkpoint is owned by serv
   assert.deepEqual(complete.events, [{ type: 'finish', checkpoint: 2, serverTick: 41 }]);
 });
 
+test('shadow finish validates the server-owned position exactly at the finish plane', () => {
+  const beside = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec, { checkpoint: 2 }),
+    state(7, 1, -48),
+    state(0, 1, -49),
+    spec,
+    42
+  );
+  assert.equal(beside.progress.finished, false, 'inside endpoint cannot repair an outside finish crossing');
+
+  const high = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec, { checkpoint: 2 }),
+    state(0, 7, -48),
+    state(0, 1, -49),
+    spec,
+    43
+  );
+  assert.equal(high.progress.finished, false);
+
+  const validCrossingWithOutsideEndpoint = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec, { checkpoint: 2 }),
+    state(0, 1, -48),
+    state(7, 1, -49),
+    spec,
+    44
+  );
+  assert.equal(
+    validCrossingWithOutsideEndpoint.progress.finished,
+    true,
+    'a valid plane crossing remains valid after the simulated step continues sideways'
+  );
+});
+
 test('the final checkpoint and finish may be recognized in the same fixed step', () => {
   const result = advanceShadowRaceProgress(
     createShadowRaceProgress(spec, { checkpoint: 1 }),
@@ -105,6 +162,27 @@ test('the final checkpoint and finish may be recognized in the same fixed step',
     { type: 'checkpoint', checkpoint: 2 },
     { type: 'finish', checkpoint: 2, serverTick: 50 }
   ]);
+});
+
+test('minimal diagnostic specs retain the historical coarse shadow progress contract', () => {
+  const minimalSpec = Object.freeze({ checkpoints: Object.freeze([-18]), finishZ: -31 });
+  const checkpoint = advanceShadowRaceProgress(
+    createShadowRaceProgress(minimalSpec),
+    state(0, 1, -17),
+    state(0, 1, -19),
+    minimalSpec,
+    55
+  );
+  assert.equal(checkpoint.progress.checkpoint, 1);
+
+  const finish = advanceShadowRaceProgress(
+    checkpoint.progress,
+    state(0, 1, -30),
+    state(0, 1, -31),
+    minimalSpec,
+    56
+  );
+  assert.equal(finish.progress.finished, true);
 });
 
 test('finished progress is idempotent and invalid states cannot manufacture progress', () => {

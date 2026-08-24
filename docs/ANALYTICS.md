@@ -50,7 +50,13 @@ knockdown_started
 knockdown_recovered
 knockdown_then_fall
 knockdown_repeat_hit
+finish_rejected
 ```
+
+`finish_rejected` считает отказы в финише, `detail` — причину: `checkpoint-missing` (сервер не
+засчитал арку, которую засчитал клиент) или `finish-validation` (последнее состояние до ленты не
+дошло). Первая причина означает расхождение моделей чекпоинта, а не сетевую задержку, и её рост —
+повод смотреть на трассу, а не на канал.
 
 `device` имеет грубые категории `mobile` и `desktop`. Это инструмент сравнения touch/mobile против
 desktop, а не детектор конкретной модели устройства.

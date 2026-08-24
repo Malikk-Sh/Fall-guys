@@ -4,6 +4,7 @@ import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
 import { buildRaceGeometry } from '/shared/raceCourseGeometry.js';
 import { applyObstacleImpulses } from '/shared/courseImpulses.js';
+import { crossedCheckpoint } from '/shared/courseProgress.js';
 import { COLORS, courseName, courseSpec, seededRandom } from '../core/Config.js';
 
 const palette = [
@@ -184,16 +185,16 @@ export class Course extends CourseBuilder {
       if (event.knockdown) player.knockDown?.(event.knockdown);
     }
   }
-  checkpointFor(position, current) {
-    let next = current;
-    while (
-      next < this.spec.checkpoints.length &&
-      position.z < this.spec.checkpoints[next] &&
-      position.y > -3 &&
-      Math.abs(position.x) < 10
-    )
-      next++;
-    return next;
+  // Арка засчитывается по ПЕРЕСЕЧЕНИЮ её плоскости — тем же общим правилом, что и на сервере.
+  //
+  // Раньше здесь стоял вопрос «я за чертой?» по текущему положению. Он выглядит равнозначным, но
+  // им не является: пересечь плоскость вне рамок можно только один раз, а «оказаться за чертой» —
+  // сколько угодно раз подряд. Игрок, пролетевший СБОКУ от арки над пустотой, получал её здесь
+  // позже, когда его сносило обратно к оси уже за ней, — а сервер не получал её никогда. Дальше
+  // клиент считал трассу пройденной и слал финиш, которого сервер принять не мог.
+  checkpointFor(previous, position, current) {
+    if (current >= this.spec.checkpoints.length) return current;
+    return crossedCheckpoint(previous, position, this.spec.checkpoints[current]) ? current + 1 : current;
   }
   spawnFor(checkpoint) {
     if (checkpoint <= 0) return new THREE.Vector3(this.spec.start.x, this.spec.start.y, this.spec.start.z);

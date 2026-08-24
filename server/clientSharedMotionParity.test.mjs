@@ -31,7 +31,7 @@ function emptyCourse() {
     wallBounceAt: () => null,
     interact: () => {},
     update: () => {},
-    checkpointFor: (_position, current) => current,
+    checkpointFor: (_previous, _position, current) => current,
     // Высоко над трассой: падение не должно упереться в порог возрождения и подменить сравнение.
     spawnFor: () => new THREE.Vector3(0, 5000, 0),
     progress: () => 0

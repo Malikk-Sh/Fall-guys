@@ -359,7 +359,11 @@ export class Player {
       recovering: this.getupTimer > 0
     });
 
-    const next = this.course.checkpointFor(this.physics, this.checkpoint);
+    // Пересечение считается по отрезку этого шага физики. `previous` снят в начале step() — до
+    // движения, — поэтому это ровно тот отрезок, который персонаж прошёл, а не хвост прошлого кадра.
+    // Телепорты (возрождение, коррекция сервера) сбрасывают `previous` вместе с позицией и ложного
+    // пересечения не дают.
+    const next = this.course.checkpointFor(this.previous, this.physics, this.checkpoint);
     if (next > this.checkpoint) {
       this.checkpoint = next;
       this.spawn.copy(this.course.spawnFor(next));

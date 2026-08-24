@@ -21,7 +21,7 @@ function flatCourse() {
       { x: 0, y: 0, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null }
     ],
     interact() {},
-    checkpointFor: (_position, checkpoint) => checkpoint
+    checkpointFor: (_previous, _position, current) => current
   };
 }
 

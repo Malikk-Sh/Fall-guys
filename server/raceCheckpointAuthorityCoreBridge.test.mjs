@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { GAME_MODE } = require('../shared/protocol.js');
+const { createCourseSpec } = require('../shared/courseSpec.js');
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const {
   createRaceCheckpointAuthorityCoreBridge,
@@ -85,6 +86,43 @@ test('legacy and unlatched matches keep the complete legacy validation result', 
     assert.equal(actual.state.checkpoint, 2);
     assert.equal(bridge.metrics().shadowProjections, 0);
   }
+});
+
+test('race checkpoint advance is suppressed outside the course corridor without rejecting movement', () => {
+  const spec = createCourseSpec(7, 'easy');
+  const currentRoom = room({ spec });
+  const currentPlayer = player({ checkpoint: 0 });
+  const line = spec.checkpoints[0];
+  const outside = legacyResult(1);
+  outside.state = { ...outside.state, x: 20, y: 1, z: line - 0.2, checkpoint: 1 };
+  const { bridge, gameRules } = fixture({
+    source: AUTHORITY_SOURCE.LEGACY,
+    validateResult: outside
+  });
+  attach(bridge, currentRoom, currentPlayer);
+
+  const actual = gameRules.validateState(currentPlayer, {}, spec, 500);
+  assert.equal(actual.ok, true, 'movement validation stays accepted');
+  assert.equal(actual.checkpoint, 0, 'being beside the course cannot grant the checkpoint');
+  assert.equal(actual.state.checkpoint, 0);
+});
+
+test('race checkpoint advance is suppressed high above the course', () => {
+  const spec = createCourseSpec(8, 'easy');
+  const currentRoom = room({ spec });
+  const currentPlayer = player({ checkpoint: 0 });
+  const high = legacyResult(1);
+  high.state = { ...high.state, x: 0, y: 7, z: spec.checkpoints[0] - 0.2, checkpoint: 1 };
+  const { bridge, gameRules } = fixture({
+    source: AUTHORITY_SOURCE.LEGACY,
+    validateResult: high
+  });
+  attach(bridge, currentRoom, currentPlayer);
+
+  const actual = gameRules.validateState(currentPlayer, {}, spec, 500);
+  assert.equal(actual.ok, true, 'high state is still movement; only result progress is refused');
+  assert.equal(actual.checkpoint, 0);
+  assert.equal(actual.state.checkpoint, 0);
 });
 
 test('shadow-latched race preserves movement validation but suppresses client checkpoint advance', () => {

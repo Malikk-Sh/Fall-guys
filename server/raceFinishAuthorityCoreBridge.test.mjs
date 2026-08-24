@@ -6,6 +6,7 @@ const require = createRequire(import.meta.url);
 const { createCourseSpec } = require('../shared/courseSpec.js');
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const { createRaceFinishAuthorityCoreBridge } = require('./raceFinishAuthorityCoreBridge');
+const { RACE_FINISH_Z_TOLERANCE } = require('./raceProgressSpatialGuard');
 
 function player(overrides = {}) {
   return {
@@ -29,9 +30,10 @@ function decision(overrides = {}) {
   });
 }
 
-function fixture({ outcome = decision(), error = null, legacyResult = true } = {}) {
+function fixture({ outcome = decision(), error = null, legacyResult = true, validateResult = null } = {}) {
   const decisionCalls = [];
   const legacyCalls = [];
+  const validationCalls = [];
   const finishDecision = {
     decide(options) {
       decisionCalls.push(options);
@@ -40,6 +42,12 @@ function fixture({ outcome = decision(), error = null, legacyResult = true } = {
     }
   };
   const gameRules = {
+    validateState(currentPlayer, value, spec, now) {
+      validationCalls.push({ player: currentPlayer, value, spec, now });
+      if (typeof validateResult === 'function') return validateResult(currentPlayer, value, spec, now);
+      if (validateResult) return validateResult;
+      return { ok: true, state: { ...value }, checkpoint: currentPlayer.checkpoint };
+    },
     canFinish(currentPlayer, spec) {
       legacyCalls.push({ player: currentPlayer, spec });
       return legacyResult;
@@ -47,7 +55,14 @@ function fixture({ outcome = decision(), error = null, legacyResult = true } = {
   };
   const bridge = createRaceFinishAuthorityCoreBridge({ finishDecision });
   assert.equal(bridge.installGameRules(gameRules), true);
-  return { bridge, gameRules, decisionCalls, legacyCalls };
+  return { bridge, gameRules, decisionCalls, legacyCalls, validationCalls };
+}
+
+function acceptState(gameRules, currentPlayer, spec, state, now) {
+  const result = gameRules.validateState(currentPlayer, state, spec, now);
+  assert.equal(result.ok, true);
+  currentPlayer.last = { ...result.state };
+  return result;
 }
 
 test('legacy authority preserves the original core finish gate and assigned finish time', () => {
@@ -66,25 +81,50 @@ test('legacy authority preserves the original core finish gate and assigned fini
   assert.equal(bridge.hasPending(currentPlayer), false);
 });
 
-test('legacy race finish requires the accepted state to remain inside the course region', () => {
+test('legacy finish requires a valid crossing point and keeps it across the trailing finish packet', () => {
   const spec = createCourseSpec(9, 'easy');
+  const line = spec.finishZ + RACE_FINISH_Z_TOLERANCE;
   const currentPlayer = player({
     checkpoint: spec.segmentCount,
-    last: { x: 20, y: 1, z: spec.finishZ - 0.2 }
+    last: { x: 20, y: 1, z: line + 0.1 }
   });
   const { bridge, gameRules, legacyCalls } = fixture({ legacyResult: true });
   bridge.attachPlayer(currentPlayer);
 
-  assert.equal(gameRules.canFinish(currentPlayer, spec), false, 'sideways finish cannot count');
-  assert.equal(legacyCalls.length, 0, 'hard result boundary runs before the legacy finish gate');
+  // This is the P1 bypass: the packet endpoint is centered on the course, but interpolation shows
+  // that the finish plane itself was crossed far outside the finish runout.
+  acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line - 1 }, 500);
+  assert.equal(gameRules.canFinish(currentPlayer, spec), false);
+  assert.equal(legacyCalls.length, 0, 'invalid spatial crossing never reaches the legacy finish gate');
 
-  currentPlayer.last = { x: 0, y: 7, z: spec.finishZ - 0.2 };
-  assert.equal(gameRules.canFinish(currentPlayer, spec), false, 'finish high above the course cannot count');
-  assert.equal(legacyCalls.length, 0);
-
-  currentPlayer.last = { x: 0, y: 1, z: spec.finishZ - 0.2 };
-  assert.equal(gameRules.canFinish(currentPlayer, spec), true, 'ordinary finish still reaches legacy gate');
+  // Returning in front of the line clears any old evidence. A clean crossing through the actual
+  // finish region then latches, and a later FINISH packet may remain behind the line without having
+  // to cross it a second time.
+  acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line + 0.2 }, 600);
+  acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line - 0.2 }, 700);
+  acceptState(gameRules, currentPlayer, spec, { x: 0.2, y: 1, z: line - 0.5 }, 800);
+  assert.equal(gameRules.canFinish(currentPlayer, spec), true, 'valid crossing survives the trailing finish state');
   assert.equal(legacyCalls.length, 1);
+
+  // A respawn/return before the plane invalidates the latch; it cannot authorize a later bypass.
+  acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line + 0.3 }, 900);
+  assert.equal(gameRules.canFinish(currentPlayer, spec), false);
+  assert.equal(legacyCalls.length, 1);
+});
+
+test('legacy finish rejects a crossing high above the course even when the endpoint returns inside', () => {
+  const spec = createCourseSpec(19, 'easy');
+  const line = spec.finishZ + RACE_FINISH_Z_TOLERANCE;
+  const currentPlayer = player({
+    checkpoint: spec.segmentCount,
+    last: { x: 0, y: 7, z: line + 0.1 }
+  });
+  const { bridge, gameRules, legacyCalls } = fixture({ legacyResult: true });
+  bridge.attachPlayer(currentPlayer);
+
+  acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line - 1 }, 500);
+  assert.equal(gameRules.canFinish(currentPlayer, spec), false);
+  assert.equal(legacyCalls.length, 0);
 });
 
 test('shadow reject blocks the legacy core gate even when legacy would accept', () => {
@@ -225,5 +265,6 @@ test('player time seam is idempotent and can be restored to plain data', () => {
 test('gameRules installation is idempotent for the same bridge', () => {
   const { bridge, gameRules } = fixture();
   assert.equal(bridge.installGameRules(gameRules), false);
+  assert.equal(gameRules.validateState, bridge.validateState);
   assert.equal(gameRules.canFinish, bridge.canFinish);
 });

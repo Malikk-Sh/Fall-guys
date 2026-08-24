@@ -2,6 +2,10 @@
 
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const raceFinishAuthorityDecision = require('./raceFinishAuthorityDecision');
+const {
+  isRaceCourseSpec,
+  raceProgressPositionAllowed
+} = require('./raceProgressSpatialGuard');
 
 function createMetrics() {
   return {
@@ -29,7 +33,15 @@ function createRaceFinishAuthorityCoreBridge({ finishDecision = raceFinishAuthor
 
   function canFinish(player, spec) {
     const pending = player ? pendingByPlayer.get(player) : null;
+    // A shadow accept comes from shadowRaceProgress, which applies the same spatial guard to the
+    // server-owned simulated position before it can mark progress finished. Do not re-check the
+    // lagging client snapshot here or a valid server finish could be rejected by network delay.
     if (pending?.source === AUTHORITY_SOURCE.SHADOW) return pending.accept === true;
+
+    // Legacy progress is based on the last accepted client state. It still has to be inside the
+    // canonical race corridor; reaching the finish Z plane far beside or high above the course is
+    // movement, but it is not a valid race result.
+    if (isRaceCourseSpec(spec) && !raceProgressPositionAllowed(spec, player?.last)) return false;
     return typeof legacyCanFinish === 'function' ? legacyCanFinish(player, spec) : false;
   }
 

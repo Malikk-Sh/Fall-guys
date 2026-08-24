@@ -107,6 +107,28 @@ test('race checkpoint advance is suppressed outside the course corridor without 
   assert.equal(actual.state.checkpoint, 0);
 });
 
+test('diagonal checkpoint update validates the point on the plane instead of its inside endpoint', () => {
+  const spec = createCourseSpec(17, 'easy');
+  const line = spec.checkpoints[0];
+  const currentRoom = room({ spec });
+  const currentPlayer = player({
+    checkpoint: 0,
+    last: { x: 20, y: 1, z: line + 0.1 }
+  });
+  const insideEndpoint = legacyResult(1);
+  insideEndpoint.state = { ...insideEndpoint.state, x: 0, y: 1, z: line - 1, checkpoint: 1 };
+  const { bridge, gameRules } = fixture({
+    source: AUTHORITY_SOURCE.LEGACY,
+    validateResult: insideEndpoint
+  });
+  attach(bridge, currentRoom, currentPlayer);
+
+  const actual = gameRules.validateState(currentPlayer, {}, spec, 500);
+  assert.equal(actual.ok, true, 'the accepted movement itself is unchanged');
+  assert.equal(actual.checkpoint, 0, 'crossing beside the course cannot be repaired by ending inside');
+  assert.equal(actual.state.checkpoint, 0);
+});
+
 test('race checkpoint advance is suppressed high above the course', () => {
   const spec = createCourseSpec(8, 'easy');
   const currentRoom = room({ spec });

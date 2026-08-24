@@ -71,12 +71,7 @@ function canFinishFromShadow(progress, current, spec, previous = null) {
     current.y > FINISH_MIN_Y;
   if (!eligible) return false;
   if (!isRaceCourseSpec(spec)) return true;
-  return raceProgressCrossingAllowed(
-    spec,
-    previous,
-    current,
-    spec.finishZ + FINISH_Z_TOLERANCE
-  );
+  return raceProgressCrossingAllowed(spec, previous, current, spec.finishZ + FINISH_Z_TOLERANCE);
 }
 
 function advanceShadowRaceProgress(progress, previousState, currentState, spec, serverTick = null) {

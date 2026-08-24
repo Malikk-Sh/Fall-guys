@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const { createCourseSpec } = require('../shared/courseSpec.js');
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const { createRaceFinishAuthorityCoreBridge } = require('./raceFinishAuthorityCoreBridge');
 
@@ -65,6 +66,27 @@ test('legacy authority preserves the original core finish gate and assigned fini
   assert.equal(bridge.hasPending(currentPlayer), false);
 });
 
+test('legacy race finish requires the accepted state to remain inside the course region', () => {
+  const spec = createCourseSpec(9, 'easy');
+  const currentPlayer = player({
+    checkpoint: spec.segmentCount,
+    last: { x: 20, y: 1, z: spec.finishZ - 0.2 }
+  });
+  const { bridge, gameRules, legacyCalls } = fixture({ legacyResult: true });
+  bridge.attachPlayer(currentPlayer);
+
+  assert.equal(gameRules.canFinish(currentPlayer, spec), false, 'sideways finish cannot count');
+  assert.equal(legacyCalls.length, 0, 'hard result boundary runs before the legacy finish gate');
+
+  currentPlayer.last = { x: 0, y: 7, z: spec.finishZ - 0.2 };
+  assert.equal(gameRules.canFinish(currentPlayer, spec), false, 'finish high above the course cannot count');
+  assert.equal(legacyCalls.length, 0);
+
+  currentPlayer.last = { x: 0, y: 1, z: spec.finishZ - 0.2 };
+  assert.equal(gameRules.canFinish(currentPlayer, spec), true, 'ordinary finish still reaches legacy gate');
+  assert.equal(legacyCalls.length, 1);
+});
+
 test('shadow reject blocks the legacy core gate even when legacy would accept', () => {
   const currentPlayer = player();
   const { bridge, gameRules, legacyCalls } = fixture({
@@ -116,6 +138,35 @@ test('shadow accept overrides the legacy gate and captures the server-owned fini
   bridge.clear(currentPlayer);
   currentPlayer.time = null;
   assert.equal(currentPlayer.time, null, 'later lifecycle resets are normal after the decision is consumed');
+});
+
+test('shadow accept does not re-check the lagging client snapshot', () => {
+  const spec = createCourseSpec(11, 'easy');
+  const currentPlayer = player({
+    checkpoint: spec.segmentCount,
+    // A shadow finish has already been spatially checked against server-owned simulation. This
+    // snapshot is intentionally stale/invalid for the finish region and must not override it.
+    last: { x: 20, y: 20, z: spec.finishZ + 10 }
+  });
+  const { bridge, gameRules, legacyCalls } = fixture({
+    legacyResult: false,
+    outcome: decision({
+      source: AUTHORITY_SOURCE.SHADOW,
+      handled: true,
+      accept: true,
+      progress: { checkpoint: spec.segmentCount, finished: true },
+      finishTimeMs: 450,
+      finishServerTime: 1450,
+      finishServerTick: 29,
+      serverTick: 30,
+      lastProcessedInput: 7
+    })
+  });
+
+  bridge.attachPlayer(currentPlayer);
+  bridge.prepare({ room: { matchId: 'm1', spec }, player: currentPlayer });
+  assert.equal(gameRules.canFinish(currentPlayer, spec), true);
+  assert.equal(legacyCalls.length, 0);
 });
 
 test('malformed accepted shadow timing fails closed before core can finish', () => {

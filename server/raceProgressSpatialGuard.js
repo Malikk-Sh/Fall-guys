@@ -40,12 +40,7 @@ function zonesFor(spec) {
 }
 
 function raceProgressPositionAllowed(spec, state) {
-  if (
-    !state ||
-    !Number.isFinite(state.x) ||
-    !Number.isFinite(state.y) ||
-    !Number.isFinite(state.z)
-  )
+  if (!state || !Number.isFinite(state.x) || !Number.isFinite(state.y) || !Number.isFinite(state.z))
     return false;
 
   const zones = zonesFor(spec);

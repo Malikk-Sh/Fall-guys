@@ -6,7 +6,9 @@ const require = createRequire(import.meta.url);
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
 const spec = Object.freeze({
-  checkpoints: [-18, -36],
+  segmentCount: 2,
+  segments: Object.freeze([{ type: 'sweepers' }, { type: 'bridge' }]),
+  checkpoints: Object.freeze([-18, -36]),
   finishZ: -49
 });
 
@@ -49,11 +51,11 @@ test('one fixed server step can advance at most one checkpoint', () => {
   assert.deepEqual(result.events, [{ type: 'checkpoint', checkpoint: 1 }]);
 });
 
-test('checkpoint crossing preserves the existing server gate for width and height', () => {
+test('checkpoint crossing must stay inside the canonical course corridor', () => {
   const tooWide = advanceShadowRaceProgress(
     createShadowRaceProgress(spec),
     state(0, 1, -17),
-    state(11, 1, -19),
+    state(7, 1, -19),
     spec,
     30
   );
@@ -67,6 +69,15 @@ test('checkpoint crossing preserves the existing server gate for width and heigh
     31
   );
   assert.equal(tooLow.progress.checkpoint, 0);
+
+  const tooHigh = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec),
+    state(0, 1, -17),
+    state(0, 7, -19),
+    spec,
+    32
+  );
+  assert.equal(tooHigh.progress.checkpoint, 0);
 });
 
 test('server shadow finish is impossible until every checkpoint is owned by server progress', () => {
@@ -90,6 +101,26 @@ test('server shadow finish is impossible until every checkpoint is owned by serv
   assert.equal(complete.progress.finished, true);
   assert.equal(complete.progress.finishServerTick, 41);
   assert.deepEqual(complete.events, [{ type: 'finish', checkpoint: 2, serverTick: 41 }]);
+});
+
+test('shadow finish also requires the server-owned position to remain inside the finish region', () => {
+  const beside = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec, { checkpoint: 2 }),
+    state(0, 1, -48),
+    state(7, 1, -49),
+    spec,
+    42
+  );
+  assert.equal(beside.progress.finished, false);
+
+  const high = advanceShadowRaceProgress(
+    createShadowRaceProgress(spec, { checkpoint: 2 }),
+    state(0, 1, -48),
+    state(0, 7, -49),
+    spec,
+    43
+  );
+  assert.equal(high.progress.finished, false);
 });
 
 test('the final checkpoint and finish may be recognized in the same fixed step', () => {

@@ -24,6 +24,7 @@ const {
   verifyMovement,
   resetHistory,
   canFinish,
+  finishRejection,
   leaderboard,
   budgetFor: raceAnomalyBudget
 } = require('./gameRules');
@@ -2413,21 +2414,28 @@ wss.on('connection', (ws, req) => {
       if (tail) addVerificationFindings(room, player, [tail.reason], tail);
 
       if (!canFinish(player, room.spec)) {
+        const rejection = finishRejection(player, room.spec);
         metrics.finishRejected++;
         log('info', 'finish_rejected', {
           roomId: room.code,
           matchId: room.matchId,
-          playerId: player.id
+          playerId: player.id,
+          reason: rejection.reason
         });
+        gameplay.count('finish_rejected', dims(room, player, rejection.reason));
         // Отказ помечен явно, а не спрятан в обычную коррекцию: клиент должен понять, что финиш
         // НЕ засчитан, и повторить его после следующего валидного состояния. Раньше он видел
         // рядовую коррекцию, считал себя финишировавшим и навсегда оставался в «Подтверждаем
         // результат…».
+        //
+        // Место возврата зависит от причины — см. `finishRejection`. Возврат в одну и ту же точку
+        // для обеих причин и был вторым способом остаться в «Подтверждаем результат…» навсегда.
         return send(ws, {
           type: S2C.FINISH_REJECTED,
           matchId: room.matchId,
-          position: player.last || spawnFor(room.spec, player.checkpoint),
-          reason: 'finish-validation'
+          position: rejection.position,
+          checkpoint: player.checkpoint,
+          reason: rejection.reason
         });
       }
       player.finished = true;

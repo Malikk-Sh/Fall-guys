@@ -130,18 +130,33 @@ export function bindNetwork(game) {
   });
 
   game.net.on('finishRejected', message => {
+    // Отказ из ПРОШЛОГО забега применять нельзя: он телепортировал бы игрока посреди нового.
+    if (message.matchId && game.net.matchId && message.matchId !== game.net.matchId) return;
     game.net.allowFinishRetry();
     game.session.reopenFinish();
     game.player.finished = false;
     game.running = true;
     game.input.enabled = true;
+    // Единственное место, где счётчик чекпоинтов на клиенте едет ВНИЗ.
+    //
+    // Обычная коррекция его только поднимает (`Math.max`), и это правильно: она приходит и с
+    // опозданием, и вперемешку. Здесь другое — сервер прямым текстом отвечает на вопрос «мой забег
+    // закончен?»: нет, последняя арка не пройдена. Оставить счётчик впереди значит оставить и точку
+    // возрождения впереди арки — игрок падал бы обратно за неё и не мог пересечь её никогда.
+    if (message.reason === 'checkpoint-missing' && Number.isInteger(message.checkpoint)) {
+      game.player.rollbackCheckpoint(message.checkpoint);
+    }
     if (message.position) {
       game.player.respawn(
         new THREE.Vector3(message.position.x, message.position.y, message.position.z),
         false
       );
     }
-    game.ui.toast('Финиш не засчитан — добегите до ленты ещё раз.');
+    game.ui.toast(
+      message.reason === 'checkpoint-missing'
+        ? 'Последний чекпоинт не засчитан — пройдите через арку.'
+        : 'Финиш не засчитан — добегите до ленты ещё раз.'
+    );
   });
 
   // Клиент старее сервера. Всплывающая подсказка тут не годится: она исчезнет через пять секунд,

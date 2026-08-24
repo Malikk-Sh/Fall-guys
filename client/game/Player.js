@@ -484,6 +484,17 @@ export class Player {
     return current + delta * (1 - Math.exp(-smoothing * dt));
   }
 
+  // Откат счётчика чекпоинтов к серверному. Вызывается ТОЛЬКО когда сервер прямо сказал, что арка
+  // не пройдена, — см. обработчик `finishRejected`. Вместе со счётчиком назад едет и точка
+  // возрождения: разъехавшись, они оставляли бы игрока падать за арку, которую ему надо пересечь.
+  rollbackCheckpoint(checkpoint) {
+    const target = Math.max(0, Math.min(checkpoint, this.checkpoint));
+    if (target === this.checkpoint) return false;
+    this.checkpoint = target;
+    this.spawn.copy(this.course.spawnFor(target));
+    return true;
+  }
+
   respawn(authoritativePosition = null, notify = true) {
     if (notify) this.respawns++;
     this.effects.burst(this.physics, COLORS.cyan, 18, 1);

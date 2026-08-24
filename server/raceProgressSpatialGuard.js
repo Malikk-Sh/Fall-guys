@@ -1,10 +1,6 @@
 'use strict';
 
-const {
-  CORRIDOR_MARGIN,
-  corridorHalfWidth,
-  corridorZones
-} = require('../shared/courseSpec.js');
+const { CORRIDOR_MARGIN, corridorHalfWidth, corridorZones } = require('../shared/courseSpec.js');
 
 // Progress is a server-owned result boundary, not a movement rule. The player may move anywhere
 // allowed by the ordinary state validator, but a checkpoint/finish only counts while the accepted

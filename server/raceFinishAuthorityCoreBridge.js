@@ -2,10 +2,7 @@
 
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const raceFinishAuthorityDecision = require('./raceFinishAuthorityDecision');
-const {
-  isRaceCourseSpec,
-  raceProgressPositionAllowed
-} = require('./raceProgressSpatialGuard');
+const { isRaceCourseSpec, raceProgressPositionAllowed } = require('./raceProgressSpatialGuard');
 
 function createMetrics() {
   return {

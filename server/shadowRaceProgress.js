@@ -1,10 +1,11 @@
 'use strict';
 
-const { raceProgressPositionAllowed } = require('./raceProgressSpatialGuard');
+const { isRaceCourseSpec, raceProgressPositionAllowed } = require('./raceProgressSpatialGuard');
 
-// Kept as the coarse crossing predicate for compatibility with the existing pure helpers. Actual
-// progress additionally passes through raceProgressPositionAllowed(), which uses the canonical
-// course corridor and the common vertical progress cap.
+// Kept as the coarse crossing predicate for compatibility with the existing pure helpers. Full
+// gameplay specs additionally pass through raceProgressPositionAllowed(), which uses the canonical
+// course corridor and the common vertical progress cap. Minimal diagnostic/test specs historically
+// contain only checkpoints + finishZ; they deliberately retain this coarse contract.
 const CHECKPOINT_HALF_WIDTH = 11;
 const CHECKPOINT_MIN_Y = -3;
 const FINISH_MIN_Y = -4;
@@ -53,13 +54,17 @@ function checkpointCrossed(previous, current, line) {
   );
 }
 
+function fullSpecPositionAllowed(spec, current) {
+  return !isRaceCourseSpec(spec) || raceProgressPositionAllowed(spec, current);
+}
+
 function canFinishFromShadow(progress, current, spec) {
   return (
     !progress.finished &&
     progress.checkpoint === spec.checkpoints.length &&
     current.z < spec.finishZ + FINISH_Z_TOLERANCE &&
     current.y > FINISH_MIN_Y &&
-    raceProgressPositionAllowed(spec, current)
+    fullSpecPositionAllowed(spec, current)
   );
 }
 
@@ -75,7 +80,7 @@ function advanceShadowRaceProgress(progress, previousState, currentState, spec, 
   if (
     line !== undefined &&
     checkpointCrossed(previous, current, line) &&
-    raceProgressPositionAllowed(spec, current)
+    fullSpecPositionAllowed(spec, current)
   ) {
     next.checkpoint += 1;
     events.push({ type: 'checkpoint', checkpoint: next.checkpoint });

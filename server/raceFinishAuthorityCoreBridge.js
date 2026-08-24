@@ -2,7 +2,11 @@
 
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const raceFinishAuthorityDecision = require('./raceFinishAuthorityDecision');
-const { isRaceCourseSpec, raceProgressPositionAllowed } = require('./raceProgressSpatialGuard');
+const {
+  RACE_FINISH_Z_TOLERANCE,
+  isRaceCourseSpec,
+  raceProgressCrossingAllowed
+} = require('./raceProgressSpatialGuard');
 
 function createMetrics() {
   return {
@@ -25,32 +29,83 @@ function createRaceFinishAuthorityCoreBridge({ finishDecision = raceFinishAuthor
 
   const pendingByPlayer = new WeakMap();
   const timeStateByPlayer = new WeakMap();
+  const finishCrossingByPlayer = new WeakMap();
+  let innerValidateState = null;
   let legacyCanFinish = null;
   let counters = createMetrics();
 
+  function observeFinishCrossing(player, spec, previous, current) {
+    if (!player || !isRaceCourseSpec(spec)) return;
+    const line = spec.finishZ + RACE_FINISH_Z_TOLERANCE;
+    const existing = finishCrossingByPlayer.get(player);
+    if (existing?.spec !== spec) finishCrossingByPlayer.delete(player);
+
+    if (!current || !Number.isFinite(current.z)) {
+      finishCrossingByPlayer.delete(player);
+      return;
+    }
+    // Going back in front of the finish boundary invalidates an old crossing. A later finish must
+    // then prove a new crossing instead of reusing evidence from a previous pass or respawn.
+    if (current.z >= line) {
+      finishCrossingByPlayer.delete(player);
+      return;
+    }
+
+    if (previous && raceProgressCrossingAllowed(spec, previous, current, line)) {
+      finishCrossingByPlayer.set(player, { spec });
+      return;
+    }
+    // We crossed the plane, but not inside the allowed spatial region. Make that explicit rather
+    // than preserving any stale evidence.
+    if (previous && Number.isFinite(previous.z) && previous.z >= line) {
+      finishCrossingByPlayer.delete(player);
+    }
+  }
+
+  function validateState(player, value, spec, now) {
+    if (typeof innerValidateState !== 'function') {
+      throw new Error('race finish authority core bridge is not installed');
+    }
+    const previous = player?.last || null;
+    const result = innerValidateState(player, value, spec, now);
+    if (result?.ok && isRaceCourseSpec(spec)) {
+      observeFinishCrossing(player, spec, previous, result.state);
+    }
+    return result;
+  }
+
   function canFinish(player, spec) {
     const pending = player ? pendingByPlayer.get(player) : null;
-    // A shadow accept comes from shadowRaceProgress, which applies the same spatial guard to the
-    // server-owned simulated position before it can mark progress finished. Do not re-check the
-    // lagging client snapshot here or a valid server finish could be rejected by network delay.
+    // A shadow accept comes from shadowRaceProgress, which checks the exact finish-plane crossing
+    // against server-owned simulation. Do not re-check the lagging client snapshot here or a valid
+    // server finish could be rejected by network delay.
     if (pending?.source === AUTHORITY_SOURCE.SHADOW) return pending.accept === true;
 
-    // Legacy progress is based on the last accepted client state. It still has to be inside the
-    // canonical race corridor; reaching the finish Z plane far beside or high above the course is
-    // movement, but it is not a valid race result.
-    if (isRaceCourseSpec(spec) && !raceProgressPositionAllowed(spec, player?.last)) return false;
+    if (isRaceCourseSpec(spec)) {
+      const line = spec.finishZ + RACE_FINISH_Z_TOLERANCE;
+      const crossing = player ? finishCrossingByPlayer.get(player) : null;
+      if (crossing?.spec !== spec || !Number.isFinite(player?.last?.z) || player.last.z >= line) {
+        return false;
+      }
+    }
     return typeof legacyCanFinish === 'function' ? legacyCanFinish(player, spec) : false;
   }
 
   function installGameRules(gameRules) {
-    if (!gameRules || typeof gameRules.canFinish !== 'function') {
-      throw new TypeError('race finish authority core bridge requires gameRules.canFinish');
+    if (
+      !gameRules ||
+      typeof gameRules.validateState !== 'function' ||
+      typeof gameRules.canFinish !== 'function'
+    ) {
+      throw new TypeError('race finish authority core bridge requires gameRules validation and finish gates');
     }
-    if (gameRules.canFinish === canFinish) return false;
-    if (legacyCanFinish && gameRules.canFinish !== legacyCanFinish) {
+    if (gameRules.validateState === validateState && gameRules.canFinish === canFinish) return false;
+    if (innerValidateState || legacyCanFinish) {
       throw new Error('race finish authority core bridge is already installed on another gameRules object');
     }
+    innerValidateState = gameRules.validateState;
     legacyCanFinish = gameRules.canFinish;
+    gameRules.validateState = validateState;
     gameRules.canFinish = canFinish;
     return true;
   }
@@ -96,6 +151,7 @@ function createRaceFinishAuthorityCoreBridge({ finishDecision = raceFinishAuthor
     if (!state) return false;
     const value = state.value;
     pendingByPlayer.delete(player);
+    finishCrossingByPlayer.delete(player);
     timeStateByPlayer.delete(player);
     delete player.time;
     Object.defineProperty(player, 'time', {
@@ -180,7 +236,8 @@ function createRaceFinishAuthorityCoreBridge({ finishDecision = raceFinishAuthor
     managesPlayer,
     metrics,
     prepare,
-    reset
+    reset,
+    validateState
   });
 }
 

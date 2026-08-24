@@ -3,6 +3,10 @@
 const { GAME_MODE } = require('../shared/protocol.js');
 const { AUTHORITY_SOURCE } = require('./raceProgressAuthoritySelector');
 const raceProgressAuthorityMatchGuard = require('./raceProgressAuthorityMatchGuard');
+const {
+  isRaceCourseSpec,
+  raceProgressPositionAllowed
+} = require('./raceProgressSpatialGuard');
 
 function createMetrics() {
   return {
@@ -47,6 +51,24 @@ function createRaceCheckpointAuthorityCoreBridge({ matchGuard = raceProgressAuth
     counters.calls += 1;
     const result = legacyValidateState(player, value, spec, now);
     if (!result?.ok) return result;
+
+    // This is a common result boundary, independent of legacy/shadow authority. The legacy
+    // validator may project a checkpoint from the crossed Z plane, but that projection is not a
+    // valid race result when the accepted endpoint is outside the actual course corridor or high
+    // above it. Movement itself stays accepted; only the checkpoint advance is suppressed.
+    const previousCheckpoint = player?.checkpoint;
+    if (
+      isRaceCourseSpec(spec) &&
+      Number.isSafeInteger(previousCheckpoint) &&
+      result.checkpoint > previousCheckpoint &&
+      !raceProgressPositionAllowed(spec, result.state)
+    ) {
+      return {
+        ...result,
+        checkpoint: previousCheckpoint,
+        state: { ...result.state, checkpoint: previousCheckpoint }
+      };
+    }
 
     const room = attachedRoomFor(player, spec);
     if (!room) {

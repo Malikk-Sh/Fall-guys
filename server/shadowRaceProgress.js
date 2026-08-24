@@ -1,5 +1,10 @@
 'use strict';
 
+const { raceProgressPositionAllowed } = require('./raceProgressSpatialGuard');
+
+// Kept as the coarse crossing predicate for compatibility with the existing pure helpers. Actual
+// progress additionally passes through raceProgressPositionAllowed(), which uses the canonical
+// course corridor and the common vertical progress cap.
 const CHECKPOINT_HALF_WIDTH = 11;
 const CHECKPOINT_MIN_Y = -3;
 const FINISH_MIN_Y = -4;
@@ -53,7 +58,8 @@ function canFinishFromShadow(progress, current, spec) {
     !progress.finished &&
     progress.checkpoint === spec.checkpoints.length &&
     current.z < spec.finishZ + FINISH_Z_TOLERANCE &&
-    current.y > FINISH_MIN_Y
+    current.y > FINISH_MIN_Y &&
+    raceProgressPositionAllowed(spec, current)
   );
 }
 
@@ -66,7 +72,11 @@ function advanceShadowRaceProgress(progress, previousState, currentState, spec, 
 
   const events = [];
   const line = spec.checkpoints[next.checkpoint];
-  if (line !== undefined && checkpointCrossed(previous, current, line)) {
+  if (
+    line !== undefined &&
+    checkpointCrossed(previous, current, line) &&
+    raceProgressPositionAllowed(spec, current)
+  ) {
     next.checkpoint += 1;
     events.push({ type: 'checkpoint', checkpoint: next.checkpoint });
   }

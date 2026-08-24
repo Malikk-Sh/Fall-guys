@@ -103,7 +103,11 @@ test('legacy finish requires a valid crossing point and keeps it across the trai
   acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line + 0.2 }, 600);
   acceptState(gameRules, currentPlayer, spec, { x: 0, y: 1, z: line - 0.2 }, 700);
   acceptState(gameRules, currentPlayer, spec, { x: 0.2, y: 1, z: line - 0.5 }, 800);
-  assert.equal(gameRules.canFinish(currentPlayer, spec), true, 'valid crossing survives the trailing finish state');
+  assert.equal(
+    gameRules.canFinish(currentPlayer, spec),
+    true,
+    'valid crossing survives the trailing finish state'
+  );
   assert.equal(legacyCalls.length, 1);
 
   // A respawn/return before the plane invalidates the latch; it cannot authorize a later bypass.

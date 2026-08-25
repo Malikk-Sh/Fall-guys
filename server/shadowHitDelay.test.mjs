@@ -21,13 +21,17 @@ const {
 
 // Прогон двух потоков событий через сопоставление, как это делает runtime: решённое складывается,
 // задержки уходят в гистограмму.
-function run(events, { tolerance = HIT_MATCH_TOLERANCE_TICKS, ticks = 400 } = {}) {
+//
+// `stamp` — возраст клиентского снимка в тиках: столько времени проходит между тем, как клиент
+// увидел удар, и тем, как сервер об этом узнал. Ноль означает «штампуем часами», то есть прежнее
+// поведение.
+function run(events, { tolerance = HIT_MATCH_TOLERANCE_TICKS, ticks = 400, stamp = 0 } = {}) {
   const pairing = new EventPairing(tolerance);
   const delays = createMatchDelayHistogram(tolerance);
   const totals = { matched: 0, leftOnly: 0, rightOnly: 0 };
 
   for (let tick = 0; tick <= ticks; tick++) {
-    const decided = pairing.observe(tick, events.server.has(tick), events.client.has(tick));
+    const decided = pairing.observe(tick, events.server.has(tick), events.client.has(tick), tick - stamp);
     totals.matched += decided.matched;
     totals.leftOnly += decided.leftOnly;
     totals.rightOnly += decided.rightOnly;
@@ -145,6 +149,96 @@ test('снимок не отдаёт наружу изменяемое нутр�
   const snapshot = delays.snapshot();
   snapshot.buckets[0] = 999;
   assert.equal(delays.snapshot().buckets[0], 0, 'правка снимка не должна менять счётчики');
+});
+
+// Возраст снимка — не расхождение симуляций, и путать их нельзя.
+//
+// Клиентский удар СЛУЧАЕТСЯ у клиента, а сервер лишь УЗНАЁТ о нём — из снимка, который старше на
+// интервал рассылки плюс задержку сети. Пока обе стороны штамповались часами сервера, замер видел
+// этот возраст как сдвиг: на проде вышло среднее −2.07 тика при 19 «сервер раньше» против 5
+// «клиент раньше». Половина интервала рассылки (33 мс) плюс типичная задержка и есть эти 69 мс.
+//
+// Тест держит различающую способность: один и тот же поток событий, отмеченный своим временем,
+// обязан дать нулевой центр, а отмеченный временем приёма — сдвиг ровно на возраст снимка.
+test('возраст снимка перестаёт читаться как сдвиг, когда удар отмечен своим временем', () => {
+  const age = 3;
+  // Клиент видит удар одновременно с сервером, но сервер узнаёт об этом на `age` тиков позже.
+  const events = {
+    server: new Set(MOMENTS),
+    client: new Set(MOMENTS.map(t => t + age))
+  };
+
+  const byArrival = run(events);
+  assert.equal(byArrival.totals.matched, MOMENTS.length);
+  assert.equal(byArrival.delays.meanTicks, -age, 'по времени приёма виден сдвиг величиной в возраст');
+  assert.equal(byArrival.delays.serverLeads, MOMENTS.length, 'и весь перекос на серверную сторону');
+
+  const byClientClock = run(events, { stamp: age });
+  assert.equal(byClientClock.totals.matched, MOMENTS.length, 'пары обязаны сойтись и после сдвига');
+  assert.equal(byClientClock.delays.meanTicks, 0, 'своим временем центр обязан встать на ноль');
+  assert.equal(byClientClock.delays.serverLeads, 0);
+  assert.equal(byClientClock.delays.clientLeads, 0);
+  assert.equal(byClientClock.delays.simultaneous, MOMENTS.length);
+});
+
+test('настоящее расхождение отметка своим временем не прячет', () => {
+  // Обратная сторона: если стороны и правда расходятся, выравнивание обязано это сохранить, а не
+  // списать на возраст. Иначе починка замера превратилась бы в способ его ослепить.
+  const age = 3;
+  const divergence = 4;
+  const events = {
+    server: new Set(MOMENTS),
+    client: new Set(MOMENTS.map(t => t + age + divergence))
+  };
+  const aligned = run(events, { stamp: age });
+  assert.equal(aligned.totals.matched, MOMENTS.length);
+  assert.equal(aligned.delays.meanTicks, -divergence, 'остаётся ровно расхождение, без возраста');
+  assert.equal(aligned.delays.serverLeads, MOMENTS.length);
+});
+
+// Отметка задним числом ОКНО НЕ РАСШИРЯЕТ, и это осознанное ограничение починки.
+//
+// Просрочка закрывается по часам — иначе серверное ожидание доживало бы до пары, которой в
+// реальном времени уже нет, а клиент, отметивший удар далёким прошлым, воскрешал бы её. Значит
+// выравнивание исправляет ИЗМЕРЕННУЮ задержку у сошедшихся пар, но не решает, кто сойдётся: сойтись
+// успевают те, чей снимок ПРИШЁЛ в пределах допуска. Возраст снимка съедает часть окна — при
+// боевых двух тиках из десяти остаётся восемь, и это приемлемо; при возрасте в полдопуска стоило бы
+// думать заново.
+test('отметка задним числом не растягивает допуск', () => {
+  const age = 6;
+
+  // Пришло внутри допуска — пара сходится, а задержка считается по СВОИМ временам: 20 против 22.
+  const inside = run({ server: new Set([20]), client: new Set([28]) }, { stamp: age });
+  assert.equal(inside.totals.matched, 1, 'пришедшее вовремя обязано сойтись');
+  assert.equal(inside.delays.meanTicks, -2, 'задержка считается по отметкам, а не по приёму');
+
+  // Пришло за допуском — пары нет, хотя ОТМЕТКИ отстоят всего на 9 тиков и формально влезли бы.
+  // Вот это и значит «окно осталось окном приёма».
+  const late = run({ server: new Set([20]), client: new Set([35]) }, { stamp: age });
+  assert.equal(late.totals.matched, 0, 'опоздавшее не спасает даже отметка внутри допуска');
+  assert.equal(late.totals.leftOnly, 1);
+  assert.equal(late.totals.rightOnly, 1);
+});
+
+test('без отметки поведение прежнее — часы на обе стороны', () => {
+  // Клиентское время бывает недостоверным (старый клиент, разъехавшиеся часы). Тогда штамп
+  // остаётся прежним, и это должно быть ровно прежнее поведение, а не что-то третье.
+  const events = { server: new Set(MOMENTS), client: new Set(MOMENTS.map(t => t + 3)) };
+  const withoutStamp = run(events, { stamp: 0 });
+  const explicit = (() => {
+    const pairing = new EventPairing(HIT_MATCH_TOLERANCE_TICKS);
+    const delays = createMatchDelayHistogram(HIT_MATCH_TOLERANCE_TICKS);
+    let matched = 0;
+    for (let tick = 0; tick <= 400; tick++) {
+      // Четвёртого довода нет вовсе — умолчание обязано совпасть с явными часами.
+      const decided = pairing.observe(tick, events.server.has(tick), events.client.has(tick));
+      matched += decided.matched;
+      for (const value of decided.delays || []) delays.add(value);
+    }
+    return { matched, delays: delays.snapshot() };
+  })();
+  assert.equal(withoutStamp.totals.matched, explicit.matched);
+  assert.deepEqual(withoutStamp.delays, explicit.delays);
 });
 
 // Замер не имеет права трогать само сопоставление: `matchRate` — величина, по которой уже собраны

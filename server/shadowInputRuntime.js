@@ -335,8 +335,14 @@ class EventPairing {
     return this.pendingLeft.length + this.pendingRight.length;
   }
 
-  // Оба флага относятся к одному тику. Возвращается то, что решилось ИМЕННО НА ЭТОМ шаге.
-  observe(tick, leftFired, rightFired) {
+  // Возвращается то, что решилось ИМЕННО НА ЭТОМ шаге.
+  //
+  // `tick` — часы: по ним и только по ним закрывается просрочка. `rightTick` — собственная отметка
+  // клиентского события, и она может быть СТАРШЕ часов. Разделены они потому, что стороны попадают
+  // сюда по-разному: серверное событие рождается в текущем тике, а клиентское лишь НАБЛЮДАЕТСЯ в
+  // нём — приезжает в снимке, который старше на интервал рассылки плюс задержку сети. Пока обе
+  // стороны штамповались часами, замер видел эту задержку как расхождение симуляций.
+  observe(tick, leftFired, rightFired, rightTick = tick) {
     // Просрочка закрывается ДО сопоставления, а не после.
     //
     // Обратный порядок расширял окно на тик: ожидание возраста 11 успевало найти пару прежде, чем
@@ -359,8 +365,8 @@ class EventPairing {
         decided.matched += 1;
         // Сервер сработал РАНЬШЕ клиента — знак отрицательный. Знак один на оба случая:
         // serverTick − clientTick, и одновременность даёт ноль.
-        noteMatchDelay(decided, serverTick - tick);
-      } else this.pendingRight.push(tick);
+        noteMatchDelay(decided, serverTick - rightTick);
+      } else this.pendingRight.push(rightTick);
     }
     return decided;
   }
@@ -537,6 +543,10 @@ class ShadowInputRuntime {
     // Счётчики попаданий общие на процесс, а ОЖИДАНИЯ живут у каждого игрока (см. EventPairing).
     this.hitTotals = noHitDecisions();
     this.hitMatchDelay = createMatchDelayHistogram();
+    // Сколько клиентских ударов удалось отметить их собственным временем, а сколько — временем
+    // приёма. Смешивать их в одной гистограмме нельзя молча: у неотмеченных задержка завышена на
+    // возраст снимка, и вместе они дают двугорбое распределение, читающееся как шум.
+    this.hitClientStamp = { aligned: 0, unaligned: 0 };
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -797,8 +807,35 @@ class ShadowInputRuntime {
     const clientKnockdown = player.last?.state === 'knockdown';
     const clientKnockdownStarted = clientKnockdown && !controller.clientWasKnockedDown;
     controller.clientWasKnockedDown = clientKnockdown;
+
+    // Клиентский удар отмечается СВОИМ временем, а не временем приёма.
+    //
+    // Серверное сбивание рождается в текущем тике, а клиентское лишь наблюдается в нём: оно
+    // приезжает в снимке, который старше на интервал рассылки (66 мс) плюс задержку сети. Пока обе
+    // стороны штамповались часами сервера, замер видел эту задержку как расхождение симуляций — и
+    // видел ровно её: на проде среднее вышло −2.07 тика (69 мс), сервер вёл в 19 случаях из 28.
+    // Половина интервала рассылки плюс типичная задержка — это и есть 69 мс.
+    //
+    // Тем же полем и по тем же правилам доверия уже пользуется сверка опоры (`trustedCourseTime`):
+    // значение принимается, только если сходится с часами сервера. Соврать внутри окна клиент
+    // по-прежнему может, но это диагностика в режиме отчёта, а не авторитет.
+    //
+    // Отметка не уезжает вперёд часов: расхождение в другую сторону сломало бы просрочку, которая
+    // держится на монотонности часов.
+    const snapshotAge = Number.isFinite(snapshotSeconds)
+      ? Math.max(0, Math.round((matchTime - snapshotSeconds) / SERVER_SIMULATION_DT))
+      : null;
+    if (clientKnockdownStarted) {
+      if (snapshotAge === null) this.hitClientStamp.unaligned += 1;
+      else this.hitClientStamp.aligned += 1;
+    }
     this.recordHitDecisions(
-      controller.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted)
+      controller.hitPairing.observe(
+        this.serverTick,
+        serverKnockdown,
+        clientKnockdownStarted,
+        snapshotAge === null ? this.serverTick : this.serverTick - snapshotAge
+      )
     );
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
@@ -1138,7 +1175,10 @@ class ShadowInputRuntime {
             // Распределение задержки внутри совпавших пар — см. createMatchDelayHistogram.
             // Отвечает на вопрос, который `matchRate` задать не может: сдвиг по времени или
             // разная геометрия.
-            matchDelay: this.hitMatchDelay.snapshot()
+            matchDelay: this.hitMatchDelay.snapshot(),
+            // Доля ударов, отмеченных собственным временем клиента. Пока она не близка к единице,
+            // `matchDelay` мерит в том числе возраст снимка, а не только расхождение.
+            clientStamp: { ...this.hitClientStamp }
           };
         })()
       }

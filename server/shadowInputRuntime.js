@@ -342,7 +342,11 @@ class EventPairing {
   // сюда по-разному: серверное событие рождается в текущем тике, а клиентское лишь НАБЛЮДАЕТСЯ в
   // нём — приезжает в снимке, который старше на интервал рассылки плюс задержку сети. Пока обе
   // стороны штамповались часами, замер видел эту задержку как расхождение симуляций.
-  observe(tick, leftFired, rightFired, rightTick = tick) {
+  //
+  // `rightAligned` — удалось ли отметить клиентское событие его собственным временем. Признак едет
+  // вместе с ожиданием и всплывает при выдаче задержки: доля выровненных имеет смысл считать только
+  // по тем событиям, что ПОПАЛИ В ГИСТОГРАММУ, а не по всем подряд.
+  observe(tick, leftFired, rightFired, rightTick = tick, rightAligned = false) {
     // Просрочка закрывается ДО сопоставления, а не после.
     //
     // Обратный порядок расширял окно на тик: ожидание возраста 11 успевало найти пару прежде, чем
@@ -351,24 +355,39 @@ class EventPairing {
     const decided = this.expire(tick);
     if (leftFired) {
       decided.left += 1;
-      if (this.pendingRight.length) {
-        const clientTick = this.pendingRight.shift();
+      const candidate = this.pendingRight[0];
+      if (candidate && this.withinTolerance(tick, candidate.tick)) {
+        this.pendingRight.shift();
         decided.matched += 1;
         // Сервер сработал ПОЗЖЕ клиента — знак положительный.
-        noteMatchDelay(decided, tick - clientTick);
+        noteMatchDelay(decided, tick - candidate.tick, candidate.aligned);
       } else this.pendingLeft.push(tick);
     }
     if (rightFired) {
       decided.right += 1;
-      if (this.pendingLeft.length) {
-        const serverTick = this.pendingLeft.shift();
+      const candidate = this.pendingLeft[0];
+      if (candidate !== undefined && this.withinTolerance(candidate, rightTick)) {
+        this.pendingLeft.shift();
         decided.matched += 1;
         // Сервер сработал РАНЬШЕ клиента — знак отрицательный. Знак один на оба случая:
         // serverTick − clientTick, и одновременность даёт ноль.
-        noteMatchDelay(decided, serverTick - rightTick);
-      } else this.pendingRight.push(rightTick);
+        noteMatchDelay(decided, candidate - rightTick, rightAligned);
+      } else this.pendingRight.push({ tick: rightTick, aligned: rightAligned });
     }
     return decided;
+  }
+
+  // Допуск проверяется по САМИМ ОТМЕТКАМ, а не только просрочкой по часам.
+  //
+  // Просрочки мало, и это стоило отдельного разбора. Клиентская отметка едет назад на возраст
+  // снимка, а серверное ожидание живёт по часам — поэтому снимок возрастом 15, принятый на тике 23,
+  // заставал в ожидании серверный удар с тика 20 и «совпадал» с ним, хотя отметки расходятся на 12
+  // при допуске 10. Гистограмма такую пару прижимала к крайней корзине — то есть подделывала ровно
+  // тот признак обрезанного хвоста, по которому этот случай и распознают.
+  //
+  // Отказ в паре не теряет событие: оно уходит в ожидание и закроется как одностороннее.
+  withinTolerance(left, right) {
+    return Math.abs(left - right) <= this.tolerance;
   }
 
   expire(tick) {
@@ -377,7 +396,7 @@ class EventPairing {
       this.pendingLeft.shift();
       decided.leftOnly += 1;
     }
-    while (this.pendingRight.length && tick - this.pendingRight[0] > this.tolerance) {
+    while (this.pendingRight.length && tick - this.pendingRight[0].tick > this.tolerance) {
       this.pendingRight.shift();
       decided.rightOnly += 1;
     }
@@ -409,8 +428,12 @@ function noHitDecisions() {
 // Поля в `noHitDecisions` намеренно нет: `expire` и `finalize` совпадений не дают вовсе, и форма их
 // ответа — часть контракта сопоставления, на который смотрят соседние тесты. Замер не имеет права
 // её менять; вызывающий читает `decided.delays || []`.
-function noteMatchDelay(decided, ticks) {
-  (decided.delays || (decided.delays = [])).push(ticks);
+// Вместе с задержкой едет и признак выравнивания клиентской стороны: доля выровненных имеет смысл
+// только по тем событиям, что попали в гистограмму. Считать её по всем клиентским ударам подряд —
+// значит мерить не то: односторонние в гистограмму не попадают вовсе, и знаменатель разъезжается с
+// числителем.
+function noteMatchDelay(decided, ticks, aligned = false) {
+  (decided.delays || (decided.delays = [])).push({ ticks, aligned: aligned === true });
 }
 
 // Распределение задержки между парой событий одного удара, в серверных тиках, со знаком
@@ -543,9 +566,13 @@ class ShadowInputRuntime {
     // Счётчики попаданий общие на процесс, а ОЖИДАНИЯ живут у каждого игрока (см. EventPairing).
     this.hitTotals = noHitDecisions();
     this.hitMatchDelay = createMatchDelayHistogram();
-    // Сколько клиентских ударов удалось отметить их собственным временем, а сколько — временем
-    // приёма. Смешивать их в одной гистограмме нельзя молча: у неотмеченных задержка завышена на
-    // возраст снимка, и вместе они дают двугорбое распределение, читающееся как шум.
+    // Чем отмечены удары, ПОПАВШИЕ В ГИСТОГРАММУ: своим временем клиента или временем приёма.
+    // Смешивать их нельзя молча — у неотмеченных задержка завышена на возраст снимка, и вместе они
+    // дают двугорбое распределение, читающееся как шум.
+    //
+    // Считается на выдаче задержки, а не на каждом клиентском ударе. Знаменатель обязан совпадать с
+    // содержимым гистограммы: односторонние удары в неё не попадают, и включать их значило бы
+    // получить долю, по которой о гистограмме ничего не скажешь.
     this.hitClientStamp = { aligned: 0, unaligned: 0 };
     this.progressDiagnostics = {
       checkpointEvents: 0,
@@ -570,10 +597,10 @@ class ShadowInputRuntime {
     if (clientKnockdown && !controller.clientWasKnockedDown) {
       controller.clientWasKnockedDown = true;
       // Этот путь отметить своим временем нечем: игрок уже уходит, времени матча здесь нет, и
-      // сверить с ним клиентское некому. Штамп остаётся временем приёма — и обязан быть ПОСЧИТАН
-      // как невыровненный. Иначе `clientStamp` показывал бы «выровнено почти всё», пока такие
-      // удары молча подмешивали в гистограмму возраст снимка.
-      this.hitClientStamp.unaligned += 1;
+      // сверить с ним клиентское некому. Штамп остаётся временем приёма, и `rightAligned` по
+      // умолчанию ложь — если такой удар всё же составит пару, он попадёт в гистограмму помеченным
+      // как невыровненный. Иначе `clientStamp` показывал бы «выровнено почти всё», пока подобные
+      // удары молча подмешивают в неё возраст снимка.
       this.recordHitDecisions(controller.hitPairing.observe(this.serverTick, false, true));
     }
     this.recordHitDecisions(controller.hitPairing.finalize());
@@ -595,7 +622,11 @@ class ShadowInputRuntime {
     this.hitTotals.matched += decided.matched;
     this.hitTotals.leftOnly += decided.leftOnly;
     this.hitTotals.rightOnly += decided.rightOnly;
-    for (const ticks of decided.delays || []) this.hitMatchDelay.add(ticks);
+    for (const { ticks, aligned } of decided.delays || []) {
+      this.hitMatchDelay.add(ticks);
+      if (aligned) this.hitClientStamp.aligned += 1;
+      else this.hitClientStamp.unaligned += 1;
+    }
   }
 
   controllerFor(player, room) {
@@ -835,19 +866,21 @@ class ShadowInputRuntime {
     //
     // Отметка не уезжает вперёд часов: расхождение в другую сторону сломало бы просрочку, которая
     // держится на монотонности часов.
-    const snapshotAge = Number.isFinite(snapshotSeconds)
-      ? Math.max(0, Math.round((matchTime - snapshotSeconds) / SERVER_SIMULATION_DT))
+    // Клиентское время ВПЕРЕДИ серверного выравниванием не считается. `trustedCourseTime` пускает
+    // расхождение в обе стороны на полсекунды, а отрицательный возраст означает разъехавшиеся часы,
+    // а не свежий снимок: прижать его к нулю и объявить выровненным значило бы мерить по приёму и
+    // одновременно уверять, что мерили по клиенту.
+    const snapshotAgeTicks = Number.isFinite(snapshotSeconds)
+      ? (matchTime - snapshotSeconds) / SERVER_SIMULATION_DT
       : null;
-    if (clientKnockdownStarted) {
-      if (snapshotAge === null) this.hitClientStamp.unaligned += 1;
-      else this.hitClientStamp.aligned += 1;
-    }
+    const clientAligned = snapshotAgeTicks !== null && snapshotAgeTicks >= 0;
     this.recordHitDecisions(
       controller.hitPairing.observe(
         this.serverTick,
         serverKnockdown,
         clientKnockdownStarted,
-        snapshotAge === null ? this.serverTick : this.serverTick - snapshotAge
+        clientAligned ? this.serverTick - Math.round(snapshotAgeTicks) : this.serverTick,
+        clientAligned
       )
     );
 
@@ -1189,8 +1222,9 @@ class ShadowInputRuntime {
             // Отвечает на вопрос, который `matchRate` задать не может: сдвиг по времени или
             // разная геометрия.
             matchDelay: this.hitMatchDelay.snapshot(),
-            // Доля ударов, отмеченных собственным временем клиента. Пока она не близка к единице,
-            // `matchDelay` мерит в том числе возраст снимка, а не только расхождение.
+            // Чем отмечены САМИ ОБРАЗЦЫ гистограммы: `aligned + unaligned` равно `matchDelay.samples`.
+            // Пока доля выровненных не близка к единице, `matchDelay` мерит в том числе возраст
+            // снимка, а не только расхождение.
             clientStamp: { ...this.hitClientStamp }
           };
         })()

@@ -172,7 +172,21 @@ function auditMovement(player, state, spec, now, dtSeconds) {
   if (observed > limits.observed) note('observed-speed');
 
   const history = player.movementHistory || (player.movementHistory = []);
-  history.push({ at: now, x: state.x, y: state.y, z: state.z, speed: observed });
+  // Вместе с точкой запоминается и НАЧАЛО того промежутка, за который посчитана `speed`. Без него
+  // две меры окна считались бы по разным границам: среднее покрывает N промежутков, а смещение по
+  // самим точкам — только N−1. Лишний промежуток в среднем — это ровно один удар, который может
+  // поднять его и на совершенно прямой траектории, то есть подделать тот самый признак, ради
+  // измерения которого замер и сделан.
+  history.push({
+    at: now,
+    x: state.x,
+    y: state.y,
+    z: state.z,
+    speed: observed,
+    fromAt: player.lastAt ?? now,
+    fromX: player.last?.x ?? state.x,
+    fromZ: player.last?.z ?? state.z
+  });
   while (history.length > HISTORY_LIMIT) history.shift();
   while (history.length > 1 && now - history[0].at > WINDOW_MS) history.shift();
 
@@ -197,10 +211,13 @@ function auditMovement(player, state, spec, now, dtSeconds) {
     //
     // Пик берётся по среднему — это та величина, которая принимает решение, — а смещение
     // запоминается то, что было в ТОТ ЖЕ момент, иначе пары не получится.
+    //
+    // Границы у обеих мер обязаны совпадать, поэтому смещение считается от НАЧАЛА первого
+    // промежутка, а не от первой точки: среднее включает промежуток, который в неё привёл.
     const first = history[0];
     const last = history.at(-1);
-    const elapsed = Math.max(0.001, (last.at - first.at) / 1000);
-    const net = Math.hypot(last.x - first.x, last.z - first.z) / elapsed;
+    const elapsed = Math.max(0.001, (last.at - first.fromAt) / 1000);
+    const net = Math.hypot(last.x - first.fromX, last.z - first.fromZ) / elapsed;
     const peak = player.sustainedSpeedPeak;
     if (!peak || average > peak.average) {
       player.sustainedSpeedPeak = { average, net, state: state.state };

@@ -1682,8 +1682,17 @@ function finishMatch(room) {
     // В сотых долях: `observe` хранит целое, а разница между 12.9 и 13.1 здесь и есть весь вопрос.
     const peak = room.mode === GAME_MODE.RACE ? player?.sustainedSpeedPeak : null;
     if (peak) {
-      gameplay.observe('sustained_speed_peak', peak.average * 100, dims(room, player, peak.state));
-      gameplay.observe('sustained_speed_net_at_peak', peak.net * 100, dims(room, player, peak.state));
+      // Забеги, где признак сработал, обязаны быть отделимы от остальных.
+      //
+      // `GameplayMetrics` хранит только суммы по ключу измерений — строку с конкретным забегом из
+      // неё не достать и с `movement_anomaly` не сшить. Свалив всё в один ключ, мы получили бы
+      // среднее по населению, где спокойных забегов заведомо больше, и они размыли бы ровно те
+      // значения, ради которых замер делается. Признак сработавших забегов входит в ключ.
+      const fired = player?.movementAnomalies?.['sustained-speed'] || 0;
+      const cohort = fired === 0 ? 'quiet' : fired > raceAnomalyBudget('sustained-speed') ? 'over' : 'noted';
+      const detail = `${cohort}:${peak.state}`;
+      gameplay.observe('sustained_speed_peak', peak.average * 100, dims(room, player, detail));
+      gameplay.observe('sustained_speed_net_at_peak', peak.net * 100, dims(room, player, detail));
     }
     incidentForSocket(player?.ws, {
       accountId: player?.accountId,

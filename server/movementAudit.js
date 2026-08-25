@@ -172,7 +172,24 @@ function auditMovement(player, state, spec, now, dtSeconds) {
   if (observed > limits.observed) note('observed-speed');
 
   const history = player.movementHistory || (player.movementHistory = []);
-  history.push({ at: now, x: state.x, y: state.y, z: state.z, speed: observed });
+  // Вместе с точкой запоминается и НАЧАЛО того промежутка, за который посчитана `speed`. Без него
+  // две меры окна считались бы по разным границам: среднее покрывает N промежутков, а смещение по
+  // самим точкам — только N−1. Лишний промежуток в среднем — это ровно один удар, который может
+  // поднять его и на совершенно прямой траектории, то есть подделать тот самый признак, ради
+  // измерения которого замер и сделан.
+  history.push({
+    at: now,
+    x: state.x,
+    y: state.y,
+    z: state.z,
+    speed: observed,
+    // Сама длина промежутка, а не только скорость: по скорости её не восстановить, потому что
+    // делитель `dtSeconds` снизу подрезан сорока миллисекундами.
+    dist: player.last ? Math.hypot(state.x - player.last.x, state.z - player.last.z) : 0,
+    fromAt: player.lastAt ?? now,
+    fromX: player.last?.x ?? state.x,
+    fromZ: player.last?.z ?? state.z
+  });
   while (history.length > HISTORY_LIMIT) history.shift();
   while (history.length > 1 && now - history[0].at > WINDOW_MS) history.shift();
 
@@ -180,6 +197,47 @@ function auditMovement(player, state, spec, now, dtSeconds) {
   if (history.length >= WINDOW_MIN_SAMPLES && now - history[0].at >= WINDOW_MS * 0.75) {
     const average = history.reduce((sum, item) => sum + item.speed, 0) / history.length;
     if (average > MAX_SUSTAINED_SPEED) note('sustained-speed');
+
+    // Рядом, на том же окне, считаются ещё две меры той же величины. Решения они НЕ принимают и
+    // принимать не должны: это замер.
+    //
+    // Зачем он. На проде `sustained-speed` срабатывает у честных игроков по шесть раз за забег при
+    // запасе три, и пять таких забегов из шести теряют зачёт. Воспроизвести это ботом не удаётся
+    // ни при какой частоте пакетов (0…400 мс), ни при петлянии, ни на chaos: у бота ноль.
+    // Значит причина в том, чего бот не делает, и какая именно — неизвестно.
+    //
+    // Мер три, потому что решающая величина может завышать по ДВУМ независимым причинам, и по
+    // одной паре их не различить:
+    //
+    //   average — среднее по пакетам БЕЗ веса. Ровно оно принимает решение. Завышается и от
+    //             кривизны пути, и от неравных промежутков: короткий быстрый промежуток входит в
+    //             него с тем же весом, что и длинный медленный. На прямой при 33 и 132 мс это
+    //             даёт 12.5 против настоящих 8.0.
+    //   path    — длина пути за то же окно, делённая на реально прошедшее время. Вес по времени,
+    //             кривизна учтена. Разница с `average` — это ровно цена отсутствия веса.
+    //   net     — прямая между концами окна за то же время. Разница с `path` — ровно кривизна.
+    //
+    // Отсюда и читается ответ: `average` заметно выше `path` — виновата формула, и виновата
+    // неравномерностью пакетов; `path` заметно выше `net` — игрок вилял; обе близки к `average` —
+    // он и правда ехал быстро, и разговор про порог. Кооператив свою меру считает как `net`
+    // (см. coopMovementAudit.js), и это сделано намеренно.
+    //
+    // Пик берётся по среднему — это та величина, которая принимает решение, — а остальные
+    // запоминаются те, что были в ТОТ ЖЕ момент, иначе пары не получится.
+    //
+    // Границы у всех трёх совпадают: знаменатель один, и отсчитывается он от НАЧАЛА первого
+    // промежутка, а не от первой точки, — среднее включает промежуток, который в неё привёл.
+    const first = history[0];
+    const last = history.at(-1);
+    const spanSeconds = Math.max(0.001, (last.at - first.fromAt) / 1000);
+    let pathLength = 0;
+    for (const item of history) pathLength += item.dist;
+    const path = pathLength / spanSeconds;
+    const net = Math.hypot(last.x - first.fromX, last.z - first.fromZ) / spanSeconds;
+    const peak = player.sustainedSpeedPeak;
+    if (!peak || average > peak.average) {
+      player.sustainedSpeedPeak = { average, path, net, state: state.state };
+    }
   }
 
   const zones = zonesFor(spec);

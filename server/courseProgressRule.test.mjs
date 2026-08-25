@@ -1,13 +1,14 @@
-// Одно правило чекпоинта на клиенте и на сервере.
+// Серверная геометрия прогресса: где именно игрок пересёк плоскость арки.
 //
-// Тест держит три вещи, и каждая из них ломалась в живой игре:
+// Тест держит две вещи:
 //
 //  1. рамки арки читаются В ПЛОСКОСТИ арки, а не на состоянии после неё — иначе честный игрок,
 //     упавший сразу за аркой, теряет её тем вернее, чем хуже у него связь;
-//  2. засчитывается ПЕРЕСЕЧЕНИЕ, а не «оказался за чертой» — иначе клиент выдаёт арку, которую
-//     сервер выдать структурно не может, и забег не заканчивается вовсе;
-//  3. клиент и сервер зовут одну и ту же функцию с одной и той же рамкой — расхождение в одну
-//     единицу здесь и было тем, из-за чего разошлись их ответы.
+//  2. про эту точку отвечают ОДНО И ТО ЖЕ все проверки, работающие на одном отрезке: выдача
+//     чекпоинта и региональная проверка кооператива. Порознь они дают худший исход — точка
+//     сохранена, а проверка всей главы снята.
+//
+// Клиент этим правилом не пользуется намеренно — см. заголовок shared/courseProgress.js.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,6 +20,8 @@ import {
   crossingPointAtZ
 } from '../shared/courseProgress.js';
 import { createCourseSpec, validateState } from './gameRules.js';
+import { verifyCoopCheckpoint } from './coopMovementAudit.js';
+import { COOP_CHAPTER_IDS, coopSpec } from '../shared/coopChapters.js';
 
 const LINE = -18;
 const at = (x, y, z) => ({ x, y, z });
@@ -146,4 +149,52 @@ test('validateState по-прежнему не выдаёт больше одн�
     now
   );
   if (result.ok) assert.equal(result.checkpoint, 1, 'за один пакет — не больше одной арки');
+});
+
+// Кооператив: выдача чекпоинта и проверка региона обязаны смотреть в одну точку.
+//
+// Порознь они дают ровно тот исход, которого не должно быть: точка сохраняется (порог выдачи -3
+// пройден в плоскости арки), а проверка снимается (порог региона -2 строже и не пройден в конце
+// отрезка). Цена ошибки здесь выше, чем у потерянного чекпоинта: снимается проверка со всей главы,
+// то есть рекорд, прогресс и награды пары.
+test('кооп: честный проход с падением сразу за аркой не снимает проверку главы', () => {
+  const spec = coopSpec(COOP_CHAPTER_IDS[0]);
+  const line = spec.checkpoints[0];
+  const now = 2_000_000;
+  const player = { checkpoint: 0, coopLastCheckpointAt: now - 30_000, matchStartedAt: now - 30_000 };
+
+  const previous = { x: 0.2, y: -1.4, z: line + 0.05, vx: 0, vy: -16, vz: -7, state: 'air' };
+  const state = { x: 0.3, y: -2.5, z: line - 0.41, vx: 0, vy: -17.5, vz: -7, state: 'air' };
+
+  // Подготовка: в плоскости арки — выше порога региона, в конце отрезка — уже ниже.
+  const crossing = crossingPointAtZ(previous, state, line);
+  assert.ok(crossing.y > -2, `в плоскости арки ${crossing.y} должно быть выше -2`);
+  assert.ok(state.y < -2, 'в конце отрезка обязано быть ниже -2');
+
+  assert.equal(verifyCoopCheckpoint(player, spec, 1, state, now, previous), null);
+});
+
+test('кооп: проход НЕ сквозь арку проверку снимает по-прежнему', () => {
+  const spec = coopSpec(COOP_CHAPTER_IDS[0]);
+  const line = spec.checkpoints[0];
+  const now = 2_000_000;
+  const player = { checkpoint: 0, coopLastCheckpointAt: now - 30_000, matchStartedAt: now - 30_000 };
+
+  // Далеко сбоку от полосы в самой плоскости арки — это и есть то, что проверка ловит.
+  const previous = { x: 9.4, y: 1, z: line + 0.3, vx: 0, vy: 0, vz: -7, state: 'air' };
+  const state = { x: 9.5, y: 1, z: line - 0.3, vx: 0, vy: 0, vz: -7, state: 'air' };
+
+  const finding = verifyCoopCheckpoint(player, spec, 1, state, now, previous);
+  assert.equal(finding?.reason, 'coop-checkpoint-region');
+});
+
+test('кооп: без предыдущего состояния проверка остаётся на конечной точке', () => {
+  const spec = coopSpec(COOP_CHAPTER_IDS[0]);
+  const now = 2_000_000;
+  const player = { checkpoint: 0, coopLastCheckpointAt: now - 30_000, matchStartedAt: now - 30_000 };
+  const state = { x: 0, y: -5, z: spec.checkpoints[0] - 1, vx: 0, vy: -8, vz: -7, state: 'air' };
+
+  // Отрезка нет — читать в плоскости нечего, и проверка обязана остаться прежней, а не пропасть.
+  const finding = verifyCoopCheckpoint(player, spec, 1, state, now, null);
+  assert.equal(finding?.reason, 'coop-checkpoint-region');
 });

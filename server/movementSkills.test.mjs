@@ -28,7 +28,7 @@ function flatCourse({ wall = false } = {}) {
       return { x: 0, z: 1 };
     },
     interact() {},
-    checkpointFor: (_previous, _position, current) => current
+    checkpointFor: (_, checkpoint) => checkpoint
   };
 }
 

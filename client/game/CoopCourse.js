@@ -3,7 +3,6 @@ import { COLORS } from '../core/Config.js';
 import { CourseBuilder, PLAYER_FOOT } from './CourseBuilder.js';
 import { RUN_SPEED } from './Player.js';
 import { chapterLayout, coopSpawnFor, LANE_WIDTH } from '/shared/coopChapters.js';
-import { crossedCheckpoint } from '/shared/courseProgress.js';
 
 // Постройка кооперативной главы из данных.
 //
@@ -1024,14 +1023,16 @@ export class CoopCourse extends CourseBuilder {
     }
   }
 
-  // То же общее правило, что и в гонке, и по той же причине — см. Course.checkpointFor. Здесь оно
-  // заодно сводит рамку с серверной: клиент кооператива сверялся с `LANE_WIDTH` (12), а сервер —
-  // с 11, то есть клиент был ШИРЕ сервера и мог засчитать арку, которую сервер не засчитает. Обе
-  // величины лежат вдвое дальше края полосы, так что игрок разницы не заметит; заметил бы он
-  // ровно то, из-за чего эта правка и делается.
-  checkpointFor(previous, position, current) {
-    if (current >= this.spec.checkpoints.length) return current;
-    return crossedCheckpoint(previous, position, this.spec.checkpoints[current]) ? current + 1 : current;
+  checkpointFor(position, current) {
+    let next = current;
+    while (
+      next < this.spec.checkpoints.length &&
+      position.z < this.spec.checkpoints[next] &&
+      position.y > -3 &&
+      Math.abs(position.x) < LANE_WIDTH
+    )
+      next++;
+    return next;
   }
 
   // `slot` — порядковый номер игрока в комнате. Раньше здесь была роль; ролей больше нет.

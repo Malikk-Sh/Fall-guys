@@ -102,6 +102,19 @@ test('workflow создаёт тег локально, проверяет и т�
   assert.ok(validate < push, 'проверка обязана стоять до того, как тег станет неизменяемым');
 });
 
+// Отдельным шагом сверка оставляла бы между собой и пушем границу шага — окно, в которое main
+// успевает уйти вперёд, а `release.yml` такой тег примет: она проверяет вхождение в main, а не то,
+// что коммит её голова.
+test('сверка с origin/main стоит в одном шаге с пушем', () => {
+  const step = workflow.slice(workflow.indexOf('- name: Push the tag'));
+  const body = step.slice(0, step.indexOf('- name: Start the publishing'));
+  assert.match(body, /rev-parse origin\/main/, 'сверка обязана быть в том же шаге');
+  assert.match(body, /git push origin "refs\/tags\/\$TAG"/);
+  const check = body.indexOf('rev-parse origin/main');
+  const push = body.indexOf('git push origin');
+  assert.ok(check < push, 'сверять надо до пуша');
+});
+
 test('workflow пушит ровно один ref, а не все теги', () => {
   assert.match(workflow, /git push origin "refs\/tags\/\$TAG"/);
   assert.ok(!workflow.includes('push origin --tags'), '--tags отправил бы и посторонние теги');
@@ -282,4 +295,15 @@ test('выкат не продолжает работу при расхожде�
 
 test('«уже стоит» решается парой тег+репозиторий, а не одним тегом', () => {
   assert.match(deployLatest, /"\$latest" == "\$current" && "\$REPO" ==/);
+});
+
+// Отсутствие сохранённого репозитория — это «неизвестно», а не «совпадает». На свежей установке
+// поля нет вовсе, и при явно заданном WOBBLE_REPO подтвердить совпадение нечем.
+test('выкат отказывается от override, когда репозиторий установки неизвестен', () => {
+  assert.match(deployLatest, /repo_overridden=1/, 'явное задание обязано отличаться от умолчания');
+  assert.match(deployLatest, /WOBBLE_REPO\+set/, 'различать надо «задано пустым» и «не задано»');
+  const guard = deployLatest.indexOf('"$repo_overridden" == 1 && -z "$current_repo"');
+  const install = deployLatest.indexOf('bash "$INSTALL"');
+  assert.ok(guard !== -1, 'неизвестный репозиторий при override обязан останавливать');
+  assert.ok(guard < install, 'останавливать надо до установки');
 });

@@ -1015,6 +1015,92 @@ test('ушедший игрок закрывает свои ожидания, а
   assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 1);
 });
 
+// Удар, замеченный уже на выходе игрока, отметить его собственным временем нечем — и он обязан быть
+// ПОСЧИТАН как невыровненный.
+//
+// Иначе `clientStamp` врёт в самую опасную сторону: показывает «выровнено всё», пока такие удары
+// молча подмешивают в гистограмму возраст снимка. Показатель, который нельзя проверить на полноту,
+// хуже отсутствующего — по нему как раз и будут решать, верить ли `matchDelay`.
+// Часы клиента ВПЕРЕДИ серверных выравниванием не считаются.
+//
+// `trustedCourseTime` пускает расхождение в обе стороны на полсекунды. Отрицательный возраст
+// означает разъехавшиеся часы, а не свежий снимок: прижать его к нулю и объявить выровненным
+// значило бы мерить по приёму и одновременно уверять, что мерили по клиенту.
+function pairAfterServerHit(courseTime) {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1, 'подготовка: серверный удар ждёт');
+
+  // Клиент сообщает о сбивании, и вместе с ним — своё время трассы.
+  player.last = { ...player.last, state: 'knockdown' };
+  player.lastCourseTime = courseTime;
+  tick(runtime, room, player, 1, now + 2 * SERVER_SIMULATION_DT * 1000);
+  return runtime.metrics().shadowGroundContact.hitParity;
+}
+
+test('снимок из прошлого выравнивает пару, снимок из будущего — нет', () => {
+  // Время матча на этом тике — около 5.067 с.
+  const behind = pairAfterServerHit(5.0);
+  assert.equal(behind.matched, 1, 'подготовка: пара обязана сойтись');
+  assert.equal(behind.clientStamp.aligned, 1, 'снимок из прошлого — обычный случай, он выровнен');
+  assert.equal(behind.clientStamp.unaligned, 0);
+
+  const ahead = pairAfterServerHit(5.2);
+  assert.equal(ahead.matched, 1, 'подготовка: пара обязана сойтись и здесь');
+  assert.equal(ahead.clientStamp.aligned, 0, 'часы впереди сервера выравниванием не считаются');
+  assert.equal(ahead.clientStamp.unaligned, 1);
+
+  // И без времени трассы вовсе — тоже невыровнено, а не «выровнено по умолчанию».
+  const missing = pairAfterServerHit(undefined);
+  assert.equal(missing.matched, 1);
+  assert.equal(missing.clientStamp.unaligned, 1);
+});
+
+test('удар, найденный при отпуске игрока, помечает пару как невыровненную', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  // Серверный удар: ставим свободную траекторию в бампер, как в проверке отпуска выше.
+  const controller = runtime.controllers.get(player);
+  const bumper = controller.world.obstacles.find(o => o.type === 'bumper');
+  controller.freeState.position.x = bumper.x;
+  controller.freeState.position.y = bumper.y;
+  controller.freeState.position.z = bumper.z;
+  controller.lastClientPosition = null;
+  tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1, 'подготовка: удар ждёт пару');
+  assert.equal(runtime.metrics().shadowGroundContact.hitParity.matchDelay.samples, 0);
+
+  // Клиент прислал сбивание последним, что успел, — и ушёл. Отметить это своим временем нечем.
+  player.last = { ...player.last, state: 'knockdown' };
+  assert.equal(runtime.release(player), true);
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.matched, 1, 'подготовка: пара обязана сойтись');
+  assert.equal(hitParity.matchDelay.samples, 1, 'и попасть в гистограмму');
+  assert.equal(hitParity.clientStamp.unaligned, 1, 'образец обязан быть помечен невыровненным');
+  assert.equal(hitParity.clientStamp.aligned, 0);
+  // Знаменатель обязан совпадать с содержимым гистограммы — ради этого счёт и переехал на выдачу
+  // задержки.
+  assert.equal(hitParity.clientStamp.aligned + hitParity.clientStamp.unaligned, hitParity.matchDelay.samples);
+});
+
 test('кооператив не выдаёт себя за сломанную геометрию', () => {
   // `maxWorldMissingSamples` требует строгий ноль и означает «матч, у которого геометрия не
   // построилась, доказательством быть не может». Кооператив не сломанная сборка: безголовой

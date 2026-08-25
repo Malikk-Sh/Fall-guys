@@ -248,6 +248,18 @@ test('ручной путь в документации пушит один ref,
   assert.match(releaseDoc, /git push origin "refs\/tags\/\$tag"/);
 });
 
+// `next-release-tag.mjs` строит тег по одному package.json. Разъехавшийся lock даёт тег, который
+// пуш делает неизменяемым, а несовпадение находит уже публикация — то есть поздно.
+test('ручной путь проверяет тег до пуша, как это делает workflow', () => {
+  const create = releaseDoc.indexOf('git tag -a "$tag"');
+  const validate = releaseDoc.indexOf('node deploy/check-release.mjs "$tag"');
+  const push = releaseDoc.indexOf('git push origin "refs/tags/$tag"');
+  assert.ok(validate !== -1, 'проверка обязана быть в ручном пути');
+  assert.ok(create < validate && validate < push, 'создать → проверить → запушить');
+  // Внутри одной цепочки: отдельной строкой её пропустят ровно так же, как пропускали git pull.
+  assert.match(releaseDoc, /node deploy\/check-release\.mjs "\$tag" && \\/);
+});
+
 // Второй раунд ревью: пять находок, и первая снова оставляла бы теги неопубликованными.
 
 // Объявленный блок permissions обнуляет всё неупомянутое, а создание workflow_dispatch требует

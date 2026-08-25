@@ -36,8 +36,14 @@ Still possible, and still the same rules. Keep the fetch inside the chain — a 
 git switch main && git pull --ff-only && \
 tag="$(node deploy/next-release-tag.mjs)" && \
 git tag -a "$tag" -m "Wobble Rush $tag" && \
+node deploy/check-release.mjs "$tag" && \
 git push origin "refs/tags/$tag"
 ```
+
+Validate before the push, as the workflow does. `next-release-tag.mjs` builds the tag from
+`package.json` alone, so a version that has drifted from `package-lock.json` still produces a tag —
+and pushing it makes the mistake immutable. Run inside the chain, the check fails before the push
+and the tag stays local.
 
 Push that one ref, never `--tags`: `--tags` sends every local tag, and any stray `v*` among them
 becomes immutable on the remote and starts the publishing workflow.

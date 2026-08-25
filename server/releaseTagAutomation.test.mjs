@@ -18,6 +18,8 @@ const require = createRequire(import.meta.url);
 const pkg = require('../package.json');
 const workflow = fs.readFileSync(new URL('../.github/workflows/tag-release.yml', import.meta.url), 'utf8');
 const deployLatest = fs.readFileSync(new URL('../deploy/deploy-latest.sh', import.meta.url), 'utf8');
+const publish = fs.readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+const releaseDoc = fs.readFileSync(new URL('../docs/RELEASE-PROCESS.md', import.meta.url), 'utf8');
 
 test('пустая история даёт первый номер', () => {
   assert.equal(nextPrereleaseTag({ tags: [], version: '2.6.0' }), 'v2.6.0-beta.1');
@@ -83,12 +85,52 @@ test('workflow тегирует origin/main, а не локальную копи
   assert.match(workflow, /exit 1/, 'расхождение обязано останавливать, а не печатать предупреждение');
 });
 
-test('workflow проверяет тег политикой релизов ДО создания', () => {
-  const validate = workflow.indexOf('deploy/check-release.mjs');
+// Порядок: создать локально → проверить → запушить.
+//
+// Обратный («проверить, потом создать») выглядит осторожнее и не работает вовсе: check-release.mjs
+// сверяет тег с HEAD, то есть требует существующего тега, и для ещё не созданного падает всегда.
+// Прежняя версия этого теста закрепляла именно тот порядок — то есть держала workflow сломанным.
+//
+// Неизменяемым тег становится только на push, и проверка стоит до него. Локальный тег живёт в
+// runner'е и исчезает вместе с ним.
+test('workflow создаёт тег локально, проверяет и только потом пушит', () => {
   const create = workflow.indexOf('git tag -a');
-  assert.ok(validate !== -1, 'проверка тега обязана быть в workflow');
-  assert.ok(create !== -1, 'создание тега обязано быть в workflow');
-  assert.ok(validate < create, 'проверять надо ДО создания: тег неизменяем');
+  const validate = workflow.indexOf('deploy/check-release.mjs');
+  const push = workflow.indexOf('git push origin');
+  assert.ok(create !== -1 && validate !== -1 && push !== -1);
+  assert.ok(create < validate, 'проверять нечего, пока тега нет');
+  assert.ok(validate < push, 'проверка обязана стоять до того, как тег станет неизменяемым');
+});
+
+test('workflow пушит ровно один ref, а не все теги', () => {
+  assert.match(workflow, /git push origin "refs\/tags\/\$TAG"/);
+  assert.ok(!workflow.includes('push origin --tags'), '--tags отправил бы и посторонние теги');
+});
+
+// Пуш с GITHUB_TOKEN новых запусков не создаёт — так GitHub закрывает рекурсию workflow'ов.
+// Исключены ровно workflow_dispatch и repository_dispatch. Без явного запуска тег создавался бы,
+// а релиз не выходил.
+test('после пуша публикация запускается явно', () => {
+  const push = workflow.indexOf('git push origin');
+  const dispatch = workflow.indexOf('gh workflow run release.yml');
+  assert.ok(dispatch !== -1, 'публикацию надо запустить явно');
+  assert.ok(push < dispatch, 'запускать публикацию имеет смысл только после пуша');
+  assert.match(workflow, /--field tag=/, 'публикация обязана получить имя тега');
+});
+
+test('публикация умеет запускаться явно и берёт тег из входа', () => {
+  assert.match(publish, /workflow_dispatch:/, 'без этого входа явный запуск невозможен');
+  assert.match(publish, /RELEASE_TAG: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/);
+  assert.match(publish, /ref: \$\{\{ inputs\.tag \|\| github\.ref_name \}\}/, 'checkout обязан взять тег');
+  assert.ok(!publish.includes('GITHUB_REF_NAME'), 'имя тега обязано браться из одного места');
+});
+
+// При запуске через workflow_dispatch GITHUB_SHA — это голова ветки, с которой запустили, а не
+// коммит тега. Проверка «коммит содержится в main» по нему смотрела бы не на то и проходила всегда.
+test('публикация проверяет коммит из checkout, а не GITHUB_SHA', () => {
+  assert.match(publish, /head="\$\(git rev-parse HEAD\)"/);
+  assert.match(publish, /merge-base --is-ancestor "\$head" origin\/main/);
+  assert.ok(!publish.includes('--is-ancestor "$GITHUB_SHA"'));
 });
 
 test('workflow сам ничего не выпускает — только ставит метку', () => {
@@ -98,13 +140,33 @@ test('workflow сам ничего не выпускает — только ст
 
 // Вторая часть автоматизации: выкат. Тег больше не набирается руками — он берётся из GitHub.
 
-test('последним считается свежий выпущенный, а не наибольший номер', () => {
+test('последним считается свежий ВЫПУЩЕННЫЙ, а не наибольший номер', () => {
   // Так бывает, когда чинят старую ветку версий: свежий релиз имеет МЕНЬШИЙ номер.
   const releases = [
-    { tag_name: 'v2.5.1', draft: false, prerelease: false },
-    { tag_name: 'v2.6.0', draft: false, prerelease: false }
+    { tag_name: 'v2.5.1', draft: false, prerelease: false, published_at: '2026-03-01T00:00:00Z' },
+    { tag_name: 'v2.6.0', draft: false, prerelease: false, published_at: '2026-01-01T00:00:00Z' }
   ];
   assert.equal(pickLatestRelease(releases), 'v2.5.1');
+});
+
+// Ответ GitHub отсортирован по СОЗДАНИЮ тега, а не по публикации. Черновик, опубликованный после
+// более новых релизов, встаёт в списке не первым — довериться порядку значило бы выкатить не то.
+test('порядок ответа не решает: решает дата публикации', () => {
+  const releases = [
+    { tag_name: 'v2.6.0', draft: false, prerelease: false, published_at: '2026-01-01T00:00:00Z' },
+    { tag_name: 'v2.5.1', draft: false, prerelease: false, published_at: '2026-04-01T00:00:00Z' },
+    { tag_name: 'v2.4.9', draft: false, prerelease: false, published_at: '2026-02-01T00:00:00Z' }
+  ];
+  assert.equal(pickLatestRelease(releases), 'v2.5.1', 'позже всех опубликован именно он');
+});
+
+test('релиз без даты публикации кандидатом остаётся, но уступает датированному', () => {
+  const undated = { tag_name: 'v2.4.0', draft: false, prerelease: false };
+  const dated = { tag_name: 'v2.5.0', draft: false, prerelease: false, published_at: '2026-01-01T00:00:00Z' };
+  assert.equal(pickLatestRelease([undated, dated]), 'v2.5.0');
+  assert.equal(pickLatestRelease([undated]), 'v2.4.0', 'без альтернативы годится и он');
+  // Мусор в дате не должен выигрывать у настоящей.
+  assert.equal(pickLatestRelease([{ ...undated, published_at: 'позавчера' }, dated]), 'v2.5.0');
 });
 
 test('черновик не выкатывается никогда', () => {
@@ -135,7 +197,7 @@ test('мусорный ответ не превращается в тег', () =
 test('выкат не заводит вторую версию логики установки', () => {
   // Своя логика установки здесь разъехалась бы с install.sh ровно так же, как разъезжались два
   // правила чекпоинта. Скрипт обязан оставаться обёрткой.
-  assert.match(deployLatest, /RELEASE_TAG="\$latest" bash "\$INSTALL"/);
+  assert.match(deployLatest, /RELEASE_TAG="\$latest" RELEASE_REPOSITORY="\$REPO" bash "\$INSTALL"/);
   assert.ok(!deployLatest.includes('systemctl restart wobble'), 'перезапуск — дело install.sh');
   assert.ok(!deployLatest.includes('git clone'), 'выкладка — дело install.sh');
 });
@@ -151,4 +213,24 @@ test('сорвавшийся запрос к GitHub не превращаетс�
   assert.ok(request !== -1 && guard !== -1 && install !== -1);
   assert.ok(guard < install, 'пустой тег обязан останавливать до установки');
   assert.match(deployLatest, /curl -fsS/, 'curl обязан падать на HTTP-ошибке, а не отдавать тело ошибки');
+});
+
+// install.sh берёт RELEASE_REPOSITORY из своего конфига или умолчания. Без явной передачи выбор
+// тега и выбор репозитория расходятся: при WOBBLE_REPO=owner/fork тег выбирается в форке, а
+// ищется в основном репозитории.
+test('выкат передаёт установщику тот же репозиторий, в котором выбрал тег', () => {
+  assert.match(deployLatest, /RELEASE_REPOSITORY="\$REPO"/);
+});
+
+// Если после последнего стабильного релиза накопится больше страницы бет, обычный режим получил бы
+// одни беты и сообщил бы, что стабильных релизов нет — при живом стабильном релизе.
+test('выкат смотрит дальше первой страницы релизов', () => {
+  assert.match(deployLatest, /page=\$\{page\}/, 'страницы обязаны перебираться');
+  assert.match(deployLatest, /MAX_PAGES=/, 'перебор обязан быть ограничен');
+  assert.ok(!/per_page=30\b/.test(deployLatest), 'тридцати мало');
+});
+
+test('ручной путь в документации пушит один ref, а не все теги', () => {
+  assert.ok(!releaseDoc.includes('git push origin --tags'), '--tags отправил бы посторонние теги');
+  assert.match(releaseDoc, /git push origin "refs\/tags\/\$tag"/);
 });

@@ -56,18 +56,32 @@ export function nextPrereleaseTag({ tags, version, channel = 'beta' }) {
 // Черновики пропускаются всегда: это ещё не выпущенное. Предрелизы — только по явному согласию,
 // иначе боевой сервер уезжал бы на бету от одного того, что её опубликовали.
 //
-// Порядок берётся тот, что вернул GitHub (самый свежий первым), а не «наибольший номер»: выкатить
-// надо то, что выпущено последним. Это различается, когда чинят старую ветку версий.
+// Свежесть определяется временем ПУБЛИКАЦИИ, а не местом в ответе GitHub.
+//
+// Список релизов приходит отсортированным по созданию, а не по публикации, и это разные вещи:
+// релиз, выпущенный из старой ветки поддержки, и черновик, опубликованный после более новых
+// релизов, оба встают в ответе не первыми. Довериться порядку значило бы иногда выкатывать не
+// то, что вышло последним, — а скрипт обещает именно последнее вышедшее.
+//
+// Релиз без разбираемого `published_at` не выбывает: он остаётся кандидатом с наименьшим
+// приоритетом, и при равенстве побеждает более ранний в ответе — то есть прежнее поведение.
 export function pickLatestRelease(releases, { allowPrerelease = false } = {}) {
   if (!Array.isArray(releases)) return null;
+  let best = null;
+  let bestAt = -Infinity;
   for (const release of releases) {
     if (!release || typeof release !== 'object') continue;
     if (release.draft) continue;
     if (release.prerelease && !allowPrerelease) continue;
     if (!parseReleaseTag(release.tag_name)) continue;
-    return release.tag_name;
+    const parsed = Date.parse(release.published_at ?? '');
+    const at = Number.isFinite(parsed) ? parsed : -Infinity;
+    if (best === null || at > bestAt) {
+      best = release.tag_name;
+      bestAt = at;
+    }
   }
-  return null;
+  return best;
 }
 
 export function validateReleaseVersions({ tag, packageVersion, lockVersion }) {

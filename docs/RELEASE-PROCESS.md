@@ -34,9 +34,13 @@ Still possible, and still the same rules. Keep the fetch inside the chain — a 
 
 ```bash
 git switch main && git pull --ff-only && \
-git tag -a "$(node deploy/next-release-tag.mjs)" -m "Wobble Rush beta" && \
-git push origin --tags
+tag="$(node deploy/next-release-tag.mjs)" && \
+git tag -a "$tag" -m "Wobble Rush $tag" && \
+git push origin "refs/tags/$tag"
 ```
+
+Push that one ref, never `--tags`: `--tags` sends every local tag, and any stray `v*` among them
+becomes immutable on the remote and starts the publishing workflow.
 
 `node deploy/next-release-tag.mjs [channel]` prints the next free tag for the current package
 version, using the same rule the workflow does.

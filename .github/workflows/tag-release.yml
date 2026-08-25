@@ -10,9 +10,10 @@ name: Tag Wobble Rush Release
 #   * коммит берётся из origin/main прямо здесь, локальной копии не существует;
 #   * номер выбирается по существующим тегам, а не человеком.
 #
-# Дальше всё как раньше: пуш тега запускает `Publish Wobble Rush Release`, и та прогоняет линт,
-# весь тест-сьют и двухбраузерный e2e ПЕРЕД публикацией. Этот workflow ничего не выпускает — он
-# только ставит метку, и ошибиться ею уже нельзя.
+# Дальше публикация запускается явным dispatch'ем (см. предпоследний шаг — пуш с GITHUB_TOKEN сам
+# по себе workflow не запускает), и `Publish Wobble Rush Release` прогоняет линт, весь тест-сьют и
+# двухбраузерный e2e ПЕРЕД публикацией. Этот workflow ничего не выпускает — он только ставит метку,
+# и ошибиться ею уже нельзя.
 
 on:
   workflow_dispatch:
@@ -70,13 +71,15 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Next tag: $tag"
 
-      # Ровно та же проверка, что и при публикации: тег против версии пакета и lock-файла. Здесь
-      # она нужна, чтобы несогласованность версий останавливала нас ДО создания неизменяемого тега,
-      # а не после.
-      - name: Validate the tag against the project version
-        run: node deploy/check-release.mjs "${{ steps.choose.outputs.tag }}"
-
-      - name: Create and push the annotated tag
+      # Тег создаётся ЛОКАЛЬНО и только потом проверяется.
+      #
+      # Обратный порядок не работает вовсе: `check-release.mjs` сверяет тег с HEAD, а значит
+      # требует, чтобы тег уже существовал, — для ещё не созданного он падает всегда. Мой прежний
+      # порядок «проверить, потом создать» гарантировал, что до создания дело не доходит никогда.
+      #
+      # Локальный тег ничего не стоит: он живёт в runner'е и исчезает вместе с ним. Неизменяемым
+      # он становится только после push ниже, и до него проверка успевает сработать.
+      - name: Create the tag locally
         shell: bash
         env:
           TAG: ${{ steps.choose.outputs.tag }}
@@ -85,7 +88,44 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           git tag -a "$TAG" -m "Wobble Rush $TAG"
-          git push origin "$TAG"
+
+      # Та же проверка, что и при публикации: тег против версии пакета, lock-файла и HEAD.
+      - name: Validate the tag against the project version
+        run: node deploy/check-release.mjs "${{ steps.choose.outputs.tag }}"
+
+      # main могла уйти вперёд, пока шли шаги выше. Тогда тег указывал бы на устаревший коммит —
+      # то самое, что этот workflow и должен исключить, — а `release.yml` его принял бы: она
+      # проверяет лишь то, что коммит СОДЕРЖИТСЯ в main, а не что он её голова.
+      - name: Re-check origin/main right before pushing
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          head="$(git rev-parse HEAD)"
+          remote="$(git rev-parse origin/main)"
+          if [[ "$head" != "$remote" ]]; then
+            echo "main ушла вперёд: $remote, тег готовился на $head. Запустите workflow заново." >&2
+            exit 1
+          fi
+
+      - name: Push the tag
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: git push origin "refs/tags/$TAG"
+
+      # Публикацию надо запустить явно.
+      #
+      # Push выше уходит с GITHUB_TOKEN, а события от него новых запусков не создают — иначе
+      # workflow'ы запускали бы друг друга без конца. Из этого правила исключены ровно
+      # workflow_dispatch и repository_dispatch, поэтому здесь именно dispatch. Без этого шага тег
+      # создавался бы, а релиз не выходил.
+      - name: Start the publishing workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: gh workflow run release.yml --ref main --field tag="$TAG"
 
       - name: Summary
         shell: bash
@@ -97,6 +137,6 @@ jobs:
             echo
             echo "Коммит: \`$(git rev-parse HEAD)\`"
             echo
-            echo "Сборка и публикация идут в \`Publish Wobble Rush Release\`."
-            echo "После неё выкат на VPS: \`wobble-deploy\` или \`RELEASE_TAG=$TAG bash /opt/wobble/deploy/install.sh\`."
+            echo "Сборка и публикация запущены в \`Publish Wobble Rush Release\`."
+            echo "После неё выкат на VPS: \`bash /opt/wobble/deploy/deploy-latest.sh --prerelease\`."
           } >> "$GITHUB_STEP_SUMMARY"

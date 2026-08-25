@@ -47,20 +47,45 @@ need curl
 need node
 
 say "Спрашиваем GitHub о релизах"
-# Тридцати последних хватает с запасом; при этом ответ остаётся маленьким.
-releases="$(curl -fsS --max-time 30 -H 'Accept: application/vnd.github+json' \
-  "https://api.github.com/repos/${REPO}/releases?per_page=30")" || {
-  echo "!! GitHub не ответил. Сеть или лимит запросов; выкат не начат." >&2
-  exit 1
-}
+# Страницами, а не одной.
+#
+# Одной страницы в сто штук почти всегда хватает, но «почти» здесь плохое слово: если после
+# последнего стабильного релиза накопится больше сотни бет, обычный режим получил бы одни беты,
+# отфильтровал бы всё и сообщил, что стабильных релизов нет вовсе — при живом стабильном релизе.
+# Пять страниц (пятьсот релизов) закрывают это с запасом и остаются ограниченными: бесконечно
+# ходить по страницам на боевой машине нельзя.
+PER_PAGE=100
+MAX_PAGES=5
+pages=""
+for ((page = 1; page <= MAX_PAGES; page++)); do
+  body="$(curl -fsS --max-time 30 -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "https://api.github.com/repos/${REPO}/releases?per_page=${PER_PAGE}&page=${page}")" || {
+    echo "!! GitHub не ответил. Сеть или лимит запросов; выкат не начат." >&2
+    exit 1
+  }
+  # Пустая страница означает, что релизы кончились.
+  [[ "$body" == "[]" ]] && break
+  # Каждая страница — одной строкой: разборщик ниже читает по массиву на строку. Переводы строк
+  # внутри JSON ничего не значат, поэтому убрать их безопасно.
+  pages+="$(printf '%s' "$body" | tr -d '\n')"$'\n'
+  # Неполная страница — последняя.
+  [[ "$(printf '%s' "$body" | tr -d '\n' | node -e '
+    let s = ""; process.stdin.on("data", d => (s += d)).on("end", () => {
+      let n = 0;
+      try { n = JSON.parse(s).length; } catch {}
+      process.stdout.write(String(n));
+    });
+  ')" -lt "$PER_PAGE" ]] && break
+done
 
-# Разбор JSON — Node, а не grep: у grep нет понятия «черновик» и «предрелиз», а именно они здесь и
-# решают. Само правило живёт в deploy/latest-release-tag.mjs и покрыто тестами.
+# Разбор JSON — Node, а не grep: у grep нет понятия «черновик», «предрелиз» и «дата публикации», а
+# именно они здесь и решают. Правило живёт в deploy/latest-release-tag.mjs и покрыто тестами.
 args=()
 if [[ "$allow_prerelease" == 1 ]]; then
   args+=(--prerelease)
 fi
-latest="$(printf '%s' "$releases" | node "$(dirname "$0")/latest-release-tag.mjs" "${args[@]}")"
+latest="$(printf '%s' "$pages" | node "$(dirname "$0")/latest-release-tag.mjs" "${args[@]}")"
 
 if [[ -z "$latest" ]]; then
   kind=$([[ "$allow_prerelease" == 1 ]] && echo "релизов" || echo "стабильных релизов")
@@ -87,7 +112,14 @@ if [[ "$check_only" == 1 ]]; then
 fi
 
 say "Выкатываем $latest"
+# Репозиторий передаётся вместе с тегом.
+#
+# install.sh берёт RELEASE_REPOSITORY из своего сохранённого конфига или из своего умолчания.
+# Без явной передачи выбор тега и выбор репозитория расходились бы: при WOBBLE_REPO=owner/fork
+# тег выбирался бы в форке, а искался — в основном репозитории, где он либо отсутствует, либо
+# существует одноимённым и совсем другим.
+#
 # Дальше всё делает install.sh: проверенный backup, переключение, перезапуск и сверка /health с
 # ожидаемым коммитом. Своей логики выката здесь намеренно нет — вторая её версия разъехалась бы
 # с первой ровно так же, как разъезжались правила чекпоинта.
-RELEASE_TAG="$latest" bash "$INSTALL"
+RELEASE_TAG="$latest" RELEASE_REPOSITORY="$REPO" bash "$INSTALL"

@@ -180,6 +180,31 @@ function auditMovement(player, state, spec, now, dtSeconds) {
   if (history.length >= WINDOW_MIN_SAMPLES && now - history[0].at >= WINDOW_MS * 0.75) {
     const average = history.reduce((sum, item) => sum + item.speed, 0) / history.length;
     if (average > MAX_SUSTAINED_SPEED) note('sustained-speed');
+
+    // Рядом, на том же окне, считается вторая мера той же величины — чистое смещение за реально
+    // прошедшее время. Решения она НЕ принимает и принимать не должна: это замер.
+    //
+    // Зачем он. На проде `sustained-speed` срабатывает у честных игроков по шесть раз за забег при
+    // запасе три, и пять таких забегов из шести теряют зачёт. Воспроизвести это ботом не удаётся
+    // ни при какой частоте пакетов (0…400 мс), ни при петлянии, ни на chaos: у бота ноль.
+    // Значит причина в том, чего бот не делает, и какая именно — неизвестно.
+    //
+    // Две меры расходятся ровно в одном случае: путь длиннее прямой между концами окна, то есть
+    // игрок вилял или его мотало. Записав обе на одном окне, мы получаем ответ измерением: если
+    // смещение сильно ниже среднего — виновата формула (кооператив свою считает именно смещением,
+    // и это сделано намеренно, см. coopMovementAudit.js); если они близко — игрок и правда ехал
+    // быстро, и разговор про порог, а не про формулу.
+    //
+    // Пик берётся по среднему — это та величина, которая принимает решение, — а смещение
+    // запоминается то, что было в ТОТ ЖЕ момент, иначе пары не получится.
+    const first = history[0];
+    const last = history.at(-1);
+    const elapsed = Math.max(0.001, (last.at - first.at) / 1000);
+    const net = Math.hypot(last.x - first.x, last.z - first.z) / elapsed;
+    const peak = player.sustainedSpeedPeak;
+    if (!peak || average > peak.average) {
+      player.sustainedSpeedPeak = { average, net, state: state.state };
+    }
   }
 
   const zones = zonesFor(spec);

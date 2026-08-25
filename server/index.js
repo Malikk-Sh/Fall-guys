@@ -1488,6 +1488,9 @@ function beginCountdown(room) {
       movementAnomalies: {},
       movementHistory: [],
       freeFallSince: null,
+      // Пик устойчивой скорости за забег — замер, а не правило. Принадлежит забегу по той же
+      // причине, что и отклонения выше: иначе реванш принёс бы чужой пик.
+      sustainedSpeedPeak: null,
       // Независимая история co-op audit. Она сбрасывается на каждый matchId так же, как race
       // verification, чтобы реванш не наследовал аномалии предыдущего забега.
       coopMovementAnomalies: {},
@@ -1666,6 +1669,21 @@ function finishMatch(room) {
         'movement_anomaly_headroom',
         dims(room, player, `${measurement.reason}:${measurement.bucket}`)
       );
+    }
+
+    // Две меры одной величины на одном окне — см. `auditMovement`.
+    //
+    // `sustained-speed` на проде срабатывает у честных игроков чаще, чем позволяет запас, а бот не
+    // воспроизводит это ни при какой частоте пакетов, ни при петлянии, ни на chaos. Причина
+    // неизвестна, и менять формулу или порог вслепую нельзя. Здесь записывается то, что позволит
+    // ответить измерением: величина, которая принимает решение, и рядом — чистое смещение за то же
+    // окно. Сильно ниже — виновата формула; близко — игрок и правда ехал быстро.
+    //
+    // В сотых долях: `observe` хранит целое, а разница между 12.9 и 13.1 здесь и есть весь вопрос.
+    const peak = room.mode === GAME_MODE.RACE ? player?.sustainedSpeedPeak : null;
+    if (peak) {
+      gameplay.observe('sustained_speed_peak', peak.average * 100, dims(room, player, peak.state));
+      gameplay.observe('sustained_speed_net_at_peak', peak.net * 100, dims(room, player, peak.state));
     }
     incidentForSocket(player?.ws, {
       accountId: player?.accountId,

@@ -13,10 +13,20 @@ const {
 // Правило чекпоинта — общее с клиентом, ровно по той же причине, что и геометрия трассы выше:
 // две реализации одного правила разъезжаются, и разъехавшись, отменяют игроку честно пройденную
 // арку. См. подробный разбор в самом модуле.
-const { crossedCheckpoint } = require('../shared/courseProgress.js');
+const { crossedCheckpoint, RACE_CHECKPOINT_FRAME } = require('../shared/courseProgress.js');
 
-// Место появления на чекпоинте у кооператива своё, и оно НЕ выводится из гоночного.
-const { coopSpawnFor } = require('../shared/coopChapters.js');
+// У кооператива своя геометрия прогресса, и она НЕ выводится из гоночной: ни место появления на
+// чекпоинте, ни рамка самой арки.
+const { coopSpawnFor, COOP_CHECKPOINT_FRAME } = require('../shared/coopChapters.js');
+
+// Рамка арки по спеке. Режим виден по самой спеке — у кооперативной главы есть `chapterId`.
+//
+// Одно место на выдачу: проверка результата (`verifyCoopCheckpoint`) читает ту же рамку, и разойтись
+// им теперь негде. Пока они стояли врозь, пересечение сбоку от дорожки чекпоинт выдавало и тем же
+// движением снимало проверку со всей главы.
+function checkpointFrame(spec) {
+  return spec?.chapterId ? COOP_CHECKPOINT_FRAME : RACE_CHECKPOINT_FRAME;
+}
 
 const { e2eSegmentCount } = require('./e2eCourse.js');
 const { trackRaceKnockdownState, trackRaceKnockdownRespawn } = require('./raceKnockdownMetrics.js');
@@ -197,7 +207,7 @@ function validateState(player, value, spec, now = Date.now()) {
   let checkpoint = player.checkpoint || 0;
   if (
     checkpoint < spec.checkpoints.length &&
-    crossedCheckpoint(previous, state, spec.checkpoints[checkpoint])
+    crossedCheckpoint(previous, state, spec.checkpoints[checkpoint], checkpointFrame(spec))
   )
     checkpoint++;
   return { ok: true, state: { ...state, checkpoint }, checkpoint };

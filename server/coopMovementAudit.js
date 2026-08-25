@@ -7,8 +7,8 @@
 // Цель — не кикать игрока за единичный шумный пакет, а не допускать в соревновательную таблицу
 // систематически невозможное движение.
 
-const { chapterLayout, LANE_WIDTH } = require('../shared/coopChapters.js');
-const { crossingPointAtZ } = require('../shared/courseProgress.js');
+const { chapterLayout, LANE_WIDTH, COOP_CHECKPOINT_FRAME } = require('../shared/coopChapters.js');
+const { crossingPointAtZ, insideCheckpointFrame } = require('../shared/courseProgress.js');
 
 const WINDOW_MS = 2000;
 const WINDOW_MIN_SAMPLES = 2;
@@ -250,9 +250,14 @@ function verifyCoopCheckpoint(player, spec, checkpoint, state, now = Date.now(),
   const line = spec.checkpoints?.[player.checkpoint || 0];
   const region = crossingPointAtZ(previous, state, line) || state;
 
-  // Общая дорожка имеет ширину 12. Даже на split-span обе реальные полосы лежат внутри неё;
-  // прежний общий validateState разрешал |x|<11, то есть чекпоинт можно было взять далеко сбоку.
-  if (Math.abs(region.x) > LANE_WIDTH / 2 + 1.5 || region.y < -2 || region.y > 10) {
+  // Рамка та же, по которой чекпоинт и ВЫДАН: `validateState` читает `COOP_CHECKPOINT_FRAME` для
+  // кооперативной спеки, и это теперь одно число на выдачу и на проверку.
+  //
+  // Пока они стояли врозь (выдача по гоночным |x|<11 без верхней границы, проверка по здешним),
+  // промежуток между ними был ловушкой: пересечение сбоку от дорожки чекпоинт выдавало и тем же
+  // движением снимало проверку со ВСЕЙ главы. Теперь эта ветка — сторожевая: сойтись рамки обязаны
+  // по построению, и её срабатывание означает, что они снова разъехались.
+  if (!insideCheckpointFrame(region, COOP_CHECKPOINT_FRAME)) {
     return {
       reason: 'coop-checkpoint-region',
       checkpoint,
@@ -278,7 +283,9 @@ function minimumFinishMs(spec) {
 
 function verifyCoopFinish(player, spec, state, now = Date.now()) {
   if (!spec?.chapterId || !state) return null;
-  if (Math.abs(state.x) > LANE_WIDTH / 2 + 1.5 || state.y < -2 || state.y > 10) {
+  // Финиш читается по СОСТОЯНИЮ, а не по пересечению: ленты как плоскости у главы нет, есть
+  // условие `z < finishZ`. Рамка при этом та же — иначе у одной главы оказалось бы две дорожки.
+  if (!insideCheckpointFrame(state, COOP_CHECKPOINT_FRAME)) {
     return {
       reason: 'coop-finish-region',
       x: Math.round(state.x * 100) / 100,

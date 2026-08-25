@@ -1,0 +1,102 @@
+name: Tag Wobble Rush Release
+
+# Создание тега предрелиза одной кнопкой: Actions → Tag Wobble Rush Release → Run workflow.
+#
+# Существует потому, что ровно этот шаг ломался трижды, и каждый раз одинаково — тег вставал не на
+# тот коммит. Дважды его ставили на устаревшую локальную main (v2.6.0-beta.2 уронила прод на 502),
+# один раз назвали уже занятый номер.
+#
+# Здесь оба класса ошибок закрыты устройством, а не инструкцией:
+#   * коммит берётся из origin/main прямо здесь, локальной копии не существует;
+#   * номер выбирается по существующим тегам, а не человеком.
+#
+# Дальше всё как раньше: пуш тега запускает `Publish Wobble Rush Release`, и та прогоняет линт,
+# весь тест-сьют и двухбраузерный e2e ПЕРЕД публикацией. Этот workflow ничего не выпускает — он
+# только ставит метку, и ошибиться ею уже нельзя.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Канал предрелиза (beta, rc)'
+        required: false
+        default: 'beta'
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wobble-tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main with full history and tags
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Тег обязан указывать на голову origin/main. Checkout выше берёт именно её, но проверка
+      # стоит явно: она стоит одну секунду, а её отсутствие уже стоило простоя.
+      - name: Require the tag to sit on origin/main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          head="$(git rev-parse HEAD)"
+          remote="$(git rev-parse origin/main)"
+          if [[ "$head" != "$remote" ]]; then
+            echo "HEAD $head is not origin/main $remote" >&2
+            exit 1
+          fi
+          echo "Tagging $head"
+
+      - name: Choose the next free prerelease number
+        id: choose
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$(node deploy/next-release-tag.mjs "${{ inputs.channel }}")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Next tag: $tag"
+
+      # Ровно та же проверка, что и при публикации: тег против версии пакета и lock-файла. Здесь
+      # она нужна, чтобы несогласованность версий останавливала нас ДО создания неизменяемого тега,
+      # а не после.
+      - name: Validate the tag against the project version
+        run: node deploy/check-release.mjs "${{ steps.choose.outputs.tag }}"
+
+      - name: Create and push the annotated tag
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Wobble Rush $TAG"
+          git push origin "$TAG"
+
+      - name: Summary
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: |
+          {
+            echo "### $TAG"
+            echo
+            echo "Коммит: \`$(git rev-parse HEAD)\`"
+            echo
+            echo "Сборка и публикация идут в \`Publish Wobble Rush Release\`."
+            echo "После неё выкат на VPS: \`wobble-deploy\` или \`RELEASE_TAG=$TAG bash /opt/wobble/deploy/install.sh\`."
+          } >> "$GITHUB_STEP_SUMMARY"

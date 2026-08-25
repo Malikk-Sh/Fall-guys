@@ -1,0 +1,165 @@
+name: Tag Wobble Rush Release
+
+# Создание тега предрелиза одной кнопкой: Actions → Tag Wobble Rush Release → Run workflow.
+#
+# Существует потому, что ровно этот шаг ломался трижды, и каждый раз одинаково — тег вставал не на
+# тот коммит. Дважды его ставили на устаревшую локальную main (v2.6.0-beta.2 уронила прод на 502),
+# один раз назвали уже занятый номер.
+#
+# Здесь оба класса ошибок закрыты устройством, а не инструкцией:
+#   * коммит берётся из origin/main прямо здесь, локальной копии не существует;
+#   * номер выбирается по существующим тегам, а не человеком.
+#
+# Дальше публикация запускается явным dispatch'ем (см. предпоследний шаг — пуш с GITHUB_TOKEN сам
+# по себе workflow не запускает), и `Publish Wobble Rush Release` прогоняет линт, весь тест-сьют и
+# двухбраузерный e2e ПЕРЕД публикацией. Этот workflow ничего не выпускает — он только ставит метку,
+# и ошибиться ею уже нельзя.
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Канал предрелиза (beta, rc)'
+        required: false
+        default: 'beta'
+        type: string
+
+permissions:
+  # `contents` — для пуша тега. `actions` — для запуска публикации: объявленный блок permissions
+  # обнуляет всё неупомянутое, а создание workflow_dispatch требует записи в Actions. Без этой
+  # строки тег пушился бы, dispatch получал бы 403, и релиз снова не выходил бы.
+  contents: write
+  actions: write
+
+concurrency:
+  group: wobble-tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main with full history and tags
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Тег обязан указывать на голову origin/main. Checkout выше берёт именно её, но проверка
+      # стоит явно: она стоит одну секунду, а её отсутствие уже стоило простоя.
+      - name: Require the tag to sit on origin/main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          head="$(git rev-parse HEAD)"
+          remote="$(git rev-parse origin/main)"
+          if [[ "$head" != "$remote" ]]; then
+            echo "HEAD $head is not origin/main $remote" >&2
+            exit 1
+          fi
+          echo "Tagging $head"
+
+      # Значение входа приходит через env, а не подстановкой в текст скрипта.
+      #
+      # `${{ ... }}` GitHub заменяет ДО того, как строку увидит bash, поэтому канал вида `$(...)`
+      # выполнился бы как команда — с токеном задания, а не отвалился бы на проверке канала. Через
+      # env это обычная строка, и разбирает её уже сам скрипт.
+      - name: Choose the next free prerelease number
+        id: choose
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          tag="$(node deploy/next-release-tag.mjs "$CHANNEL")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Next tag: $tag"
+
+      # Тег создаётся ЛОКАЛЬНО и только потом проверяется.
+      #
+      # Обратный порядок не работает вовсе: `check-release.mjs` сверяет тег с HEAD, а значит
+      # требует, чтобы тег уже существовал, — для ещё не созданного он падает всегда. Мой прежний
+      # порядок «проверить, потом создать» гарантировал, что до создания дело не доходит никогда.
+      #
+      # Локальный тег ничего не стоит: он живёт в runner'е и исчезает вместе с ним. Неизменяемым
+      # он становится только после push ниже, и до него проверка успевает сработать.
+      - name: Create the tag locally
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Wobble Rush $TAG"
+
+      # Та же проверка, что и при публикации: тег против версии пакета, lock-файла и HEAD.
+      - name: Validate the tag against the project version
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: node deploy/check-release.mjs "$TAG"
+
+      # Сверка с origin/main стоит в ОДНОМ шаге с пушем.
+      #
+      # main могла уйти вперёд, пока шли шаги выше. Тогда тег указывал бы не на её голову — то
+      # самое, что этот workflow должен исключить, — а `release.yml` такой тег принял бы: она
+      # проверяет лишь вхождение коммита в main, а не то, что он её голова.
+      #
+      # Отдельным шагом проверка оставляла между собой и пушем границу шага. Здесь между ними одна
+      # команда, то есть миллисекунды вместо секунд.
+      #
+      # Полностью окно этим не закрывается, и закрыть его нечем без цены, которой оно не стоит.
+      # Атомарно связать «пуш тега» с «main всё ещё та» можно только пушем обоих ref разом
+      # (`--atomic` плюс `--force-with-lease` на main), то есть записью в main — а она защищена, и
+      # такой пуш скорее отвергнут целиком, сломав выпуск ради секундного окна. Цена промаха тоже
+      # другая: тег встанет на коммит, отставший от main на один мерж, — проверенный, влитый и
+      # прошедший CI, а не устаревшая копия из прошлой сессии, ради которой всё затевалось.
+      - name: Push the tag if main has not moved
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          head="$(git rev-parse HEAD)"
+          remote="$(git rev-parse origin/main)"
+          if [[ "$head" != "$remote" ]]; then
+            echo "main ушла вперёд: $remote, тег готовился на $head. Запустите workflow заново." >&2
+            exit 1
+          fi
+          git push origin "refs/tags/$TAG"
+
+      # Публикацию надо запустить явно.
+      #
+      # Push выше уходит с GITHUB_TOKEN, а события от него новых запусков не создают — иначе
+      # workflow'ы запускали бы друг друга без конца. Из этого правила исключены ровно
+      # workflow_dispatch и repository_dispatch, поэтому здесь именно dispatch. Без этого шага тег
+      # создавался бы, а релиз не выходил.
+      - name: Start the publishing workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: gh workflow run release.yml --ref main --field tag="$TAG"
+
+      - name: Summary
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: |
+          {
+            echo "### $TAG"
+            echo
+            echo "Коммит: \`$(git rev-parse HEAD)\`"
+            echo
+            echo "Сборка и публикация запущены в \`Publish Wobble Rush Release\`."
+            echo "После неё выкат на VPS: \`bash /opt/wobble/deploy/deploy-latest.sh --prerelease\`."
+          } >> "$GITHUB_STEP_SUMMARY"

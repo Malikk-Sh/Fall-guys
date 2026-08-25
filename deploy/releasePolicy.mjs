@@ -12,6 +12,81 @@ export function parseReleaseTag(tag) {
   };
 }
 
+// Следующий свободный номер предрелиза.
+//
+// Номер выбирается по УЖЕ СУЩЕСТВУЮЩИМ тегам, а не человеком по памяти. Человек ошибался трижды:
+// дважды ставил тег на устаревшую локальную main (v2.6.0-beta.2 уронила прод), один раз назвал
+// занятый номер. Первое лечится тем, что тег ставит CI с origin/main; второе — вот этим.
+//
+// Теги неизменяемы, поэтому занятый номер нельзя переставить — только взять следующий.
+export function nextPrereleaseTag({ tags, version, channel = 'beta' }) {
+  const base = String(version || '').trim();
+  if (!/^\d+\.\d+\.\d+$/.test(base)) {
+    throw new Error(`invalid package version: ${version}`);
+  }
+  if (!/^[0-9A-Za-z]+$/.test(String(channel || ''))) {
+    throw new Error(`invalid prerelease channel: ${channel}`);
+  }
+
+  let highest = 0;
+  let stable = false;
+  for (const candidate of tags || []) {
+    const release = parseReleaseTag(candidate);
+    if (!release || release.version !== base) continue;
+    if (!release.prerelease) {
+      stable = true;
+      continue;
+    }
+    const match = new RegExp(`^${channel}\\.(\\d+)$`).exec(release.prereleaseLabel);
+    if (!match) continue;
+    highest = Math.max(highest, Number(match[1]));
+  }
+
+  // Предрелиз версии, которая уже вышла стабильной, — это шаг назад: по semver `-beta.N` МЕНЬШЕ,
+  // чем сама версия. Молча выпустить такое хуже, чем остановиться и потребовать поднять версию.
+  if (stable) {
+    throw new Error(`v${base} is already released; bump the package version before tagging ${channel}`);
+  }
+
+  return `v${base}-${channel}.${highest + 1}`;
+}
+
+// Какой релиз считать «последним опубликованным».
+//
+// Черновики пропускаются всегда: это ещё не выпущенное. Предрелизы — только по явному согласию,
+// иначе боевой сервер уезжал бы на бету от одного того, что её опубликовали.
+//
+// Свежесть определяется временем ПУБЛИКАЦИИ, а не местом в ответе GitHub.
+//
+// Список релизов приходит отсортированным по созданию, а не по публикации, и это разные вещи:
+// релиз, выпущенный из старой ветки поддержки, и черновик, опубликованный после более новых
+// релизов, оба встают в ответе не первыми. Довериться порядку значило бы иногда выкатывать не
+// то, что вышло последним, — а скрипт обещает именно последнее вышедшее.
+//
+// Релиз без разбираемого `published_at` не выбывает: он остаётся кандидатом с наименьшим
+// приоритетом, и при равенстве побеждает более ранний в ответе — то есть прежнее поведение.
+export function pickLatestRelease(releases, { allowPrerelease = false } = {}) {
+  if (!Array.isArray(releases)) return null;
+  let best = null;
+  let bestAt = -Infinity;
+  for (const release of releases) {
+    if (!release || typeof release !== 'object') continue;
+    if (release.draft) continue;
+    const parsedTag = parseReleaseTag(release.tag_name);
+    if (!parsedTag) continue;
+    // Предрелизом считается и тот, у кого суффикс в теге, даже если флаг в GitHub забыли поставить.
+    // Иначе случайно выпущенная как стабильная `v2.6.0-beta.9` уехала бы на боевой сервер.
+    if (!allowPrerelease && (release.prerelease || parsedTag.prerelease)) continue;
+    const parsed = Date.parse(release.published_at ?? '');
+    const at = Number.isFinite(parsed) ? parsed : -Infinity;
+    if (best === null || at > bestAt) {
+      best = release.tag_name;
+      bestAt = at;
+    }
+  }
+  return best;
+}
+
 export function validateReleaseVersions({ tag, packageVersion, lockVersion }) {
   const release = parseReleaseTag(tag);
   if (!release) {

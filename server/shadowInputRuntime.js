@@ -352,15 +352,20 @@ class EventPairing {
     if (leftFired) {
       decided.left += 1;
       if (this.pendingRight.length) {
-        this.pendingRight.shift();
+        const clientTick = this.pendingRight.shift();
         decided.matched += 1;
+        // Сервер сработал ПОЗЖЕ клиента — знак положительный.
+        noteMatchDelay(decided, tick - clientTick);
       } else this.pendingLeft.push(tick);
     }
     if (rightFired) {
       decided.right += 1;
       if (this.pendingLeft.length) {
-        this.pendingLeft.shift();
+        const serverTick = this.pendingLeft.shift();
         decided.matched += 1;
+        // Сервер сработал РАНЬШЕ клиента — знак отрицательный. Знак один на оба случая:
+        // serverTick − clientTick, и одновременность даёт ноль.
+        noteMatchDelay(decided, serverTick - tick);
       } else this.pendingRight.push(tick);
     }
     return decided;
@@ -397,6 +402,75 @@ class EventPairing {
 
 function noHitDecisions() {
   return { left: 0, right: 0, matched: 0, leftOnly: 0, rightOnly: 0 };
+}
+
+// Задержки приписываются к решению ЛЕНИВО и только при совпадении.
+//
+// Поля в `noHitDecisions` намеренно нет: `expire` и `finalize` совпадений не дают вовсе, и форма их
+// ответа — часть контракта сопоставления, на который смотрят соседние тесты. Замер не имеет права
+// её менять; вызывающий читает `decided.delays || []`.
+function noteMatchDelay(decided, ticks) {
+  (decided.delays || (decided.delays = [])).push(ticks);
+}
+
+// Распределение задержки между парой событий одного удара, в серверных тиках, со знаком
+// `serverTick − clientTick`.
+//
+// Зачем оно. Паритет ударов на проде — 66.5 %: совпало 161 из 242, 34 удара видит только сервер, 47
+// только клиент. Причин ровно две, и по нынешним метрикам они неразличимы, потому что записывается
+// только ИТОГ сопоставления:
+//
+//   * постоянный сдвиг по времени. Тогда события те же самые, просто одно систематически позже, и
+//     часть пар выходит за допуск: `expire()` закрывает серверное как `serverOnly`, а пришедшее
+//     позже клиентское как `clientOnly`. Один настоящий удар даёт по единице в каждую сторону —
+//     наблюдаемая «симметрия» это и есть, а вовсе не улика против сдвига.
+//   * разная геометрия препятствий. Тогда удары действительно разные.
+//
+// Различает их форма распределения, и читается она так:
+//
+//   * центр около нуля, спад к краям, обе стороны примерно поровну — сдвига нет, допуск ничего не
+//     срезает, и односторонние события это настоящая разница геометрии;
+//   * центр смещён (ненулевое среднее, одна сторона ведёт) — сдвиг есть;
+//   * счётчики РАСТУТ к краям ±допуск — видна лишь часть распределения, хвост обрезан допуском, и
+//     односторонние события скорее продолжение того же сдвига, чем разная геометрия.
+//
+// Ограничение честное и существенное: задержка известна только для СОВПАВШИХ пар. Сдвиг больше
+// допуска в гистограмму не попадает вовсе — о нём говорят края, а не тело.
+function createMatchDelayHistogram(tolerance = HIT_MATCH_TOLERANCE_TICKS) {
+  const buckets = new Array(2 * tolerance + 1).fill(0);
+  let samples = 0;
+  let total = 0;
+  let serverLeads = 0;
+  let clientLeads = 0;
+  let simultaneous = 0;
+
+  return {
+    add(ticks) {
+      if (!Number.isFinite(ticks)) return false;
+      const clamped = Math.max(-tolerance, Math.min(tolerance, Math.round(ticks)));
+      buckets[clamped + tolerance] += 1;
+      samples += 1;
+      total += clamped;
+      if (clamped < 0) serverLeads += 1;
+      else if (clamped > 0) clientLeads += 1;
+      else simultaneous += 1;
+      return true;
+    },
+    snapshot() {
+      return {
+        samples,
+        // Ненулевое среднее — это и есть постоянный сдвиг. Знак говорит, кто опаздывает.
+        meanTicks: samples ? total / samples : 0,
+        serverLeads,
+        clientLeads,
+        simultaneous,
+        // От -tolerance до +tolerance включительно. Крайние корзины важнее прочих: их рост означает,
+        // что распределение обрезано допуском.
+        toleranceTicks: tolerance,
+        buckets: [...buckets]
+      };
+    }
+  };
 }
 
 function rejectionBucket(reason) {
@@ -468,6 +542,7 @@ class ShadowInputRuntime {
     // на ровном месте.
     // Счётчики попаданий общие на процесс, а ОЖИДАНИЯ живут у каждого игрока (см. EventPairing).
     this.hitTotals = noHitDecisions();
+    this.hitMatchDelay = createMatchDelayHistogram();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -511,6 +586,7 @@ class ShadowInputRuntime {
     this.hitTotals.matched += decided.matched;
     this.hitTotals.leftOnly += decided.leftOnly;
     this.hitTotals.rightOnly += decided.rightOnly;
+    for (const ticks of decided.delays || []) this.hitMatchDelay.add(ticks);
   }
 
   controllerFor(player, room) {
@@ -1088,7 +1164,11 @@ class ShadowInputRuntime {
             // Но каждое событие ровно один раз становится либо половиной пары, либо односторонним,
             // поэтому незакрытых ровно столько, сколько ещё не разошлось по этим двум исходам.
             pending: totals.left + totals.right - 2 * totals.matched - totals.leftOnly - totals.rightOnly,
-            matchRate: decided ? totals.matched / decided : 0
+            matchRate: decided ? totals.matched / decided : 0,
+            // Распределение задержки внутри совпавших пар — см. createMatchDelayHistogram.
+            // Отвечает на вопрос, который `matchRate` задать не может: сдвиг по времени или
+            // разная геометрия.
+            matchDelay: this.hitMatchDelay.snapshot()
           };
         })()
       }
@@ -1102,6 +1182,8 @@ module.exports = {
   SERVER_SIMULATION_HZ,
   SERVER_SIMULATION_INTERVAL_MS,
   EventPairing,
+  HIT_MATCH_TOLERANCE_TICKS,
+  createMatchDelayHistogram,
   RollingErrorStats,
   ShadowInputRuntime,
   alignKnownWorldContact,

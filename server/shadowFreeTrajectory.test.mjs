@@ -1015,6 +1015,32 @@ test('ушедший игрок закрывает свои ожидания, а
   assert.equal(runtime.metrics().shadowGroundContact.hitParity.serverOnly, 1);
 });
 
+// Удар, замеченный уже на выходе игрока, отметить его собственным временем нечем — и он обязан быть
+// ПОСЧИТАН как невыровненный.
+//
+// Иначе `clientStamp` врёт в самую опасную сторону: показывает «выровнено всё», пока такие удары
+// молча подмешивают в гистограмму возраст снимка. Показатель, который нельзя проверить на полноту,
+// хуже отсутствующего — по нему как раз и будут решать, верить ли `matchDelay`.
+test('удар, найденный при отпуске игрока, считается невыровненным', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  tick(runtime, room, player, 1, now);
+
+  const before = runtime.metrics().shadowGroundContact.hitParity.clientStamp;
+  assert.equal(before.unaligned, 0, 'подготовка: до отпуска невыровненных нет');
+
+  // Клиент прислал сбивание последним, что успел, — и ушёл.
+  player.last = { ...player.last, state: 'knockdown' };
+  assert.equal(runtime.release(player), true);
+
+  const { hitParity } = runtime.metrics().shadowGroundContact;
+  assert.equal(hitParity.clientHits, 1, 'подготовка: удар обязан быть засчитан');
+  assert.equal(hitParity.clientStamp.unaligned, 1, 'и обязан попасть в невыровненные');
+  assert.equal(hitParity.clientStamp.aligned, before.aligned, 'выровненных он не прибавляет');
+});
+
 test('кооператив не выдаёт себя за сломанную геометрию', () => {
   // `maxWorldMissingSamples` требует строгий ноль и означает «матч, у которого геометрия не
   // построилась, доказательством быть не может». Кооператив не сломанная сборка: безголовой

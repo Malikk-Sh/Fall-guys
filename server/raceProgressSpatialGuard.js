@@ -1,6 +1,10 @@
 'use strict';
 
 const { CORRIDOR_MARGIN, corridorHalfWidth, corridorZones } = require('../shared/courseSpec.js');
+// The plane-crossing geometry is the one the client and the legacy validator also use. A second
+// copy of it here would be a second answer to "where did the player cross the arch" — the exact
+// split that lost honest checkpoints in the first place.
+const { crossingPointAtZ } = require('../shared/courseProgress.js');
 
 // Progress is a server-owned result boundary, not a movement rule. The player may move anywhere
 // allowed by the ordinary state validator, but a checkpoint/finish only counts while the actual
@@ -47,18 +51,7 @@ function finitePosition(state) {
 }
 
 function crossingPositionAtZ(previous, current, line) {
-  const from = finitePosition(previous);
-  const to = finitePosition(current);
-  if (!from || !to || !Number.isFinite(line)) return null;
-  if (from.z < line || to.z >= line || from.z === to.z) return null;
-
-  const ratio = (line - from.z) / (to.z - from.z);
-  if (ratio < 0 || ratio > 1) return null;
-  return {
-    x: from.x + (to.x - from.x) * ratio,
-    y: from.y + (to.y - from.y) * ratio,
-    z: line
-  };
+  return crossingPointAtZ(finitePosition(previous), finitePosition(current), line);
 }
 
 function raceProgressPositionAllowed(spec, state) {

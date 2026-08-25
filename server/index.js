@@ -1375,7 +1375,9 @@ function verificationFindingsForState(room, player, state, now) {
 function verifyPlayerProgress(room, player, checkpoint, state, now) {
   const verification =
     room.mode === GAME_MODE.COOP
-      ? verifyCoopCheckpoint(player, room.spec, checkpoint, state, now)
+      ? // `player.last` здесь ещё ПРЕЖНЕЕ состояние: обновляют его оба вызывающих уже после
+        // проверки. Значит это ровно тот отрезок, по которому чекпоинт и был выдан.
+        verifyCoopCheckpoint(player, room.spec, checkpoint, state, now, player.last)
       : verifyCheckpointTime(player, checkpoint, now, room.spec);
   if (!verification) return null;
   addVerificationFindings(room, player, [verification.reason], verification);

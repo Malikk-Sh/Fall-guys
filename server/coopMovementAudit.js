@@ -8,6 +8,7 @@
 // систематически невозможное движение.
 
 const { chapterLayout, LANE_WIDTH } = require('../shared/coopChapters.js');
+const { crossingPointAtZ } = require('../shared/courseProgress.js');
 
 const WINDOW_MS = 2000;
 const WINDOW_MIN_SAMPLES = 2;
@@ -231,20 +232,32 @@ function minimumCheckpointMs(spec, checkpoint) {
   return Math.max(450, Math.round((window.distance / maxForwardSpeed) * 1000));
 }
 
-function verifyCoopCheckpoint(player, spec, checkpoint, state, now = Date.now()) {
+function verifyCoopCheckpoint(player, spec, checkpoint, state, now = Date.now(), previous = null) {
   if (!spec?.chapterId || checkpoint <= (player.checkpoint || 0)) return null;
   const previousAt = player.coopLastCheckpointAt || player.matchStartedAt || now;
   const elapsed = now - previousAt;
   player.coopLastCheckpointAt = now;
 
+  // Место читается В ПЛОСКОСТИ арки — там же, где его читает и сама выдача чекпоинта.
+  //
+  // Раньше здесь стояло состояние, пришедшее ПОСЛЕ арки, и вместе с выдачей по конечной точке это
+  // было согласовано: не засчитали — не проверили. Порознь они дают худший из возможных исходов.
+  // Пара честно проходит арку и сразу падает в проём: точка теперь сохраняется правильно, а порог
+  // `y < -2` здесь строже порога выдачи `-3`, поэтому падение попадает в него и снимает проверку
+  // с ВСЕЙ главы — рекорд, прогресс и награды, — за движение, которое сервер сам признал честным.
+  //
+  // Отрезок тот же самый, значит и точка обязана быть та же.
+  const line = spec.checkpoints?.[player.checkpoint || 0];
+  const region = crossingPointAtZ(previous, state, line) || state;
+
   // Общая дорожка имеет ширину 12. Даже на split-span обе реальные полосы лежат внутри неё;
   // прежний общий validateState разрешал |x|<11, то есть чекпоинт можно было взять далеко сбоку.
-  if (Math.abs(state.x) > LANE_WIDTH / 2 + 1.5 || state.y < -2 || state.y > 10) {
+  if (Math.abs(region.x) > LANE_WIDTH / 2 + 1.5 || region.y < -2 || region.y > 10) {
     return {
       reason: 'coop-checkpoint-region',
       checkpoint,
-      x: Math.round(state.x * 100) / 100,
-      y: Math.round(state.y * 100) / 100
+      x: Math.round(region.x * 100) / 100,
+      y: Math.round(region.y * 100) / 100
     };
   }
 

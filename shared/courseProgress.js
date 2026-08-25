@@ -69,19 +69,32 @@ export function crossingPointAtZ(from, to, line) {
   };
 }
 
+// Рамка гоночной арки. Верхней границы у неё нет: над трассой висит только небо, и всё, что летит
+// высоко, всё равно упирается в проверку `bounds` в `validateState`.
+export const RACE_CHECKPOINT_FRAME = Object.freeze({
+  halfWidth: CHECKPOINT_HALF_WIDTH,
+  minY: CHECKPOINT_MIN_Y,
+  maxY: Infinity
+});
+
 // Прошла ли точка внутри рамки арки.
-export function insideCheckpointFrame(point) {
+export function insideCheckpointFrame(point, frame = RACE_CHECKPOINT_FRAME) {
   return (
     !!point &&
     Number.isFinite(point.x) &&
     Number.isFinite(point.y) &&
-    point.y > CHECKPOINT_MIN_Y &&
-    Math.abs(point.x) < CHECKPOINT_HALF_WIDTH
+    point.y > frame.minY &&
+    point.y < frame.maxY &&
+    Math.abs(point.x) < frame.halfWidth
   );
 }
 
-// Засчитана ли арка на отрезке [from → to] по внешней рамке. В гонке поверх этого работает ещё и
+// Засчитана ли арка на отрезке [from → to] по заданной рамке. В гонке поверх этого работает ещё и
 // коридор (см. выше); здесь его намеренно нет, чтобы про коридор знало одно место.
-export function crossedCheckpoint(from, to, line) {
-  return insideCheckpointFrame(crossingPointAtZ(from, to, line));
+//
+// Рамка — параметр, потому что режимов два и дорожка у них разная. Число само по себе неважно;
+// важно, чтобы ВЫДАЧА и ПРОВЕРКА одного режима читали ОДНУ рамку. Разойдясь, они дают худший из
+// исходов: чекпоинт выдан, а проверка с результата снята — игрок прошёл, и наказан за это молча.
+export function crossedCheckpoint(from, to, line, frame = RACE_CHECKPOINT_FRAME) {
+  return insideCheckpointFrame(crossingPointAtZ(from, to, line), frame);
 }

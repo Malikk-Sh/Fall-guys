@@ -68,6 +68,12 @@ Everything after the tag is resolved is `install.sh` as before — verified back
 and the `/health` build-identity check. `deploy-latest.sh` deliberately holds no install logic of
 its own.
 
+`WOBBLE_REPO` may point the lookup at another repository, but it must agree with what the installer
+already uses: `install.sh` keeps its own Git remote and reads `RELEASE_REPOSITORY` only for the
+published-release check, so a mismatch would verify the release in one repository and take the code
+from another. `deploy-latest.sh` refuses to continue when the saved repository disagrees rather than
+deploying something else under a same-named tag.
+
 To deploy one exact tag instead:
 
 ```bash

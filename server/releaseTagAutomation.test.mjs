@@ -234,3 +234,52 @@ test('ручной путь в документации пушит один ref,
   assert.ok(!releaseDoc.includes('git push origin --tags'), '--tags отправил бы посторонние теги');
   assert.match(releaseDoc, /git push origin "refs\/tags\/\$tag"/);
 });
+
+// Второй раунд ревью: пять находок, и первая снова оставляла бы теги неопубликованными.
+
+// Объявленный блок permissions обнуляет всё неупомянутое, а создание workflow_dispatch требует
+// записи в Actions. Без неё пуш проходит, dispatch получает 403 — и релиз опять не выходит.
+test('у workflow есть право запустить публикацию, а не только запушить тег', () => {
+  const permissions = workflow.slice(workflow.indexOf('permissions:'), workflow.indexOf('concurrency:'));
+  assert.match(permissions, /contents: write/, 'пуш тега');
+  assert.match(permissions, /actions: write/, 'запуск публикации');
+});
+
+// `${{ ... }}` подставляется в текст скрипта ДО того, как его увидит bash: канал вида `$(...)`
+// выполнился бы как команда с токеном задания, а не отвалился бы на проверке канала.
+test('входы приходят через env, а не подстановкой в текст скрипта', () => {
+  for (const [step, script] of workflow.split(/^ {6}- name: /m).entries()) {
+    const run = script.indexOf('run:');
+    if (run === -1) continue;
+    const body = script.slice(run);
+    assert.ok(
+      !/\$\{\{\s*inputs\./.test(body),
+      `шаг ${step}: вход подставлен прямо в скрипт — это выполнение чужой строки`
+    );
+    assert.ok(!/\$\{\{\s*steps\./.test(body), `шаг ${step}: вывод шага подставлен прямо в скрипт`);
+  }
+  assert.match(workflow, /CHANNEL: \$\{\{ inputs\.channel \}\}/, 'канал обязан ехать через env');
+});
+
+test('предрелизом считается и тег с суффиксом, даже если флаг в GitHub забыли', () => {
+  const releases = [
+    { tag_name: 'v2.6.0-beta.9', draft: false, prerelease: false, published_at: '2026-05-01T00:00:00Z' },
+    { tag_name: 'v2.5.0', draft: false, prerelease: false, published_at: '2026-01-01T00:00:00Z' }
+  ];
+  assert.equal(pickLatestRelease(releases), 'v2.5.0', 'бета не должна уехать на боевой сервер');
+  assert.equal(pickLatestRelease(releases, { allowPrerelease: true }), 'v2.6.0-beta.9');
+});
+
+// install.sh берёт git-remote из своей настройки, а RELEASE_REPOSITORY — только для проверки
+// публикации. При расхождении он проверил бы релиз в одном репозитории, а код взял из другого.
+test('выкат не продолжает работу при расхождении репозиториев', () => {
+  assert.match(deployLatest, /SAVED_RELEASE_REPOSITORY=/, 'сохранённый репозиторий обязан читаться');
+  const mismatch = deployLatest.indexOf('"$current_repo" != "$REPO"');
+  const install = deployLatest.indexOf('bash "$INSTALL"');
+  assert.ok(mismatch !== -1, 'расхождение обязано проверяться');
+  assert.ok(mismatch < install, 'проверка обязана стоять до установки');
+});
+
+test('«уже стоит» решается парой тег+репозиторий, а не одним тегом', () => {
+  assert.match(deployLatest, /"\$latest" == "\$current" && "\$REPO" ==/);
+});

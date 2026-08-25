@@ -94,14 +94,29 @@ if [[ -z "$latest" ]]; then
 fi
 
 current=""
+current_repo=""
 if [[ -r "$CONF" ]]; then
   current="$(sed -n 's/^SAVED_RELEASE_TAG=//p' "$CONF" | tail -n1 | tr -d "\"'")"
+  current_repo="$(sed -n 's/^SAVED_RELEASE_REPOSITORY=//p' "$CONF" | tail -n1 | tr -d "\"'")"
 fi
 
-echo "последний опубликованный: $latest"
-echo "стоит сейчас:             ${current:-(не из релиза)}"
+echo "последний опубликованный: $latest ($REPO)"
+echo "стоит сейчас:             ${current:-(не из релиза)}${current_repo:+ ($current_repo)}"
 
-if [[ "$latest" == "$current" ]]; then
+# Репозиторий обязан совпадать, и это не придирка.
+#
+# install.sh берёт git-remote из своей собственной настройки, а `RELEASE_REPOSITORY` использует
+# только для проверки публикации. Значит при расхождении он проверил бы релиз в одном репозитории,
+# а код взял бы из другого — и одноимённый тег выкатил бы чужой код. Сойтись эти две настройки
+# должны снаружи; молча продолжать здесь нельзя.
+if [[ -n "$current_repo" && "$current_repo" != "$REPO" ]]; then
+  echo "!! установка помнит репозиторий $current_repo, а запрошен $REPO." >&2
+  echo "   Приведите их к одному значению — иначе проверка релиза и источник кода разойдутся." >&2
+  exit 1
+fi
+
+# Сравнивается ПАРА: одинаковые имена тегов в разных репозиториях — разный код.
+if [[ "$latest" == "$current" && "$REPO" == "${current_repo:-$REPO}" ]]; then
   say "Уже стоит $latest — делать нечего"
   exit 0
 fi

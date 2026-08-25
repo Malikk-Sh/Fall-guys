@@ -72,8 +72,11 @@ export function pickLatestRelease(releases, { allowPrerelease = false } = {}) {
   for (const release of releases) {
     if (!release || typeof release !== 'object') continue;
     if (release.draft) continue;
-    if (release.prerelease && !allowPrerelease) continue;
-    if (!parseReleaseTag(release.tag_name)) continue;
+    const parsedTag = parseReleaseTag(release.tag_name);
+    if (!parsedTag) continue;
+    // Предрелизом считается и тот, у кого суффикс в теге, даже если флаг в GitHub забыли поставить.
+    // Иначе случайно выпущенная как стабильная `v2.6.0-beta.9` уехала бы на боевой сервер.
+    if (!allowPrerelease && (release.prerelease || parsedTag.prerelease)) continue;
     const parsed = Date.parse(release.published_at ?? '');
     const at = Number.isFinite(parsed) ? parsed : -Infinity;
     if (best === null || at > bestAt) {

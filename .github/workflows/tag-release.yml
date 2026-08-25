@@ -25,7 +25,11 @@ on:
         type: string
 
 permissions:
+  # `contents` — для пуша тега. `actions` — для запуска публикации: объявленный блок permissions
+  # обнуляет всё неупомянутое, а создание workflow_dispatch требует записи в Actions. Без этой
+  # строки тег пушился бы, dispatch получал бы 403, и релиз снова не выходил бы.
   contents: write
+  actions: write
 
 concurrency:
   group: wobble-tag-release
@@ -62,12 +66,19 @@ jobs:
           fi
           echo "Tagging $head"
 
+      # Значение входа приходит через env, а не подстановкой в текст скрипта.
+      #
+      # `${{ ... }}` GitHub заменяет ДО того, как строку увидит bash, поэтому канал вида `$(...)`
+      # выполнился бы как команда — с токеном задания, а не отвалился бы на проверке канала. Через
+      # env это обычная строка, и разбирает её уже сам скрипт.
       - name: Choose the next free prerelease number
         id: choose
         shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
-          tag="$(node deploy/next-release-tag.mjs "${{ inputs.channel }}")"
+          tag="$(node deploy/next-release-tag.mjs "$CHANNEL")"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Next tag: $tag"
 
@@ -91,7 +102,10 @@ jobs:
 
       # Та же проверка, что и при публикации: тег против версии пакета, lock-файла и HEAD.
       - name: Validate the tag against the project version
-        run: node deploy/check-release.mjs "${{ steps.choose.outputs.tag }}"
+        shell: bash
+        env:
+          TAG: ${{ steps.choose.outputs.tag }}
+        run: node deploy/check-release.mjs "$TAG"
 
       # main могла уйти вперёд, пока шли шаги выше. Тогда тег указывал бы на устаревший коммит —
       # то самое, что этот workflow и должен исключить, — а `release.yml` его принял бы: она

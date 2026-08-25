@@ -22,6 +22,7 @@ const spec = createCourseSpec(9090, 'normal');
 
 // Поток состояний прямо в проверку движения, без бота: тест задаёт траекторию сам.
 function feed(states, { dtMs = SEND_MS } = {}) {
+  // Точка может нести собственный интервал в поле `dt` — неравномерность прихода пакетов это и есть.
   const player = {
     checkpoint: 0,
     checkpointAt: START_MS,
@@ -36,7 +37,7 @@ function feed(states, { dtMs = SEND_MS } = {}) {
     if (player.last) findings.push(...verifyMovement(player, state, now, spec));
     player.last = { ...state };
     player.lastAt = now;
-    now += dtMs;
+    now += Number.isFinite(point.dt) ? point.dt : dtMs;
   }
   return { player, findings };
 }
@@ -93,6 +94,35 @@ test('на прямой меры совпадают, даже если перв�
     Math.abs(peak.average - peak.net) < 0.1,
     `на прямой меры обязаны совпасть: среднее ${peak.average}, смещение ${peak.net}`
   );
+  assert.ok(Math.abs(peak.average - peak.path) < 0.1, 'и путь тоже');
+});
+
+// Вторая причина завышения — независимая от кривизны и куда вероятнее в бою.
+//
+// `average` — среднее по пакетам БЕЗ веса: короткий быстрый промежуток входит в него с тем же
+// весом, что и длинный медленный. На идеально ПРЯМОЙ траектории с промежутками 33 и 132 мс это
+// даёт 12.5 против настоящих 8.0. По паре `average`/`net` эту причину не отличить от петляния —
+// поэтому и понадобилась третья мера: путь, взвешенный по времени.
+test('на прямой с неравными промежутками завышает вес, а не кривизна', () => {
+  const step = (8 * 66) / 1000;
+  const points = [];
+  let z = 0;
+  for (let i = 0; i < 60; i++) {
+    // Одно и то же расстояние за попеременно короткий и длинный промежуток.
+    z -= step;
+    points.push({ x: 0, y: 1, z, dt: i % 2 ? 33 : 132 });
+  }
+  const { player } = feed(points);
+  const peak = player.sustainedSpeedPeak;
+  assert.ok(peak, 'окно набралось');
+
+  // Путь и прямая совпадают — траектория прямая, кривизны нет вовсе.
+  assert.ok(Math.abs(peak.path - peak.net) < 0.1, `кривизны нет: путь ${peak.path}, прямая ${peak.net}`);
+  // А решающая величина всё равно заметно выше — вот она, цена отсутствия веса.
+  assert.ok(
+    peak.average > peak.path * 1.2,
+    `среднее ${peak.average} обязано заметно превышать взвешенный путь ${peak.path}`
+  );
 });
 
 test('на петляющей траектории меры расходятся — ради этого замер и делается', () => {
@@ -103,6 +133,16 @@ test('на петляющей траектории меры расходятся
   assert.ok(
     peak.average > peak.net * 1.5,
     `среднее ${peak.average} должно заметно превышать смещение ${peak.net}`
+  );
+  // Промежутки здесь равные, значит вес ни при чём: расхождение целиком от кривизны, и его видно
+  // именно в паре путь/прямая.
+  assert.ok(
+    peak.path > peak.net * 1.5,
+    `кривизна обязана быть видна в паре путь ${peak.path} / прямая ${peak.net}`
+  );
+  assert.ok(
+    Math.abs(peak.average - peak.path) < 0.1,
+    `при равных промежутках вес ничего не добавляет: среднее ${peak.average}, путь ${peak.path}`
   );
 });
 

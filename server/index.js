@@ -1692,6 +1692,7 @@ function finishMatch(room) {
       const cohort = fired === 0 ? 'quiet' : fired > raceAnomalyBudget('sustained-speed') ? 'over' : 'noted';
       const detail = `${cohort}:${peak.state}`;
       gameplay.observe('sustained_speed_peak', peak.average * 100, dims(room, player, detail));
+      gameplay.observe('sustained_speed_path_at_peak', peak.path * 100, dims(room, player, detail));
       gameplay.observe('sustained_speed_net_at_peak', peak.net * 100, dims(room, player, detail));
     }
     incidentForSocket(player?.ws, {

@@ -15,6 +15,9 @@ const {
 // арку. См. подробный разбор в самом модуле.
 const { crossedCheckpoint } = require('../shared/courseProgress.js');
 
+// Место появления на чекпоинте у кооператива своё, и оно НЕ выводится из гоночного.
+const { coopSpawnFor } = require('../shared/coopChapters.js');
+
 const { e2eSegmentCount } = require('./e2eCourse.js');
 const { trackRaceKnockdownState, trackRaceKnockdownRespawn } = require('./raceKnockdownMetrics.js');
 
@@ -224,12 +227,39 @@ function canFinish(player, spec) {
 //
 // Пропущенный чекпоинт повтором с того же места не лечится: арку надо пересечь. Поэтому здесь
 // игрок возвращается на свой чекпоинт — единственное место, откуда он до арки дойдёт.
+//
+// Геометрия возврата у режимов РАЗНАЯ, и брать гоночную для кооператива нельзя — см.
+// `checkpointReturn`.
 function finishRejection(player, spec) {
   const checkpoint = player.checkpoint || 0;
   if (checkpoint < spec.segmentCount) {
-    return { reason: 'checkpoint-missing', position: spawnFor(spec, checkpoint) };
+    return { reason: 'checkpoint-missing', position: checkpointReturn(player, spec, checkpoint) };
   }
-  return { reason: 'finish-validation', position: player.last || spawnFor(spec, checkpoint) };
+  return { reason: 'finish-validation', position: player.last || checkpointReturn(player, spec, checkpoint) };
+}
+
+// Куда возвращают игрока на его чекпоинт. Режим виден по самой спеке: у кооперативной главы есть
+// `chapterId`, у гоночной трассы его нет.
+//
+// Геометрия у режимов разная по трём осям сразу. Гонка ставит игрока ПЕРЕД аркой (`+3.1` по Z,
+// прогресс идёт в минус), на оси и на высоте 1.15. Кооператив — сразу ЗА неё (`-3.1`), на своей
+// половине дорожки (x = ±2.2) и на 1.35. Причём «за аркой» там не мелочь, а прямо заявленное
+// правило: «чтобы игрок не пересекал её повторно» (см. `coopSpawnFor`).
+//
+// Чем это оборачивалось. Оба напарника, получив отказ разом, оказывались в ОДНОЙ точке на оси и
+// расталкивали друг друга. Пара откатывалась на 6.2 единицы назад, за арку, которую уже прошла, и
+// проходила её заново. А на 2 чекпоинтах из 32 (все главы, все арки) гоночная точка попадает не на
+// тот же кусок главы, что кооперативная, а на осыпающийся пол — тот самый, который под ногами
+// пропадает.
+//
+// Обработчик возрождения это различие соблюдает и всегда считает точку по слоту
+// (`C2S.RESPAWN` → `coopSpawnFor`). Отказ в финише — не соблюдал: он появился как гоночная починка
+// и достался кооперативу вместе с общим обработчиком финиша.
+function checkpointReturn(player, spec, checkpoint) {
+  if (!spec?.chapterId) return spawnFor(spec, checkpoint);
+  // Слот — порядковый номер игрока в комнате. Без него берём первую половину дорожки: она такой же
+  // законный пол, а вот гоночная точка кооперативу не подходит ничем.
+  return coopSpawnFor(spec, checkpoint, player?.slot || 0);
 }
 
 function leaderboard(room) {

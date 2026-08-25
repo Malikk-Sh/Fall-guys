@@ -1,15 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import * as THREE from 'three';
 import { Player } from '../client/game/Player.js';
 import { Effects } from '../client/game/Effects.js';
-import {
-  createPlayerSimulationState,
-  movementIntent,
-  resolveGroundContact,
-  stepPlayerMotion
-} from '../shared/playerSimulation.js';
-import { PLAYER_FOOT } from '../client/game/PlayerDimensions.js';
+import { createPlayerSimulationState } from '../shared/playerSimulation.js';
+
+const require = createRequire(import.meta.url);
+const { stepPlayerThroughWorld } = require('./playerWorldStep');
 
 // Движение игрока написано дважды: в client/game/Player.js — тот путь, по которому реально играют,
 // и в shared/playerSimulation.js — тот, которым считает сервер и по которому клиент переигрывает
@@ -19,8 +17,12 @@ import { PLAYER_FOOT } from '../client/game/PlayerDimensions.js';
 // молча разводит клиент и сервер, и ни один тест этого не заметит. Здесь обе реализации гоняются
 // по одному сценарию и сверяются на каждом шаге — до последнего разряда.
 //
-// Часть сценариев идёт над пустотой, часть — над полом: постановка на опору уже общая, а стены и
-// импульсы препятствий ещё нет, поэтому сравнивается ровно то, что реализовано в обеих версиях.
+// Серверная сторона идёт через `stepPlayerThroughWorld` — ту самую сборку, которую исполняет
+// shadow-симуляция. Раньше тест собирал её сам, и это была третья копия порядка вызовов: тест мог
+// сойтись с клиентом, а рантайм — нет, ровно так и вышло со стеной (см. clientWorldMotionParity).
+//
+// Здесь сверяется пустая трасса и ровный пол. Настоящая геометрия — препятствия, стены, подвижные
+// опоры — в `server/clientWorldMotionParity.test.mjs`.
 function emptyCourse() {
   return {
     platforms: [],
@@ -37,6 +39,9 @@ function emptyCourse() {
     progress: () => 0
   };
 }
+
+// Мир без пола, без препятствий и без стен: сценарии над пустотой сверяют одно только движение.
+const EMPTY_WORLD = { colliders: [], obstacles: [], walls: [] };
 
 const FIELDS = [
   ['grounded', 'grounded'],
@@ -120,7 +125,7 @@ function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000
     }
 
     player.step(dt, input, cameraYaw, tick * dt);
-    state = stepPlayerMotion(
+    state = stepPlayerThroughWorld(
       state,
       {
         moveX: move.x,
@@ -130,12 +135,10 @@ function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000
         jumpHeld: frame.jumpHeld === true,
         divePressed: frame.dive === true
       },
-      {
-        // Сбивание приходит извне и в обеих версиях лишь заводит таймеры, поэтому клиенту оно
-        // подаётся вызовом, а ядру — состоянием: сравнивать нужно то, что идёт после него.
-        knockdownControl: 0
-      },
-      dt
+      EMPTY_WORLD,
+      // Сбивание приходит извне и в обеих версиях лишь заводит таймеры, поэтому клиенту оно
+      // подаётся вызовом, а ядру — состоянием: сравнивать нужно то, что идёт после него.
+      { dt, now: tick * dt, hitTimes: new Map(), knockdownControl: 0 }
     ).state;
     assertSameState(player, state, `на шаге ${tick}`);
   });
@@ -144,9 +147,12 @@ function runScript(script, { dt = 1 / 30, cameraYaw = 0, start = { x: 0, y: 5000
 
 // Тот же сценарий, но над полом: теперь сверяется и постановка на опору. Пол описан плоскими
 // опорами — ровно тем, что клиент строит из своей геометрии, а сервер получает безголовой сборкой.
-function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
+function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6, ledges = [] } = {}) {
+  // Списки строятся дважды, а не переиспользуются: клиент и сервер обязаны читать СВОИ записи, и
+  // общий объект спрятал бы расхождение, случись оно в самой записи.
   const floor = () => [
-    { x: 0, y: -0.5, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null }
+    { x: 0, y: -0.5, z: 0, w: 4000, h: 1, d: 4000, r: 0, type: 'box', disabled: false, delta: null },
+    ...ledges.map(ledge => ({ r: 0, type: 'box', disabled: false, delta: null, ...ledge }))
   ];
   const scene = new THREE.Scene();
   const course = emptyCourse();
@@ -154,7 +160,8 @@ function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
   const player = new Player(scene, course, new Effects(scene));
   player.teleport(new THREE.Vector3(0, startY, 0));
   let state = createPlayerSimulationState({ position: { x: 0, y: startY, z: 0 } });
-  const colliders = floor();
+  const world = { colliders: floor(), obstacles: [], walls: [] };
+  const hitTimes = new Map();
 
   script.forEach((frame, tick) => {
     const move = harnessMovement(frame);
@@ -194,15 +201,11 @@ function runOverFloor(script, { dt = 1 / 30, cameraYaw = 0, startY = 6 } = {}) {
 
     player.step(dt, input, cameraYaw, tick * dt);
 
-    const wasGrounded = state.grounded;
-    const previousY = state.position.y;
-    state = stepPlayerMotion(state, rawInput, { knockdownControl: 0 }, dt).state;
-    state = resolveGroundContact(state, {
-      colliders,
-      previousY,
-      footOffset: PLAYER_FOOT,
-      intent: movementIntent(rawInput),
-      wasGrounded
+    state = stepPlayerThroughWorld(state, rawInput, world, {
+      dt,
+      now: tick * dt,
+      hitTimes,
+      knockdownControl: 0
     }).state;
 
     assertSameState(player, state, `на шаге ${tick} над полом`);
@@ -333,6 +336,51 @@ test('сбитый на полу игрок останавливается, а �
   assert.ok(
     recovered.speed > 5,
     `после подъёма игрок обязан разогнаться, а не ползти со скоростью ${recovered.speed}`
+  );
+});
+
+// Приземление СБИТОГО игрока по ходу движения.
+//
+// Мягкое приземление вдоль движения ненадолго удерживает набранный темп — но только если ввод
+// направлен туда же, куда несёт. У сбитого игрока ввод ослаблен множителем `knockdownControl` (у
+// живого клиента это ноль), поэтому направления «куда хочет» у него нет вовсе и удержания быть не
+// должно. Сервер же брал намерение СЫРЫМ и удержание выдавал — то есть после каждого попадания
+// бежал быстрее клиента ещё треть секунды.
+//
+// Окно у этой ветки узкое: скорость выше 6.3, вертикальная скорость встречи между 2.8 и 7.5, и
+// приземление именно ИЗ ВОЗДУХА. Обычный прыжок с ровного пола возвращается на него со всеми 8.7 и
+// в окно не попадает вовсе, поэтому игрок прыгает на СТУПЕНЬКУ: подъём съедает часть падения, и
+// встреча выходит мягкой. Сбивание в полёте замораживает горизонтальную скорость (ускорение
+// домножается на тот же ноль), так что к ступеньке игрок подлетает всё ещё быстрым.
+const LANDING_LEDGE = { x: 0, y: 0.4, z: -36, w: 40, h: 1, d: 60 };
+
+function knockdownLanding() {
+  // Сценарий обрывается НА кадре приземления: проверки ниже смотрят на состояние в конце, а лежащий
+  // на опоре игрок тормозит быстро — ещё через полдюжины кадров ни скорости, ни сбивания уже нет.
+  const flight = running(25, { moveX: 0, moveZ: 1 });
+  flight[8] = { moveX: 0, moveZ: 1, jump: true };
+  flight[11] = { moveX: 0, moveZ: 1, knockDown: 0.5 };
+  return [...idle(40), ...flight];
+}
+
+test('сбитый игрок приземляется по ходу движения одинаково у обеих реализаций', () => {
+  const { player } = runOverFloor(knockdownLanding(), { ledges: [LANDING_LEDGE] });
+  // Проверки подготовки, а не паритета: приземление без сбивания, на малой скорости или мимо
+  // ступеньки сравнивало бы совсем другой случай, и тест зеленел бы впустую.
+  assert.ok(player.knockdownTimer > 0, 'подготовка: игрок обязан приземлиться сбитым');
+  assert.ok(player.grounded, 'подготовка: игрок обязан приземлиться');
+  assert.ok(
+    player.physics.y > 1.2,
+    `подготовка: приземление обязано случиться на ступеньке, а не на полу (y ${player.physics.y})`
+  );
+  assert.ok(
+    Math.hypot(player.velocity.x, player.velocity.z) > 6.4,
+    'подготовка: скорость обязана остаться выше порога удержания'
+  );
+  assert.equal(
+    player.landingRetention,
+    0,
+    `сбитому удержание темпа не положено, а получено ${player.landingRetention}`
   );
 });
 

@@ -274,7 +274,7 @@ export function stepPlayerMotion(previousState, rawInput, context = {}, dt) {
   const characterYaw = finite(context.characterYaw);
   const events = [];
 
-  if (state.finished) return { state, events, intentX: 0 };
+  if (state.finished) return { state, events, intent: { x: 0, z: 0 }, intentX: 0 };
 
   const knockedDown = state.knockdownTimer > 0;
   state.knockdownImmunity = Math.max(0, state.knockdownImmunity - dt);
@@ -380,5 +380,11 @@ export function stepPlayerMotion(previousState, rawInput, context = {}, dt) {
   state.position.y += state.velocity.y * dt;
   state.position.z += state.velocity.z * dt;
 
-  return { state, events, intentX: desired.x };
+  // Намерение отдаётся целиком, а не только его X.
+  //
+  // Оно нужно снаружи: `resolveGroundContact` спрашивает, совпадает ли направление ввода с
+  // движением, и от ответа зависит удержание темпа при мягком приземлении. Взять его там же, где
+  // вычислили, — единственный способ не заводить второе место, знающее про ослабление ввода у
+  // сбитого игрока: `desired` уже посчитан по ВВОДУ, домноженному на `knockdownControl`.
+  return { state, events, intent: desired, intentX: desired.x };
 }

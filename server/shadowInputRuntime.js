@@ -4,19 +4,13 @@ const { ClientInputQueue } = require('./clientInputQueue');
 const { GAME_MODE, ROOM_STATE } = require('../shared/protocol.js');
 const {
   GROUND_CONTACT_MAX_UPWARD_SPEED,
-  PLAYER_SIMULATION_CONSTANTS,
-  applyKnockdown,
   createPlayerSimulationState,
-  movementIntent,
-  resolveGroundContact,
   stepPlayerMotion
 } = require('../shared/playerSimulation.js');
 
-const { JUMP_SPEED } = PLAYER_SIMULATION_CONSTANTS;
-const { PLAYER_BODY_RADIUS, PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } = require('../shared/playerDimensions.js');
-const { applyObstacleImpulses } = require('../shared/courseImpulses.js');
+const { PLAYER_FOOT } = require('../shared/playerDimensions.js');
 const { supportIndexAt, supportTop } = require('../shared/courseCollision.js');
-const { applyWallBounce, wallBounceNormalAt } = require('../shared/courseWalls.js');
+const { stepPlayerThroughWorld } = require('./playerWorldStep');
 const { WORLD_SUPPORT, shadowCourseWorldFor, shadowWorldSupport } = require('./shadowCourseWorld');
 const { advanceShadowRaceProgress, createShadowRaceProgress } = require('./shadowRaceProgress');
 
@@ -768,57 +762,33 @@ class ShadowInputRuntime {
     // Клиент крутит фиксированный цикл 1/60 (`client/main.js`), и каждый его кадр — это движение,
     // отскок, опора и импульсы. Здесь тот же цикл, дважды за тик: сравнивается одинаковое с
     // одинаковым. Замерено: 0.93 мкс на подшаг, то есть 0.17 % ядра на шестьдесят игроков.
-    let impulses = null;
     let serverKnockdown = false;
     for (let sub = 0; sub < FREE_TRAJECTORY_SUB_STEPS; sub++) {
       // Мир доводится до времени каждого подшага: перенос движущейся опорой считается по её сдвигу
       // за подшаг, ровно как у клиента за кадр.
-      world.advance(matchTime - SERVER_SIMULATION_DT + (sub + 1) * FREE_TRAJECTORY_SUB_DT);
+      const at = matchTime - SERVER_SIMULATION_DT + (sub + 1) * FREE_TRAJECTORY_SUB_DT;
+      world.advance(at);
 
-      const before = copySimulationState(controller.freeState);
-      const stepped = this.step(controller.freeState, controller.input, {}, FREE_TRAJECTORY_SUB_DT).state;
-
-      const normal = wallBounceNormalAt(
-        world.walls,
-        stepped.position,
-        before.position,
-        stepped.velocity,
-        PLAYER_BODY_RADIUS
-      );
-      if (normal && !before.grounded && before.jumpBuffer > 0) {
-        applyWallBounce(stepped, normal, before.position, { jumpSpeed: JUMP_SPEED });
-        this.worldDiagnostics.wallBounces += 1;
-      }
-
-      const settled = resolveGroundContact(stepped, {
-        colliders: world.colliders,
-        previousY: before.position.y,
-        footOffset: PLAYER_FOOT,
-        intent: movementIntent(controller.input),
-        wasGrounded: before.grounded
-      }).state;
-
-      impulses = applyObstacleImpulses(settled, {
-        obstacles: world.obstacles,
+      // Сама сборка шага — движение, стена, опора, импульсы — живёт в `playerWorldStep`: порядок и
+      // то, какое состояние читает каждая проверка, обязаны совпадать с `Player.step` до разряда, и
+      // держать это в двух местах уже однажды не получилось. Здесь остаётся только учёт.
+      const advanced = stepPlayerThroughWorld(controller.freeState, controller.input, world, {
+        dt: FREE_TRAJECTORY_SUB_DT,
         // Тот же счётчик времени матча: от него зависят и фаза поршня, и выдержка между попаданиями.
-        now: matchTime - SERVER_SIMULATION_DT + (sub + 1) * FREE_TRAJECTORY_SUB_DT,
+        now: at,
         hitTimes: controller.hitTimes,
-        playerRadius: PLAYER_OBSTACLE_RADIUS,
-        footOffset: PLAYER_FOOT,
-        knockback: 1
+        knockback: 1,
+        step: this.step
       });
-      this.worldDiagnostics.impulses += impulses.events.length;
-      // Импульс препятствия несёт не только толчок, но и сбивание, и второе клиент применяет
-      // (`Course.interact` → `player.knockDown`). Пока здесь считались только толчки, каждое
-      // попадание разводило траектории на полторы секунды: клиент терял управление, а свободная
-      // симуляция бежала дальше. Замерено на ботах — расхождение начиналось ровно на первом
-      // попадании, с knockdownTimer 1.383 у клиента против нуля у сервера.
-      for (const event of impulses.events) {
-        // Сбивание засчитывается в событие только если оно СОСТОЯЛОСЬ: иммунитет и уже идущее
-        // сбивание отменяют его и у клиента тоже, поэтому сравнивать надо результат, а не намерение.
-        if (event.knockdown && applyKnockdown(impulses.state, event.knockdown)) serverKnockdown = true;
-      }
-      controller.freeState = impulses.state;
+
+      if (advanced.bounced) this.worldDiagnostics.wallBounces += 1;
+      this.worldDiagnostics.impulses += advanced.hits.length;
+      // Сбивание от импульса клиент применяет (`Course.interact` → `player.knockDown`). Пока здесь
+      // считались только толчки, каждое попадание разводило траектории на полторы секунды: клиент
+      // терял управление, а свободная симуляция бежала дальше. Замерено на ботах — расхождение
+      // начиналось ровно на первом попадании, с knockdownTimer 1.383 у клиента против нуля у сервера.
+      if (advanced.knockedDown) serverKnockdown = true;
+      controller.freeState = advanced.state;
     }
 
     // Сбивание у клиента наблюдаемо прямо в снапшоте: ярлык состояния встаёт в `knockdown`.

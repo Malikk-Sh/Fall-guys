@@ -150,6 +150,11 @@ function sustainedSpeedCausality(history, spanSeconds, pathLength) {
 
   for (const item of history) {
     const intervalMs = Math.max(0, item.at - item.fromAt);
+    // Между разными endpoint-state момент самого перехода неизвестен. Приписывать весь
+    // сетевой промежуток конечному состоянию особенно опасно именно при редких пакетах,
+    // которые этот замер и диагностирует. Переходный интервал поэтому не считается ни
+    // knockdown, ни управляемым движением; знаменатель полного окна при этом не меняется.
+    if ((item.fromState ?? item.state) !== item.state) continue;
     if (item.state === 'knockdown') {
       knockdownMs += intervalMs;
       knockdownPath += item.dist;
@@ -233,6 +238,7 @@ function auditMovement(player, state, spec, now, dtSeconds) {
     y: state.y,
     z: state.z,
     state: state.state,
+    fromState: player.last?.state ?? state.state,
     speed: observed,
     // Сама длина промежутка, а не только скорость: по скорости её не восстановить, потому что
     // делитель `dtSeconds` снизу подрезан сорока миллисекундами.

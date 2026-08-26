@@ -165,6 +165,23 @@ test('причинный замер считает время, путь и ск�
   assert.ok(productionDetail.length <= 32, `detail ${productionDetail} обязан помещаться в GameplayMetrics`);
 });
 
+test('переходный интервал не приписывается конечному состоянию', () => {
+  const history = [
+    { fromAt: 0, at: 500, dist: 4, fromState: 'ground', state: 'ground' },
+    { fromAt: 500, at: 1000, dist: 10, fromState: 'ground', state: 'knockdown' },
+    { fromAt: 1000, at: 1500, dist: 10, fromState: 'knockdown', state: 'knockdown' },
+    { fromAt: 1500, at: 2000, dist: 4, fromState: 'knockdown', state: 'ground' }
+  ];
+  const cause = sustainedSpeedCausality(history, 2, 28);
+
+  // Оба интервала смены state исключены: достоверно knockdown только третья четверть окна,
+  // а достоверно управляемое движение — только первая.
+  assert.ok(Math.abs(cause.knockdownTimeShare - 0.25) < 1e-9);
+  assert.ok(Math.abs(cause.knockdownPathShare - 10 / 28) < 1e-9);
+  assert.ok(Math.abs(cause.controlledPathSpeed - 8) < 1e-9);
+  assert.equal(cause.detailSuffix, 'kd-12u');
+});
+
 test('окно без knockdown не создаёт новую analytics-размерность', () => {
   const history = [
     { fromAt: 0, at: 1000, dist: 8, state: 'ground' },

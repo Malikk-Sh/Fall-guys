@@ -129,6 +129,56 @@ function budgetFor(reason) {
   return Object.hasOwn(ANOMALY_BUDGET, reason) ? ANOMALY_BUDGET[reason] : DEFAULT_ANOMALY_BUDGET;
 }
 
+function shareBucket(share) {
+  if (!(share > 0)) return '0';
+  if (share <= 0.25) return '1';
+  if (share <= 0.5) return '2';
+  if (share <= 0.75) return '3';
+  return '4';
+}
+
+// Причинный замер для peak-окна. Это НЕ разрешение на движение и не доказательство конкретного
+// удара: `state` приходит от клиента, хоть и после общей validateState. Серверный hit из shadow
+// тоже нельзя использовать как exemption — его obstacle parity пока не доказан. Здесь только
+// отвечаем на более узкий вопрос: сколько самого окна и его пути пришлось на принятые состояния
+// knockdown, и остаётся ли путь вне этих интервалов выше действующего порога.
+function sustainedSpeedCausality(history, spanSeconds, pathLength) {
+  let knockdownMs = 0;
+  let knockdownPath = 0;
+  let controlledMs = 0;
+  let controlledPath = 0;
+
+  for (const item of history) {
+    const intervalMs = Math.max(0, item.at - item.fromAt);
+    if (item.state === 'knockdown') {
+      knockdownMs += intervalMs;
+      knockdownPath += item.dist;
+    } else {
+      controlledMs += intervalMs;
+      controlledPath += item.dist;
+    }
+  }
+
+  const spanMs = Math.max(1, spanSeconds * 1000);
+  const knockdownTimeShare = Math.min(1, knockdownMs / spanMs);
+  const knockdownPathShare = pathLength > 0 ? Math.min(1, knockdownPath / pathLength) : 0;
+  const controlledPathSpeed = controlledMs > 0 ? controlledPath / (controlledMs / 1000) : null;
+  const hasKnockdown = knockdownMs > 0 || knockdownPath > 0;
+  const controlBand =
+    controlledPathSpeed === null ? 'n' : controlledPathSpeed > MAX_SUSTAINED_SPEED ? 'o' : 'u';
+  const detailSuffix = hasKnockdown
+    ? `kd-${shareBucket(knockdownTimeShare)}${shareBucket(knockdownPathShare)}${controlBand}`
+    : '';
+
+  return {
+    hasKnockdown,
+    knockdownTimeShare,
+    knockdownPathShare,
+    controlledPathSpeed,
+    detailSuffix
+  };
+}
+
 // Зоны трассы считаются один раз на спеку и кешируются на ней же: они зависят только от плана.
 function zonesFor(spec) {
   if (!spec?.segments?.length) return null;
@@ -182,6 +232,7 @@ function auditMovement(player, state, spec, now, dtSeconds) {
     x: state.x,
     y: state.y,
     z: state.z,
+    state: state.state,
     speed: observed,
     // Сама длина промежутка, а не только скорость: по скорости её не восстановить, потому что
     // делитель `dtSeconds` снизу подрезан сорока миллисекундами.
@@ -236,7 +287,16 @@ function auditMovement(player, state, spec, now, dtSeconds) {
     const net = Math.hypot(last.x - first.fromX, last.z - first.fromZ) / spanSeconds;
     const peak = player.sustainedSpeedPeak;
     if (!peak || average > peak.average) {
-      player.sustainedSpeedPeak = { average, path, net, state: state.state };
+      const causality = sustainedSpeedCausality(history, spanSeconds, pathLength);
+      const stateDetail = causality.detailSuffix ? `${state.state}:${causality.detailSuffix}` : state.state;
+      player.sustainedSpeedPeak = {
+        average,
+        path,
+        net,
+        state: stateDetail,
+        peakState: state.state,
+        ...causality
+      };
     }
   }
 
@@ -286,6 +346,7 @@ module.exports = {
   budgetFor,
   outOfReach,
   zonesFor,
+  sustainedSpeedCausality,
   STATE_LIMITS,
   MAX_SUSTAINED_SPEED,
   MIN_SEGMENT_SECONDS,

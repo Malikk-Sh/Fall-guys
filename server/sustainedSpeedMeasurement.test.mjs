@@ -1,10 +1,10 @@
-// Замер устойчивой скорости: две меры одной величины на одном окне.
+// Замер устойчивой скорости: несколько мер одной величины на одном окне.
 //
 // Признак `sustained-speed` срабатывает на проде у честных игроков чаще, чем позволяет запас, а бот
 // не воспроизводит это ни при какой частоте пакетов, ни при петлянии, ни на chaos. Причина
 // неизвестна, поэтому здесь ничего не решается — только записывается то, чем причину можно будет
-// установить: величина, принимающая решение (среднее по пакетам), и рядом чистое смещение за то же
-// окно. Расходятся они ровно тогда, когда путь длиннее прямой между концами окна.
+// установить: величина, принимающая решение (среднее по пакетам), взвешенный путь, чистое смещение
+// и bounded-признаки того, сколько peak-окна пришлось на knockdown.
 //
 // Главное, что держит этот тест: замер ничего не меняет в поведении.
 
@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createCourseSpec, validateState, verifyMovement, resetHistory, spawnFor } from './gameRules.js';
-import { MAX_SUSTAINED_SPEED } from './movementAudit.js';
+import { MAX_SUSTAINED_SPEED, sustainedSpeedCausality } from './movementAudit.js';
 import { RaceRun, FIXED_DT } from './bots.mjs';
 
 const SEND_MS = 66;
@@ -63,6 +63,7 @@ test('пик записывается по величине, которая пр
   assert.ok(Math.abs(peak.average - 9) < 0.5, `среднее ${peak.average} должно быть около 9`);
   // Прямая: смещение и путь совпадают, значит и меры совпадают.
   assert.ok(Math.abs(peak.net - peak.average) < 0.5, 'на прямой две меры обязаны сойтись');
+  assert.equal(peak.state, 'ground', 'окно без knockdown сохраняет прежний detail без новых ключей');
 });
 
 // Прямая с неравномерной скоростью: последовательность скоростей по промежуткам.
@@ -144,6 +145,47 @@ test('на петляющей траектории меры расходятся
     Math.abs(peak.average - peak.path) < 0.1,
     `при равных промежутках вес ничего не добавляет: среднее ${peak.average}, путь ${peak.path}`
   );
+});
+
+test('причинный замер считает время, путь и скорость вне knockdown на одном окне', () => {
+  const history = [
+    { fromAt: 0, at: 500, dist: 4, state: 'ground' },
+    { fromAt: 500, at: 1000, dist: 10, state: 'knockdown' },
+    { fromAt: 1000, at: 1500, dist: 10, state: 'knockdown' },
+    { fromAt: 1500, at: 2000, dist: 4, state: 'ground' }
+  ];
+  const cause = sustainedSpeedCausality(history, 2, 28);
+
+  assert.equal(cause.hasKnockdown, true);
+  assert.ok(Math.abs(cause.knockdownTimeShare - 0.5) < 1e-9);
+  assert.ok(Math.abs(cause.knockdownPathShare - 20 / 28) < 1e-9);
+  assert.ok(Math.abs(cause.controlledPathSpeed - 8) < 1e-9);
+  assert.equal(cause.detailSuffix, 'kd-23u');
+  const productionDetail = `noted:knockdown:${cause.detailSuffix}`;
+  assert.ok(productionDetail.length <= 32, `detail ${productionDetail} обязан помещаться в GameplayMetrics`);
+});
+
+test('окно без knockdown не создаёт новую analytics-размерность', () => {
+  const history = [
+    { fromAt: 0, at: 1000, dist: 8, state: 'ground' },
+    { fromAt: 1000, at: 2000, dist: 8, state: 'air' }
+  ];
+  const cause = sustainedSpeedCausality(history, 2, 16);
+  assert.equal(cause.hasKnockdown, false);
+  assert.equal(cause.detailSuffix, '');
+  assert.equal(cause.knockdownTimeShare, 0);
+  assert.equal(cause.knockdownPathShare, 0);
+  assert.ok(Math.abs(cause.controlledPathSpeed - 8) < 1e-9);
+});
+
+test('клиентский knockdown не ослабляет sustained-speed', () => {
+  const states = straight(15, 60).map(point => ({ ...point, state: 'knockdown' }));
+  const { player, findings } = feed(states);
+
+  assert.ok((player.movementAnomalies?.['sustained-speed'] || 0) > 3, 'budget по-прежнему расходуется');
+  assert.ok(findings.includes('sustained-speed'), 'постоянная скорость выше порога остаётся finding');
+  assert.ok(player.sustainedSpeedPeak.state.startsWith('knockdown:kd-'));
+  assert.equal(player.sustainedSpeedPeak.controlledPathSpeed, null);
 });
 
 test('замер не меняет решение: признак по-прежнему ставит среднее', () => {

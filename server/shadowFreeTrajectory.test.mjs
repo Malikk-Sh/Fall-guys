@@ -1178,7 +1178,9 @@ test('возраст якоря считается по образцам гис�
 // приписать её якорю значило бы отравить `anchorAge` на весь горизонт — то есть ровно ту величину,
 // которую из `matchDelay` потом вычитают. Отличается это точно: номер пакета растёт только на
 // клиентских сообщениях, а возрождение его не трогает.
-test('якорь по серверной постановке возраста не получает', () => {
+// Провенанс снимают ДВЕ подписи, и каждая закрывает свой случай, поэтому проверяются они порознь.
+// Сценарий, где срабатывают обе разом, не показал бы, что нужна каждая.
+function anchorAgeAfterServerWrite(write) {
   const runtime = new ShadowInputRuntime();
   const room = raceRoom();
   room.startedAt = 1_760_000_000_000;
@@ -1190,13 +1192,112 @@ test('якорь по серверной постановке возраста �
   const controller = runtime.controllers.get(player);
   assert.ok(Number.isFinite(controller.anchorAgeTicks), 'подготовка: по клиентскому пакету возраст есть');
 
-  // Возрождение: сервер пишет `player.last` сам, номер пакета не трогает, время трассы застывает.
+  // Сервер пишет `player.last` сам: номер пакета не трогает, время трассы застывает.
   const rooms = new Map([[room.matchId, room]]);
   room.players = new Map([['p1', player]]);
-  player.last = { ...player.last, z: player.last.z - 40, state: 'air' };
+  player.last = write(player.last);
   runtime.tick(rooms, now + SERVER_SIMULATION_DT * 1000);
+  return controller.anchorAgeTicks;
+}
 
-  assert.equal(controller.anchorAgeTicks, null, 'серверная постановка обязана оставить возраст неизвестным');
+// Подпись первая — СОДЕРЖАНИЕ: `looksPlaced`. Ровно так пишут оба обработчика возрождения в
+// `server/index.js`: `state: 'air'` при нулевой скорости. Она закрывает возрождение У САМОГО
+// чекпоинта, где перенос короче порога `CLIENT_TELEPORT_DISTANCE` и по расстоянию не виден.
+//
+// Короткий перенос сам по себе якорь не сбрасывает — и не должен: якорь остаётся прежним, ПО
+// КЛИЕНТСКОЙ точке, и возраст у него законный. Опасен следующий сброс по горизонту: он придётся уже
+// на серверную точку. Окно узкое — от записи сервера до первого же клиентского пакета, то есть пара
+// тиков, — и здесь горизонт сведён ровно с ним.
+test('сброс горизонта на серверной точке возраста не получает, хотя перенос короткий', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const rooms = new Map([[room.matchId, room]]);
+  room.players = new Map([['p1', player]]);
+  const at = step => room.startedAt + 5000 + step * SERVER_SIMULATION_DT * 1000;
+  const matchTimeAt = step => (at(step) - room.startedAt) / 1000;
+
+  // Тридцать тиков обычной жизни: пакеты идут, время трассы отстаёт на тик, возраст известен.
+  let horizon = null;
+  for (let step = 0; step < 30; step++) {
+    player.lastCourseTime = matchTimeAt(step) - SERVER_SIMULATION_DT;
+    tick(runtime, room, player, 1, at(step));
+  }
+  const controller = runtime.controllers.get(player);
+  assert.equal(controller.freeTicks, 30, 'подготовка: следующий тик обязан сбросить горизонт');
+  assert.ok(Number.isFinite(controller.anchorAgeTicks), 'подготовка: до постановки возраст известен');
+
+  // А на тике сброса приходит серверная постановка: пакета нет, перенос короткий. Время трассы при
+  // этом СВЕЖЕЕ — от прошлого тика, — поэтому невыровненностью тут ничего не объяснить: возраст
+  // обязан пропасть именно из-за происхождения точки.
+  player.last = { ...player.last, z: player.last.z - 1, state: 'air', vx: 0, vy: 0, vz: 0 };
+  runtime.tick(rooms, at(30));
+  horizon = controller.anchorAgeTicks;
+
+  assert.equal(controller.freeTicks, 1, 'подготовка: горизонт обязан был сброситься');
+  assert.equal(horizon, null, 'короткий перенос узнаётся по содержанию, а не по расстоянию');
+});
+
+// Подпись вторая — СТРУКТУРА: позиция прыгнула, а пакета не было. Она сильнее первой тем, что не
+// зависит от того, ЧТО именно сервер записал: сам клиент не мог переместиться, ничего не прислав.
+// Это страховка на случай, если постановка когда-нибудь начнёт писать другое состояние.
+test('перенос без пакета возраста не получает, даже если состояние на постановку не похоже', () => {
+  const moved = last => ({ ...last, z: last.z - 40, state: 'air', vx: 0, vy: -3, vz: 0 });
+  assert.equal(
+    anchorAgeAfterServerWrite(moved),
+    null,
+    'перенос без пакета клиентским быть не может, каким бы ни было состояние'
+  );
+});
+
+// Признак клиентского происхождения — ПРОВЕНАНС, а не свежесть, и разница здесь стоит половины
+// выборки.
+//
+// Рост номера пакета доказывает, что `player.last` написал клиент. Молчание номера обратного НЕ
+// доказывает: состояния идут раз в 66 мс, а тик — раз в 33 мс, поэтому между пакетами номер стоит, а
+// точка всё та же клиентская. Требуй сервер роста ИМЕННО НА ТИКЕ постановки якоря — периодический
+// сброс раз в 30 тиков попадал бы на «тихий» тик примерно в половине случаев, и половина якорей
+// осталась бы без возраста впустую.
+//
+// Здесь воспроизведена настоящая частота: пакет через тик. Горизонт при такой раскладке приходится
+// именно на тихий тик — то есть на тот самый случай, ради которого признак сделан липким.
+test('якорь на горизонте сохраняет возраст, когда пакет не пришёл ровно на этом тике', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+
+  let horizonAge;
+  let horizonHadPacket = null;
+  for (let step = 0; step < 31; step++) {
+    const now = room.startedAt + 5000 + step * SERVER_SIMULATION_DT * 1000;
+    const matchTime = (now - room.startedAt) / 1000;
+    // Пакет приходит через тик, и снимок в нём отстаёт на тик — обычная жизнь живого клиента.
+    const packet = step % 2 === 1;
+    if (packet) {
+      player.lastSequence += 1;
+      player.lastCourseTime = matchTime - SERVER_SIMULATION_DT;
+    }
+    tick(runtime, room, player, 1, now, { freshClient: false });
+    // Горизонт узнаётся по сбросу счётчика, а не по номеру тика: так тест не сломается от смены
+    // FREE_TRAJECTORY_HORIZON_TICKS, а проверять будет ровно то же самое.
+    const controller = runtime.controllers.get(player);
+    if (step > 0 && controller.freeTicks === 1) {
+      horizonAge = controller.anchorAgeTicks;
+      horizonHadPacket = packet;
+    }
+  }
+
+  assert.equal(horizonHadPacket, false, 'подготовка: горизонт обязан прийтись на тик БЕЗ нового пакета');
+  assert.ok(
+    Number.isFinite(horizonAge),
+    `якорь по клиентской точке обязан сохранить возраст и на тихом тике, а получено ${horizonAge}`
+  );
+  assert.ok(
+    Math.abs(horizonAge - 2) < 0.01,
+    `возраст на горизонте обязан быть около 2 тиков, а получен ${horizonAge}`
+  );
 });
 
 test('возраст берётся у якоря траектории, а не у снимка удара', () => {
@@ -1243,6 +1344,18 @@ test('снимок из прошлого выравнивает пару, сни
   assert.equal(ahead.matched, 1, 'подготовка: пара обязана сойтись и здесь');
   assert.equal(ahead.clientStamp.aligned, 0, 'часы впереди сервера выравниванием не считаются');
   assert.equal(ahead.clientStamp.unaligned, 1);
+
+  // И в средние остатка такая пара не идёт, хотя возраст ЯКОРЯ у неё известен: якорь ставился по
+  // достоверному времени (4.95), а невыровнен снимок самого удара. Задержка у такой пары отмерена
+  // тиком ПРИЁМА и несёт наблюдательную задержку сверх смещения якоря — формула возраста её не
+  // описывает. Место такой пары в `unknown`.
+  assert.equal(ahead.anchorAge.known, 0, 'невыровненная пара в средние остатка не идёт');
+  assert.equal(ahead.anchorAge.unknown, 1, 'но и молча выпасть она не должна');
+  assert.equal(
+    ahead.anchorAge.known + ahead.anchorAge.unknown,
+    ahead.matchDelay.samples,
+    'сумма обязана сходиться с числом образцов гистограммы и здесь'
+  );
 
   // И без времени трассы вовсе — тоже невыровнено, а не «выровнено по умолчанию».
   const missing = pairAfterServerHit(undefined);

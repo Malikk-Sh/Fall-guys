@@ -651,7 +651,14 @@ class ShadowInputRuntime {
       else this.hitClientStamp.unaligned += 1;
       // Возраст ЯКОРЯ и задержка записываются вместе и только у тех событий, что дали образец
       // гистограммы: из них выводят остаток, и разные совокупности дали бы его выдуманным.
-      if (Number.isFinite(anchorAgeTicks)) {
+      //
+      // Выравнивание требуется наравне с возрастом, и это не перестраховка. У НЕвыровненной пары
+      // `ticks` отмерен тиком ПРИЁМА, а не временем события у клиента, поэтому несёт в себе
+      // наблюдательную задержку снимка удара — сверх смещения якоря. Формула возраста такую
+      // задержку не описывает и описать не может, а `clientStamp` считает выравнивание по всем
+      // парам и пересечения «возраст известен И выровнено» из него не достать. Место такой пары —
+      // в `unknown`.
+      if (aligned && Number.isFinite(anchorAgeTicks)) {
         this.anchorAge.known += 1;
         this.anchorAge.ageSum += anchorAgeTicks;
         this.anchorAge.delaySum += ticks;
@@ -775,11 +782,28 @@ class ShadowInputRuntime {
     //
     // Отличить одно от другого можно точно, не гадая: номер пакета растёт только на клиентских
     // сообщениях (`PLAYER_STATE` и `FINISH`), а возрождение его не трогает вовсе.
+    //
+    // Но признак этот — ПРОВЕНАНС, а не свежесть, и путать их нельзя. Рост номера доказывает, что
+    // `player.last` написал клиент; молчание номера НЕ доказывает обратного. Состояния идут раз в
+    // 66 мс, а тик — раз в 33 мс, поэтому между пакетами номер стоит, а `player.last` всё это время
+    // остаётся тем же клиентским снимком. Требуй я роста ИМЕННО НА ТИКЕ ПОСТАНОВКИ якоря — половина
+    // якорей осталась бы без возраста: периодический сброс раз в 30 тиков попадает на «тихий» тик
+    // примерно в половине случаев, и `unknown` съел бы выборку, ради которой всё и затевалось.
+    //
+    // Поэтому признак ЛИПКИЙ: рост номера его ставит, серверная постановка — снимает. Постановка
+    // узнаётся по двум подписям сразу, и обе механические: позиция прыгнула дальше
+    // `CLIENT_TELEPORT_DISTANCE` либо снимок выглядит поставленным (`looksPlaced`) — и всё это при
+    // НЕсдвинувшемся номере пакета. Вторая подпись нужна ради возрождения у самого чекпоинта, где
+    // прыжок может не дотянуть до порога, а время трассы уже застыло.
+    //
+    // Ошибка признака односторонняя: он скорее объявит возраст неизвестным, чем присвоит ложный.
     const anchorSequence = player?.lastSequence;
-    const anchorFromClient =
+    const sequenceAdvanced =
       Number.isSafeInteger(anchorSequence) && controller.anchorSequence !== anchorSequence;
     if (Number.isSafeInteger(anchorSequence)) controller.anchorSequence = anchorSequence;
-    const anchorAge = () => (clientAligned && anchorFromClient ? snapshotAgeTicks : null);
+    if (sequenceAdvanced) controller.lastFromClient = true;
+    else if (looksPlaced(player?.last)) controller.lastFromClient = false;
+    const anchorAge = () => (clientAligned && controller.lastFromClient === true ? snapshotAgeTicks : null);
 
     // Траектория меряется НА ОГРАНИЧЕННОМ ГОРИЗОНТЕ, и это не смягчение проверки, а условие того,
     // чтобы она вообще что-то значила.
@@ -826,6 +850,9 @@ class ShadowInputRuntime {
     };
     if (clientJump > CLIENT_TELEPORT_DISTANCE) {
       this.worldDiagnostics.clientTeleports += 1;
+      // Прыжок БЕЗ нового пакета — вторая подпись серверной постановки: сам клиент так переместиться
+      // не мог, потому что не присылал ничего. Снимается провенанс до вызова `anchorAge` ниже.
+      if (!sequenceAdvanced) controller.lastFromClient = false;
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
       controller.anchorAgeTicks = anchorAge();
@@ -1295,9 +1322,17 @@ class ShadowInputRuntime {
             // снимка, а не только расхождение.
             clientStamp: { ...this.hitClientStamp },
             // Возраст якоря и задержка ОДНИХ И ТЕХ ЖЕ образцов — единственная пара, по которой
-            // остаток считается честно: `meanDelayTicks − (meanAgeTicks − 1) − 1`. Именно ЯКОРЯ, а
+            // остаток считается честно: `meanDelayTicks − (meanAgeTicks − 1) + 1`. Именно ЯКОРЯ, а
             // не снимка самого удара: якорь ставится раз в 30 тиков, и при меняющейся задержке это
             // разные величины. `unknown` — сколько образцов гистограммы этим чтением не покрыто.
+            //
+            // Знак у второго слагаемого именно такой, и на нём легко ошибиться — я и ошибся.
+            // СМЕЩЕНИЕ складывается как `+(возраст − 1)` от запоздалого якоря и `−1` от дискретности
+            // рассылки. Остаток — это наблюдение МИНУС смещение, то есть
+            // `delay − ((age − 1) + (−1))` = `delay − (age − 1) + 1`. Написав в конце «− 1», я
+            // вычитал бы дискретность вместо того, чтобы её вернуть, и занижал бы остаток ровно на
+            // два тика — достаточно, чтобы объяснённую задержку превратить в мнимое расхождение
+            // геометрии с опережением сервера.
             anchorAge: {
               known: this.anchorAge.known,
               unknown: this.anchorAge.unknown,

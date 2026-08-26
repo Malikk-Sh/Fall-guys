@@ -343,10 +343,16 @@ class EventPairing {
   // нём — приезжает в снимке, который старше на интервал рассылки плюс задержку сети. Пока обе
   // стороны штамповались часами, замер видел эту задержку как расхождение симуляций.
   //
-  // `rightAligned` — удалось ли отметить клиентское событие его собственным временем. Признак едет
-  // вместе с ожиданием и всплывает при выдаче задержки: доля выровненных имеет смысл считать только
-  // по тем событиям, что ПОПАЛИ В ГИСТОГРАММУ, а не по всем подряд.
-  observe(tick, leftFired, rightFired, rightTick = tick, rightAligned = false) {
+  // `right` — всё, что известно о клиентском событии: его отметка, удалось ли её выровнять и каков
+  // был возраст снимка. Всё это едет ВМЕСТЕ С ОЖИДАНИЕМ и всплывает при выдаче задержки, потому что
+  // считать такие величины имеет смысл только по событиям, ПОПАВШИМ В ГИСТОГРАММУ. Считанные по
+  // всем клиентским ударам подряд, они описывают другую совокупность: односторонние в гистограмму
+  // не попадают, а игрок с большой задержкой и без единой пары задирал бы средний возраст, из
+  // которого потом вычитают смещение.
+  observe(tick, leftFired, rightFired, right = {}) {
+    const rightTick = Number.isFinite(right.tick) ? right.tick : tick;
+    const rightAligned = right.aligned === true;
+    const rightAge = Number.isFinite(right.ageTicks) ? right.ageTicks : null;
     // Просрочка закрывается ДО сопоставления, а не после.
     //
     // Обратный порядок расширял окно на тик: ожидание возраста 11 успевало найти пару прежде, чем
@@ -360,7 +366,7 @@ class EventPairing {
         this.pendingRight.shift();
         decided.matched += 1;
         // Сервер сработал ПОЗЖЕ клиента — знак положительный.
-        noteMatchDelay(decided, tick - candidate.tick, candidate.aligned);
+        noteMatchDelay(decided, tick - candidate.tick, candidate.aligned, candidate.ageTicks);
       } else this.pendingLeft.push(tick);
     }
     if (rightFired) {
@@ -371,8 +377,8 @@ class EventPairing {
         decided.matched += 1;
         // Сервер сработал РАНЬШЕ клиента — знак отрицательный. Знак один на оба случая:
         // serverTick − clientTick, и одновременность даёт ноль.
-        noteMatchDelay(decided, candidate - rightTick, rightAligned);
-      } else this.pendingRight.push({ tick: rightTick, aligned: rightAligned });
+        noteMatchDelay(decided, candidate - rightTick, rightAligned, rightAge);
+      } else this.pendingRight.push({ tick: rightTick, aligned: rightAligned, ageTicks: rightAge });
     }
     return decided;
   }
@@ -432,8 +438,12 @@ function noHitDecisions() {
 // только по тем событиям, что попали в гистограмму. Считать её по всем клиентским ударам подряд —
 // значит мерить не то: односторонние в гистограмму не попадают вовсе, и знаменатель разъезжается с
 // числителем.
-function noteMatchDelay(decided, ticks, aligned = false) {
-  (decided.delays || (decided.delays = [])).push({ ticks, aligned: aligned === true });
+function noteMatchDelay(decided, ticks, aligned = false, ageTicks = null) {
+  (decided.delays || (decided.delays = [])).push({
+    ticks,
+    aligned: aligned === true,
+    ageTicks: Number.isFinite(ageTicks) ? ageTicks : null
+  });
 }
 
 // Распределение задержки между парой событий одного удара, в серверных тиках, со знаком
@@ -625,10 +635,13 @@ class ShadowInputRuntime {
     this.hitTotals.matched += decided.matched;
     this.hitTotals.leftOnly += decided.leftOnly;
     this.hitTotals.rightOnly += decided.rightOnly;
-    for (const { ticks, aligned } of decided.delays || []) {
+    for (const { ticks, aligned, ageTicks } of decided.delays || []) {
       this.hitMatchDelay.add(ticks);
       if (aligned) this.hitClientStamp.aligned += 1;
       else this.hitClientStamp.unaligned += 1;
+      // Возраст записывается ровно у тех событий, что дали образец гистограммы: из него вычитают
+      // смещение ИМЕННО ЭТОЙ гистограммы, и другая совокупность дала бы ложный остаток.
+      if (Number.isFinite(ageTicks)) this.clientSnapshotAge.record(ageTicks);
     }
   }
 
@@ -882,19 +895,19 @@ class ShadowInputRuntime {
     // Свободная траектория привязывается к ЗАПОЗДАВШЕМУ снимку намеренно — так постоянная часть
     // задержки уходит из замера отрыва (см. `freeTrajectoryError`: там обе стороны запаздывают
     // одинаково и разность их не содержит). Но для ВРЕМЕНИ УДАРА та же привязка означает, что
-    // траектория идёт позади настоящего игрока и доходит до препятствий позже — замерено ровно:
-    // отставание равно `возраст − 1` тик, на каждом значении возраста.
+    // траектория идёт позади настоящего игрока и доходит до препятствий позже — на равномерном
+    // прямом беге замерено ровно: отставание равно `возраст − 1` тик, на каждом значении возраста.
+    // На настоящем забеге — где разгоняются, поворачивают и получают по голове — это оценка
+    // порядка, а не тождество: якорь продвигается ТЕКУЩИМ вводом и точной копией не остаётся.
     //
     // Значит в `matchDelay` сидит известное положительное смещение, и вычесть его можно, только
     // зная возраст. Отсюда эта запись.
     this.recordHitDecisions(
-      controller.hitPairing.observe(
-        this.serverTick,
-        serverKnockdown,
-        clientKnockdownStarted,
-        clientAligned ? this.serverTick - Math.round(snapshotAgeTicks) : this.serverTick,
-        clientAligned
-      )
+      controller.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted, {
+        tick: clientAligned ? this.serverTick - Math.round(snapshotAgeTicks) : this.serverTick,
+        aligned: clientAligned,
+        ageTicks: clientAligned ? snapshotAgeTicks : null
+      })
     );
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
@@ -943,7 +956,6 @@ class ShadowInputRuntime {
     const freshSnapshot =
       Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
     if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
-    if (clientAligned && freshSnapshot) this.clientSnapshotAge.record(snapshotAgeTicks);
     // Игрок, ТОЛЬКО ЧТО ПОСТАВЛЕННЫЙ на место, про опору не свидетельствует.
     //
     // `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не

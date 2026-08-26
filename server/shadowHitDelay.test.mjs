@@ -31,7 +31,9 @@ function run(events, { tolerance = HIT_MATCH_TOLERANCE_TICKS, ticks = 400, stamp
   const totals = { matched: 0, leftOnly: 0, rightOnly: 0 };
 
   for (let tick = 0; tick <= ticks; tick++) {
-    const decided = pairing.observe(tick, events.server.has(tick), events.client.has(tick), tick - stamp);
+    const decided = pairing.observe(tick, events.server.has(tick), events.client.has(tick), {
+      tick: tick - stamp
+    });
     totals.matched += decided.matched;
     totals.leftOnly += decided.leftOnly;
     totals.rightOnly += decided.rightOnly;
@@ -302,7 +304,7 @@ test('пара с отметками за допуском не засчитыв
   fold(pairing.observe(20, true, false));
   // Снимок возрастом 15 приходит на тике 23: по часам серверное ожидание ещё живо (23 − 20 = 3),
   // а по отметкам расхождение 20 − 8 = 12.
-  fold(pairing.observe(23, false, true, 8, true));
+  fold(pairing.observe(23, false, true, { tick: 8, aligned: true }));
   fold(pairing.observe(40, false, false));
   const tail = pairing.finalize();
   totals.leftOnly += tail.leftOnly;
@@ -324,15 +326,19 @@ test('признак выравнивания едет вместе с ожид�
 
   // Клиент пришёл первым, отмечен своим временем; сервер догоняет — задержка обязана унести
   // признак выравнивания с собой.
-  const first = pairing.observe(10, false, true, 9, true);
+  const first = pairing.observe(10, false, true, { tick: 9, aligned: true, ageTicks: 1 });
   assert.equal(first.matched, 0);
   const second = pairing.observe(12, true, false);
-  assert.deepEqual(second.delays, [{ ticks: 3, aligned: true }]);
+  assert.deepEqual(second.delays, [{ ticks: 3, aligned: true, ageTicks: 1 }]);
 
   // И наоборот: невыровненное клиентское событие помечает пару как невыровненную.
   pairing.observe(40, true, false);
   const unaligned = pairing.observe(42, false, true);
-  assert.deepEqual(unaligned.delays, [{ ticks: -2, aligned: false }]);
+  assert.deepEqual(unaligned.delays, [{ ticks: -2, aligned: false, ageTicks: null }]);
+
+  // Возраст едет вместе с ожиданием и всплывает у того же образца — иначе его вычитали бы из
+  // гистограммы, посчитав по другой совокупности.
+  assert.equal(second.delays[0].ageTicks, 1, 'возраст обязан прийти от клиентского ожидания');
 });
 
 // Замер не имеет права трогать само сопоставление: `matchRate` — величина, по которой уже собраны

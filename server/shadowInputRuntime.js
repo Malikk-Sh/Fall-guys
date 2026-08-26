@@ -574,6 +574,9 @@ class ShadowInputRuntime {
     // содержимым гистограммы: односторонние удары в неё не попадают, и включать их значило бы
     // получить долю, по которой о гистограмме ничего не скажешь.
     this.hitClientStamp = { aligned: 0, unaligned: 0 };
+    // Возраст клиентского снимка в тиках — величина, без которой `matchDelay` не читается: см.
+    // разбор у места записи.
+    this.clientSnapshotAge = new RollingErrorStats();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -874,6 +877,16 @@ class ShadowInputRuntime {
       ? (matchTime - snapshotSeconds) / SERVER_SIMULATION_DT
       : null;
     const clientAligned = snapshotAgeTicks !== null && snapshotAgeTicks >= 0;
+    // Возраст снимка записывается, и это не любопытство: без него `matchDelay` не прочитать.
+    //
+    // Свободная траектория привязывается к ЗАПОЗДАВШЕМУ снимку намеренно — так постоянная часть
+    // задержки уходит из замера отрыва (см. `freeTrajectoryError`: там обе стороны запаздывают
+    // одинаково и разность их не содержит). Но для ВРЕМЕНИ УДАРА та же привязка означает, что
+    // траектория идёт позади настоящего игрока и доходит до препятствий позже — замерено ровно:
+    // отставание равно `возраст − 1` тик, на каждом значении возраста.
+    //
+    // Значит в `matchDelay` сидит известное положительное смещение, и вычесть его можно, только
+    // зная возраст. Отсюда эта запись.
     this.recordHitDecisions(
       controller.hitPairing.observe(
         this.serverTick,
@@ -930,6 +943,7 @@ class ShadowInputRuntime {
     const freshSnapshot =
       Number.isSafeInteger(snapshotSequence) && controller.measuredSnapshotSequence !== snapshotSequence;
     if (Number.isSafeInteger(snapshotSequence)) controller.measuredSnapshotSequence = snapshotSequence;
+    if (clientAligned && freshSnapshot) this.clientSnapshotAge.record(snapshotAgeTicks);
     // Игрок, ТОЛЬКО ЧТО ПОСТАВЛЕННЫЙ на место, про опору не свидетельствует.
     //
     // `Player.respawn` и `Player.teleport` переносят позицию и обнуляют скорость, но `grounded` не
@@ -1225,7 +1239,11 @@ class ShadowInputRuntime {
             // Чем отмечены САМИ ОБРАЗЦЫ гистограммы: `aligned + unaligned` равно `matchDelay.samples`.
             // Пока доля выровненных не близка к единице, `matchDelay` мерит в том числе возраст
             // снимка, а не только расхождение.
-            clientStamp: { ...this.hitClientStamp }
+            clientStamp: { ...this.hitClientStamp },
+            // Возраст клиентского снимка в тиках. Из него выводится известное смещение `matchDelay`
+            // вверх: свободная траектория привязана к запоздавшему снимку и потому идёт позади
+            // игрока на `возраст − 1` тик, доходя до препятствий на столько же позже.
+            snapshotAge: this.clientSnapshotAge.snapshot()
           };
         })()
       }

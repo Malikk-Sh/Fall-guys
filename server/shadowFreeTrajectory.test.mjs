@@ -1021,6 +1021,85 @@ test('ушедший игрок закрывает свои ожидания, а
 // Иначе `clientStamp` врёт в самую опасную сторону: показывает «выровнено всё», пока такие удары
 // молча подмешивают в гистограмму возраст снимка. Показатель, который нельзя проверить на полноту,
 // хуже отсутствующего — по нему как раз и будут решать, верить ли `matchDelay`.
+// Свободная траектория идёт ПОЗАДИ игрока ровно на возраст снимка минус тик.
+//
+// Это не дефект, а следствие намеренного устройства: якорь ставится по запоздавшему снимку, и
+// именно поэтому постоянная часть задержки уходит из замера отрыва — обе стороны запаздывают
+// одинаково (см. `freeTrajectoryError`). Но у ВРЕМЕНИ УДАРА последствие обратное: мир доводится до
+// текущего момента, а траектория идёт позади — значит до препятствий она доходит позже, и
+// `matchDelay` получает известное смещение вверх.
+//
+// Закон записан тестом, потому что по нему читают боевые данные: без него остаточное смещение в
+// `matchDelay` принимают за расхождение физики. Первое же боевое чтение после выравнивания дало
+// +1.47 тика, и это ровно предсказание закона (возраст 3.5 → отставание 2.5) за вычетом остатка
+// дискретности рассылки (−1).
+test('свободная траектория отстаёт ровно на возраст снимка минус тик', () => {
+  const speed = 7.7; // RUN_SPEED: столько же, сколько даёт ввод свободной траектории
+  const startPlatform = recordRaceCourse(spec).platforms[0];
+  const floorY = supportTop(startPlatform) + PLAYER_FOOT;
+
+  const lagFor = ageTicks => {
+    const runtime = new ShadowInputRuntime();
+    const room = raceRoom();
+    room.startedAt = 1_760_000_000_000;
+    const player = standingPlayer();
+    const rooms = new Map([[room.matchId, room]]);
+    room.players = new Map([['p1', player]]);
+    const history = [];
+    const lags = [];
+
+    for (let step = 0; step < 120; step++) {
+      const matchTime = step * SERVER_SIMULATION_DT;
+      const trueZ = startPlatform.z - speed * matchTime;
+      history.push({ z: trueZ, courseTime: matchTime });
+      // Снимок, дошедший до сервера, старше на `ageTicks`.
+      const seen = history[Math.max(0, history.length - 1 - ageTicks)];
+      player.lastSequence = (player.lastSequence ?? -1) + 1;
+      player.last = {
+        x: startPlatform.x,
+        y: floorY,
+        z: seen.z,
+        vx: 0,
+        vy: 0,
+        vz: -speed,
+        state: 'ground'
+      };
+      player.lastCourseTime = seen.courseTime;
+      runtime.accept({
+        player,
+        room,
+        message: {
+          matchId: room.matchId,
+          sequence: nextSequence,
+          clientTick: nextSequence,
+          moveX: 0,
+          moveZ: 1,
+          cameraYaw: 0,
+          jumpPressed: false,
+          jumpHeld: false,
+          divePressed: false
+        }
+      });
+      nextSequence += 1;
+      runtime.tick(rooms, room.startedAt + step * SERVER_SIMULATION_DT * 1000);
+
+      const controller = runtime.controllers.get(player);
+      // Разгон до беговой скорости занимает около секунды — до него сравнивать нечего.
+      if (controller && step > 40) lags.push(controller.freeState.position.z - trueZ);
+    }
+    const mean = lags.reduce((sum, value) => sum + value, 0) / lags.length;
+    return mean / (speed * SERVER_SIMULATION_DT);
+  };
+
+  for (const age of [0, 1, 2, 3, 4, 6]) {
+    const lag = lagFor(age);
+    assert.ok(
+      Math.abs(lag - (age - 1)) < 0.05,
+      `при возрасте ${age} отставание обязано быть ${age - 1} тика, а получено ${lag.toFixed(2)}`
+    );
+  }
+});
+
 // Часы клиента ВПЕРЕДИ серверных выравниванием не считаются.
 //
 // `trustedCourseTime` пускает расхождение в обе стороны на полсекунды. Отрицательный возраст

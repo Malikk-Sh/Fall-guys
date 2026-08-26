@@ -1111,12 +1111,15 @@ test('свободная траектория отстаёт на возраст
 // `trustedCourseTime` пускает расхождение в обе стороны на полсекунды. Отрицательный возраст
 // означает разъехавшиеся часы, а не свежий снимок: прижать его к нулю и объявить выровненным
 // значило бы мерить по приёму и одновременно уверять, что мерили по клиенту.
-function pairAfterServerHit(courseTime) {
+function pairAfterServerHit(courseTime, anchorCourseTime = 4.95) {
   const runtime = new ShadowInputRuntime();
   const room = raceRoom();
   room.startedAt = 1_760_000_000_000;
   const player = standingPlayer();
   const now = room.startedAt + 5000;
+  // Время трассы нужно уже здесь: якорь свободной траектории ставится на первом же тике, и его
+  // возраст запоминается тогда же. Без него возраст якоря неизвестен — и записывать его нечем.
+  player.lastCourseTime = anchorCourseTime;
   tick(runtime, room, player, 1, now);
 
   const controller = runtime.controllers.get(player);
@@ -1125,12 +1128,14 @@ function pairAfterServerHit(courseTime) {
   controller.freeState.position.y = bumper.y;
   controller.freeState.position.z = bumper.z;
   controller.lastClientPosition = null;
+  // Свежее время трассы подставляется ДО тика серверного удара: возраст якоря уже зафиксирован, и
+  // здесь начинается расхождение между ним и возрастом текущего снимка.
+  player.lastCourseTime = courseTime;
   tick(runtime, room, player, 1, now + SERVER_SIMULATION_DT * 1000);
   assert.equal(runtime.metrics().shadowGroundContact.hitParity.pending, 1, 'подготовка: серверный удар ждёт');
 
-  // Клиент сообщает о сбивании, и вместе с ним — своё время трассы.
+  // Клиент сообщает о сбивании.
   player.last = { ...player.last, state: 'knockdown' };
-  player.lastCourseTime = courseTime;
   tick(runtime, room, player, 1, now + 2 * SERVER_SIMULATION_DT * 1000);
   return runtime.metrics().shadowGroundContact.hitParity;
 }
@@ -1141,7 +1146,7 @@ function pairAfterServerHit(courseTime) {
 // значит получить ложный остаток: игрок с большой задержкой и без единой совпавшей пары задрал бы
 // средний возраст, ничего не добавив в гистограмму. Та же ошибка знаменателя, что была у
 // `clientStamp`, — и здесь её быть не должно.
-test('возраст снимка считается по образцам гистограммы, а не по всем снимкам', () => {
+test('возраст якоря считается по образцам гистограммы, а не по всем снимкам', () => {
   const runtime = new ShadowInputRuntime();
   const room = raceRoom();
   room.startedAt = 1_760_000_000_000;
@@ -1154,7 +1159,23 @@ test('возраст снимка считается по образцам ги�
   tick(runtime, room, player, 10, now);
   const quiet = runtime.metrics().shadowGroundContact.hitParity;
   assert.equal(quiet.matchDelay.samples, 0, 'подготовка: ударов не было');
-  assert.equal(quiet.snapshotAge.count, 0, 'без образцов гистограммы возраст не копится');
+  assert.equal(quiet.anchorAge.count, 0, 'без образцов гистограммы возраст не копится');
+});
+
+// Записывается возраст ЯКОРЯ, а не возраст снимка самого удара.
+//
+// Смещение серверного удара по времени задано тем снимком, по которому поставлена свободная
+// траектория, — а ставится она раз в тридцать тиков. Если задержка за это время изменилась, возраст
+// снимка удара уже другой, и вычитание не той величины даёт выдуманный остаток в любую сторону.
+test('возраст берётся у якоря траектории, а не у снимка удара', () => {
+  // Якорь ставится по СТАРОМУ снимку (возраст около 6 тиков), а удар приходит со свежим (около 2).
+  const parity = pairAfterServerHit(5.0, 4.8);
+  assert.equal(parity.matched, 1, 'подготовка: пара обязана сойтись');
+  assert.equal(parity.anchorAge.count, 1);
+  assert.ok(
+    parity.anchorAge.mean > 4,
+    `обязан быть записан возраст якоря (около 6), а записано ${parity.anchorAge.mean}`
+  );
 });
 
 test('снимок из прошлого выравнивает пару, снимок из будущего — нет', () => {
@@ -1163,12 +1184,9 @@ test('снимок из прошлого выравнивает пару, сни
   assert.equal(behind.matched, 1, 'подготовка: пара обязана сойтись');
   assert.equal(behind.clientStamp.aligned, 1, 'снимок из прошлого — обычный случай, он выровнен');
   assert.equal(behind.clientStamp.unaligned, 0);
-  // И возраст пришёл вместе с этим самым образцом.
-  assert.equal(behind.snapshotAge.count, 1, 'возраст обязан записаться у совпавшей пары');
-  assert.ok(
-    behind.snapshotAge.mean > 0,
-    `возраст обязан быть положительным, а он ${behind.snapshotAge.mean}`
-  );
+  // И возраст ЯКОРЯ пришёл вместе с этим самым образцом.
+  assert.equal(behind.anchorAge.count, 1, 'возраст якоря обязан записаться у совпавшей пары');
+  assert.ok(behind.anchorAge.mean >= 0, `возраст обязан быть неотрицательным, а он ${behind.anchorAge.mean}`);
 
   const ahead = pairAfterServerHit(5.2);
   assert.equal(ahead.matched, 1, 'подготовка: пара обязана сойтись и здесь');

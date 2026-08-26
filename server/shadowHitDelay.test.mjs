@@ -324,21 +324,16 @@ test('пара с отметками за допуском не засчитыв
 test('признак выравнивания едет вместе с ожиданием и всплывает при выдаче задержки', () => {
   const pairing = new EventPairing(HIT_MATCH_TOLERANCE_TICKS);
 
-  // Клиент пришёл первым, отмечен своим временем; сервер догоняет — задержка обязана унести
-  // признак выравнивания с собой.
-  const first = pairing.observe(10, false, true, { tick: 9, aligned: true, ageTicks: 1 });
-  assert.equal(first.matched, 0);
-  const second = pairing.observe(12, true, false);
-  assert.deepEqual(second.delays, [{ ticks: 3, aligned: true, ageTicks: 1 }]);
+  // Признак выравнивания приезжает со стороны КЛИЕНТА, возраст якоря — со стороны СЕРВЕРА, и оба
+  // обязаны всплыть у выданной задержки: по ним потом читают гистограмму.
+  pairing.observe(9, true, false, {}, { anchorAgeTicks: 4 });
+  const first = pairing.observe(10, false, true, { tick: 9, aligned: true });
+  assert.deepEqual(first.delays, [{ ticks: 0, aligned: true, anchorAgeTicks: 4 }]);
 
   // И наоборот: невыровненное клиентское событие помечает пару как невыровненную.
-  pairing.observe(40, true, false);
+  pairing.observe(40, true, false, {}, { anchorAgeTicks: 7 });
   const unaligned = pairing.observe(42, false, true);
-  assert.deepEqual(unaligned.delays, [{ ticks: -2, aligned: false, ageTicks: null }]);
-
-  // Возраст едет вместе с ожиданием и всплывает у того же образца — иначе его вычитали бы из
-  // гистограммы, посчитав по другой совокупности.
-  assert.equal(second.delays[0].ageTicks, 1, 'возраст обязан прийти от клиентского ожидания');
+  assert.deepEqual(unaligned.delays, [{ ticks: -2, aligned: false, anchorAgeTicks: 7 }]);
 });
 
 // Замер не имеет права трогать само сопоставление: `matchRate` — величина, по которой уже собраны

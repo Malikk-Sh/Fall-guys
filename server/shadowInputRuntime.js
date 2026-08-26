@@ -349,10 +349,14 @@ class EventPairing {
   // всем клиентским ударам подряд, они описывают другую совокупность: односторонние в гистограмму
   // не попадают, а игрок с большой задержкой и без единой пары задирал бы средний возраст, из
   // которого потом вычитают смещение.
-  observe(tick, leftFired, rightFired, right = {}) {
+  observe(tick, leftFired, rightFired, right = {}, left = {}) {
     const rightTick = Number.isFinite(right.tick) ? right.tick : tick;
     const rightAligned = right.aligned === true;
-    const rightAge = Number.isFinite(right.ageTicks) ? right.ageTicks : null;
+    // Возраст ЯКОРЯ, а не текущего снимка. Смещение серверного удара по времени задано тем снимком,
+    // по которому поставлена свободная траектория, — а ставится она раз в 30 тиков. Возьми мы
+    // возраст снимка самого удара, при меняющейся задержке вычиталась бы не та величина, и остаток
+    // получался бы выдуманным в любую сторону.
+    const leftAnchorAge = Number.isFinite(left.anchorAgeTicks) ? left.anchorAgeTicks : null;
     // Просрочка закрывается ДО сопоставления, а не после.
     //
     // Обратный порядок расширял окно на тик: ожидание возраста 11 успевало найти пару прежде, чем
@@ -366,19 +370,19 @@ class EventPairing {
         this.pendingRight.shift();
         decided.matched += 1;
         // Сервер сработал ПОЗЖЕ клиента — знак положительный.
-        noteMatchDelay(decided, tick - candidate.tick, candidate.aligned, candidate.ageTicks);
-      } else this.pendingLeft.push(tick);
+        noteMatchDelay(decided, tick - candidate.tick, candidate.aligned, leftAnchorAge);
+      } else this.pendingLeft.push({ tick, anchorAgeTicks: leftAnchorAge });
     }
     if (rightFired) {
       decided.right += 1;
       const candidate = this.pendingLeft[0];
-      if (candidate !== undefined && this.withinTolerance(candidate, rightTick)) {
+      if (candidate && this.withinTolerance(candidate.tick, rightTick)) {
         this.pendingLeft.shift();
         decided.matched += 1;
         // Сервер сработал РАНЬШЕ клиента — знак отрицательный. Знак один на оба случая:
         // serverTick − clientTick, и одновременность даёт ноль.
-        noteMatchDelay(decided, candidate - rightTick, rightAligned, rightAge);
-      } else this.pendingRight.push({ tick: rightTick, aligned: rightAligned, ageTicks: rightAge });
+        noteMatchDelay(decided, candidate.tick - rightTick, rightAligned, candidate.anchorAgeTicks);
+      } else this.pendingRight.push({ tick: rightTick, aligned: rightAligned });
     }
     return decided;
   }
@@ -398,7 +402,7 @@ class EventPairing {
 
   expire(tick) {
     const decided = noHitDecisions();
-    while (this.pendingLeft.length && tick - this.pendingLeft[0] > this.tolerance) {
+    while (this.pendingLeft.length && tick - this.pendingLeft[0].tick > this.tolerance) {
       this.pendingLeft.shift();
       decided.leftOnly += 1;
     }
@@ -438,11 +442,11 @@ function noHitDecisions() {
 // только по тем событиям, что попали в гистограмму. Считать её по всем клиентским ударам подряд —
 // значит мерить не то: односторонние в гистограмму не попадают вовсе, и знаменатель разъезжается с
 // числителем.
-function noteMatchDelay(decided, ticks, aligned = false, ageTicks = null) {
+function noteMatchDelay(decided, ticks, aligned = false, anchorAgeTicks = null) {
   (decided.delays || (decided.delays = [])).push({
     ticks,
     aligned: aligned === true,
-    ageTicks: Number.isFinite(ageTicks) ? ageTicks : null
+    anchorAgeTicks: Number.isFinite(anchorAgeTicks) ? anchorAgeTicks : null
   });
 }
 
@@ -584,9 +588,9 @@ class ShadowInputRuntime {
     // содержимым гистограммы: односторонние удары в неё не попадают, и включать их значило бы
     // получить долю, по которой о гистограмме ничего не скажешь.
     this.hitClientStamp = { aligned: 0, unaligned: 0 };
-    // Возраст клиентского снимка в тиках — величина, без которой `matchDelay` не читается: см.
-    // разбор у места записи.
-    this.clientSnapshotAge = new RollingErrorStats();
+    // Возраст снимка, по которому поставлен ЯКОРЬ свободной траектории, — величина, без которой
+    // `matchDelay` не читается: см. разбор у места записи.
+    this.anchorAge = new RollingErrorStats();
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -635,13 +639,13 @@ class ShadowInputRuntime {
     this.hitTotals.matched += decided.matched;
     this.hitTotals.leftOnly += decided.leftOnly;
     this.hitTotals.rightOnly += decided.rightOnly;
-    for (const { ticks, aligned, ageTicks } of decided.delays || []) {
+    for (const { ticks, aligned, anchorAgeTicks } of decided.delays || []) {
       this.hitMatchDelay.add(ticks);
       if (aligned) this.hitClientStamp.aligned += 1;
       else this.hitClientStamp.unaligned += 1;
-      // Возраст записывается ровно у тех событий, что дали образец гистограммы: из него вычитают
-      // смещение ИМЕННО ЭТОЙ гистограммы, и другая совокупность дала бы ложный остаток.
-      if (Number.isFinite(ageTicks)) this.clientSnapshotAge.record(ageTicks);
+      // Возраст ЯКОРЯ записывается ровно у тех событий, что дали образец гистограммы: из него
+      // вычитают смещение ИМЕННО ЭТОЙ гистограммы, и другая совокупность дала бы ложный остаток.
+      if (Number.isFinite(anchorAgeTicks)) this.anchorAge.record(anchorAgeTicks);
     }
   }
 
@@ -739,6 +743,19 @@ class ShadowInputRuntime {
       : this.serverTick * SERVER_SIMULATION_DT;
     world.advance(matchTime);
 
+    // Возраст клиентского снимка в тиках. Считается здесь, потому что нужен в двух разных ролях:
+    // отметить клиентский удар его собственным временем и запомнить, НАСКОЛЬКО СТАРЫМ был снимок,
+    // по которому поставлен якорь свободной траектории. Роли эти путать нельзя — см. `anchorAge`.
+    //
+    // Клиентское время ВПЕРЕДИ серверного выравниванием не считается: `trustedCourseTime` пускает
+    // расхождение в обе стороны на полсекунды, а отрицательный возраст означает разъехавшиеся часы,
+    // а не свежий снимок.
+    const snapshotAgeTicks = Number.isFinite(snapshotSeconds)
+      ? (matchTime - snapshotSeconds) / SERVER_SIMULATION_DT
+      : null;
+    const clientAligned = snapshotAgeTicks !== null && snapshotAgeTicks >= 0;
+    const anchorAge = () => (clientAligned ? snapshotAgeTicks : null);
+
     // Траектория меряется НА ОГРАНИЧЕННОМ ГОРИЗОНТЕ, и это не смягчение проверки, а условие того,
     // чтобы она вообще что-то значила.
     //
@@ -754,6 +771,7 @@ class ShadowInputRuntime {
     if (!controller.freeState) {
       controller.freeState = stateFromLegacy(player.last);
       controller.freeTicks = 0;
+      controller.anchorAgeTicks = anchorAge();
     }
 
     // Возврат на чекпоинт — не расхождение симуляций, а разрыв в клиенте, которого серверная
@@ -785,6 +803,7 @@ class ShadowInputRuntime {
       this.worldDiagnostics.clientTeleports += 1;
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
+      controller.anchorAgeTicks = anchorAge();
       // Пока по этой точке не прошёл шаг физики, ярлык опоры у клиента ничего не сообщает: см.
       // `placedNotSimulated`. Латч ограничен по числу снимков — распознавание идёт по расстоянию, а
       // расстояние не отличает возрождение от потери пакетов.
@@ -810,6 +829,7 @@ class ShadowInputRuntime {
       this.worldDiagnostics.reanchors += 1;
       controller.freeState = reanchoredState(player.last, controller.freeState);
       controller.freeTicks = 0;
+      controller.anchorAgeTicks = anchorAge();
     }
     controller.freeTicks += 1;
 
@@ -882,14 +902,6 @@ class ShadowInputRuntime {
     //
     // Отметка не уезжает вперёд часов: расхождение в другую сторону сломало бы просрочку, которая
     // держится на монотонности часов.
-    // Клиентское время ВПЕРЕДИ серверного выравниванием не считается. `trustedCourseTime` пускает
-    // расхождение в обе стороны на полсекунды, а отрицательный возраст означает разъехавшиеся часы,
-    // а не свежий снимок: прижать его к нулю и объявить выровненным значило бы мерить по приёму и
-    // одновременно уверять, что мерили по клиенту.
-    const snapshotAgeTicks = Number.isFinite(snapshotSeconds)
-      ? (matchTime - snapshotSeconds) / SERVER_SIMULATION_DT
-      : null;
-    const clientAligned = snapshotAgeTicks !== null && snapshotAgeTicks >= 0;
     // Возраст снимка записывается, и это не любопытство: без него `matchDelay` не прочитать.
     //
     // Свободная траектория привязывается к ЗАПОЗДАВШЕМУ снимку намеренно — так постоянная часть
@@ -903,11 +915,16 @@ class ShadowInputRuntime {
     // Значит в `matchDelay` сидит известное положительное смещение, и вычесть его можно, только
     // зная возраст. Отсюда эта запись.
     this.recordHitDecisions(
-      controller.hitPairing.observe(this.serverTick, serverKnockdown, clientKnockdownStarted, {
-        tick: clientAligned ? this.serverTick - Math.round(snapshotAgeTicks) : this.serverTick,
-        aligned: clientAligned,
-        ageTicks: clientAligned ? snapshotAgeTicks : null
-      })
+      controller.hitPairing.observe(
+        this.serverTick,
+        serverKnockdown,
+        clientKnockdownStarted,
+        {
+          tick: clientAligned ? this.serverTick - Math.round(snapshotAgeTicks) : this.serverTick,
+          aligned: clientAligned
+        },
+        { anchorAgeTicks: controller.anchorAgeTicks }
+      )
     );
 
     // Опору клиента видно НЕ ВСЕГДА, и это не то же самое, что «опоры нет».
@@ -1252,10 +1269,11 @@ class ShadowInputRuntime {
             // Пока доля выровненных не близка к единице, `matchDelay` мерит в том числе возраст
             // снимка, а не только расхождение.
             clientStamp: { ...this.hitClientStamp },
-            // Возраст клиентского снимка в тиках. Из него выводится известное смещение `matchDelay`
-            // вверх: свободная траектория привязана к запоздавшему снимку и потому идёт позади
-            // игрока на `возраст − 1` тик, доходя до препятствий на столько же позже.
-            snapshotAge: this.clientSnapshotAge.snapshot()
+            // Возраст снимка, по которому поставлен якорь свободной траектории. Из него выводится
+            // известное смещение `matchDelay` вверх: траектория идёт позади игрока и доходит до
+            // препятствий позже. Именно ЯКОРЯ, а не снимка самого удара: якорь ставится раз в 30
+            // тиков, и при меняющейся задержке это разные величины.
+            anchorAge: this.anchorAge.snapshot()
           };
         })()
       }

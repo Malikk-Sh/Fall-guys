@@ -1159,7 +1159,11 @@ test('возраст якоря считается по образцам гис�
   tick(runtime, room, player, 10, now);
   const quiet = runtime.metrics().shadowGroundContact.hitParity;
   assert.equal(quiet.matchDelay.samples, 0, 'подготовка: ударов не было');
-  assert.equal(quiet.anchorAge.count, 0, 'без образцов гистограммы возраст не копится');
+  assert.equal(
+    quiet.anchorAge.known + quiet.anchorAge.unknown,
+    0,
+    'без образцов гистограммы возраст не копится'
+  );
 });
 
 // Записывается возраст ЯКОРЯ, а не возраст снимка самого удара.
@@ -1167,14 +1171,57 @@ test('возраст якоря считается по образцам гис�
 // Смещение серверного удара по времени задано тем снимком, по которому поставлена свободная
 // траектория, — а ставится она раз в тридцать тиков. Если задержка за это время изменилась, возраст
 // снимка удара уже другой, и вычитание не той величины даёт выдуманный остаток в любую сторону.
+// Якорь, поставленный СЕРВЕРОМ, возраста не имеет — и не должен его выдумывать.
+//
+// При возрождении `server/index.js` перезаписывает `player.last` точкой чекпоинта, а
+// `lastCourseTime` оставляет от прошлого клиентского снимка. Разность с застывшим временем растёт, и
+// приписать её якорю значило бы отравить `anchorAge` на весь горизонт — то есть ровно ту величину,
+// которую из `matchDelay` потом вычитают. Отличается это точно: номер пакета растёт только на
+// клиентских сообщениях, а возрождение его не трогает.
+test('якорь по серверной постановке возраста не получает', () => {
+  const runtime = new ShadowInputRuntime();
+  const room = raceRoom();
+  room.startedAt = 1_760_000_000_000;
+  const player = standingPlayer();
+  const now = room.startedAt + 5000;
+  player.lastCourseTime = 4.95;
+  tick(runtime, room, player, 1, now);
+
+  const controller = runtime.controllers.get(player);
+  assert.ok(Number.isFinite(controller.anchorAgeTicks), 'подготовка: по клиентскому пакету возраст есть');
+
+  // Возрождение: сервер пишет `player.last` сам, номер пакета не трогает, время трассы застывает.
+  const rooms = new Map([[room.matchId, room]]);
+  room.players = new Map([['p1', player]]);
+  player.last = { ...player.last, z: player.last.z - 40, state: 'air' };
+  runtime.tick(rooms, now + SERVER_SIMULATION_DT * 1000);
+
+  assert.equal(controller.anchorAgeTicks, null, 'серверная постановка обязана оставить возраст неизвестным');
+});
+
 test('возраст берётся у якоря траектории, а не у снимка удара', () => {
   // Якорь ставится по СТАРОМУ снимку (возраст около 6 тиков), а удар приходит со свежим (около 2).
   const parity = pairAfterServerHit(5.0, 4.8);
   assert.equal(parity.matched, 1, 'подготовка: пара обязана сойтись');
-  assert.equal(parity.anchorAge.count, 1);
+  assert.equal(parity.anchorAge.known, 1);
   assert.ok(
-    parity.anchorAge.mean > 4,
-    `обязан быть записан возраст якоря (около 6), а записано ${parity.anchorAge.mean}`
+    parity.anchorAge.meanAgeTicks > 4,
+    `обязан быть записан возраст якоря (около 6), а записано ${parity.anchorAge.meanAgeTicks}`
+  );
+  // Задержка ТОГО ЖЕ образца лежит рядом — только по этой паре остаток и считается честно.
+  assert.equal(parity.anchorAge.meanDelayTicks, parity.matchDelay.meanTicks);
+
+  // А образец, у которого возраст якоря неизвестен, обязан быть ПОСЧИТАН отдельно, а не выпасть
+  // молча: иначе средние двух величин описывали бы разные совокупности, и остаток вышел бы
+  // выдуманным. Время трассы на два метра мимо серверного доверия не проходит вовсе.
+  const untrusted = pairAfterServerHit(5.0, 3.0);
+  assert.equal(untrusted.matched, 1, 'подготовка: пара обязана сойтись и здесь');
+  assert.equal(untrusted.anchorAge.known, 0, 'возраст такого якоря неизвестен');
+  assert.equal(untrusted.anchorAge.unknown, 1, 'но образец обязан быть посчитан');
+  assert.equal(
+    untrusted.anchorAge.known + untrusted.anchorAge.unknown,
+    untrusted.matchDelay.samples,
+    'сумма обязана сходиться с числом образцов гистограммы'
   );
 });
 
@@ -1185,8 +1232,12 @@ test('снимок из прошлого выравнивает пару, сни
   assert.equal(behind.clientStamp.aligned, 1, 'снимок из прошлого — обычный случай, он выровнен');
   assert.equal(behind.clientStamp.unaligned, 0);
   // И возраст ЯКОРЯ пришёл вместе с этим самым образцом.
-  assert.equal(behind.anchorAge.count, 1, 'возраст якоря обязан записаться у совпавшей пары');
-  assert.ok(behind.anchorAge.mean >= 0, `возраст обязан быть неотрицательным, а он ${behind.anchorAge.mean}`);
+  assert.equal(behind.anchorAge.known, 1, 'возраст якоря обязан записаться у совпавшей пары');
+  assert.equal(behind.anchorAge.unknown, 0);
+  assert.ok(
+    behind.anchorAge.meanAgeTicks >= 0,
+    `возраст обязан быть неотрицательным, а он ${behind.anchorAge.meanAgeTicks}`
+  );
 
   const ahead = pairAfterServerHit(5.2);
   assert.equal(ahead.matched, 1, 'подготовка: пара обязана сойтись и здесь');

@@ -588,9 +588,15 @@ class ShadowInputRuntime {
     // содержимым гистограммы: односторонние удары в неё не попадают, и включать их значило бы
     // получить долю, по которой о гистограмме ничего не скажешь.
     this.hitClientStamp = { aligned: 0, unaligned: 0 };
-    // Возраст снимка, по которому поставлен ЯКОРЬ свободной траектории, — величина, без которой
-    // `matchDelay` не читается: см. разбор у места записи.
-    this.anchorAge = new RollingErrorStats();
+    // Возраст якоря и задержка ОДНИХ И ТЕХ ЖЕ образцов, плюс счётчик тех, у кого возраст неизвестен.
+    //
+    // Порознь эти величины несравнимы: `matchDelay` считается по всем совпавшим парам, а возраст
+    // известен не у всех — якорь мог быть поставлен сервером (возрождение) или по недостоверному
+    // времени трассы. Вычитать среднее одной совокупности из среднего другой — тот же промах с
+    // знаменателем, что уже дважды случался здесь. Поэтому пара считается вместе: по `known`
+    // читается и возраст, и задержка ТЕХ ЖЕ событий, а `unknown` говорит, какую часть выборки этим
+    // чтением не покрыть.
+    this.anchorAge = { known: 0, unknown: 0, ageSum: 0, delaySum: 0 };
     this.progressDiagnostics = {
       checkpointEvents: 0,
       finishEvents: 0,
@@ -643,9 +649,13 @@ class ShadowInputRuntime {
       this.hitMatchDelay.add(ticks);
       if (aligned) this.hitClientStamp.aligned += 1;
       else this.hitClientStamp.unaligned += 1;
-      // Возраст ЯКОРЯ записывается ровно у тех событий, что дали образец гистограммы: из него
-      // вычитают смещение ИМЕННО ЭТОЙ гистограммы, и другая совокупность дала бы ложный остаток.
-      if (Number.isFinite(anchorAgeTicks)) this.anchorAge.record(anchorAgeTicks);
+      // Возраст ЯКОРЯ и задержка записываются вместе и только у тех событий, что дали образец
+      // гистограммы: из них выводят остаток, и разные совокупности дали бы его выдуманным.
+      if (Number.isFinite(anchorAgeTicks)) {
+        this.anchorAge.known += 1;
+        this.anchorAge.ageSum += anchorAgeTicks;
+        this.anchorAge.delaySum += ticks;
+      } else this.anchorAge.unknown += 1;
     }
   }
 
@@ -754,7 +764,22 @@ class ShadowInputRuntime {
       ? (matchTime - snapshotSeconds) / SERVER_SIMULATION_DT
       : null;
     const clientAligned = snapshotAgeTicks !== null && snapshotAgeTicks >= 0;
-    const anchorAge = () => (clientAligned ? snapshotAgeTicks : null);
+
+    // Возраст якоря известен, ТОЛЬКО ЕСЛИ якорь ставится по клиентскому пакету.
+    //
+    // `player.last` пишет не один клиент: при возрождении сервер ставит игрока на чекпоинт сам, а
+    // `lastCourseTime` при этом остаётся от прошлого клиентского снимка. Привязка к такой точке —
+    // событие серверное, у него нет никакого «возраста снимка», а разность с застывшим временем
+    // трассы всё растёт. Приписать её якорю значило бы отравить `anchorAge` на весь горизонт в
+    // тридцать тиков — то есть ровно на ту величину, которую из `matchDelay` потом вычитают.
+    //
+    // Отличить одно от другого можно точно, не гадая: номер пакета растёт только на клиентских
+    // сообщениях (`PLAYER_STATE` и `FINISH`), а возрождение его не трогает вовсе.
+    const anchorSequence = player?.lastSequence;
+    const anchorFromClient =
+      Number.isSafeInteger(anchorSequence) && controller.anchorSequence !== anchorSequence;
+    if (Number.isSafeInteger(anchorSequence)) controller.anchorSequence = anchorSequence;
+    const anchorAge = () => (clientAligned && anchorFromClient ? snapshotAgeTicks : null);
 
     // Траектория меряется НА ОГРАНИЧЕННОМ ГОРИЗОНТЕ, и это не смягчение проверки, а условие того,
     // чтобы она вообще что-то значила.
@@ -1269,11 +1294,16 @@ class ShadowInputRuntime {
             // Пока доля выровненных не близка к единице, `matchDelay` мерит в том числе возраст
             // снимка, а не только расхождение.
             clientStamp: { ...this.hitClientStamp },
-            // Возраст снимка, по которому поставлен якорь свободной траектории. Из него выводится
-            // известное смещение `matchDelay` вверх: траектория идёт позади игрока и доходит до
-            // препятствий позже. Именно ЯКОРЯ, а не снимка самого удара: якорь ставится раз в 30
-            // тиков, и при меняющейся задержке это разные величины.
-            anchorAge: this.anchorAge.snapshot()
+            // Возраст якоря и задержка ОДНИХ И ТЕХ ЖЕ образцов — единственная пара, по которой
+            // остаток считается честно: `meanDelayTicks − (meanAgeTicks − 1) − 1`. Именно ЯКОРЯ, а
+            // не снимка самого удара: якорь ставится раз в 30 тиков, и при меняющейся задержке это
+            // разные величины. `unknown` — сколько образцов гистограммы этим чтением не покрыто.
+            anchorAge: {
+              known: this.anchorAge.known,
+              unknown: this.anchorAge.unknown,
+              meanAgeTicks: this.anchorAge.known ? this.anchorAge.ageSum / this.anchorAge.known : 0,
+              meanDelayTicks: this.anchorAge.known ? this.anchorAge.delaySum / this.anchorAge.known : 0
+            }
           };
         })()
       }

@@ -309,7 +309,10 @@ export class UI {
     $('#accountName').textContent = account?.name || 'ГОСТЬ';
     $('#accountChip').classList.toggle('offline', !online);
     $('#accountChip').classList.toggle('account-chip-guest', !account);
-    $('#accountChip').querySelector('small').textContent = account ? 'сменить' : 'войти';
+    // На площадке входа нет — там чип ведёт к шкафу, и звать «войти» было бы обманом: сама секция
+    // входа скрыта шлюзом, и нажавший ничего бы не нашёл.
+    const chipAction = supportsOnlinePlay(resolvePlatform()) ? (account ? 'сменить' : 'войти') : 'шкаф';
+    $('#accountChip').querySelector('small').textContent = chipAction;
     this.renderAccountState();
     this.renderAccountPanel();
     this.renderServerProfile();

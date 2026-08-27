@@ -472,6 +472,18 @@ export class AccountFlow {
     return message;
   }
 
+  // Гостевое состояние без единого запроса — для площадки, где входа нет вовсе.
+  //
+  // Без него интерфейс остаётся незаполненным: `apply()` — единственный стартовый вызов
+  // `ui.setAccount()`, и пропустив `signIn()`, чип аккаунта навсегда сохраняет шаблонные «…» и
+  // «сменить». А чип на площадке нужен: через него открывается экран со шкафом.
+  //
+  // Отдельным методом, а не `signIn()` с флагом: `signIn()` при неудаче говорит «сервер не ответил»,
+  // и на площадке это была бы неправда — сервера там нет по устройству сборки, а не по сбою.
+  async applyGuestState() {
+    this.apply(null, { online: false, records: [], progress: null });
+  }
+
   async signIn() {
     const { account, records, progress, online, sanction = null } = await ensureAccount({});
     this.apply(account, { online, records, progress });

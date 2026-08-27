@@ -107,6 +107,28 @@ test('сетевая секция аккаунта прячется вместе
   assert.equal(control.hidden, undefined);
 });
 
+// Пропустить вход мало — состояние всё равно надо применить.
+//
+// `apply()` — единственный стартовый вызов `ui.setAccount()`. Пропустив `signIn()`, я оставил чип
+// аккаунта с шаблонными «…» и «сменить»: в браузере он так и показывал `… сменить`. А чип на
+// площадке нужен — через него открывается экран со шкафом.
+test('на площадке гостевое состояние применяется без сети', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'client', 'main.js'), 'utf8');
+  assert.match(
+    source,
+    /this\.accountReady = this\.onlinePlay \? this\.account\.signIn\(\) : this\.account\.applyGuestState\(\);/,
+    'ветка без сети обязана применить гостевое состояние, а не оставить интерфейс пустым'
+  );
+
+  const flow = fs.readFileSync(path.join(ROOT, 'client', 'core', 'AccountFlow.js'), 'utf8');
+  const guest = flow.slice(flow.indexOf('async applyGuestState()'), flow.indexOf('async signIn()'));
+  assert.match(guest, /this\.apply\(null, \{ online: false/, 'состояние применяется как гостевое');
+  // Ни одного сетевого вызова: метод существует именно затем, чтобы обойтись без них.
+  for (const call of ['ensureAccount', 'sessionAccount', 'authConfig', 'setupGoogle']) {
+    assert.doesNotMatch(guest, new RegExp(`\\b${call}\\(`), `${call} в гостевом пути недопустим`);
+  }
+});
+
 // ГОРЛОВИНА: все двадцать вызовов `/api/auth/*` идут через один `post`, и заслон стоит в нём.
 //
 // Это вывод из трёх подряд пропущенных мест: кнопки аккаунта, кооп-рейтинг, отправка соло-рекорда.

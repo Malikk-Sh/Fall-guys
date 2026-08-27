@@ -124,7 +124,7 @@ class Game {
     // только 404 в консоли и ложное «сервер не ответил» в интерфейсе. Без аккаунта `save()` сама
     // ничего не отправляет, а личные рекорды пишет `UI` в localStorage, поэтому одиночная игра от
     // этого не теряет ничего. Обещание держим разрешённым, чтобы ожидающие его места не зависли.
-    this.accountReady = this.onlinePlay ? this.account.signIn() : Promise.resolve(null);
+    this.accountReady = this.onlinePlay ? this.account.signIn() : this.account.applyGuestState();
 
     this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);

@@ -1,0 +1,210 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import { createHash, randomBytes } from 'node:crypto';
+
+import { ZIP_EPOCH, defaultDate, listZip, makeZip, packPortal } from '../tools/packPortal.mjs';
+
+// Архив читается ОБРАТНО, а не сверяется со списком файлов на диске.
+//
+// Сверка со списком проверяла бы замысел упаковщика его же глазами. Здесь разобран центральный
+// каталог готового файла — то же самое делает распаковщик площадки.
+
+test('в архиве лежит ровно то, что положили, и читается по центральному каталогу', () => {
+  const entries = [
+    { name: 'index.html', data: Buffer.from('<h1>меню</h1>', 'utf8') },
+    { name: 'vendor/three.js', data: Buffer.from('x'.repeat(4096), 'utf8') },
+    { name: 'shared/course.js', data: Buffer.from('export const seed = 1;', 'utf8') }
+  ];
+  assert.deepEqual(listZip(makeZip(entries)), ['index.html', 'vendor/three.js', 'shared/course.js']);
+});
+
+// Содержимое обязано доезжать байт в байт, и проверяется это распаковкой, а не длиной записи.
+test('содержимое записей распаковывается обратно без изменений', () => {
+  const payload = Buffer.from('трасса: '.repeat(500), 'utf8');
+  const zip = makeZip([{ name: 'a.js', data: payload }]);
+
+  // Локальный заголовок: 30 байт + имя, дальше тело.
+  const nameLength = zip.readUInt16LE(26);
+  const method = zip.readUInt16LE(8);
+  const packedSize = zip.readUInt32LE(18);
+  const body = zip.subarray(30 + nameLength, 30 + nameLength + packedSize);
+  const restored = method === 8 ? zlib.inflateRawSync(body) : body;
+
+  assert.deepEqual(restored, payload);
+  assert.equal(zip.readUInt32LE(22), payload.length, 'исходный размер обязан быть записан честно');
+});
+
+// Уже сжатое deflate только растит, и тогда запись обязана лечь без сжатия.
+//
+// Проверяется ПОЛЕ МЕТОДА, а не размер архива. Сначала здесь стояло «архив не больше данных плюс
+// запас» — и это утверждение не ловило ничего: накладные расходы deflate на четырёх килобайтах
+// меньше любого разумного запаса, так что тест был зелёным и с принудительным сжатием. Проверено
+// мутацией — потому и переписан.
+test('несжимаемая запись ложится без сжатия, а не жмётся впустую', () => {
+  // Байты берутся у генератора случайных, а не считаются формулой. Сначала здесь стояло
+  // `(i * 2654435761) % 251` «как случайные» — последовательность с периодом 251, которую deflate
+  // прекрасно сжимает. Тест падал на исправном коде, потому что неверны были данные.
+  const noise = randomBytes(4096);
+  const zip = makeZip([{ name: 'n.bin', data: noise }]);
+  assert.equal(zip.readUInt16LE(8), 0, 'метод 0 — store; на несжимаемом deflate только растит');
+
+  const text = Buffer.from('трасса '.repeat(1000), 'utf8');
+  assert.equal(makeZip([{ name: 't.js', data: text }]).readUInt16LE(8), 8, 'сжимаемое обязано сжаться');
+});
+
+// Воспроизводимость проверяется СРАВНЕНИЕМ БАЙТ, а не рассуждением про сортировку: сортировки имён
+// не хватало, `new Date()` писала другое время во все заголовки, и тот же билд давал архив того же
+// размера, но другими байтами. Утверждение про воспроизводимость стояло в комментарии к коду раньше,
+// чем стало правдой.
+//
+// Проверяется, что метка по умолчанию НЕ ЗАВИСИТ ОТ ЧАСОВ, — и проверяется без часов.
+//
+// Сначала здесь стоял пустой цикл на 2.2 секунды: он ждал перехода через двухсекундную границу
+// DOS-метки, чтобы поймать `new Date()`. Это отнимало ядро при каждом прогоне `test:server` и на
+// тесном CI мешало соседним процессам. Тот же вопрос задаётся мгновенно: архив без указания даты
+// обязан совпасть с архивом на постоянной эпохе. Часы при этом не идут вовсе.
+test('метка по умолчанию постоянна и не читает часы', () => {
+  const entries = [
+    { name: 'index.html', data: Buffer.from('<h1>меню</h1>', 'utf8') },
+    { name: 'core/a.js', data: Buffer.from('export const a = 1;'.repeat(40), 'utf8') }
+  ];
+  assert.deepEqual(makeZip(entries), makeZip(entries, { date: ZIP_EPOCH }));
+});
+
+test('SOURCE_DATE_EPOCH задаёт метку времени снаружи', () => {
+  assert.deepEqual(defaultDate({}), ZIP_EPOCH);
+  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '' }), ZIP_EPOCH);
+  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '1700000000' }), new Date(1700000000 * 1000));
+});
+
+// ЗАСЛОН ПРОВЕРЯЕТСЯ ТАМ, ГДЕ ОН СТОИТ, — на входе `makeZip`, а не только на разборе переменной.
+//
+// Проверку я ставил трижды и трижды не туда, и последний раз она встала на границу ВВОДА
+// (`defaultDate`), оставив открытым экспортированный вход `makeZip(entries, { date })`. Замерено на
+// том коде: `new Date(0)` давал в архиве 2098-01-01, 2200 год — 2072-й, `Invalid Date` — месяц 0 и
+// день 0. Теперь заслон стоит в `dosStamp`, куда приходят все пути, и проверяется он отсюда.
+test('дата вне диапазона ZIP отвергается и при прямом вызове makeZip', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x', 'utf8') }];
+
+  // 1970 год — прежде молча становился 2098-м.
+  assert.throws(() => makeZip(entries, { date: new Date(0) }), /1980–2107/);
+  // 2200 год — прежде становился 2072-м.
+  assert.throws(() => makeZip(entries, { date: new Date(Date.UTC(2200, 0, 1)) }), /1980–2107/);
+  // Не дата вовсе — прежде давала месяц 0 и день 0, то есть заведомо негодную запись.
+  assert.throws(() => makeZip(entries, { date: new Date('нет') }), /не является датой/);
+  assert.throws(() => makeZip(entries, { date: 1700000000 }), /не является датой/);
+
+  // Границы диапазона при этом обязаны проходить.
+  assert.ok(makeZip(entries, { date: new Date(Date.UTC(1980, 0, 1)) }).length > 0);
+  assert.ok(makeZip(entries, { date: new Date(Date.UTC(2107, 11, 31)) }).length > 0);
+});
+
+// Тот же заслон, взятый со стороны переменной окружения: разбор её больше диапазон не проверяет,
+// поэтому важно, что негодное значение всё равно не доходит до архива.
+test('негодный SOURCE_DATE_EPOCH не доходит до архива', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x', 'utf8') }];
+  for (const raw of ['0', '4354819200', '99999999999', '-1']) {
+    assert.throws(() => makeZip(entries, { date: defaultDate({ SOURCE_DATE_EPOCH: raw }) }), /1980–2107/);
+  }
+  assert.throws(
+    () => makeZip(entries, { date: defaultDate({ SOURCE_DATE_EPOCH: '99999999999999999999' }) }),
+    /не является датой/
+  );
+
+  // А годные границы проходят насквозь.
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '315532800' }).getUTCFullYear(), 1980);
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '4354819199' }).getUTCFullYear(), 2107);
+});
+
+// Заданный, но неразбираемый мусор — это «просили и не смогли», а не «не просили».
+test('неразбираемый SOURCE_DATE_EPOCH падает, а не откатывается к эпохе', () => {
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: 'вчера' }), /не целое число секунд/);
+  // Самая правдоподобная ошибка: дату написали датой. `parseInt` прочёл бы её как 2026 секунд,
+  // то есть как 1970 год, и архив получил бы 2098-й.
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '2026-01-01' }), /не целое число секунд/);
+});
+
+// Заданная эпоха обязана давать одни и те же байты в ЛЮБОМ часовом поясе.
+//
+// С локальными геттерами не давала: три пояса — три разные суммы, а в Токио разъезжалась и дата.
+// Воспроизводимость держалась на одной машине и ломалась там, где нужна, — между CI и локальной
+// сборкой. Пояс здесь подменяется на время вызова, поэтому проверка не зависит от того, где её
+// запустили.
+test('заданная эпоха не зависит от часового пояса', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x'.repeat(64), 'utf8') }];
+  const date = new Date(1700000000 * 1000);
+  const previous = process.env.TZ;
+  try {
+    const digests = ['UTC', 'America/Los_Angeles', 'Asia/Tokyo'].map(zone => {
+      process.env.TZ = zone;
+      return createHash('sha256').update(makeZip(entries, { date })).digest('hex');
+    });
+    assert.equal(new Set(digests).size, 1, `пояс не должен менять архив: ${digests.join(' ')}`);
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+test('битый буфер отвергается, а не читается наугад', () => {
+  assert.throws(() => listZip(Buffer.from('это не архив', 'utf8')), /не ZIP/);
+});
+
+// ГЛАВНОЕ ТРЕБОВАНИЕ ПЛОЩАДКИ.
+//
+// Площадка распаковывает архив и ищет `index.html` в его КОРНЕ. Уедь он внутри папки — загрузка
+// отклоняется, и узнаём мы об этом из чужой формы, а не отсюда.
+test('index.html лежит в корне архива, а не внутри папки', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-pack-'));
+  try {
+    const { file, files } = packPortal({ outFile: path.join(dir, 'p.zip') });
+    const names = listZip(fs.readFileSync(file));
+
+    assert.ok(names.includes('index.html'), 'index.html обязан быть в корне');
+    assert.equal(files, names.length);
+    assert.ok(names.length > 100, 'билд — это больше сотни файлов; пустой архив тоже «собрался бы»');
+    // Ни одна запись не должна начинаться с общей папки-обёртки.
+    const wrapped = names.filter(name => name.startsWith('dist/') || name.startsWith('yandex/'));
+    assert.deepEqual(wrapped, [], 'архив не должен быть обёрнут в папку');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Подтверждения владения доменом подтверждают НАШ домен и на площадке не значат ничего. Исключены
+// образцом, а не списком имён: файл уже сменился однажды, и список протух бы при следующей смене.
+test('подтверждения домена Яндекс.Вебмастера в архив не уезжают', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-pack-'));
+  try {
+    const { file } = packPortal({ outFile: path.join(dir, 'p.zip') });
+    const names = listZip(fs.readFileSync(file));
+    // Образец здесь тот же широкий, что и в сборке: узкий пропустил бы имя новой формы, а ошибка у
+    // него односторонняя в худшую сторону.
+    const verification = names.filter(name => /^yandex_[^/]*\.html$/.test(name));
+    assert.deepEqual(verification, [], `в архив уехали подтверждения домена: ${verification.join(', ')}`);
+
+    // И заодно то, что не уезжает по устройству площадки, — чтобы проверка держала весь список,
+    // а не одну свежую находку.
+    assert.deepEqual(
+      names.filter(name => name.startsWith('admin/') || name === 'service-worker.js'),
+      []
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('неизвестная площадка не даёт «успешно собранного» архива', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wobble-pack-'));
+  try {
+    const target = path.join(dir, 'p.zip');
+    assert.throws(() => packPortal({ platform: 'yadnex', outFile: target }), /неизвестная площадка/);
+    assert.equal(fs.existsSync(target), false, 'негодный архив не должен появляться на диске');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

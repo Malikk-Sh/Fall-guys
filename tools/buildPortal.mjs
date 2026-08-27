@@ -36,6 +36,16 @@ const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 //   только вместе с service worker.
 const CLIENT_EXCLUDE = new Set(['admin', 'service-worker.js', 'manifest.webmanifest', 'offline.html']);
 
+// Подтверждения владения доменом для Яндекс.Вебмастера (`yandex_<хеш>.html`, PR #220 и #221).
+//
+// Они подтверждают НАШ домен и работают только лёжа в его корне. В портальном архиве они не значат
+// ничего: площадка раздаёт их со своего пути, где подтверждать нечего.
+//
+// Исключаются ОБРАЗЦОМ, а не списком имён, и это не мелочь. Файл уже сменился однажды — второй
+// приехал «обновлённым» поверх первого, — так что список имён протух бы ровно при следующей смене,
+// молча и в сторону «уехало лишнее».
+const CLIENT_EXCLUDE_MATCH = relative => /^yandex_[0-9a-f]+\.html$/.test(relative);
+
 // Абсолютные ссылки в разметке. Ключ — что искать, значение — чем заменить относительно корня
 // билда. `index.html` лежит в корне, поэтому префикс здесь всегда `./`.
 const HTML_REWRITES = [
@@ -97,11 +107,11 @@ function copyModuleClosure(entries, { addonsRoot, addonsOut }) {
   return done.size;
 }
 
-function copyTree(from, to, { exclude = new Set(), root = from } = {}) {
+function copyTree(from, to, { exclude = new Set(), excludeMatch = () => false, root = from } = {}) {
   fs.mkdirSync(to, { recursive: true });
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
     const relative = path.relative(root, path.join(from, entry.name));
-    if (exclude.has(relative)) continue;
+    if (exclude.has(relative) || excludeMatch(relative)) continue;
     const source = path.join(from, entry.name);
     const target = path.join(to, entry.name);
     if (entry.isDirectory()) copyTree(source, target, { exclude, root });
@@ -196,7 +206,10 @@ export function buildPortal({ platform = 'yandex', outDir } = {}) {
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
 
-  copyTree(path.join(ROOT, 'client'), out, { exclude: CLIENT_EXCLUDE });
+  copyTree(path.join(ROOT, 'client'), out, {
+    exclude: CLIENT_EXCLUDE,
+    excludeMatch: CLIENT_EXCLUDE_MATCH
+  });
   copyTree(path.join(ROOT, 'shared'), path.join(out, 'shared'));
 
   // Three.js лежит в `node_modules` и в репозиторий не входит — на своём сервере он монтируется

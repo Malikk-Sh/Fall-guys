@@ -31,9 +31,12 @@ npm run test:e2e:fullscreen
 npm run test:e2e:full-match
 npm run test:e2e:matchmaking
 npm run test:e2e:menu
+npm run test:e2e:portal
 ```
 
 `desktop:fast` intentionally excludes `full-match.spec.js`. The full-match suite runs separately because it drives two real browsers through a real-time race and cannot be shortened without changing what it verifies.
+
+`test:e2e:portal` is the only command with its own Playwright config (`playwright.portal.config.js`), and that is deliberate. It checks the static build that ships to a game portal, so it needs a different server — the build served from a **subpath**, with the root answering 404 — and it must not have our game server running at all, or the suite could pass because something nearby answered. `webServer` is a config-level setting rather than a project-level one, so a portal entry in the shared config was started even by commands whose tests never touch it; a separate config is what keeps the lanes independent in both directions. The command rebuilds `dist/yandex` on every run and never reuses a running server, because a leftover one would serve a stale build.
 
 ## GitHub Actions layout
 
@@ -46,10 +49,13 @@ npm run test:e2e:menu
 - `E2E (mobile)`
 - `E2E (fullscreen)`
 - `E2E (full-match)`
+- `E2E (portal)`
 
 `CI ready` is the final aggregate status. It succeeds only when every required group succeeds. A small compatibility job named `test` follows it because branch protection still requires the historical check name.
 
-The desktop, mobile, fullscreen, and full-match jobs use zero retries. Timing-sensitive failures are surfaced directly together with their diagnostics instead of being hidden by a retry.
+The portal lane runs the built artifact in two browser profiles — desktop and mobile landscape. The mobile one is not decoration: the audience of a game portal is mobile, and a suite that only ever opened the build in a desktop browser would be declaring protected something it never looked at.
+
+The desktop, mobile, fullscreen, full-match, and portal jobs use zero retries. Timing-sensitive failures are surfaced directly together with their diagnostics instead of being hidden by a retry.
 
 ## Browser timing and flaky summaries
 

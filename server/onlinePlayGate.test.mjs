@@ -5,7 +5,7 @@ import path from 'node:path';
 import url from 'node:url';
 
 import { PLATFORM, resolvePlatform, supportsOnlinePlay } from '../client/core/PlatformResolver.js';
-import { applyOnlinePlayGate } from '../client/core/onlinePlayGate.js';
+import { applyOnlinePlayGate, GATE_CLASS } from '../client/core/onlinePlayGate.js';
 
 const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 
@@ -20,7 +20,13 @@ function fakeRoot(selectors) {
     querySelectorAll(selector) {
       const count = selectors[selector] ?? 0;
       return Array.from({ length: count }, () => {
-        const node = { attrs: {}, setAttribute: (name, value) => (node.attrs[name] = value) };
+        const classes = new Set();
+        const node = {
+          attrs: {},
+          classes,
+          setAttribute: (name, value) => (node.attrs[name] = value),
+          classList: { add: name => classes.add(name) }
+        };
         touched.set(selector, node);
         return node;
       });
@@ -205,8 +211,9 @@ test('кооп-рейтинг закрыт признаком платформы
   assert.ok(guard < playerCheck, 'заслон обязан стоять ДО проверки игрока, а не после');
 });
 
-// Скрытие обязано быть АТРИБУТОМ, а не классом: класс `hidden` меню снимает при переключении
-// режима, атрибут — нет. И кнопка вдобавок отключается, чтобы её нельзя было нажать из кода.
+// Скрытие ставит атрибут `hidden` — он убирает узел из фокуса и из дерева доступности, и меню его,
+// в отличие от класса `hidden`, при переключении режима не снимет. И кнопка вдобавок отключается,
+// чтобы её нельзя было нажать из кода.
 test('вкладка скрыта атрибутом и отключена, а не просто помечена классом', () => {
   const root = fakeRoot(ONLINE_MARKUP);
   applyOnlinePlayGate(PLATFORM.YANDEX, root);
@@ -219,6 +226,27 @@ test('вкладка скрыта атрибутом и отключена, а �
   const panel = root.node('#multi');
   assert.equal(panel.hidden, true);
   assert.equal(panel.attrs.hidden, '');
+});
+
+// ...но одного атрибута мало, и это выяснилось не рассуждением, а браузером.
+//
+// Атрибут скрывает узел лишь правилом браузера `[hidden] { display: none }`, а оно проигрывает
+// любому нашему явному `display`. `.account-section { display: grid }` — ровно такой случай: секция
+// «вход с другого устройства» оставалась на площадке видимой. Запросы из неё не уходили, поэтому
+// прежние проверки — и эта в том числе — были зелёными.
+//
+// Здесь закреплены обе половины: класс на узле и правило, которое делает класс не декоративным.
+test('скрытое заслоном закрыто правилом, которое не перебить нашим же display', () => {
+  const root = fakeRoot(ONLINE_MARKUP);
+  applyOnlinePlayGate(PLATFORM.YANDEX, root);
+
+  for (const [selector, node] of root.touched) {
+    assert.ok(node.classes.has(GATE_CLASS), `${selector} обязан получить класс ${GATE_CLASS}`);
+  }
+
+  const styles = fs.readFileSync(path.join(ROOT, 'client', 'styles.css'), 'utf8');
+  const rule = new RegExp(`\\.${GATE_CLASS}\\s*\\{[^}]*display:\\s*none\\s*!important`);
+  assert.match(styles, rule, 'без !important правило перебьёт любой наш явный display');
 });
 
 // Узлы остаются в дереве, и это существенно.

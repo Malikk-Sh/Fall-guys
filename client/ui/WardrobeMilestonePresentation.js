@@ -14,7 +14,9 @@ function installStylesheet(root) {
   const link = root.createElement('link');
   link.id = STYLESHEET_ID;
   link.rel = 'stylesheet';
-  link.href = '/reward-ux.css';
+  // Адрес считается от САМОГО МОДУЛЯ, а не от корня: абсолютный путь ломается и на подпути
+  // площадки, и на глубоком маршруте нашего SPA. См. tools/buildPortal.mjs.
+  link.href = new URL('../reward-ux.css', import.meta.url).href;
   root.head.append(link);
 }
 

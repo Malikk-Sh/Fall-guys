@@ -107,6 +107,39 @@ test('сетевая секция аккаунта прячется вместе
   assert.equal(control.hidden, undefined);
 });
 
+// ПОЛНОТА ШЛЮЗА ПО РАЗМЕТКЕ, а не по моему списку.
+//
+// Экран `#account` открыт на площадке ради шкафа, и каждая его секция — это либо сетевое, которое
+// надо скрыть, либо локальное, которое надо оставить. Пока я решал это по одной находке за раз,
+// оставались незакрытыми: сначала переименование и список аккаунтов, потом «вход с другого
+// устройства». Тест читает саму разметку и требует решения для КАЖДОЙ секции — новая потребует
+// внести себя в один из двух списков, а не дождётся, пока её заметят.
+test('каждая секция экрана аккаунта отнесена либо к сетевым, либо к локальным', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'client', 'index.html'), 'utf8');
+  const screen = html.slice(html.indexOf('id="account"'), html.indexOf('id="wardrobe"'));
+  const gate = fs.readFileSync(path.join(ROOT, 'client', 'core', 'onlinePlayGate.js'), 'utf8');
+
+  // Локальные секции: косметика (шкаф) и блок личности, где остаётся только текст состояния.
+  const LOCAL = ['#openWardrobe', '#accountStateTitle'];
+
+  const sections = screen.split('account-section').slice(1);
+  assert.ok(sections.length >= 4, `секций должно быть найдено несколько, найдено ${sections.length}`);
+
+  const undecided = [];
+  for (const section of sections) {
+    const ids = [...section.matchAll(/id="([^"]+)"/g)].map(match => `#${match[1]}`);
+    if (!ids.length) continue;
+    const decided = ids.some(id => gate.includes(`'${id}'`) || LOCAL.includes(id));
+    if (!decided) undecided.push(ids.join(', '));
+  }
+
+  assert.deepEqual(
+    undecided,
+    [],
+    `секция экрана аккаунта не отнесена ни к сетевым, ни к локальным:\n${undecided.join('\n')}`
+  );
+});
+
 // Пропустить вход мало — состояние всё равно надо применить.
 //
 // `apply()` — единственный стартовый вызов `ui.setAccount()`. Пропустив `signIn()`, я оставил чип

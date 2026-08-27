@@ -87,8 +87,14 @@ export function defaultDate(environment = process.env) {
   }
 
   const date = new Date(Number(raw) * 1000);
+  // Значение может не лечь и в сам `Date` — тогда года нет вовсе, и говорить надо об этом, а не
+  // сообщать «даёт NaN год».
+  if (!Number.isFinite(date.getTime())) {
+    throw new Error(`SOURCE_DATE_EPOCH=${raw} — не представимая дата`);
+  }
+
   const year = date.getUTCFullYear();
-  if (!Number.isFinite(date.getTime()) || year < 1980 || year > ZIP_LAST_YEAR) {
+  if (year < 1980 || year > ZIP_LAST_YEAR) {
     throw new Error(
       `SOURCE_DATE_EPOCH=${raw} даёт ${year} год; формат ZIP хранит только 1980–${ZIP_LAST_YEAR}`
     );

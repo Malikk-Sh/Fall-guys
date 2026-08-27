@@ -41,7 +41,8 @@
     "soak:summary": "node server/soakSummary.mjs",
     "load:observe": "node server/loadObserver.mjs",
     "parity:probe": "node --experimental-loader ./server/client-loader.mjs server/movementParityProbe.mjs",
-    "build:portal": "node tools/buildPortal.mjs"
+    "build:portal": "node tools/buildPortal.mjs",
+    "test:e2e:portal": "playwright test --project=portal"
   },
   "dependencies": {
     "express": "^4.21.2",

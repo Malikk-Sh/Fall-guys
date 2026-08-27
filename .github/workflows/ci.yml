@@ -154,6 +154,11 @@ jobs:
             exclude_full_match: '0'
             retries: '0'
             timeout_minutes: 20
+          - name: portal
+            command: npm run test:e2e:portal
+            exclude_full_match: '0'
+            retries: '0'
+            timeout_minutes: 12
     env:
       WOBBLE_E2E_EXCLUDE_FULL_MATCH: ${{ matrix.exclude_full_match }}
       WOBBLE_E2E_RETRIES: ${{ matrix.retries }}

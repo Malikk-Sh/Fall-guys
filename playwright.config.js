@@ -8,8 +8,13 @@ const launchOptions = executablePath ? { executablePath } : {};
 const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
 const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
 const fullMatchSuite = /full-match\.spec\.js/;
+// Портальный набор гоняется только своим проектом: он смотрит на статический билд, а не на наш
+// сервер, и в проектах, идущих по каталогу, его быть не должно.
+const portalSuite = /portal\.spec\.js/;
 const desktopIgnore =
-  process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1' ? [mobileOnlySuite, fullMatchSuite] : mobileOnlySuite;
+  process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1'
+    ? [mobileOnlySuite, fullMatchSuite, portalSuite]
+    : [mobileOnlySuite, portalSuite];
 const requestedRetries = Number.parseInt(process.env.WOBBLE_E2E_RETRIES || '0', 10);
 const ciRetries = Number.isFinite(requestedRetries) ? Math.max(0, requestedRetries) : 0;
 
@@ -56,7 +61,7 @@ export default defineConfig({
     },
     {
       name: 'mobile-chromium',
-      testIgnore: [fullscreenSuite, fullMatchSuite],
+      testIgnore: [fullscreenSuite, fullMatchSuite, portalSuite],
       use: {
         ...devices['Pixel 7'],
         // Продукт теперь landscape-first: базовый мобильный project проверяет рабочую ориентацию и
@@ -66,6 +71,18 @@ export default defineConfig({
         storageState: windowedMobileStorage,
         launchOptions,
         extraHTTPHeaders: { 'x-forwarded-for': '192.0.2.11' }
+      }
+    },
+    {
+      // Портальный билд. Свой адрес и своя раздача: площадка отдаёт игру с ПОДПУТИ чужого домена,
+      // и всё, что уцелело абсолютным путём, ломается только там. Остальные проекты этот набор не
+      // трогают, а он — их: `testMatch` разводит их строго.
+      name: 'portal',
+      testMatch: portalSuite,
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'http://127.0.0.1:4174',
+        launchOptions
       }
     },
     {
@@ -80,48 +97,62 @@ export default defineConfig({
       }
     }
   ],
-  webServer: {
-    // Тот же preload, что у production и `npm start`. Без него E2E гоняет сервер, у которого нет
-    // моста `CLIENT_INPUT` → серверная симуляция: сквозной путь «браузер → WebSocket → симуляция»
-    // не проверяется вовсе, а набор при этом зелёный. Юнит-тесты моста грузят preload сами, так
-    // что дыра была именно в сквозной проверке — там, где её тяжелее всего заметить.
-    command: 'node --require ./server/shadowInputPreload.js server/bootstrap.js',
-    url: 'http://127.0.0.1:4173/health/ready',
-    reuseExistingServer: !process.env.CI,
-    timeout: 15_000,
-    env: {
-      HOST: '127.0.0.1',
-      PORT: '4173',
-      COOKIE_SECURE: '0',
-      // Fake rewarded provider разрешён только локальному Playwright-серверу. Production остаётся
-      // выключенным по умолчанию; тест использует его, чтобы получить настоящую server-owned
-      // косметику без тестового backdoor в inventory.
-      ENABLE_DEV_REWARDS: '1',
-      // Только локальный Playwright-сервер доверяет тестовому X-Forwarded-For. Production по
-      // умолчанию по-прежнему использует реальный remoteAddress и те же защитные лимиты.
-      TRUST_PROXY: '1',
-      // База своя и только на время прогона. Значение совпадает с умолчанием сервера, но задано
-      // здесь ЯВНО: `webServer.env` дополняет окружение вызывающего, а не заменяет его, поэтому
-      // экспортированный в оболочке LEADERBOARD_DB иначе достался бы и тестовому серверу.
+  webServer: [
+    {
+      // Раздача портального билда с ПОДПУТИ — так его отдаёт площадка. Своя, потому что наш сервер
+      // монтирует клиент, `shared/` и движок из трёх разных мест, а площадка не монтирует ничего:
+      // ей уезжает архив. Абсолютный путь, уцелевший в билде, ломается только здесь.
       //
-      // Цена ошибки выросла вместе с укорочением трассы: забег E2E короче обычного, а ключ таблицы
-      // рекордов — это seed:difficulty без длины (см. courseKeyFor), то есть тестовые времена легли
-      // бы в таблицу настоящей трассы того же сида и оказались там непобиваемыми. Сквозной тест
-      // намеренно доводит оба результата до подтверждённой таблицы — это его проверка, — и вот его
-      // записям и полагается жить ровно столько, сколько живёт сам прогон.
-      LEADERBOARD_DB: ':memory:',
-      // Трасса гонки в обычной работе случайная. Браузерный тест проходит её до финиша живым
-      // управлением, и на случайной трассе он означал бы разное каждый прогон — то падал бы, то нет.
-      //
-      // Сид не «какой попался», а подобранный замером под простого водителя теста, и трёх сегментов
-      // ему хватает: два настоящих Chromium на одной машине выдают 10–15 кадров в секунду, и полная
-      // трасса перестаёт укладываться в бюджет — не из-за игры, а из-за раннера.
-      //
-      // Подробности — в server/e2eCourse.js (чем ограничено укорочение и почему оно не игровая
-      // настройка) и в server/e2eCourse.test.mjs, где план этой трассы закреплён инвариантом.
-      WOBBLE_E2E: '1',
-      WOBBLE_E2E_SEGMENTS: '3',
-      WOBBLE_FIXED_SEED: '130'
+      // Сборка идёт внутри команды и занимает доли секунды, поэтому поднимается вместе с остальными
+      // проектами без заметной цены.
+      command: 'node scripts/servePortalBuild.mjs',
+      url: 'http://127.0.0.1:4174/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000
+    },
+    {
+      // Тот же preload, что у production и `npm start`. Без него E2E гоняет сервер, у которого нет
+      // моста `CLIENT_INPUT` → серверная симуляция: сквозной путь «браузер → WebSocket → симуляция»
+      // не проверяется вовсе, а набор при этом зелёный. Юнит-тесты моста грузят preload сами, так
+      // что дыра была именно в сквозной проверке — там, где её тяжелее всего заметить.
+      command: 'node --require ./server/shadowInputPreload.js server/bootstrap.js',
+      url: 'http://127.0.0.1:4173/health/ready',
+      reuseExistingServer: !process.env.CI,
+      timeout: 15_000,
+      env: {
+        HOST: '127.0.0.1',
+        PORT: '4173',
+        COOKIE_SECURE: '0',
+        // Fake rewarded provider разрешён только локальному Playwright-серверу. Production остаётся
+        // выключенным по умолчанию; тест использует его, чтобы получить настоящую server-owned
+        // косметику без тестового backdoor в inventory.
+        ENABLE_DEV_REWARDS: '1',
+        // Только локальный Playwright-сервер доверяет тестовому X-Forwarded-For. Production по
+        // умолчанию по-прежнему использует реальный remoteAddress и те же защитные лимиты.
+        TRUST_PROXY: '1',
+        // База своя и только на время прогона. Значение совпадает с умолчанием сервера, но задано
+        // здесь ЯВНО: `webServer.env` дополняет окружение вызывающего, а не заменяет его, поэтому
+        // экспортированный в оболочке LEADERBOARD_DB иначе достался бы и тестовому серверу.
+        //
+        // Цена ошибки выросла вместе с укорочением трассы: забег E2E короче обычного, а ключ таблицы
+        // рекордов — это seed:difficulty без длины (см. courseKeyFor), то есть тестовые времена легли
+        // бы в таблицу настоящей трассы того же сида и оказались там непобиваемыми. Сквозной тест
+        // намеренно доводит оба результата до подтверждённой таблицы — это его проверка, — и вот его
+        // записям и полагается жить ровно столько, сколько живёт сам прогон.
+        LEADERBOARD_DB: ':memory:',
+        // Трасса гонки в обычной работе случайная. Браузерный тест проходит её до финиша живым
+        // управлением, и на случайной трассе он означал бы разное каждый прогон — то падал бы, то нет.
+        //
+        // Сид не «какой попался», а подобранный замером под простого водителя теста, и трёх сегментов
+        // ему хватает: два настоящих Chromium на одной машине выдают 10–15 кадров в секунду, и полная
+        // трасса перестаёт укладываться в бюджет — не из-за игры, а из-за раннера.
+        //
+        // Подробности — в server/e2eCourse.js (чем ограничено укорочение и почему оно не игровая
+        // настройка) и в server/e2eCourse.test.mjs, где план этой трассы закреплён инвариантом.
+        WOBBLE_E2E: '1',
+        WOBBLE_E2E_SEGMENTS: '3',
+        WOBBLE_FIXED_SEED: '130'
+      }
     }
-  }
+  ]
 });

@@ -7,6 +7,7 @@ import {
   ordinal
 } from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
+import { resolvePlatform, supportsOnlinePlay } from '../core/PlatformResolver.js';
 import { voteTally } from '../core/voting.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
 import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
@@ -601,6 +602,14 @@ export class UI {
   }
 
   async loadCampaignRank(chapterId, target) {
+    // Заслон стоит ЯВНО, хотя сегодня до запроса и так не доходит.
+    //
+    // На площадке аккаунта нет, `playerId()` возвращает null, и следующая строка выходит раньше
+    // `fetch` — замер в браузере подтверждает ноль запросов к нашему домену. Но держится это на
+    // побочном следствии: стоит завести локальную личность или подставить `ui.account` иначе — и
+    // десять запросов к чужому домену поедут сами, без единого действия игрока. Условие, от
+    // которого зависит поведение, должно быть названо.
+    if (!supportsOnlinePlay(resolvePlatform())) return;
     if (!target || !this.playerId()) return;
     try {
       const params = new URLSearchParams({ limit: '1', playerId: this.playerId(), chapter: chapterId });

@@ -25,6 +25,14 @@ import { supportsOnlinePlay } from './PlatformResolver.js';
 const ONLINE_TABS = ['.mode-tab[data-mode="multi"]', '.mode-tab[data-mode="coop"]'];
 const ONLINE_PANELS = ['#multi', '#coop'];
 
+// Аккаунт — тоже сетевая игра, хотя вкладкой не выглядит.
+//
+// Пропустить один лишь `signIn()` мало: `bindMenu` вешает обработчики, а кнопки остаются на виду.
+// Нажатие на «сменить» уходит в `/api/auth/*`, открытие профиля зовёт `accountProfile()` и
+// `listAvoidedPlayers()`. Игрок получил бы рабочие на вид элементы, которые на площадке всегда
+// заканчиваются ошибкой. Прячутся вместе с онлайн-режимами и по тем же правилам.
+const ONLINE_ACCOUNT = ['#accountChip', '#profileOpen'];
+
 function hide(node) {
   node.hidden = true;
   node.setAttribute?.('hidden', '');
@@ -35,11 +43,10 @@ export function applyOnlinePlayGate(platform, root = globalThis.document) {
   if (!root?.querySelectorAll) return { hidden: 0 };
 
   let count = 0;
-  for (const selector of ONLINE_TABS) {
+  for (const selector of [...ONLINE_TABS, ...ONLINE_ACCOUNT]) {
     for (const node of root.querySelectorAll(selector) || []) {
       hide(node);
       node.disabled = true;
-      node.setAttribute?.('aria-hidden', 'true');
       count += 1;
     }
   }

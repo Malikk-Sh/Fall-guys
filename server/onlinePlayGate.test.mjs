@@ -32,7 +32,9 @@ const ONLINE_MARKUP = {
   '.mode-tab[data-mode="multi"]': 1,
   '.mode-tab[data-mode="coop"]': 1,
   '#multi': 1,
-  '#coop': 1
+  '#coop': 1,
+  '#accountChip': 1,
+  '#profileOpen': 1
 };
 
 test('площадка объявляется файлом сборки, а неизвестное значение читается как свой домен', () => {
@@ -55,18 +57,38 @@ test('на своём домене шлюз не трогает меню', () =>
   assert.equal(root.touched.size, 0);
 });
 
-// Скрываются именно ВКЛАДКИ И ПАНЕЛИ, а не что попало: одиночная игра обязана уцелеть целиком.
-test('на площадке скрываются обе онлайн-вкладки и обе панели', () => {
+// Скрывается именно СЕТЕВОЕ, а не что попало: одиночная игра обязана уцелеть целиком.
+//
+// Кнопки аккаунта входят сюда наравне с вкладками, хотя вкладками не выглядят. Пропустить один лишь
+// `signIn()` мало: `bindMenu` вешает на них обработчики, и нажатие уходит в `/api/auth/*`, а
+// открытие профиля зовёт `accountProfile()` — то есть игрок видит рабочие на вид элементы, которые
+// на площадке всегда кончаются ошибкой.
+test('на площадке скрываются онлайн-вкладки, панели и вход в аккаунт', () => {
   const root = fakeRoot({ ...ONLINE_MARKUP, '.mode-tab[data-mode="single"]': 1, '#single': 1 });
   const result = applyOnlinePlayGate(PLATFORM.YANDEX, root);
 
-  assert.equal(result.hidden, 4);
+  assert.equal(result.hidden, 6);
   assert.deepEqual([...root.touched.keys()].sort(), [
+    '#accountChip',
     '#coop',
     '#multi',
+    '#profileOpen',
     '.mode-tab[data-mode="coop"]',
     '.mode-tab[data-mode="multi"]'
   ]);
+});
+
+// Кооп-рейтинг не должен зависеть от того, что аккаунта случайно нет.
+//
+// Сегодня `loadCampaignRank` выходит по `playerId()`, и замер в браузере показывает ноль запросов к
+// нашему домену. Но это побочное следствие: появится локальная личность — и десять запросов к чужому
+// домену поедут сами. Условие, от которого зависит поведение, обязано быть названо в коде.
+test('кооп-рейтинг закрыт признаком платформы, а не отсутствием аккаунта', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'client', 'ui', 'UI.js'), 'utf8');
+  const guard = source.indexOf('if (!supportsOnlinePlay(resolvePlatform())) return;');
+  const playerCheck = source.indexOf('if (!target || !this.playerId()) return;');
+  assert.ok(guard > 0, 'заслон платформы обязан стоять в loadCampaignRank');
+  assert.ok(guard < playerCheck, 'заслон обязан стоять ДО проверки игрока, а не после');
 });
 
 // Скрытие обязано быть АТРИБУТОМ, а не классом: класс `hidden` меню снимает при переключении

@@ -81,32 +81,43 @@ test('SOURCE_DATE_EPOCH задаёт метку времени снаружи', 
   assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '1700000000' }), new Date(1700000000 * 1000));
 });
 
-// Дата вне диапазона формата обязана падать, а не подгоняться молча.
+// ЗАСЛОН ПРОВЕРЯЕТСЯ ТАМ, ГДЕ ОН СТОИТ, — на входе `makeZip`, а не только на разборе переменной.
 //
-// Биты года в DOS-метке циклически обрезаются, поэтому без проверки внешняя эпоха давала архив с
-// датой, которой никто не просил. Значения здесь не выдуманы, а взяты замером с прежнего кода.
-test('SOURCE_DATE_EPOCH вне диапазона ZIP отвергается, а не обрезается', () => {
-  // 1970 год — прежде молча становился 2098-м.
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '0' }), /1980–2107/);
-  // Сразу после конца 2107-го — прежде становился 1980-м.
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '4354819200' }), /1980–2107/);
-  // Заведомо большое — прежде становилось 2066-11-16.
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '99999999999' }), /1980–2107/);
+// Проверку я ставил трижды и трижды не туда, и последний раз она встала на границу ВВОДА
+// (`defaultDate`), оставив открытым экспортированный вход `makeZip(entries, { date })`. Замерено на
+// том коде: `new Date(0)` давал в архиве 2098-01-01, 2200 год — 2072-й, `Invalid Date` — месяц 0 и
+// день 0. Теперь заслон стоит в `dosStamp`, куда приходят все пути, и проверяется он отсюда.
+test('дата вне диапазона ZIP отвергается и при прямом вызове makeZip', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x', 'utf8') }];
 
-  // Отрицательное — это тоже «до 1980-го», и разбору оно поддаётся, так что дойти до проверки
-  // диапазона обязано.
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '-1' }), /1980–2107/);
+  // 1970 год — прежде молча становился 2098-м.
+  assert.throws(() => makeZip(entries, { date: new Date(0) }), /1980–2107/);
+  // 2200 год — прежде становился 2072-м.
+  assert.throws(() => makeZip(entries, { date: new Date(Date.UTC(2200, 0, 1)) }), /1980–2107/);
+  // Не дата вовсе — прежде давала месяц 0 и день 0, то есть заведомо негодную запись.
+  assert.throws(() => makeZip(entries, { date: new Date('нет') }), /не является датой/);
+  assert.throws(() => makeZip(entries, { date: 1700000000 }), /не является датой/);
 
   // Границы диапазона при этом обязаны проходить.
-  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '315532800' }).getUTCFullYear(), 1980);
-  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '4354819199' }).getUTCFullYear(), 2107);
+  assert.ok(makeZip(entries, { date: new Date(Date.UTC(1980, 0, 1)) }).length > 0);
+  assert.ok(makeZip(entries, { date: new Date(Date.UTC(2107, 11, 31)) }).length > 0);
 });
 
-// Значение может не лечь и в сам `Date` — про это надо говорить отдельно, а не сообщать «NaN год».
-test('непредставимая датой величина отвергается своим сообщением', () => {
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '99999999999999999999' }), /не представимая дата/);
-  // А то, что в `Date` ложится, но выходит за формат, обязано жаловаться на диапазон.
-  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '8640000000' }), /1980–2107/);
+// Тот же заслон, взятый со стороны переменной окружения: разбор её больше диапазон не проверяет,
+// поэтому важно, что негодное значение всё равно не доходит до архива.
+test('негодный SOURCE_DATE_EPOCH не доходит до архива', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x', 'utf8') }];
+  for (const raw of ['0', '4354819200', '99999999999', '-1']) {
+    assert.throws(() => makeZip(entries, { date: defaultDate({ SOURCE_DATE_EPOCH: raw }) }), /1980–2107/);
+  }
+  assert.throws(
+    () => makeZip(entries, { date: defaultDate({ SOURCE_DATE_EPOCH: '99999999999999999999' }) }),
+    /не является датой/
+  );
+
+  // А годные границы проходят насквозь.
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '315532800' }).getUTCFullYear(), 1980);
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '4354819199' }).getUTCFullYear(), 2107);
 });
 
 // Заданный, но неразбираемый мусор — это «просили и не смогли», а не «не просили».

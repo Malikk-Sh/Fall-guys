@@ -27,6 +27,8 @@ import { RaceSession } from './game/RaceSession.js';
 import { CoopSession } from './game/CoopSession.js';
 import { CoopController } from './game/CoopController.js';
 import { AccountFlow } from './core/AccountFlow.js';
+import { resolvePlatform, supportsOnlinePlay } from './core/PlatformResolver.js';
+import { applyOnlinePlayGate } from './core/onlinePlayGate.js';
 import { cosmeticLoadoutFromIds } from './core/cosmetics.js';
 import { racersStillRunning, spectateTarget } from './core/spectate.js';
 import { Settings } from './core/settings.js';
@@ -59,6 +61,15 @@ class Game {
     this.session = new RaceSession();
     this.coop = new CoopSession();
     this.coopControl = new CoopController(this);
+    // Площадка определяется один раз при старте и дальше только читается: сборка объявила её файлом
+    // `platform-config.js`, и меняться в течение сессии ей неоткуда.
+    //
+    // Шлюз отрабатывает ЗДЕСЬ, а не в `pwa-entry.js`: тот исполняется позже и как раз поднимает
+    // меню, которому уже не должно достаться онлайн-вкладок.
+    this.platform = resolvePlatform();
+    this.onlinePlay = supportsOnlinePlay(this.platform);
+    applyOnlinePlayGate(this.platform);
+
     this.account = new AccountFlow(this);
     this.ui.onCosmeticChange = () => {
       if (this.mode === 'preview' && this.previewSpec) this.buildPreview(this.previewSpec);
@@ -108,14 +119,22 @@ class Game {
     // Обещание сохраняем: вход в комнату его дожидается. Иначе игрок, нажавший «создать комнату» в
     // первые мгновения после загрузки, попадал бы туда без личности — и его результат не привязался
     // бы к аккаунту.
-    this.accountReady = this.account.signIn();
+    //
+    // На площадке входа нет вовсе: наш сервер однодоменный, и запрос ушёл бы на чужой адрес, дав
+    // только 404 в консоли и ложное «сервер не ответил» в интерфейсе. Без аккаунта `save()` сама
+    // ничего не отправляет, а личные рекорды пишет `UI` в localStorage, поэтому одиночная игра от
+    // этого не теряет ничего. Обещание держим разрешённым, чтобы ожидающие его места не зависли.
+    this.accountReady = this.onlinePlay ? this.account.signIn() : this.account.applyGuestState();
 
     this.previewSpec = dailyCourseSpec('normal');
     this.buildPreview(this.previewSpec);
-    this.handleInvite();
+    // Приглашение и восстановление сессии — оба про сетевую игру, и оба поднимают сокет. На
+    // площадке он всё равно не откроется (`originAllowed` пускает только свой origin), поэтому
+    // единственным их следствием была бы вечная «переподключаемся» поверх одиночной игры.
+    if (this.onlinePlay) this.handleInvite();
     // После полной перезагрузки в URL уже нет invite-параметров, но sessionStorage хранит токен.
     // Подключаем сеть без нового клика, иначе клиент так и останется в меню и не отправит resume.
-    if (NetworkManager.hasSavedSession()) this.ensureNetwork();
+    if (this.onlinePlay && NetworkManager.hasSavedSession()) this.ensureNetwork();
     this.resize();
     requestAnimationFrame(time => this.loop(time));
     this.ui.preview(this.previewSpec);

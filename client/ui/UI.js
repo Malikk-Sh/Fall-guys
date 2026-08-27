@@ -7,6 +7,7 @@ import {
   ordinal
 } from '../core/Config.js';
 import { coopKey, readBest, saveBest, soloKey } from '../core/records.js';
+import { resolvePlatform, supportsOnlinePlay } from '../core/PlatformResolver.js';
 import { voteTally } from '../core/voting.js';
 import { buildInviteLink, readInvite } from '../core/invite.js';
 import { readProfile, recordCoopProfile, recordSoloProfile } from '../core/profile.js';
@@ -308,7 +309,10 @@ export class UI {
     $('#accountName').textContent = account?.name || 'ГОСТЬ';
     $('#accountChip').classList.toggle('offline', !online);
     $('#accountChip').classList.toggle('account-chip-guest', !account);
-    $('#accountChip').querySelector('small').textContent = account ? 'сменить' : 'войти';
+    // На площадке входа нет — там чип ведёт к шкафу, и звать «войти» было бы обманом: сама секция
+    // входа скрыта шлюзом, и нажавший ничего бы не нашёл.
+    const chipAction = supportsOnlinePlay(resolvePlatform()) ? (account ? 'сменить' : 'войти') : 'шкаф';
+    $('#accountChip').querySelector('small').textContent = chipAction;
     this.renderAccountState();
     this.renderAccountPanel();
     this.renderServerProfile();
@@ -345,12 +349,19 @@ export class UI {
       return;
     }
     title.textContent = 'ВЫ ИГРАЕТЕ ГОСТЕМ';
+    // На площадке сетевые режимы скрыты шлюзом, и обещать «все режимы» значило бы описывать игру
+    // ровно наоборот тому, что игрок видит в меню. Про таблицу рекордов там тоже говорить нечего:
+    // войти некуда, сервера нет.
+    const online = supportsOnlinePlay(resolvePlatform());
     if (detail) {
-      detail.textContent =
-        'Играть можно во все режимы. Прогресс хранится только в этом браузере и пропадёт вместе с его данными.';
+      detail.textContent = online
+        ? 'Играть можно во все режимы. Прогресс хранится только в этом браузере и пропадёт вместе с его данными.'
+        : 'Одиночные забеги и ежедневный вызов. Прогресс хранится только в этом браузере и пропадёт вместе с его данными.';
     }
     if (hint) {
-      hint.textContent = 'Место в таблице рекордов сохраняется только у вошедших игроков.';
+      hint.textContent = online
+        ? 'Место в таблице рекордов сохраняется только у вошедших игроков.'
+        : 'Косметика и рекорды остаются на этом устройстве.';
     }
   }
 
@@ -601,6 +612,14 @@ export class UI {
   }
 
   async loadCampaignRank(chapterId, target) {
+    // Заслон стоит ЯВНО, хотя сегодня до запроса и так не доходит.
+    //
+    // На площадке аккаунта нет, `playerId()` возвращает null, и следующая строка выходит раньше
+    // `fetch` — замер в браузере подтверждает ноль запросов к нашему домену. Но держится это на
+    // побочном следствии: стоит завести локальную личность или подставить `ui.account` иначе — и
+    // десять запросов к чужому домену поедут сами, без единого действия игрока. Условие, от
+    // которого зависит поведение, должно быть названо.
+    if (!supportsOnlinePlay(resolvePlatform())) return;
     if (!target || !this.playerId()) return;
     try {
       const params = new URLSearchParams({ limit: '1', playerId: this.playerId(), chapter: chapterId });

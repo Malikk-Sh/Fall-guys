@@ -5,6 +5,8 @@
 // сессию. Для совместимости со старой схемой WebSocket клиент получает короткий network ticket,
 // но сам cookie JavaScript прочитать не может.
 
+import { resolvePlatform, supportsOnlinePlay } from './PlatformResolver.js';
+
 const STORAGE_KEY = 'wobble-accounts-v1';
 const MAX_ACCOUNTS = 8;
 
@@ -168,7 +170,19 @@ export function discardStagedRecoveryCode(accountId, storage) {
   };
 }
 
+// Единственный транспорт аккаунта: через него идут все двадцать вызовов `/api/auth/*`.
+//
+// Заслон стоит ЗДЕСЬ, а не у каждого вызывающего, и это не удобство, а вывод из трёх подряд
+// пропущенных мест. Сетевые входы я перечислял вручную — и трижды список оказывался неполным:
+// сначала забыл кнопки аккаунта, потом кооп-рейтинг, потом отправку соло-рекорда. Перечисление
+// здесь негодный метод: закрывать надо горловину, через которую проходит всё, включая то, что
+// напишут после.
+//
+// На площадке наш сервер недостижим по построению — он однодоменный, а запрос ушёл бы на чужой
+// адрес. Возвращается та же форма, что у неудачного ответа, поэтому вызывающим ничего менять не
+// нужно: они уже умеют обрабатывать отказ.
 async function post(path, body = {}, { fetchImpl = globalThis.fetch } = {}) {
+  if (!supportsOnlinePlay(resolvePlatform())) return { ok: false, status: 0, data: {} };
   const response = await fetchImpl(path, {
     method: 'POST',
     credentials: 'same-origin',

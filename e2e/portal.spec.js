@@ -240,7 +240,18 @@ test('на площадке игра пишет только в localStorage и 
   await page.goto('/game/', { waitUntil: 'networkidle' });
   await expect(page.locator('#menu')).toBeVisible({ timeout: 30_000 });
 
-  // Забег с финишем: именно там пишутся рекорд и профиль, то есть всё, что игра вообще сохраняет.
+  // Смена косметики: `wobble-cosmetics-v1` и пресеты пишутся именно здесь, и первая версия этого
+  // теста этот путь не проходила — то есть существовала запись, которой замер не видел.
+  await page.locator('#accountChip').click();
+  await page.locator('#openWardrobe').click();
+  await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
+  await page.locator('#wardrobeRandom').click();
+  await page.waitForTimeout(500);
+  await page.locator('#wardrobeClose').click();
+  await page.locator('#accountClose').click();
+  await expect(page.locator('#menu')).toBeVisible({ timeout: 15_000 });
+
+  // Забег с финишем: там пишутся рекорд и профиль.
   await page.locator('#play').click();
   await expect(page.locator('#hud')).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(1000);
@@ -259,9 +270,16 @@ test('на площадке игра пишет только в localStorage и 
   }));
 
   // Всё сохранённое — наше и локальное.
-  expect(state.written.length).toBeGreaterThan(0);
   const foreign = state.written.filter(key => !key.startsWith('wobble-'));
   expect(foreign, `в localStorage пишет кто-то посторонний: ${foreign.join(', ')}`).toEqual([]);
+
+  // Путь обязан покрывать ОБА вида записи, иначе проверка выше молча сузилась бы: рекорд с профилем
+  // пишет финиш, косметику — шкаф. Первая версия теста шкаф не проходила вовсе.
+  expect(state.written, `замер не покрыл запись косметики: ${state.written.join(', ')}`).toContain(
+    'wobble-cosmetics-v1'
+  );
+  expect(state.written.some(key => key.startsWith('wobble-best-'))).toBe(true);
+  expect(state.written).toContain('wobble-profile-v1');
 
   // Сетевые пути на площадке закрыты, а `sessionStorage` в игре трогают только они: токен сессии
   // (`NetworkManager`) и приглашение (`main.js`). Обращение к нему означало бы, что заслон дал течь.

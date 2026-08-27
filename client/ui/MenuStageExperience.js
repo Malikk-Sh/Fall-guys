@@ -92,7 +92,9 @@ export class MenuStageExperience {
     if (this.root.querySelector('link[data-menu-ux]')) return;
     const link = this.root.createElement('link');
     link.rel = 'stylesheet';
-    link.href = '/menu-ux.css';
+    // Адрес считается от САМОГО МОДУЛЯ, а не от корня: абсолютный путь ломается и на подпути
+    // площадки, и на глубоком маршруте нашего SPA. См. tools/buildPortal.mjs.
+    link.href = new URL('../menu-ux.css', import.meta.url).href;
     link.dataset.menuUx = '1';
     this.root.head.append(link);
   }

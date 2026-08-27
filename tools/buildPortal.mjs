@@ -20,17 +20,21 @@ const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 
 // Что НЕ уезжает на площадку.
 //
-// `admin/` — панель управления: на площадке ей делать нечего, а её присутствие в архиве было бы
-// раздачей внутреннего интерфейса кому угодно. Остальное — PWA-обвязка: service worker внутри
-// чужого iframe не нужен и мешает, а манифест установки на площадке не значит ничего.
-const CLIENT_EXCLUDE = new Set([
-  'admin',
-  'service-worker.js',
-  'pwa-entry.js',
-  'pwa.css',
-  'manifest.webmanifest',
-  'offline.html'
-]);
+// Список короткий, и каждая строка в нём обоснована ОТДЕЛЬНО. Имя файла обоснованием не является:
+// в первой версии сюда попали `pwa-entry.js` и `pwa.css` «как PWA-обвязка», и оба оказались не тем,
+// чем назывались. `pwa-entry.js` поднимает ВЕСЬ интерфейс — мобильный опыт, оформление меню,
+// обучение, обратную связь, кооп-презентации, экран результатов, гардероб и награды, — а `pwa.css`
+// стилизует в том числе `.fullscreen-toggle`, `.mobile-game-mode` и `.rotate-device`, то есть тот
+// самый мобильный опыт. Портальный билд оставался бы с голым канвасом и без стилей на телефоне.
+//
+// Поэтому исключается только то, что на площадке не работает по устройству самой площадки:
+//
+// - `admin/` — панель управления. В архиве это была бы раздача внутреннего интерфейса кому угодно.
+// - `service-worker.js` — в чужом iframe не нужен и мешает; сама PWA-обвязка гасится по платформе
+//   в `client/pwa-entry.js`, поэтому регистрировать нечего.
+// - `manifest.webmanifest` и `offline.html` — установка приложения и офлайн-страница существуют
+//   только вместе с service worker.
+const CLIENT_EXCLUDE = new Set(['admin', 'service-worker.js', 'manifest.webmanifest', 'offline.html']);
 
 // Абсолютные ссылки в разметке. Ключ — что искать, значение — чем заменить относительно корня
 // билда. `index.html` лежит в корне, поэтому префикс здесь всегда `./`.
@@ -146,13 +150,10 @@ export function rewriteHtml(html, { platform }) {
   let out = html;
   for (const [from, to] of HTML_REWRITES) out = out.split(from).join(to);
 
-  // PWA-обвязка не уезжает на площадку (`CLIENT_EXCLUDE`), поэтому из разметки убираются и ССЫЛКИ
-  // на неё. Иначе билд грузится, но с 404 на каждый исключённый файл: браузер такую ошибку не
-  // считает фатальной, и без проверки она уехала бы на площадку незамеченной. Так и случилось с
-  // `pwa.css` — файл исключили, ссылку забыли.
-  out = out.replace(/\s*<script[^>]*pwa-entry\.js[^>]*><\/script>/g, '');
+  // У исключённых файлов убираются и ССЫЛКИ на них. Иначе билд грузится, но с 404 на каждый: браузер
+  // такую ошибку фатальной не считает, и без проверки она уехала бы на площадку незамеченной.
+  // Ровно так и случилось однажды — файл исключили, ссылку забыли.
   out = out.replace(/\s*<link[^>]*manifest\.webmanifest[^>]*>/g, '');
-  out = out.replace(/\s*<link[^>]*href="pwa\.css"[^>]*>/g, '');
 
   // Имя платформы приходит отдельным файлом, а не инлайном: инлайн пришлось бы вносить в хеши CSP
   // нашего же сервера, хотя к нему этот билд отношения не имеет.
@@ -166,7 +167,20 @@ export function rewriteHtml(html, { platform }) {
   return out;
 }
 
+// Площадки, для которых сборка вообще имеет смысл. Список короткий нарочно: он же и проверка.
+export const PLATFORMS = Object.freeze(['yandex', 'web']);
+
 export function buildPortal({ platform = 'yandex', outDir } = {}) {
+  // Опечатка в аргументе не должна давать «успешно собранный» архив.
+  //
+  // Без проверки `yadnex` прошёл бы насквозь: каталог удалён, файлы записаны, в консоли успех — а в
+  // `platform-config.js` неизвестное значение, SDK не подключён, и `resolvePlatform` на площадке
+  // молча откатится к `web`. Сборка выглядела бы рабочей и была бы негодной. Проверка стоит ДО
+  // удаления каталога, чтобы ошибка не уносила с собой прошлый удачный билд.
+  if (!PLATFORMS.includes(platform)) {
+    throw new Error(`неизвестная площадка ${JSON.stringify(platform)}; известны: ${PLATFORMS.join(', ')}`);
+  }
+
   const out = outDir || path.join(ROOT, 'dist', platform);
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
@@ -208,6 +222,23 @@ export function buildPortal({ platform = 'yandex', outDir } = {}) {
   const htmlPath = path.join(out, 'index.html');
   fs.writeFileSync(htmlPath, rewriteHtml(fs.readFileSync(htmlPath, 'utf8'), { platform }));
 
+  // Вложенные страницы тоже навигируют, и их ссылки тоже абсолютные.
+  //
+  // `privacy/index.html` ведёт «Вернуться» на `/`. В корне своего домена это игра, а на площадке —
+  // корень ЕЁ домена: игрок уходит на чужую страницу или в 404 и обратно не возвращается. Правится
+  // по глубине самой страницы, как и модули.
+  for (const nested of walkFiles(out, name => name.endsWith('.html'))) {
+    if (nested === htmlPath) continue;
+    const depth = path.relative(out, path.dirname(nested)).split(path.sep).filter(Boolean).length;
+    const prefix = depth === 0 ? './' : '../'.repeat(depth);
+    const before = fs.readFileSync(nested, 'utf8');
+    const after = before.replace(
+      /(src|href)="\/([^"]*)"/g,
+      (_match, attr, rest) => `${attr}="${prefix}${rest}"`
+    );
+    if (after !== before) fs.writeFileSync(nested, after);
+  }
+
   fs.writeFileSync(
     path.join(out, 'platform-config.js'),
     `// Создаётся сборкой. Определяет площадку явно, а не по имени хоста: iframe, CDN и превью\n` +
@@ -220,6 +251,12 @@ export function buildPortal({ platform = 'yandex', outDir } = {}) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === url.fileURLToPath(import.meta.url)) {
   const platform = process.argv[2] || 'yandex';
-  const out = buildPortal({ platform });
-  console.log(`Собрано в ${path.relative(ROOT, out)} для площадки ${platform}`);
+  try {
+    const out = buildPortal({ platform });
+    console.log(`Собрано в ${path.relative(ROOT, out)} для площадки ${platform}`);
+  } catch (error) {
+    // Ненулевой код обязателен: в CI молчаливо «успешная» сборка негодного архива хуже падения.
+    console.error(`Сборка не выполнена: ${error.message}`);
+    process.exitCode = 1;
+  }
 }

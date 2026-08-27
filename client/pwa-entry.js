@@ -1,3 +1,4 @@
+import { PLATFORM, resolvePlatform } from './core/PlatformResolver.js';
 import { PwaController } from './core/pwa.js';
 import { installCampaignPresentation } from './game/CampaignPresentation.js';
 import { installCoopCelebrationPresentation } from './game/CoopCelebrationPresentation.js';
@@ -14,11 +15,21 @@ import { installTouchTutorialPresentation } from './ui/TouchTutorialPresentation
 import { installWardrobeMilestonePresentation } from './ui/WardrobeMilestonePresentation.js';
 import { installWardrobePresetPresentation } from './ui/WardrobePresetPresentation.js';
 
-const pwa = new PwaController({
-  isSafeToReload: () => !globalThis.__WOBBLE_GAME__?.running
-});
-globalThis.__WOBBLE_PWA__ = pwa;
-pwa.start();
+// Файл назван по первому своему жильцу, но давно им не исчерпывается: ниже поднимается ВЕСЬ
+// интерфейс — мобильный опыт, оформление меню, обучение, обратная связь, кооп-презентации, экран
+// результатов, гардероб и награды. Поэтому целиком его отключать нельзя нигде и никогда.
+//
+// Платформенная часть здесь только одна: сама PWA-обвязка. На площадке она бессмысленна и вредна —
+// service worker живёт в чужом iframe, а установка приложения площадкой не предусмотрена, — поэтому
+// в портальный билд `service-worker.js` не попадает вовсе. Запусти мы контроллер без него, он
+// попытался бы зарегистрировать отсутствующий файл.
+if (resolvePlatform() === PLATFORM.WEB) {
+  const pwa = new PwaController({
+    isSafeToReload: () => !globalThis.__WOBBLE_GAME__?.running
+  });
+  globalThis.__WOBBLE_PWA__ = pwa;
+  pwa.start();
+}
 
 const mobileExperience = new MobileExperience();
 globalThis.__WOBBLE_MOBILE_EXPERIENCE__ = mobileExperience;

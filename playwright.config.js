@@ -8,8 +8,9 @@ const launchOptions = executablePath ? { executablePath } : {};
 const fullscreenSuite = /mobile-fullscreen\.spec\.js/;
 const mobileOnlySuite = /mobile-(?:landscape|fullscreen)\.spec\.js/;
 const fullMatchSuite = /full-match\.spec\.js/;
-// Портальный набор гоняется только своим проектом: он смотрит на статический билд, а не на наш
-// сервер, и в проектах, идущих по каталогу, его быть не должно.
+// Портальный набор живёт в СВОЕЙ конфигурации (playwright.portal.config.js): он смотрит на
+// статический билд, а не на наш сервер. Здесь он только исключается — иначе проекты, идущие по
+// каталогу `e2e/`, подобрали бы его и погнали против нашего сервера, где он бессмыслен.
 const portalSuite = /portal\.spec\.js/;
 const desktopIgnore =
   process.env.WOBBLE_E2E_EXCLUDE_FULL_MATCH === '1'
@@ -74,18 +75,6 @@ export default defineConfig({
       }
     },
     {
-      // Портальный билд. Свой адрес и своя раздача: площадка отдаёт игру с ПОДПУТИ чужого домена,
-      // и всё, что уцелело абсолютным путём, ломается только там. Остальные проекты этот набор не
-      // трогают, а он — их: `testMatch` разводит их строго.
-      name: 'portal',
-      testMatch: portalSuite,
-      use: {
-        ...devices['Desktop Chrome'],
-        baseURL: 'http://127.0.0.1:4174',
-        launchOptions
-      }
-    },
-    {
       name: 'mobile-fullscreen',
       testMatch: fullscreenSuite,
       use: {
@@ -98,18 +87,6 @@ export default defineConfig({
     }
   ],
   webServer: [
-    {
-      // Раздача портального билда с ПОДПУТИ — так его отдаёт площадка. Своя, потому что наш сервер
-      // монтирует клиент, `shared/` и движок из трёх разных мест, а площадка не монтирует ничего:
-      // ей уезжает архив. Абсолютный путь, уцелевший в билде, ломается только здесь.
-      //
-      // Сборка идёт внутри команды и занимает доли секунды, поэтому поднимается вместе с остальными
-      // проектами без заметной цены.
-      command: 'node scripts/servePortalBuild.mjs',
-      url: 'http://127.0.0.1:4174/health',
-      reuseExistingServer: !process.env.CI,
-      timeout: 30_000
-    },
     {
       // Тот же preload, что у production и `npm start`. Без него E2E гоняет сервер, у которого нет
       // моста `CLIENT_INPUT` → серверная симуляция: сквозной путь «браузер → WebSocket → симуляция»

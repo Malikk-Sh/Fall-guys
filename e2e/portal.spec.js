@@ -11,9 +11,38 @@ import { expect, test } from '@playwright/test';
 // делает. Ни один новый сетевой вызов, откуда бы он ни взялся, мимо такой проверки не пройдёт — её
 // не надо дополнять списком.
 
-const OUR_SERVER = /\/api\/|\/ws\b|\/leaderboard/;
+// Дозволенное задано ОТ ОБРАТНОГО, и это принципиально.
+//
+// Сначала здесь стоял список путей нашего сервера — `/api/`, `/ws`, `/leaderboard`. Он был неполон
+// уже в момент написания: аккаунт создаётся запросом на `/account` (client/core/account.js), мимо
+// всех трёх признаков. Набор, написанный ради отказа от перечисления, внутри себя перечислял — и
+// ошибся ровно так же.
+//
+// Замена признака на «чужой домен» тоже неверна, и это стоило отдельного прогона: наш клиент
+// однодоменный и ходит на сервер КОРНЕВЫМИ путями (`fetch('/api/auth/session')`). С подпути они
+// разрешаются в тот же origin, что и раздача, — то есть проверка по домену их не видит вовсе.
+//
+// Верный признак — точка монтирования. Портальный билд целиком лежит под ней, а всё, что наш сервер
+// когда-либо отдавал, висит в КОРНЕ чужого домена. Поэтому дозволено ровно одно: то, что лежит под
+// подпутём, плюс схемы, которые никуда не идут. Список поддерживать не нужно ни с какой стороны:
+// новый серверный путь, о котором мы не знали, попадает сюда сам.
+const ALLOWED_SCHEMES = /^(data|blob|about|chrome-extension):/;
+// Совпадает с MOUNT в scripts/servePortalBuild.mjs — там же и объяснение, почему корень закрыт.
+const MOUNT = '/game/';
 
-async function openPortal(page) {
+function outsideBuild(requests, baseURL) {
+  const origin = new URL(baseURL).origin;
+  return requests.filter(url => {
+    if (ALLOWED_SCHEMES.test(url)) return false;
+    if (!url.startsWith(origin)) return true;
+    return !new URL(url).pathname.startsWith(MOUNT);
+  });
+}
+
+// Слежка ставится до первого перехода и НЕ снимается: набор смотрит не на загрузку страницы, а на
+// путь игрока целиком. Запрос, уходящий по действию в меню или на финише забега, обязан попадать в
+// тот же список, что и запросы загрузки.
+function watch(page) {
   const requests = [];
   const consoleErrors = [];
   const failures = [];
@@ -27,27 +56,80 @@ async function openPortal(page) {
     if (response.status() >= 400) failures.push(`${response.status()} ${response.url()}`);
   });
 
-  await page.goto('/game/', { waitUntil: 'networkidle' });
-  // Меню поднимает `pwa-entry.js` уже после модулей игры; без паузы часть его установщиков ещё не
-  // отработала, и проверка целости интерфейса мерила бы недогруженную страницу.
-  await page.waitForTimeout(2000);
-
   return { requests, consoleErrors, failures };
 }
+
+async function openPortal(page) {
+  const seen = watch(page);
+
+  await page.goto('/game/', { waitUntil: 'networkidle' });
+  // Меню поднимает `pwa-entry.js` уже после модулей игры; ждём готовности по видимому признаку, а
+  // не по таймеру: на мобильном раннере пауза фиксированной длины означала бы разное.
+  await expect(page.locator('#menu')).toBeVisible({ timeout: 30_000 });
+
+  return seen;
+}
+
+// ИНВАРИАНТ СТЕНДА. Всё, ради чего этот набор существует, держится на том, что корень раздачи
+// закрыт: уцелевший абсолютный путь `/vendor/three.js` ломается только там, где по корню никто не
+// отвечает. Начни раздача когда-нибудь отдавать билд ещё и с корня — набор остался бы зелёным,
+// перестав при этом моделировать площадку. Проверяем стенд раньше, чем ему верим.
+test('корень раздачи закрыт: стенд действительно моделирует подпуть', async ({ page, baseURL }) => {
+  const response = await page.request.get(`${baseURL}/`);
+  expect(response.status(), 'корень обязан отвечать 404, иначе абсолютные пути не ломаются').toBe(404);
+});
 
 // ГЛАВНАЯ ПРОВЕРКА НАБОРА.
 //
 // Наш сервер портальной сборке недоступен по построению: он однодоменный. Любое обращение к нему
 // оттуда — это запрос на чужой домен, который в лучшем случае даст 404 в консоли, а в худшем уведёт
 // игрока в вечное «соединение потеряно».
-test('портальный билд не обращается к нашему серверу', async ({ page }) => {
+//
+// Замер идёт не по загрузке, а по пути игрока: меню → окно аккаунта → шкаф → забег → финиш →
+// возврат. Отправка соло-рекорда, например, живёт именно на финише, и загрузкой страницы её не
+// увидеть вовсе.
+test('портальный билд не выходит за пределы своей сборки на всём пути игрока', async ({ page, baseURL }) => {
   const { requests } = await openPortal(page);
 
-  const ours = requests.filter(url => OUR_SERVER.test(url));
-  expect(ours, `портальный билд не должен ходить на наш сервер:\n${ours.join('\n')}`).toEqual([]);
-  // Запросы вообще идти обязаны: пустой список означал бы, что страница не загрузилась и проверка
-  // выше прошла впустую.
-  expect(requests.length).toBeGreaterThan(20);
+  const afterLoad = requests.length;
+  // Запросы загрузки идти обязаны: пустой список означал бы, что страница не открылась и проверка
+  // ниже прошла бы впустую.
+  expect(afterLoad).toBeGreaterThan(20);
+
+  // Окно аккаунта и шкаф — самые богатые на сетевые вызовы экраны.
+  await page.locator('#accountChip').click();
+  await expect(page.locator('#account')).toBeVisible();
+  await page.locator('#openWardrobe').click();
+  await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
+  await page.locator('#wardrobeClose').click();
+  await expect(page.locator('#wardrobe')).toBeHidden();
+  await page.locator('#accountClose').click();
+  await expect(page.locator('#account')).toBeHidden();
+
+  // Забег и финиш. Финиш вызывается напрямую — тем же способом, что и в десктопном наборе: пройти
+  // трассу живым управлением здесь не нужно, нужен код, который выполняется по её завершении.
+  await page.locator('#play').click();
+  await expect(page.locator('#hud')).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => {
+    const game = globalThis.__WOBBLE_GAME__;
+    game.ui.finishSolo({ time: 45_000, respawns: 0, dashes: 1, hits: 0, spec: game.course.spec });
+  });
+  await expect(page.locator('#finish')).toBeVisible({ timeout: 15_000 });
+  // Время после финиша: отправка рекорда ушла бы уже после отрисовки экрана.
+  await page.waitForTimeout(1500);
+
+  // Что путь пройден, доказано выше видимым состоянием: шкаф открылся, забег пошёл, экран финиша
+  // показан. Числом запросов это не доказывается и доказываться не должно — после загрузки
+  // правильный портальный билд не запрашивает НИЧЕГО, и замер это подтверждает: и на настольном, и
+  // на мобильном проекте список к концу пути тот же, что сразу после загрузки.
+  //
+  // Здесь стояло `toBeGreaterThan(afterLoad)` — «путь обязан породить запросы». Утверждение было
+  // ложным по существу, а не строгим: сбудься оно, это означало бы, что билд куда-то ходит.
+  expect(requests.length).toBeGreaterThanOrEqual(afterLoad);
+
+  const outside = outsideBuild(requests, baseURL);
+  expect(outside, `портальный билд не должен ходить за пределы билда:\n${outside.join('\n')}`).toEqual([]);
 });
 
 test('портальный билд загружается без ошибок и промахов пути', async ({ page }) => {
@@ -68,7 +150,6 @@ test('интерфейс портального билда поднят цели
   await openPortal(page);
 
   const state = await page.evaluate(() => ({
-    canvas: !!document.querySelector('canvas'),
     mobile: !!globalThis.__WOBBLE_MOBILE_EXPERIENCE__,
     results: !!globalThis.__WOBBLE_RESULTS_PRESENTATION__,
     tutorial: !!globalThis.__WOBBLE_TOUCH_TUTORIAL__,
@@ -77,7 +158,11 @@ test('интерфейс портального билда поднят цели
     pwa: !!globalThis.__WOBBLE_PWA__
   }));
 
-  expect(state.canvas).toBe(true);
+  // Глобали говорят лишь о том, что установщик отработал. Видимость меню и сцены меряется
+  // браузером — установщик мог отработать и над невидимым деревом.
+  await expect(page.locator('#game')).toBeVisible();
+  await expect(page.locator('#menu')).toBeVisible();
+
   expect(state.mobile, 'мобильный опыт обязан подняться: аудитория площадки мобильная').toBe(true);
   expect(state.results).toBe(true);
   expect(state.tutorial).toBe(true);
@@ -86,29 +171,37 @@ test('интерфейс портального билда поднят цели
 });
 
 // Одиночная игра доступна, сетевая — нет, и ровно в этом весь смысл портальной сборки.
+//
+// Видимость проверяется браузером, а не предикатом по атрибуту `hidden`. Предикат здесь уже
+// обманул меня однажды: экран аккаунта скрыт КЛАССОМ `.hidden`, а не атрибутом, поэтому кнопка
+// шкафа внутри закрытого экрана считалась видимой, и утверждение «шкаф на месте» держалось само
+// по себе — оно было бы верным и с наглухо недостижимым шкафом.
 test('на площадке доступно одиночное и скрыто сетевое', async ({ page }) => {
   await openPortal(page);
 
-  const shown = selector =>
-    page.evaluate(css => {
-      const node = document.querySelector(css);
-      if (!node) return null;
-      return !node.hidden && !node.closest('[hidden]');
-    }, selector);
-
-  expect(await shown('.mode-tab[data-mode="single"]'), 'одиночная игра обязана остаться').toBe(true);
-  expect(await shown('.mode-tab[data-mode="multi"]')).toBe(false);
-  expect(await shown('.mode-tab[data-mode="coop"]')).toBe(false);
+  await expect(
+    page.locator('.mode-tab[data-mode="single"]'),
+    'одиночная игра обязана остаться'
+  ).toBeVisible();
+  await expect(page.locator('.mode-tab[data-mode="multi"]')).toBeHidden();
+  await expect(page.locator('.mode-tab[data-mode="coop"]')).toBeHidden();
 
   // Шкаф — локальная косметика, к серверу отношения не имеет. Однажды я закрыл к нему доступ,
-  // спрятав чип аккаунта: единственный ход к шкафу лежит через открываемый им экран.
-  expect(await shown('#accountChip'), 'через чип единственный ход к шкафу').toBe(true);
-  expect(await shown('#openWardrobe'), 'шкаф локальный и обязан остаться').toBe(true);
+  // спрятав чип аккаунта: единственный ход к шкафу лежит через открываемый им экран. Поэтому ход
+  // проходится целиком, а не утверждается по наличию узла.
+  await expect(page.locator('#accountChip')).toBeVisible();
+  await page.locator('#accountChip').click();
+  await expect(page.locator('#account')).toBeVisible();
+  await expect(page.locator('#openWardrobe'), 'шкаф обязан быть достижим через чип').toBeVisible();
 
-  // А сетевое внутри того же экрана скрыто.
-  expect(await shown('#accountSignIn')).toBe(false);
-  expect(await shown('#accountEnter')).toBe(false);
-  expect(await shown('#profileOpen')).toBe(false);
+  // А сетевое внутри того же открытого экрана скрыто.
+  await expect(page.locator('#accountSignIn')).toBeHidden();
+  await expect(page.locator('#accountEnter')).toBeHidden();
+  await expect(page.locator('#profileOpen')).toBeHidden();
+
+  // Шкаф не просто виден, а открывается: кнопка могла бы вести в экран, которого в билде нет.
+  await page.locator('#openWardrobe').click();
+  await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
 });
 
 // Пропущенный вход не должен оставлять интерфейс в заготовке.

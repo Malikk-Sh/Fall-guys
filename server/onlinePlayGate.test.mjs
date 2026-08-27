@@ -33,8 +33,10 @@ const ONLINE_MARKUP = {
   '.mode-tab[data-mode="coop"]': 1,
   '#multi': 1,
   '#coop': 1,
-  '#accountChip': 1,
-  '#profileOpen': 1
+  '#profileOpen': 1,
+  '#accountSignIn': 1,
+  '#accountRename': 1,
+  '#accountList': 1
 };
 
 test('площадка объявляется файлом сборки, а неизвестное значение читается как свой домен', () => {
@@ -63,19 +65,46 @@ test('на своём домене шлюз не трогает меню', () =>
 // `signIn()` мало: `bindMenu` вешает на них обработчики, и нажатие уходит в `/api/auth/*`, а
 // открытие профиля зовёт `accountProfile()` — то есть игрок видит рабочие на вид элементы, которые
 // на площадке всегда кончаются ошибкой.
-test('на площадке скрываются онлайн-вкладки, панели и вход в аккаунт', () => {
+test('на площадке скрываются онлайн-вкладки, панели и сетевое внутри аккаунта', () => {
   const root = fakeRoot({ ...ONLINE_MARKUP, '.mode-tab[data-mode="single"]': 1, '#single': 1 });
   const result = applyOnlinePlayGate(PLATFORM.YANDEX, root);
 
-  assert.equal(result.hidden, 6);
+  assert.equal(result.hidden, 8);
   assert.deepEqual([...root.touched.keys()].sort(), [
-    '#accountChip',
+    '#accountList',
+    '#accountRename',
+    '#accountSignIn',
     '#coop',
     '#multi',
     '#profileOpen',
     '.mode-tab[data-mode="coop"]',
     '.mode-tab[data-mode="multi"]'
   ]);
+});
+
+// ЧИП АККАУНТА ОБЯЗАН УЦЕЛЕТЬ, и это не мелочь.
+//
+// Он открывает экран `#account`, а внутри него лежит единственная кнопка «открыть шкаф». Спрятав
+// чип, я закрыл игроку доступ к косметике — локальной, хранимой в браузере и к серверу отношения не
+// имеющей, то есть к части одиночной игры. Скрывать надо сетевое внутри панели, а не вход в панель.
+test('чип аккаунта и шкаф остаются доступны на площадке', () => {
+  const root = fakeRoot({ ...ONLINE_MARKUP, '#accountChip': 1, '#openWardrobe': 1 });
+  applyOnlinePlayGate(PLATFORM.YANDEX, root);
+
+  assert.equal(root.node('#accountChip'), undefined, 'чип трогать нельзя: через него ход в шкаф');
+  assert.equal(root.node('#openWardrobe'), undefined, 'шкаф — локальная косметика, он остаётся');
+});
+
+// Секция прячется целиком, а не только её орган управления: иначе остаётся заголовок без
+// содержимого.
+test('сетевая секция аккаунта прячется вместе с заголовком', () => {
+  const section = { attrs: {}, setAttribute: (n, v) => (section.attrs[n] = v) };
+  const control = { closest: selector => (selector === '.account-section' ? section : null) };
+  const root = { querySelectorAll: selector => (selector === '#accountRename' ? [control] : []) };
+
+  applyOnlinePlayGate(PLATFORM.YANDEX, root);
+  assert.equal(section.hidden, true, 'прятать надо секцию, а не только поле');
+  assert.equal(control.hidden, undefined);
 });
 
 // ГОРЛОВИНА: все двадцать вызовов `/api/auth/*` идут через один `post`, и заслон стоит в нём.
@@ -161,14 +190,30 @@ test('шлюз не падает без DOM и без узлов', () => {
 // Проверок в шлюзе недостаточно: он убирает кнопки, но если рядом останется безусловный
 // `ensureNetwork()` или `signIn()`, портальная сборка всё равно полезет на чужой домен — молча, с
 // 404 в консоли и «сервер не ответил» в интерфейсе. Именно так это и выглядело до правки.
-test('сетевые входы в main.js не остаются безусловными', () => {
-  const source = fs.readFileSync(path.join(ROOT, 'client', 'main.js'), 'utf8');
-  const guarded = [
-    /this\.accountReady = this\.onlinePlay \? this\.account\.signIn\(\)/,
-    /if \(this\.onlinePlay\) this\.handleInvite\(\);/,
-    /if \(this\.onlinePlay && NetworkManager\.hasSavedSession\(\)\) this\.ensureNetwork\(\);/
-  ];
-  for (const pattern of guarded) {
-    assert.match(source, pattern, `сетевой вход обязан быть закрыт признаком: ${pattern}`);
-  }
+test('ни один сетевой вход в main.js не остаётся безусловным', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'client', 'main.js'), 'utf8').split('\n');
+
+  // Имена, поднимающие сокет или запрос при старте. Перечислены ИМЕНА, но проверяются ВСЕ их
+  // вхождения: прошлая версия сторожа подтверждала три заранее выписанных выражения и осталась бы
+  // зелёной при добавлении четвёртого безусловного вызова — то есть не ловила ту самую регрессию,
+  // ради которой стояла.
+  const entries = ['ensureNetwork', 'handleInvite', 'signIn'];
+  const offenders = [];
+  let checked = 0;
+
+  source.forEach((line, index) => {
+    for (const name of entries) {
+      // Только ВЫЗОВЫ. Объявление метода (`ensureNetwork() {`) под `this.` не подпадает.
+      if (!new RegExp(`\\b(?:this\\.|this\\.account\\.|NetworkManager\\.)${name}\\(`).test(line)) continue;
+      checked += 1;
+      // Признак обязан стоять на ТОЙ ЖЕ строке. Первая версия смотрела и предыдущую — и пропускала
+      // ровно ту мутацию, ради которой писалась: новый безусловный вызов сразу после закрытого
+      // наследовал его условие как своё. Все три настоящих вызова закрыты на своей строке, так что
+      // послабление ничего не давало, кроме дыры.
+      if (!/this\.onlinePlay/.test(line)) offenders.push(`${index + 1}: ${line.trim()}`);
+    }
+  });
+
+  assert.ok(checked >= 3, `сетевых вызовов должно быть найдено хотя бы три, найдено ${checked}`);
+  assert.deepEqual(offenders, [], `сетевой вход без признака платформы:\n${offenders.join('\n')}`);
 });

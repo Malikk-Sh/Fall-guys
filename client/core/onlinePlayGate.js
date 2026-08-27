@@ -25,13 +25,24 @@ import { supportsOnlinePlay } from './PlatformResolver.js';
 const ONLINE_TABS = ['.mode-tab[data-mode="multi"]', '.mode-tab[data-mode="coop"]'];
 const ONLINE_PANELS = ['#multi', '#coop'];
 
-// Аккаунт — тоже сетевая игра, хотя вкладкой не выглядит.
+// Аккаунт — тоже сетевая игра, хотя вкладкой не выглядит: «сменить» уходит в `/api/auth/*`, а
+// профиль зовёт `accountProfile()` и `listAvoidedPlayers()`. Сами запросы закрыты в транспорте
+// (`post` в `client/core/account.js`), поэтому здесь речь только о том, чтобы не показывать игроку
+// органы управления, которые на площадке ничего не сделают.
 //
-// Пропустить один лишь `signIn()` мало: `bindMenu` вешает обработчики, а кнопки остаются на виду.
-// Нажатие на «сменить» уходит в `/api/auth/*`, открытие профиля зовёт `accountProfile()` и
-// `listAvoidedPlayers()`. Игрок получил бы рабочие на вид элементы, которые на площадке всегда
-// заканчиваются ошибкой. Прячутся вместе с онлайн-режимами и по тем же правилам.
-const ONLINE_ACCOUNT = ['#accountChip', '#profileOpen'];
+// НО ЧИП АККАУНТА ОСТАЁТСЯ, и это важнее, чем кажется. Он открывает экран `#account`, а внутри него
+// лежит единственная кнопка «открыть шкаф». Спрятав чип, я закрыл игроку доступ к косметике —
+// локальной, хранимой в браузере и к серверу отношения не имеющей, то есть к части одиночной игры.
+// Скрывать надо сетевое внутри панели, а не вход в панель целиком.
+const ONLINE_ACCOUNT = ['#profileOpen'];
+
+// Сетевое внутри экрана аккаунта. Для этих узлов прячется вся секция `.account-section`, иначе от
+// неё остался бы заголовок без содержимого.
+const ONLINE_ACCOUNT_SECTIONS = ['#accountRename', '#accountList'];
+
+// А это — отдельные органы управления, у которых своей секции нет: вход стоит внутри блока
+// личности, где рядом лежит текст «вы играете гостем», и его убирать не нужно.
+const ONLINE_ACCOUNT_CONTROLS = ['#accountSignIn'];
 
 function hide(node) {
   node.hidden = true;
@@ -47,6 +58,19 @@ export function applyOnlinePlayGate(platform, root = globalThis.document) {
     for (const node of root.querySelectorAll(selector) || []) {
       hide(node);
       node.disabled = true;
+      count += 1;
+    }
+  }
+  for (const selector of ONLINE_ACCOUNT_CONTROLS) {
+    for (const node of root.querySelectorAll(selector) || []) {
+      hide(node);
+      count += 1;
+    }
+  }
+  // Секцию целиком, а не только орган управления: иначе останется заголовок без содержимого.
+  for (const selector of ONLINE_ACCOUNT_SECTIONS) {
+    for (const node of root.querySelectorAll(selector) || []) {
+      hide(node.closest?.('.account-section') || node);
       count += 1;
     }
   }

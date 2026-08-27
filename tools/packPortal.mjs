@@ -64,10 +64,36 @@ function dosStamp(date) {
 // Раз время в архиве всё равно ничего не значит для площадки, оно берётся постоянным. Снаружи его
 // можно задать через `SOURCE_DATE_EPOCH` — общепринятое соглашение воспроизводимых сборок.
 export const ZIP_EPOCH = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
+// Верхняя граница формата: под год в DOS-метке отведено 7 бит от 1980-го.
+const ZIP_LAST_YEAR = 1980 + 0x7f;
 
+// Значение вне диапазона формата ОТВЕРГАЕТСЯ, а не подгоняется молча.
+//
+// Биты года в DOS-метке циклически обрезаются, поэтому без проверки внешняя эпоха давала архив с
+// датой, которой никто не просил, — и обещание «SOURCE_DATE_EPOCH задаёт метку» переставало быть
+// правдой ровно там, где его труднее всего заметить. Замерено: `0` (1970 год) давал в архиве
+// 2098-01-01, значение сразу после конца 2107-го — 1980-й, а заведомо большое — 2066-11-16.
+//
+// Отвергается и заданный, но неразбираемый мусор: `SOURCE_DATE_EPOCH=2026-01-01` разбирается
+// `parseInt` как 2026 секунд, то есть как 1970 год, — ошибка правдоподобная, и молчаливый откат к
+// эпохе по умолчанию скрыл бы её. Пустое или не заданное значение — другое дело: это не «просили и
+// не смогли», а «не просили».
 export function defaultDate(environment = process.env) {
-  const fromEnvironment = Number.parseInt(environment.SOURCE_DATE_EPOCH || '', 10);
-  return Number.isFinite(fromEnvironment) ? new Date(fromEnvironment * 1000) : ZIP_EPOCH;
+  const raw = (environment.SOURCE_DATE_EPOCH ?? '').trim();
+  if (!raw) return ZIP_EPOCH;
+
+  if (!/^-?\d+$/.test(raw)) {
+    throw new Error(`SOURCE_DATE_EPOCH=${JSON.stringify(raw)} — не целое число секунд`);
+  }
+
+  const date = new Date(Number(raw) * 1000);
+  const year = date.getUTCFullYear();
+  if (!Number.isFinite(date.getTime()) || year < 1980 || year > ZIP_LAST_YEAR) {
+    throw new Error(
+      `SOURCE_DATE_EPOCH=${raw} даёт ${year} год; формат ZIP хранит только 1980–${ZIP_LAST_YEAR}`
+    );
+  }
+  return date;
 }
 
 // Записи идут в том порядке, в каком переданы. Порядок держит вызывающий — сортировкой по имени;
@@ -165,6 +191,10 @@ function walk(dir, base = dir) {
 }
 
 export function packPortal({ platform = 'yandex', outFile } = {}) {
+  // Метка разбирается ДО сборки, а не в момент записи архива. `buildPortal` начинает с удаления
+  // прошлого дерева, и опечатка в `SOURCE_DATE_EPOCH` иначе уносила бы с собой удачный билд —
+  // ровно та же причина, по которой сама сборка проверяет имя площадки до удаления каталога.
+  const date = defaultDate();
   const root = buildPortal({ platform });
   // Сортировка — ради воспроизводимости: обход каталога порядок не гарантирует, а одинаковый билд
   // должен давать одинаковый архив.
@@ -176,7 +206,10 @@ export function packPortal({ platform = 'yandex', outFile } = {}) {
     throw new Error('в корне билда нет index.html — площадка такой архив не примет');
   }
 
-  const zip = makeZip(names.map(name => ({ name, data: fs.readFileSync(path.join(root, name)) })));
+  const zip = makeZip(
+    names.map(name => ({ name, data: fs.readFileSync(path.join(root, name)) })),
+    { date }
+  );
   const target = outFile || path.join(ROOT, 'dist', `wobble-rush-${platform}.zip`);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, zip);

@@ -77,9 +77,33 @@ test('метка по умолчанию постоянна и не читает
 
 test('SOURCE_DATE_EPOCH задаёт метку времени снаружи', () => {
   assert.deepEqual(defaultDate({}), ZIP_EPOCH);
+  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '' }), ZIP_EPOCH);
   assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '1700000000' }), new Date(1700000000 * 1000));
-  // Мусор в переменной не должен уводить сборку к «сейчас».
-  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: 'вчера' }), ZIP_EPOCH);
+});
+
+// Дата вне диапазона формата обязана падать, а не подгоняться молча.
+//
+// Биты года в DOS-метке циклически обрезаются, поэтому без проверки внешняя эпоха давала архив с
+// датой, которой никто не просил. Значения здесь не выдуманы, а взяты замером с прежнего кода.
+test('SOURCE_DATE_EPOCH вне диапазона ZIP отвергается, а не обрезается', () => {
+  // 1970 год — прежде молча становился 2098-м.
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '0' }), /1980–2107/);
+  // Сразу после конца 2107-го — прежде становился 1980-м.
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '4354819200' }), /1980–2107/);
+  // Заведомо большое — прежде становилось 2066-11-16.
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '99999999999' }), /1980–2107/);
+
+  // Границы диапазона при этом обязаны проходить.
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '315532800' }).getUTCFullYear(), 1980);
+  assert.equal(defaultDate({ SOURCE_DATE_EPOCH: '4354819199' }).getUTCFullYear(), 2107);
+});
+
+// Заданный, но неразбираемый мусор — это «просили и не смогли», а не «не просили».
+test('неразбираемый SOURCE_DATE_EPOCH падает, а не откатывается к эпохе', () => {
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: 'вчера' }), /не целое число секунд/);
+  // Самая правдоподобная ошибка: дату написали датой. `parseInt` прочёл бы её как 2026 секунд,
+  // то есть как 1970 год, и архив получил бы 2098-й.
+  assert.throws(() => defaultDate({ SOURCE_DATE_EPOCH: '2026-01-01' }), /не целое число секунд/);
 });
 
 // Заданная эпоха обязана давать одни и те же байты в ЛЮБОМ часовом поясе.

@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
-import { listZip, makeZip, packPortal } from '../tools/packPortal.mjs';
+import { ZIP_EPOCH, defaultDate, listZip, makeZip, packPortal } from '../tools/packPortal.mjs';
 
 // Архив читается ОБРАТНО, а не сверяется со списком файлов на диске.
 //
@@ -56,39 +56,51 @@ test('несжимаемая запись ложится без сжатия, а
   assert.equal(makeZip([{ name: 't.js', data: text }]).readUInt16LE(8), 8, 'сжимаемое обязано сжаться');
 });
 
-// Воспроизводимость проверяется СРАВНЕНИЕМ БАЙТ, а не рассуждением про сортировку.
+// Воспроизводимость проверяется СРАВНЕНИЕМ БАЙТ, а не рассуждением про сортировку: сортировки имён
+// не хватало, `new Date()` писала другое время во все заголовки, и тот же билд давал архив того же
+// размера, но другими байтами. Утверждение про воспроизводимость стояло в комментарии к коду раньше,
+// чем стало правдой.
 //
-// Сортировки имён не хватало: `new Date()` писала другое время во все заголовки, и тот же билд
-// давал архив того же размера, но другими байтами. Утверждение про воспроизводимость стояло в
-// комментарии раньше, чем стало правдой.
-test('тот же билд даёт байт в байт тот же архив', () => {
+// Проверяется, что метка по умолчанию НЕ ЗАВИСИТ ОТ ЧАСОВ, — и проверяется без часов.
+//
+// Сначала здесь стоял пустой цикл на 2.2 секунды: он ждал перехода через двухсекундную границу
+// DOS-метки, чтобы поймать `new Date()`. Это отнимало ядро при каждом прогоне `test:server` и на
+// тесном CI мешало соседним процессам. Тот же вопрос задаётся мгновенно: архив без указания даты
+// обязан совпасть с архивом на постоянной эпохе. Часы при этом не идут вовсе.
+test('метка по умолчанию постоянна и не читает часы', () => {
   const entries = [
     { name: 'index.html', data: Buffer.from('<h1>меню</h1>', 'utf8') },
     { name: 'core/a.js', data: Buffer.from('export const a = 1;'.repeat(40), 'utf8') }
   ];
-  // Между вызовами проходит время — именно оно и ломало байтовое равенство.
-  const first = makeZip(entries);
-  const started = Date.now();
-  while (Date.now() - started < 2200) {
-    /* ждём переход через двухсекундную границу DOS-метки */
-  }
-  assert.deepEqual(makeZip(entries), first);
+  assert.deepEqual(makeZip(entries), makeZip(entries, { date: ZIP_EPOCH }));
 });
 
 test('SOURCE_DATE_EPOCH задаёт метку времени снаружи', () => {
+  assert.deepEqual(defaultDate({}), ZIP_EPOCH);
+  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: '1700000000' }), new Date(1700000000 * 1000));
+  // Мусор в переменной не должен уводить сборку к «сейчас».
+  assert.deepEqual(defaultDate({ SOURCE_DATE_EPOCH: 'вчера' }), ZIP_EPOCH);
+});
+
+// Заданная эпоха обязана давать одни и те же байты в ЛЮБОМ часовом поясе.
+//
+// С локальными геттерами не давала: три пояса — три разные суммы, а в Токио разъезжалась и дата.
+// Воспроизводимость держалась на одной машине и ломалась там, где нужна, — между CI и локальной
+// сборкой. Пояс здесь подменяется на время вызова, поэтому проверка не зависит от того, где её
+// запустили.
+test('заданная эпоха не зависит от часового пояса', () => {
   const entries = [{ name: 'a.js', data: Buffer.from('x'.repeat(64), 'utf8') }];
-  const previous = process.env.SOURCE_DATE_EPOCH;
+  const date = new Date(1700000000 * 1000);
+  const previous = process.env.TZ;
   try {
-    process.env.SOURCE_DATE_EPOCH = '1700000000';
-    const withEpoch = makeZip(entries);
-    delete process.env.SOURCE_DATE_EPOCH;
-    const withDefault = makeZip(entries);
-    assert.notDeepEqual(withEpoch, withDefault, 'заданная извне метка обязана попадать в архив');
-    process.env.SOURCE_DATE_EPOCH = '1700000000';
-    assert.deepEqual(makeZip(entries), withEpoch, 'и при этом оставаться воспроизводимой');
+    const digests = ['UTC', 'America/Los_Angeles', 'Asia/Tokyo'].map(zone => {
+      process.env.TZ = zone;
+      return createHash('sha256').update(makeZip(entries, { date })).digest('hex');
+    });
+    assert.equal(new Set(digests).size, 1, `пояс не должен менять архив: ${digests.join(' ')}`);
   } finally {
-    if (previous === undefined) delete process.env.SOURCE_DATE_EPOCH;
-    else process.env.SOURCE_DATE_EPOCH = previous;
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
   }
 });
 

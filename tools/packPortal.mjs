@@ -40,9 +40,18 @@ function crc32(buffer) {
   return (c ^ -1) >>> 0;
 }
 
+// Поля читаются UTC-геттерами, а не локальными.
+//
+// С локальными один и тот же `SOURCE_DATE_EPOCH` давал на разных машинах разные заголовки: замер по
+// трём поясам дал три разные суммы SHA-256, а в Токио разъезжалась и дата. То есть воспроизводимость
+// держалась на одной машине и ломалась ровно там, где она нужна, — между агентом CI и локальной
+// сборкой. Значение по умолчанию при этом было устойчиво случайно: локальная конструкция и
+// локальные геттеры взаимно сокращались. Теперь обе половины определены в UTC явно.
 function dosStamp(date) {
-  const time = ((date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1)) & 0xffff;
-  const day = (((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate()) & 0xffff;
+  const time =
+    ((date.getUTCHours() << 11) | (date.getUTCMinutes() << 5) | (date.getUTCSeconds() >> 1)) & 0xffff;
+  const day =
+    (((date.getUTCFullYear() - 1980) << 9) | ((date.getUTCMonth() + 1) << 5) | date.getUTCDate()) & 0xffff;
   return { time, day };
 }
 
@@ -54,10 +63,10 @@ function dosStamp(date) {
 //
 // Раз время в архиве всё равно ничего не значит для площадки, оно берётся постоянным. Снаружи его
 // можно задать через `SOURCE_DATE_EPOCH` — общепринятое соглашение воспроизводимых сборок.
-const ZIP_EPOCH = new Date(1980, 0, 1, 0, 0, 0);
+export const ZIP_EPOCH = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
 
-function defaultDate() {
-  const fromEnvironment = Number.parseInt(process.env.SOURCE_DATE_EPOCH || '', 10);
+export function defaultDate(environment = process.env) {
+  const fromEnvironment = Number.parseInt(environment.SOURCE_DATE_EPOCH || '', 10);
   return Number.isFinite(fromEnvironment) ? new Date(fromEnvironment * 1000) : ZIP_EPOCH;
 }
 

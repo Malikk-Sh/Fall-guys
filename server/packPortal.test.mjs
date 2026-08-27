@@ -56,6 +56,42 @@ test('несжимаемая запись ложится без сжатия, а
   assert.equal(makeZip([{ name: 't.js', data: text }]).readUInt16LE(8), 8, 'сжимаемое обязано сжаться');
 });
 
+// Воспроизводимость проверяется СРАВНЕНИЕМ БАЙТ, а не рассуждением про сортировку.
+//
+// Сортировки имён не хватало: `new Date()` писала другое время во все заголовки, и тот же билд
+// давал архив того же размера, но другими байтами. Утверждение про воспроизводимость стояло в
+// комментарии раньше, чем стало правдой.
+test('тот же билд даёт байт в байт тот же архив', () => {
+  const entries = [
+    { name: 'index.html', data: Buffer.from('<h1>меню</h1>', 'utf8') },
+    { name: 'core/a.js', data: Buffer.from('export const a = 1;'.repeat(40), 'utf8') }
+  ];
+  // Между вызовами проходит время — именно оно и ломало байтовое равенство.
+  const first = makeZip(entries);
+  const started = Date.now();
+  while (Date.now() - started < 2200) {
+    /* ждём переход через двухсекундную границу DOS-метки */
+  }
+  assert.deepEqual(makeZip(entries), first);
+});
+
+test('SOURCE_DATE_EPOCH задаёт метку времени снаружи', () => {
+  const entries = [{ name: 'a.js', data: Buffer.from('x'.repeat(64), 'utf8') }];
+  const previous = process.env.SOURCE_DATE_EPOCH;
+  try {
+    process.env.SOURCE_DATE_EPOCH = '1700000000';
+    const withEpoch = makeZip(entries);
+    delete process.env.SOURCE_DATE_EPOCH;
+    const withDefault = makeZip(entries);
+    assert.notDeepEqual(withEpoch, withDefault, 'заданная извне метка обязана попадать в архив');
+    process.env.SOURCE_DATE_EPOCH = '1700000000';
+    assert.deepEqual(makeZip(entries), withEpoch, 'и при этом оставаться воспроизводимой');
+  } finally {
+    if (previous === undefined) delete process.env.SOURCE_DATE_EPOCH;
+    else process.env.SOURCE_DATE_EPOCH = previous;
+  }
+});
+
 test('битый буфер отвергается, а не читается наугад', () => {
   assert.throws(() => listZip(Buffer.from('это не архив', 'utf8')), /не ZIP/);
 });
@@ -88,7 +124,9 @@ test('подтверждения домена Яндекс.Вебмастера 
   try {
     const { file } = packPortal({ outFile: path.join(dir, 'p.zip') });
     const names = listZip(fs.readFileSync(file));
-    const verification = names.filter(name => /^yandex_[0-9a-f]+\.html$/.test(name));
+    // Образец здесь тот же широкий, что и в сборке: узкий пропустил бы имя новой формы, а ошибка у
+    // него односторонняя в худшую сторону.
+    const verification = names.filter(name => /^yandex_[^/]*\.html$/.test(name));
     assert.deepEqual(verification, [], `в архив уехали подтверждения домена: ${verification.join(', ')}`);
 
     // И заодно то, что не уезжает по устройству площадки, — чтобы проверка держала весь список,

@@ -204,6 +204,74 @@ test('на площадке доступно одиночное и скрыто 
   await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
 });
 
+// ТО, ЧТО ОБЕЩАНО В ПОЛИТИКЕ, ДОЛЖНО ЧЕМ-ТО ДЕРЖАТЬСЯ.
+//
+// Портальная политика утверждает три вещи про хранение: данные лежат в браузере, cookies Wobble
+// Rush не используются, аккаунт не создаётся. Это юридический документ, и подпирать его чтением
+// кода мало — здесь он подпирается замером.
+//
+// Считаются ОБРАЩЕНИЯ, а не итоговое содержимое: запись, которую потом стёрли, всё равно была.
+test('на площадке игра пишет только в localStorage и не ставит cookies', async ({ page }) => {
+  await page.addInitScript(() => {
+    globalThis.__written = [];
+    globalThis.__session = [];
+    globalThis.__idb = 0;
+    const local = globalThis.localStorage;
+    const localSet = local.setItem.bind(local);
+    local.setItem = (key, value) => {
+      globalThis.__written.push(key);
+      return localSet(key, value);
+    };
+    for (const method of ['setItem', 'getItem', 'removeItem']) {
+      const session = globalThis.sessionStorage;
+      const original = session[method].bind(session);
+      session[method] = (...args) => {
+        globalThis.__session.push(`${method}:${args[0]}`);
+        return original(...args);
+      };
+    }
+    const open = indexedDB.open.bind(indexedDB);
+    indexedDB.open = (...args) => {
+      globalThis.__idb += 1;
+      return open(...args);
+    };
+  });
+
+  await page.goto('/game/', { waitUntil: 'networkidle' });
+  await expect(page.locator('#menu')).toBeVisible({ timeout: 30_000 });
+
+  // Забег с финишем: именно там пишутся рекорд и профиль, то есть всё, что игра вообще сохраняет.
+  await page.locator('#play').click();
+  await expect(page.locator('#hud')).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => {
+    const game = globalThis.__WOBBLE_GAME__;
+    game.ui.finishSolo({ time: 45_000, respawns: 0, dashes: 1, hits: 0, spec: game.course.spec });
+  });
+  await expect(page.locator('#finish')).toBeVisible({ timeout: 15_000 });
+  await page.waitForTimeout(1000);
+
+  const state = await page.evaluate(() => ({
+    written: [...new Set(globalThis.__written)].sort(),
+    session: globalThis.__session,
+    idb: globalThis.__idb,
+    cookie: document.cookie
+  }));
+
+  // Всё сохранённое — наше и локальное.
+  expect(state.written.length).toBeGreaterThan(0);
+  const foreign = state.written.filter(key => !key.startsWith('wobble-'));
+  expect(foreign, `в localStorage пишет кто-то посторонний: ${foreign.join(', ')}`).toEqual([]);
+
+  // Сетевые пути на площадке закрыты, а `sessionStorage` в игре трогают только они: токен сессии
+  // (`NetworkManager`) и приглашение (`main.js`). Обращение к нему означало бы, что заслон дал течь.
+  expect(state.session, `sessionStorage трогают только сетевые пути: ${state.session.join(', ')}`).toEqual(
+    []
+  );
+  expect(state.idb, 'IndexedDB игра не использует').toBe(0);
+  expect(state.cookie, 'политика обещает отсутствие cookies Wobble Rush').toBe('');
+});
+
 // Политику конфиденциальности набор до сих пор НЕ ОТКРЫВАЛ — проверял только, что файл в билде
 // есть и ссылка на него относительная. Этого мало по той же причине, по которой существует весь
 // набор: страница могла бы открываться с промахами путей или оказаться политикой нашего сайта,

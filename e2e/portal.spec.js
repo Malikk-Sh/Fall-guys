@@ -204,6 +204,41 @@ test('на площадке доступно одиночное и скрыто 
   await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
 });
 
+// Политику конфиденциальности набор до сих пор НЕ ОТКРЫВАЛ — проверял только, что файл в билде
+// есть и ссылка на него относительная. Этого мало по той же причине, по которой существует весь
+// набор: страница могла бы открываться с промахами путей или оказаться политикой нашего сайта,
+// заявляющей игроку обработку, которой на площадке не происходит.
+test('политика конфиденциальности открывается и говорит про площадку', async ({ page, baseURL }) => {
+  await page.goto('/game/', { waitUntil: 'networkidle' });
+  await expect(page.locator('#menu')).toBeVisible({ timeout: 30_000 });
+
+  // Ход тот же, что у игрока: из меню по ссылке, а не по прямому адресу. Ссылка помечена
+  // `target="_blank"`, поэтому страница открывается СОСЕДНЕЙ вкладкой — и следить за ней надо
+  // отдельно: `page.on('request')` чужую вкладку не видит, и проверка «не ходит наружу» молча
+  // мерила бы пустой список.
+  const link = page.locator('a[href$="privacy/"]').first();
+  await expect(link).toHaveCount(1);
+  const [policy] = await Promise.all([page.waitForEvent('popup'), link.click()]);
+  const seen = watch(policy);
+  await policy.waitForLoadState('networkidle');
+
+  await expect(policy.locator('h1').first()).toContainText('Политика конфиденциальности');
+  // Главное утверждение страницы — оно же то, что набор проверяет замером выше.
+  await expect(policy.locator('body')).toContainText('целиком в вашем браузере');
+  // А про то, чего на площадке нет, страница молчать обязана.
+  await expect(policy.locator('body')).not.toContainText('Google Identity Services');
+
+  // Возврат в игру работает: ссылка переписана по глубине страницы, а не ведёт в корень домена.
+  await policy.locator('a.back').click();
+  await expect(policy.locator('#menu')).toBeVisible({ timeout: 30_000 });
+
+  expect(seen.failures, `неудачные запросы:\n${seen.failures.join('\n')}`).toEqual([]);
+  const outside = outsideBuild(seen.requests, baseURL);
+  expect(outside, `страница политики ходит за пределы билда:\n${outside.join('\n')}`).toEqual([]);
+  // Слежка обязана была что-то увидеть: пустой список означал бы, что мерили не ту вкладку.
+  expect(seen.requests.length).toBeGreaterThan(0);
+});
+
 // Пропущенный вход не должен оставлять интерфейс в заготовке.
 test('гостевое состояние применено, а не оставлено шаблоном', async ({ page }) => {
   await openPortal(page);

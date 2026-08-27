@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 
-import { buildPortal, relativeSpecifier, rewriteHtml, rewriteModuleSource } from '../tools/buildPortal.mjs';
+import { PLATFORMS, buildPortal, relativeSpecifier, rewriteModuleSource } from '../tools/buildPortal.mjs';
 
 const ROOT = path.join(path.dirname(url.fileURLToPath(import.meta.url)), '..');
 
@@ -220,11 +220,24 @@ test('площадка объявлена файлом сборки, а не и�
   assert.ok(html.indexOf('platform-config.js') < moduleTag);
 });
 
-test('SDK площадки подключается только в её билде', () => {
-  const yandex = rewriteHtml('<head></head>', { platform: 'yandex' });
-  assert.match(yandex, /yandex\.ru\/games\/sdk/);
-  const web = rewriteHtml('<head></head>', { platform: 'web' });
-  assert.doesNotMatch(web, /yandex\.ru\/games\/sdk/);
+// Сторонний код в архив не попадает, пока не пройден гейт.
+//
+// В первой версии сборка вставляла тег Yandex SDK, и любой открытый артефакт грузил чужой скрипт.
+// Это нарушало порядок из `docs/MONETIZATION.md` §9 дважды: SDK идёт после серверного контура
+// rewarded-попыток, а до первого живого игрока обязан быть пройден гейт — privacy с поимённым
+// перечислением провайдеров, видимая пометка, маркировка, отчисления. Проверка нарочно шире, чем
+// «нет тега Яндекса»: она держит правило, а не один его случай.
+test('в билд не попадает сторонний код', () => {
+  const html = fs.readFileSync(path.join(OUT, 'index.html'), 'utf8');
+  const external = [...html.matchAll(/(?:src|href)="((?:https?:)?\/\/[^"]+)"/g)].map(match => match[1]);
+  assert.deepEqual(external, [], `до гейта сторонних ресурсов быть не должно:\n${external.join('\n')}`);
+});
+
+test('портальной целью может быть только площадка', () => {
+  // `web` обслуживает наш сервер из исходников. Как портальная цель он был бы заведомо сломан:
+  // `PwaController` запустился бы и полез регистрировать service worker, которого в архиве нет.
+  assert.deepEqual([...PLATFORMS], ['yandex']);
+  assert.throws(() => buildPortal({ platform: 'web', outDir: path.join(OUT, '..', 'nope') }), /web/);
 });
 
 test('исходное дерево сборка не трогает', () => {

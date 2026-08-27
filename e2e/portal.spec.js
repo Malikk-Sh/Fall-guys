@@ -106,15 +106,20 @@ test('портальный билд не выходит за пределы св
   await page.locator('#accountClose').click();
   await expect(page.locator('#account')).toBeHidden();
 
-  // Забег и финиш. Финиш вызывается напрямую — тем же способом, что и в десктопном наборе: пройти
-  // трассу живым управлением здесь не нужно, нужен код, который выполняется по её завершении.
+  // Забег и финиш — через НАСТОЯЩИЙ обработчик `Game.localFinish()`.
+  //
+  // Здесь стоял прямой вызов `ui.finishSolo()`, отрисовывающий экран результата. Он обходил
+  // `localFinish()`, а тот следом зовёт `account.save('solo', …)` — то есть единственное место, где
+  // рекорд мог бы уехать на сервер. Главная проверка набора шла мимо ровно того вызова, ради
+  // которого существует.
+  //
+  // Ждём хода часов, а не паузы: `#hud` появляется ещё на обратном отсчёте, а забег нулевой длины
+  // до сохранения рекорда не доходит вовсе.
   await page.locator('#play').click();
   await expect(page.locator('#hud')).toBeVisible({ timeout: 30_000 });
-  await page.waitForTimeout(1000);
-  await page.evaluate(() => {
-    const game = globalThis.__WOBBLE_GAME__;
-    game.ui.finishSolo({ time: 45_000, respawns: 0, dashes: 1, hits: 0, spec: game.course.spec });
-  });
+  const started = await page.locator('#timer').textContent();
+  await expect(page.locator('#timer')).not.toHaveText(started, { timeout: 15_000 });
+  await page.evaluate(() => globalThis.__WOBBLE_GAME__.localFinish());
   await expect(page.locator('#finish')).toBeVisible({ timeout: 15_000 });
   // Время после финиша: отправка рекорда ушла бы уже после отрисовки экрана.
   await page.waitForTimeout(1500);
@@ -215,21 +220,52 @@ test('на площадке игра пишет только в localStorage и 
   await page.addInitScript(() => {
     globalThis.__written = [];
     globalThis.__session = [];
+    globalThis.__cookieWrites = [];
     globalThis.__idb = 0;
+
     const local = globalThis.localStorage;
     const localSet = local.setItem.bind(local);
     local.setItem = (key, value) => {
       globalThis.__written.push(key);
       return localSet(key, value);
     };
-    for (const method of ['setItem', 'getItem', 'removeItem']) {
-      const session = globalThis.sessionStorage;
-      const original = session[method].bind(session);
-      session[method] = (...args) => {
-        globalThis.__session.push(`${method}:${args[0]}`);
-        return original(...args);
-      };
-    }
+
+    // `sessionStorage` оборачивается ЦЕЛИКОМ, а не тремя известными методами.
+    //
+    // Первая версия перехватывала `setItem`/`getItem`/`removeItem` — то есть ровно те три, о которых
+    // я знал. Мимо неё прошли бы `clear()`, `length`, `key()` и обращение по имени свойства
+    // (`sessionStorage.token`), а тест при этом остался бы зелёным. Прокси считает любое обращение,
+    // и список знать не надо.
+    const session = globalThis.sessionStorage;
+    const proxy = new Proxy(session, {
+      get(target, property, receiver) {
+        globalThis.__session.push(`get:${String(property)}`);
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+      set(target, property, value) {
+        globalThis.__session.push(`set:${String(property)}`);
+        return Reflect.set(target, property, value, target);
+      },
+      has(target, property) {
+        globalThis.__session.push(`has:${String(property)}`);
+        return Reflect.has(target, property);
+      }
+    });
+    Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, get: () => proxy });
+
+    // Cookies — тоже по ОБРАЩЕНИЮ, а не по итоговой строке: поставленная и тут же удалённая cookie
+    // в финальном `document.cookie` не видна, а обращение было.
+    const cookie = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => cookie.get.call(document),
+      set: value => {
+        globalThis.__cookieWrites.push(String(value));
+        return cookie.set.call(document, value);
+      }
+    });
+
     const open = indexedDB.open.bind(indexedDB);
     indexedDB.open = (...args) => {
       globalThis.__idb += 1;
@@ -251,27 +287,43 @@ test('на площадке игра пишет только в localStorage и 
   await page.locator('#accountClose').click();
   await expect(page.locator('#menu')).toBeVisible({ timeout: 15_000 });
 
-  // Забег с финишем: там пишутся рекорд и профиль.
+  // Забег с финишем — через НАСТОЯЩИЙ обработчик, а не через `ui.finishSolo()`.
+  //
+  // Прямой вызов отрисовки результата обходил `Game.localFinish()`, а тот следом зовёт
+  // `account.save('solo', …)` — ровно тот путь, ради которого проверка и существует. Замер шёл мимо
+  // единственного места, где рекорд мог бы уехать.
   await page.locator('#play').click();
   await expect(page.locator('#hud')).toBeVisible({ timeout: 30_000 });
-  await page.waitForTimeout(1000);
-  await page.evaluate(() => {
-    const game = globalThis.__WOBBLE_GAME__;
-    game.ui.finishSolo({ time: 45_000, respawns: 0, dashes: 1, hits: 0, spec: game.course.spec });
-  });
+  // Ждём, пока часы ПОЙДУТ, а не фиксированную паузу: `#hud` появляется ещё на обратном отсчёте, и
+  // забег нулевой длины рекордом не считается (`saveBest` требует времени больше нуля). С паузой
+  // вместо ожидания замер прошёл бы мимо записи рекорда — и я это как раз и получил.
+  const started = await page.locator('#timer').textContent();
+  await expect(page.locator('#timer')).not.toHaveText(started, { timeout: 15_000 });
+  await page.evaluate(() => globalThis.__WOBBLE_GAME__.localFinish());
   await expect(page.locator('#finish')).toBeVisible({ timeout: 15_000 });
-  await page.waitForTimeout(1000);
+  // Отправка рекорда асинхронна и уходит уже после отрисовки экрана.
+  await page.waitForTimeout(1500);
 
   const state = await page.evaluate(() => ({
     written: [...new Set(globalThis.__written)].sort(),
     session: globalThis.__session,
+    cookieWrites: globalThis.__cookieWrites,
     idb: globalThis.__idb,
-    cookie: document.cookie
+    cookie: document.cookie,
+    accounts: window.localStorage.getItem('wobble-accounts-v1')
   }));
 
   // Всё сохранённое — наше и локальное.
   const foreign = state.written.filter(key => !key.startsWith('wobble-'));
   expect(foreign, `в localStorage пишет кто-то посторонний: ${foreign.join(', ')}`).toEqual([]);
+
+  // «Аккаунт не создаётся» — отдельное обещание политики, и префикса `wobble-` для него мало:
+  // список локальных аккаунтов лежит в `wobble-accounts-v1` и под этот префикс подходит. Регрессия,
+  // заводящая аккаунт при загрузке или на финише, прошла бы проверку выше насквозь.
+  expect(state.written, 'политика обещает, что аккаунт не создаётся').not.toContain('wobble-accounts-v1');
+  expect(state.accounts ?? '[]', 'список аккаунтов обязан остаться пустым').toMatch(
+    /^\s*(\[\s*\]|null)?\s*$/
+  );
 
   // Путь обязан покрывать ОБА вида записи, иначе проверка выше молча сузилась бы: рекорд с профилем
   // пишет финиш, косметику — шкаф. Первая версия теста шкаф не проходила вовсе.
@@ -287,6 +339,10 @@ test('на площадке игра пишет только в localStorage и 
     []
   );
   expect(state.idb, 'IndexedDB игра не использует').toBe(0);
+
+  // Cookies проверяются С ДВУХ СТОРОН: по обращениям и по итоговой строке. Одной итоговой мало —
+  // поставленная и тут же удалённая cookie в ней не видна.
+  expect(state.cookieWrites, `игра ставила cookies: ${state.cookieWrites.join(' | ')}`).toEqual([]);
   expect(state.cookie, 'политика обещает отсутствие cookies Wobble Rush').toBe('');
 });
 
@@ -298,14 +354,22 @@ test('политика конфиденциальности открываетс
   await page.goto('/game/', { waitUntil: 'networkidle' });
   await expect(page.locator('#menu')).toBeVisible({ timeout: 30_000 });
 
-  // Ход тот же, что у игрока: из меню по ссылке, а не по прямому адресу. Ссылка помечена
-  // `target="_blank"`, поэтому страница открывается СОСЕДНЕЙ вкладкой — и следить за ней надо
-  // отдельно: `page.on('request')` чужую вкладку не видит, и проверка «не ходит наружу» молча
-  // мерила бы пустой список.
+  // Ход тот же, что у игрока: из меню по ссылке, а не по прямому адресу.
+  //
+  // Ссылка помечена `target="_blank"`, поэтому страница открывается СОСЕДНЕЙ вкладкой. Следить надо
+  // за КОНТЕКСТОМ и ДО клика, а не за вкладкой после её появления: `page.on('request')` чужую
+  // вкладку не видит вовсе, а событие `popup` приходит уже после того, как начальный запрос ушёл.
+  // Повесь слежку на вкладку — и сама навигация политики с ранними подресурсами прошла бы мимо,
+  // причём незаметно: список всё равно наполнился бы переходом по «вернуться».
+  const seen = { requests: [], failures: [] };
+  page.context().on('request', request => seen.requests.push(request.url()));
+  page.context().on('response', response => {
+    if (response.status() >= 400) seen.failures.push(`${response.status()} ${response.url()}`);
+  });
+
   const link = page.locator('a[href$="privacy/"]').first();
   await expect(link).toHaveCount(1);
   const [policy] = await Promise.all([page.waitForEvent('popup'), link.click()]);
-  const seen = watch(policy);
   await policy.waitForLoadState('networkidle');
 
   await expect(policy.locator('h1').first()).toContainText('Политика конфиденциальности');
@@ -321,8 +385,13 @@ test('политика конфиденциальности открываетс
   expect(seen.failures, `неудачные запросы:\n${seen.failures.join('\n')}`).toEqual([]);
   const outside = outsideBuild(seen.requests, baseURL);
   expect(outside, `страница политики ходит за пределы билда:\n${outside.join('\n')}`).toEqual([]);
-  // Слежка обязана была что-то увидеть: пустой список означал бы, что мерили не ту вкладку.
-  expect(seen.requests.length).toBeGreaterThan(0);
+  // Слежка обязана была увидеть саму навигацию политики. Проверка именно на неё, а не на «список
+  // непустой»: непустым он станет и от перехода по «вернуться», то есть пропуск начального запроса
+  // остался бы незамеченным.
+  expect(
+    seen.requests.some(url => url.includes('/privacy/')),
+    `начальная навигация политики прошла мимо слежки:\n${seen.requests.join('\n')}`
+  ).toBe(true);
 });
 
 // Пропущенный вход не должен оставлять интерфейс в заготовке.

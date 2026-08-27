@@ -1,0 +1,197 @@
+<!doctype html>
+<!--
+  Политика конфиденциальности для ПОРТАЛЬНОЙ сборки.
+
+  Живёт вне `client/` намеренно: на нашем сайте эта страница не нужна и не должна быть доступна —
+  там действует полная политика, описывающая аккаунты, вход через Google и обработку технических
+  данных сервером. Сюда её кладёт `tools/buildPortal.mjs`, подменяя `privacy/index.html` в билде.
+
+  ПОЧЕМУ ОТДЕЛЬНАЯ, А НЕ ТА ЖЕ. Полная политика на площадке была бы неправдой почти целиком:
+  аккаунтов там нет, входа через Google нет, до нашего сервера не доходит ни один запрос. Последнее
+  не рассуждение, а замер: портальный E2E (`e2e/portal.spec.js`) проходит весь путь игрока — меню,
+  шкаф, забег, финиш — и требует, чтобы ни один запрос не вышел за пределы билда.
+
+  ПЕРЕСМОТРЕТЬ ОБЯЗАТЕЛЬНО, когда подключится SDK площадки или реклама: тогда появятся сторонние
+  получатели данных, и их надо назвать поимённо. Это условие гейта из `docs/MONETIZATION.md` §9.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="theme-color" content="#4b35b7" />
+    <meta
+      name="description"
+      content="Политика конфиденциальности Wobble Rush на игровой площадке: игра работает целиком в браузере."
+    />
+    <title>Политика конфиденциальности — Wobble Rush</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'Segoe UI',
+          sans-serif;
+        background: #17122b;
+        color: #f7f4ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html {
+        min-height: 100%;
+        background:
+          radial-gradient(circle at 15% 0%, #5a3ac933, transparent 34rem),
+          linear-gradient(180deg, #1b1435, #120e24 55%, #0d0b18);
+      }
+      body {
+        margin: 0;
+        padding: max(24px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+          max(36px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+        line-height: 1.6;
+      }
+      main {
+        max-width: 46rem;
+        margin: 0 auto;
+      }
+      .back {
+        display: inline-block;
+        margin-bottom: 20px;
+        color: #c9b8ff;
+        text-decoration: none;
+        font-size: 14px;
+      }
+      .back:hover {
+        text-decoration: underline;
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        color: #9d8ede;
+        margin: 0 0 6px;
+      }
+      h1 {
+        font-size: clamp(24px, 5vw, 34px);
+        margin: 0 0 12px;
+      }
+      h2 {
+        font-size: 17px;
+        margin: 28px 0 8px;
+      }
+      .lede {
+        color: #ded6ff;
+      }
+      .dates {
+        font-size: 13px;
+        color: #9d8ede;
+        margin: 12px 0 0;
+      }
+      ul {
+        padding-left: 20px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      a {
+        color: #c9b8ff;
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid #ffffff1f;
+        margin: 32px 0;
+      }
+      footer {
+        margin-top: 32px;
+        font-size: 13px;
+        color: #9d8ede;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <a class="back" href="../">← Вернуться в Wobble Rush</a>
+      <p class="eyebrow">WOBBLE RUSH · PRIVACY</p>
+      <h1>Политика конфиденциальности</h1>
+      <p class="lede">
+        В этой версии игры, размещённой на игровой площадке, Wobble Rush работает целиком в вашем браузере и
+        не передаёт нам никаких данных.
+      </p>
+      <p class="dates">Действует с 27 августа 2026 года · Последнее обновление: 27 августа 2026 года</p>
+
+      <h2>1. Что хранится и где</h2>
+      <p>
+        Настройки, рекорды одиночной игры и выбранный внешний вид персонажа хранятся в данных браузера на
+        вашем устройстве. Они никуда не отправляются. Очистка данных сайта или браузера удаляет этот локальный
+        прогресс — восстановить его будет неоткуда.
+      </p>
+
+      <h2>2. Чего эта версия игры не делает</h2>
+      <ul>
+        <li>не создаёт аккаунт и не требует входа;</li>
+        <li>не использует вход через Google;</li>
+        <li>не обращается к серверам Wobble Rush — ни за таблицами рекордов, ни за чем-либо ещё;</li>
+        <li>не показывает рекламу;</li>
+        <li>не использует cookies Wobble Rush.</li>
+      </ul>
+      <p>
+        Сетевые режимы — гонка онлайн и кооператив — в этой версии недоступны: они требуют аккаунта на нашем
+        сайте. Одиночная игра доступна полностью.
+      </p>
+
+      <h2>3. Игровая площадка</h2>
+      <p>
+        Игра размещена на сторонней игровой площадке. Сама площадка обрабатывает данные своих пользователей по
+        собственной политике конфиденциальности — на это мы не влияем и доступа к этим данным не имеем.
+        Ознакомьтесь с политикой площадки, на которой вы играете.
+      </p>
+
+      <h2>4. Вопросы и обращения</h2>
+      <p>
+        Написать можно по адресу
+        <a href="mailto:mshakhmerzayev@gmail.com">mshakhmerzayev@gmail.com</a>. Учтите, что удалять на нашей
+        стороне нечего: данных этой версии игры у нас нет. Локальный прогресс удаляется очисткой данных
+        браузера.
+      </p>
+
+      <h2>5. Полная версия для сайта</h2>
+      <p>
+        На сайте <a href="https://wobbles.ru/">wobbles.ru</a> доступны аккаунты, вход через Google и сетевая
+        игра, и там действует более подробная политика:
+        <a href="https://wobbles.ru/privacy/">https://wobbles.ru/privacy/</a>.
+      </p>
+
+      <h2>6. Изменения</h2>
+      <p>
+        Если обработка данных в этой версии игры изменится — например, появятся реклама или функции площадки,
+        требующие передачи данных, — эта страница будет обновлена до того, как изменение вступит в силу, а
+        дата вверху изменится.
+      </p>
+
+      <hr />
+
+      <p class="eyebrow">ENGLISH SUMMARY</p>
+      <h2>Privacy Policy</h2>
+      <p>
+        In this build, published on a game platform, Wobble Rush runs entirely in your browser and sends us no
+        data. Settings, single-player records and the chosen character appearance are stored in your browser
+        on your device; clearing site data removes them.
+      </p>
+      <p>
+        This build creates no account, does not use Google Sign-In, does not contact Wobble Rush servers,
+        shows no advertising and sets no Wobble Rush cookies. Online modes are unavailable here because they
+        require an account on our own site.
+      </p>
+      <p>
+        The hosting game platform processes its own users' data under its own privacy policy, which we do not
+        control. Questions:
+        <a href="mailto:mshakhmerzayev@gmail.com">mshakhmerzayev@gmail.com</a>. The fuller policy covering
+        accounts and online play is published at
+        <a href="https://wobbles.ru/privacy/">https://wobbles.ru/privacy/</a>.
+      </p>
+
+      <footer>© 2026 Wobble Rush</footer>
+    </main>
+  </body>
+</html>

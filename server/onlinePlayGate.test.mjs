@@ -78,6 +78,36 @@ test('на площадке скрываются онлайн-вкладки, п
   ]);
 });
 
+// ГОРЛОВИНА: все двадцать вызовов `/api/auth/*` идут через один `post`, и заслон стоит в нём.
+//
+// Это вывод из трёх подряд пропущенных мест: кнопки аккаунта, кооп-рейтинг, отправка соло-рекорда.
+// Каждый раз я перечислял сетевые входы вручную и каждый раз ошибался. Заслон у горловины закрывает
+// и то, чего в списке нет, и то, что напишут после.
+test('запросы аккаунта не уходят с портальной сборки', async () => {
+  const account = await import('../client/core/account.js');
+  const calls = [];
+  const fetchImpl = url => {
+    calls.push(url);
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+  };
+
+  const saved = globalThis.WOBBLE_PLATFORM;
+  try {
+    globalThis.WOBBLE_PLATFORM = 'yandex';
+    const result = await account.authConfig({ fetchImpl });
+    assert.deepEqual(calls, [], 'на площадке транспорт не должен трогать сеть');
+    // Форма ответа — как у неудачного запроса: вызывающие уже умеют обрабатывать отказ.
+    assert.equal(result?.google ?? null, null);
+
+    globalThis.WOBBLE_PLATFORM = 'web';
+    await account.authConfig({ fetchImpl });
+    assert.equal(calls.length, 1, 'на своём домене запрос обязан уйти как прежде');
+  } finally {
+    if (saved === undefined) delete globalThis.WOBBLE_PLATFORM;
+    else globalThis.WOBBLE_PLATFORM = saved;
+  }
+});
+
 // Кооп-рейтинг не должен зависеть от того, что аккаунта случайно нет.
 //
 // Сегодня `loadCampaignRank` выходит по `playerId()`, и замер в браузере показывает ноль запросов к

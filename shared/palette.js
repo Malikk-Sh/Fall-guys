@@ -15,6 +15,23 @@ export const COLORS = {
   ink: 0x261653
 };
 
+// Семантический слой поверх базовой палитры. Gameplay не должен принимать решения по этим цветам:
+// токены нужны только presentation-коду, чтобы одинаковые роли выглядели одинаково во всей игре.
+// Когда арт-направление меняется, роль можно перекрасить здесь, а не искать случайные hex по сцене.
+export const VISUAL_TOKENS = Object.freeze({
+  surfacePrimary: COLORS.cyan,
+  surfaceSecondary: COLORS.purple,
+  danger: COLORS.pink,
+  bounce: COLORS.yellow,
+  checkpoint: COLORS.mint,
+  finish: COLORS.pink,
+  finishAccent: COLORS.yellow,
+  rail: COLORS.white,
+  cloud: COLORS.white,
+  uiPanel: COLORS.purpleDark,
+  uiAccent: COLORS.yellow
+});
+
 // Палитра сегментов трассы: цвет выбирается по индексу сегмента и seed, поэтому порядок значим.
 export const COURSE_PALETTE = [
   COLORS.purple,

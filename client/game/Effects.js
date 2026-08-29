@@ -71,8 +71,7 @@ export class Effects {
   emit(position, color, count, profile = 'burst', power = 1) {
     const total = Math.min(count, this.max - this.items.length);
     for (let i = 0; i < total; i++) {
-      const mesh =
-        this.pool.pop() || new THREE.Mesh(this.geometry, this.material(color, OPACITY_STEPS - 1));
+      const mesh = this.pool.pop() || new THREE.Mesh(this.geometry, this.material(color, OPACITY_STEPS - 1));
       const velocity = mesh.userData.velocity || new THREE.Vector3();
       mesh.material = this.material(color, OPACITY_STEPS - 1);
       mesh.visible = true;

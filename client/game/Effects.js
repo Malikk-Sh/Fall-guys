@@ -3,6 +3,8 @@ import * as THREE from 'three';
 // Частицы: вспышки при прыжках, приземлениях, ударах и на чекпоинтах.
 //
 // Меши переиспользуются из пула — создавать по десятку объектов на каждый удар слишком дорого.
+// Семантические профили ниже меняют только разлёт уже существующих частиц: это presentation-only
+// слой, который не знает ни о физике игрока, ни о коллизиях препятствий.
 //
 // Про затухание. Материалы общие для всех частиц одного цвета, поэтому задать прозрачность
 // отдельной частице через material.opacity нельзя: правка немедленно применится ко всем частицам
@@ -13,6 +15,17 @@ import * as THREE from 'three';
 // переключается на всё более прозрачный материал. Ступеней достаточно шести: разница между
 // соседними на глаз не различима, а материалов остаётся считанные единицы.
 const OPACITY_STEPS = 6;
+const TAU = Math.PI * 2;
+
+function radialVelocity(velocity, horizontalMin, horizontalMax, verticalMin, verticalMax, power = 1) {
+  const angle = Math.random() * TAU;
+  const horizontal = horizontalMin + Math.random() * (horizontalMax - horizontalMin);
+  velocity.set(
+    Math.cos(angle) * horizontal * power,
+    (verticalMin + Math.random() * (verticalMax - verticalMin)) * power,
+    Math.sin(angle) * horizontal * power
+  );
+}
 
 export class Effects {
   constructor(scene, quality = 'high') {
@@ -51,25 +64,74 @@ export class Effects {
     return cached;
   }
 
-  burst(position, color = 0xffffff, count = 10, power = 1) {
+  profileCount(highCount) {
+    return this.quality === 'low' ? Math.max(1, Math.ceil(highCount * 0.72)) : highCount;
+  }
+
+  emit(position, color, count, profile = 'burst', power = 1) {
     const total = Math.min(count, this.max - this.items.length);
     for (let i = 0; i < total; i++) {
       const mesh = this.pool.pop() || new THREE.Mesh(this.geometry, this.material(color, OPACITY_STEPS - 1));
+      const velocity = mesh.userData.velocity || new THREE.Vector3();
       mesh.material = this.material(color, OPACITY_STEPS - 1);
       mesh.visible = true;
       mesh.position.copy(position);
-      mesh.scale.setScalar(0.7 + Math.random() * 0.7);
       mesh.userData.color = color;
-      mesh.userData.velocity = new THREE.Vector3(
-        (Math.random() - 0.5) * 4.8,
-        1.2 + Math.random() * 3.7,
-        (Math.random() - 0.5) * 4.8
-      ).multiplyScalar(power);
-      mesh.userData.life = 0.48 + Math.random() * 0.32;
+      mesh.userData.profile = profile;
+      mesh.userData.velocity = velocity;
+
+      if (profile === 'spring') {
+        radialVelocity(velocity, 0.65, 1.65, 4.4, 7, power);
+        mesh.scale.setScalar(0.58 + Math.random() * 0.48);
+        mesh.userData.life = 0.46 + Math.random() * 0.24;
+      } else if (profile === 'bumper') {
+        radialVelocity(velocity, 3.5, 5.8, 1.1, 3.25, power);
+        mesh.scale.setScalar(0.72 + Math.random() * 0.62);
+        mesh.userData.life = 0.44 + Math.random() * 0.24;
+      } else if (profile === 'spinner') {
+        radialVelocity(velocity, 4.1, 6.2, 0.3, 1.2, power);
+        mesh.scale.setScalar(0.58 + Math.random() * 0.42);
+        mesh.userData.life = 0.34 + Math.random() * 0.2;
+      } else if (profile === 'puncher') {
+        radialVelocity(velocity, 4.5, 6.8, 1.4, 3.5, power);
+        mesh.scale.setScalar(0.78 + Math.random() * 0.62);
+        mesh.userData.life = 0.5 + Math.random() * 0.26;
+      } else {
+        velocity
+          .set(
+            (Math.random() - 0.5) * 4.8,
+            1.2 + Math.random() * 3.7,
+            (Math.random() - 0.5) * 4.8
+          )
+          .multiplyScalar(power);
+        mesh.scale.setScalar(0.7 + Math.random() * 0.7);
+        mesh.userData.life = 0.48 + Math.random() * 0.32;
+      }
+
       mesh.userData.maxLife = mesh.userData.life;
       this.scene.add(mesh);
       this.items.push(mesh);
     }
+  }
+
+  burst(position, color = 0xffffff, count = 10, power = 1) {
+    this.emit(position, color, count, 'burst', power);
+  }
+
+  spring(position, color = 0xffd94b) {
+    this.emit(position, color, this.profileCount(14), 'spring');
+  }
+
+  bumper(position, color = 0xff5a9e) {
+    this.emit(position, color, this.profileCount(16), 'bumper');
+  }
+
+  spinner(position, color = 0xffd94b) {
+    this.emit(position, color, this.profileCount(12), 'spinner');
+  }
+
+  puncher(position, color = 0xff5a9e) {
+    this.emit(position, color, this.profileCount(12), 'puncher');
   }
 
   trail(position, color = 0xffd94b) {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { courseSpec } from '../client/core/Config.js';
 import { Course } from '../client/game/Course.js';
 import { CoopCourse } from '../client/game/CoopCourse.js';
@@ -36,6 +37,36 @@ test('каждая опора гоночной трассы описана чи�
     assertRecordsMatchMeshes(course, 'сразу после постройки');
   } finally {
     course.dispose();
+  }
+});
+
+test('скруглённый visual mesh не меняет box collision и имеет дешёвый low-quality fallback', () => {
+  const spec = courseSpec(20260821, 'easy');
+  const high = new Course(new THREE.Scene(), spec, { quality: 'high' });
+  const low = new Course(new THREE.Scene(), spec, { quality: 'low' });
+  try {
+    const highStart = high.platforms[0];
+    const lowStart = low.platforms[0];
+
+    assert.equal(highStart.type, 'box');
+    assert.equal(lowStart.type, 'box');
+    assert.deepEqual(
+      [highStart.x, highStart.y, highStart.z, highStart.w, highStart.h, highStart.d],
+      [lowStart.x, lowStart.y, lowStart.z, lowStart.w, lowStart.h, lowStart.d]
+    );
+    assert.ok(highStart.mesh.geometry instanceof RoundedBoxGeometry, 'high quality должен скруглять visual mesh');
+    assert.equal(
+      lowStart.mesh.geometry instanceof RoundedBoxGeometry,
+      false,
+      'low quality должен оставаться на дешёвой BoxGeometry'
+    );
+    assert.equal(highStart.mesh.material.roughness, 0.48);
+    assert.equal(highStart.mesh.material.metalness, 0.02);
+    assertRecordsMatchMeshes(high, 'со скруглённым high-quality mesh');
+    assertRecordsMatchMeshes(low, 'с low-quality fallback');
+  } finally {
+    high.dispose();
+    low.dispose();
   }
 });
 
@@ -135,7 +166,7 @@ test('молот и вертушка живут по данным, а меш л�
 test('осыпающаяся плитка кооператива дрожит, падает и возвращается вместе со своей записью', () => {
   const course = new CoopCourse(new THREE.Scene(), coopSpec('ch4'), { quality: 'low' });
   try {
-    assert.ok(course.tiles.length > 0, 'глава обязана содержать осыпающиеся плитки');
+    assert.ok(course.tiles.length > 0);
     assertRecordsMatchMeshes(course, 'сразу после постройки главы');
 
     // Обычно таймер заводит касание игрока. Здесь он заводится напрямую: проверяется не механика

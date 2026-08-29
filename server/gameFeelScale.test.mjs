@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { Character } from '../client/game/Character.js';
+import { Effects } from '../client/game/Effects.js';
 import { flowSignal, nearMissSample, placeDirection } from '../client/game/FeedbackController.js';
 import { PLAYER_RADIUS } from '../client/game/PlayerCollisions.js';
 import {
@@ -150,4 +151,48 @@ test('near miss поддерживает puncher и игнорирует неп�
   assert.equal(near?.key, 'puncher');
   assert.equal(near?.side, 1);
   assert.equal(nearMissSample({ type: 'bumper' }, { x: 0, y: 0, z: 0 }), null);
+});
+
+test('semantic obstacle effects различаются, переиспользуют pool и держат low-quality budget', () => {
+  const scene = new THREE.Scene();
+  const effects = new Effects(scene, 'low');
+  const at = new THREE.Vector3(2, 3, -4);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  const verticalSpeed = mesh => mesh.userData.velocity.y;
+  try {
+    effects.spring(at, 0xffd94b);
+    assert.ok(effects.items.length > 0);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'spring'));
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 4.4));
+    const springMeshes = new Set(effects.items);
+
+    effects.clear();
+    assert.equal(effects.items.length, 0);
+    assert.equal(effects.pool.length, springMeshes.size);
+
+    effects.bumper(at, 0xff5a9e);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'bumper'));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 3.5));
+    assert.ok(
+      effects.items.some(mesh => springMeshes.has(mesh)),
+      'bumper должен переиспользовать pool'
+    );
+
+    effects.clear();
+    effects.spinner(at, 0xffd94b);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'spinner'));
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 0.3 && verticalSpeed(mesh) <= 1.2));
+
+    effects.clear();
+    effects.puncher(at, 0xff5a9e);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'puncher'));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 4.5));
+
+    effects.clear();
+    effects.burst(at, 0xffffff, 100, 1);
+    assert.equal(effects.items.length, 34, 'даже большой burst не должен пробить low-quality cap');
+    assert.ok(effects.items.every(mesh => mesh.geometry === effects.geometry));
+  } finally {
+    effects.dispose();
+  }
 });

@@ -8,6 +8,15 @@ import { applyObstacleImpulses } from '/shared/courseImpulses.js';
 import { VISUAL_TOKENS } from '/shared/palette.js';
 import { COLORS, courseName, courseSpec, seededRandom } from '../core/Config.js';
 
+function playObstacleEffect(effects, name, position, color, fallbackCount, fallbackPower) {
+  const semantic = effects?.[name];
+  if (typeof semantic === 'function') {
+    semantic.call(effects, position, color);
+    return;
+  }
+  effects?.burst?.(position, color, fallbackCount, fallbackPower);
+}
+
 export class Course extends CourseBuilder {
   constructor(scene, spec, { quality = 'high' } = {}) {
     super(scene, { quality });
@@ -113,17 +122,17 @@ export class Course extends CourseBuilder {
       if (event.counted) player.hits++;
       player.impact = Math.max(player.impact, event.impact);
       if (event.name === 'spring') {
-        effects.burst(event.at, COLORS.yellow, 14, 1.1);
+        playObstacleEffect(effects, 'spring', event.at, COLORS.yellow, 14, 1.1);
         player.character.landed(0.6);
         sfx?.spring();
       } else if (event.name === 'bumper') {
-        effects.burst(event.at, event.color, 16, 1.15);
+        playObstacleEffect(effects, 'bumper', event.at, event.color, 16, 1.15);
         sfx?.bumper();
       } else if (event.name === 'spinner') {
-        effects.burst(event.at, COLORS.yellow, 12, 1);
+        playObstacleEffect(effects, 'spinner', event.at, COLORS.yellow, 12, 1);
         sfx?.spinner();
       } else if (event.name === 'puncher') {
-        effects.burst(event.at, COLORS.pink, 12, 1);
+        playObstacleEffect(effects, 'puncher', event.at, COLORS.pink, 12, 1);
         sfx?.puncher();
       }
       if (event.knockdown) player.knockDown?.(event.knockdown);

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { supportIndexAt, supportTop } from '/shared/courseCollision.js';
 import { wallBounceNormalAt } from '/shared/courseWalls.js';
 import { COLORS } from '../core/Config.js';
@@ -17,6 +18,19 @@ export { PLAYER_FOOT } from './PlayerDimensions.js';
 // Игрок, стоящий на неподвижной опоре, не получает переноса. Вектор общий и только читается —
 // иначе каждый шаг физики на статичной платформе выделял бы новый Vector3.
 const ZERO_DELTA = Object.freeze(new THREE.Vector3());
+
+// Базовый язык материалов: матовый цветной пластик, а не блестящий металл. Отдельные игровые
+// объекты могут переопределить roughness, но обычная трасса должна выглядеть цельно без сотен
+// ручных настроек.
+const TOY_ROUGHNESS = 0.48;
+const TOY_METALNESS = 0.02;
+
+function roundedRadius(w, h, d, requested = null) {
+  const smallest = Math.min(w, h, d);
+  const maxRadius = Math.max(0.001, smallest * 0.48);
+  const preferred = requested ?? Math.min(0.32, smallest * 0.28);
+  return Math.min(Math.max(0.001, preferred), maxRadius);
+}
 
 // Единственный способ сдвинуть опору.
 //
@@ -72,14 +86,21 @@ export class CourseBuilder {
   // Важно: раз материал общий, менять его после создания у конкретного меша нельзя — правка
   // расползётся на все меши с тем же материалом. Поэтому свечение и прозрачность задаются здесь же,
   // параметрами, и входят в ключ кэша.
-  material({ color, roughness = 0.3, emissive = null, emissiveIntensity = 1, opacity = 1 } = {}) {
-    const key = `${color}|${roughness}|${emissive}|${emissiveIntensity}|${opacity}`;
+  material({
+    color,
+    roughness = TOY_ROUGHNESS,
+    metalness = TOY_METALNESS,
+    emissive = null,
+    emissiveIntensity = 1,
+    opacity = 1
+  } = {}) {
+    const key = `${color}|${roughness}|${metalness}|${emissive}|${emissiveIntensity}|${opacity}`;
     let cached = this.materials.get(key);
     if (cached) return cached;
     cached = new THREE.MeshStandardMaterial({
       color,
       roughness,
-      metalness: 0.03,
+      metalness,
       transparent: opacity < 1,
       opacity
     });
@@ -100,14 +121,26 @@ export class CourseBuilder {
     d = 1,
     color = COLORS.purple,
     bevel = false,
+    bevelRadius = null,
     collider = true,
+    roughness = TOY_ROUGHNESS,
+    metalness = TOY_METALNESS,
     emissive = null,
     emissiveIntensity = 1,
     opacity = 1,
     wallBounce = false
   } = {}) {
-    const geometry = bevel ? new THREE.BoxGeometry(w, h, d, 2, 1, 2) : new THREE.BoxGeometry(w, h, d);
-    const mesh = new THREE.Mesh(geometry, this.material({ color, emissive, emissiveIntensity, opacity }));
+    // `bevel` меняет только presentation mesh. Плоская collision-запись ниже остаётся обычной
+    // коробкой тех же размеров. На low quality сохраняем дешёвый BoxGeometry: скругление не должно
+    // покупать красоту ценой мобильного FPS.
+    const geometry =
+      bevel && this.quality !== 'low'
+        ? new RoundedBoxGeometry(w, h, d, 3, roundedRadius(w, h, d, bevelRadius))
+        : new THREE.BoxGeometry(w, h, d);
+    const mesh = new THREE.Mesh(
+      geometry,
+      this.material({ color, roughness, metalness, emissive, emissiveIntensity, opacity })
+    );
     mesh.position.set(x, y, z);
     mesh.castShadow = this.quality !== 'low';
     mesh.receiveShadow = true;
@@ -193,9 +226,9 @@ export class CourseBuilder {
     pivot.position.set(x, y, z);
     const bar = new THREE.Mesh(
       new THREE.BoxGeometry(length, 0.48, width),
-      this.material({ color: COLORS.yellow, roughness: 0.24 })
+      this.material({ color: COLORS.yellow, roughness: 0.38 })
     );
-    bar.castShadow = true;
+    bar.castShadow = this.quality !== 'low';
     pivot.add(bar);
     this.group.add(pivot);
     return pivot;
@@ -205,11 +238,11 @@ export class CourseBuilder {
   ringDecor({ x = 0, y = 0, z = 0, radius = 1 } = {}) {
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(radius, 0.095, 6, 16),
-      this.material({ color: 0xffffff, roughness: 0.2 })
+      this.material({ color: 0xffffff, roughness: 0.36 })
     );
     ring.rotation.x = Math.PI / 2;
     ring.position.set(x, y, z);
-    ring.castShadow = true;
+    ring.castShadow = this.quality !== 'low';
     this.group.add(ring);
     return ring;
   }

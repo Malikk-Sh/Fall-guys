@@ -77,7 +77,11 @@ export class Course extends CourseBuilder {
     const key = 'cloud';
     let cached = this.materials.get(key);
     if (!cached) {
-      cached = new THREE.MeshLambertMaterial({ color: VISUAL_TOKENS.cloud, transparent: true, opacity: 0.72 });
+      cached = new THREE.MeshLambertMaterial({
+        color: VISUAL_TOKENS.cloud,
+        transparent: true,
+        opacity: 0.72
+      });
       this.materials.set(key, cached);
     }
     return cached;

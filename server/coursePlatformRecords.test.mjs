@@ -21,6 +21,35 @@ function assertRecordsMatchMeshes(course, when) {
   }
 }
 
+function platformRecord(platform) {
+  return {
+    type: platform.type,
+    x: platform.x,
+    y: platform.y,
+    z: platform.z,
+    w: platform.w,
+    h: platform.h,
+    d: platform.d,
+    r: platform.r,
+    disabled: platform.disabled
+  };
+}
+
+function obstacleRecord(obstacle) {
+  return {
+    type: obstacle.type,
+    x: obstacle.x,
+    y: obstacle.y,
+    z: obstacle.z,
+    radius: obstacle.radius,
+    length: obstacle.length,
+    width: obstacle.width,
+    range: obstacle.range,
+    speed: obstacle.speed,
+    phase: obstacle.phase
+  };
+}
+
 test('каждая опора гоночной трассы описана числами, а не только мешем', () => {
   const course = new Course(new THREE.Scene(), courseSpec(20260821, 'chaos'), { quality: 'low' });
   try {
@@ -68,6 +97,34 @@ test('скруглённый visual mesh не меняет box collision и им
     assertRecordsMatchMeshes(high, 'со скруглённым high-quality mesh');
     assertRecordsMatchMeshes(low, 'с low-quality fallback');
   } finally {
+    high.dispose();
+    low.dispose();
+  }
+});
+
+test('sky playground scenery остаётся presentation-only и сохраняет low-quality budget', () => {
+  class BareCourse extends Course {
+    addScenery() {}
+  }
+
+  const spec = courseSpec(20260821, 'normal');
+  const bare = new BareCourse(new THREE.Scene(), spec, { quality: 'high' });
+  const high = new Course(new THREE.Scene(), spec, { quality: 'high' });
+  const low = new Course(new THREE.Scene(), spec, { quality: 'low' });
+  try {
+    assert.deepEqual(high.platforms.map(platformRecord), bare.platforms.map(platformRecord));
+    assert.deepEqual(high.obstacles.map(obstacleRecord), bare.obstacles.map(obstacleRecord));
+    assert.equal(high.dynamic.length, bare.dynamic.length);
+    assert.equal(high.cameraMeshes.length, bare.cameraMeshes.length);
+
+    assert.ok(high.scenery.length > low.scenery.length, 'high quality должен иметь более богатый scenery');
+    assert.ok(high.group.getObjectByName('scenery-island-0'), 'high quality должен иметь floating island');
+    assert.ok(low.group.getObjectByName('scenery-island-0'), 'low quality сохраняет дешёвый floating island');
+    assert.ok(high.group.getObjectByName('course-landmark-1'), 'трасса должна иметь промежуточный landmark');
+    assert.ok(high.group.getObjectByName('finish-landmark'), 'финиш должен быть видимым издалека landmark');
+    assert.ok(low.group.getObjectByName('finish-landmark'), 'финишный landmark не исчезает на low quality');
+  } finally {
+    bare.dispose();
     high.dispose();
     low.dispose();
   }

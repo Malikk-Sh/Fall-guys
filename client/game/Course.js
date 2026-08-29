@@ -4,6 +4,7 @@ import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
 import { buildRaceGeometry } from '/shared/raceCourseGeometry.js';
 import { applyObstacleImpulses } from '/shared/courseImpulses.js';
+import { VISUAL_TOKENS } from '/shared/palette.js';
 import { COLORS, courseName, courseSpec, seededRandom } from '../core/Config.js';
 
 const palette = [
@@ -52,7 +53,8 @@ export class Course extends CourseBuilder {
   addCheckpointArches() {
     for (let i = 0; i < this.spec.checkpoints.length; i++) {
       const z = this.spec.checkpoints[i],
-        color = i === this.spec.checkpoints.length - 1 ? COLORS.yellow : COLORS.mint;
+        color =
+          i === this.spec.checkpoints.length - 1 ? VISUAL_TOKENS.finishAccent : VISUAL_TOKENS.checkpoint;
       for (const x of [-5.1, 5.1])
         this.box({ x, y: 1.9, z, w: 0.18, h: 2.8, d: 0.18, color, collider: false });
       this.box({
@@ -75,7 +77,11 @@ export class Course extends CourseBuilder {
     const key = 'cloud';
     let cached = this.materials.get(key);
     if (!cached) {
-      cached = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.72 });
+      cached = new THREE.MeshLambertMaterial({
+        color: VISUAL_TOKENS.cloud,
+        transparent: true,
+        opacity: 0.72
+      });
       this.materials.set(key, cached);
     }
     return cached;

@@ -53,7 +53,8 @@ export class Course extends CourseBuilder {
   addCheckpointArches() {
     for (let i = 0; i < this.spec.checkpoints.length; i++) {
       const z = this.spec.checkpoints[i],
-        color = i === this.spec.checkpoints.length - 1 ? VISUAL_TOKENS.finishAccent : VISUAL_TOKENS.checkpoint;
+        color =
+          i === this.spec.checkpoints.length - 1 ? VISUAL_TOKENS.finishAccent : VISUAL_TOKENS.checkpoint;
       for (const x of [-5.1, 5.1])
         this.box({ x, y: 1.9, z, w: 0.18, h: 2.8, d: 0.18, color, collider: false });
       this.box({

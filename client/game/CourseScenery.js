@@ -42,10 +42,18 @@ function addCloudLayers(course, animations) {
         const radius = 1.05 + course.rng() * 0.75;
         const puff = sceneryMesh(
           cloud,
-          new THREE.SphereGeometry(radius, course.quality === 'low' ? 6 : 8, course.quality === 'low' ? 5 : 6),
+          new THREE.SphereGeometry(
+            radius,
+            course.quality === 'low' ? 6 : 8,
+            course.quality === 'low' ? 5 : 6
+          ),
           cloudMaterial(course, layer.opacity)
         );
-        puff.position.set((j - 1) * 1.15 + (course.rng() - 0.5) * 0.35, course.rng() * 0.55, course.rng() - 0.5);
+        puff.position.set(
+          (j - 1) * 1.15 + (course.rng() - 0.5) * 0.35,
+          course.rng() * 0.55,
+          course.rng() - 0.5
+        );
       }
 
       const x = side * (layer.minX + course.rng() * (layer.maxX - layer.minX));

@@ -54,7 +54,10 @@ test('скруглённый visual mesh не меняет box collision и им
       [highStart.x, highStart.y, highStart.z, highStart.w, highStart.h, highStart.d],
       [lowStart.x, lowStart.y, lowStart.z, lowStart.w, lowStart.h, lowStart.d]
     );
-    assert.ok(highStart.mesh.geometry instanceof RoundedBoxGeometry, 'high quality должен скруглять visual mesh');
+    assert.ok(
+      highStart.mesh.geometry instanceof RoundedBoxGeometry,
+      'high quality должен скруглять visual mesh'
+    );
     assert.equal(
       lowStart.mesh.geometry instanceof RoundedBoxGeometry,
       false,
@@ -166,7 +169,7 @@ test('молот и вертушка живут по данным, а меш л�
 test('осыпающаяся плитка кооператива дрожит, падает и возвращается вместе со своей записью', () => {
   const course = new CoopCourse(new THREE.Scene(), coopSpec('ch4'), { quality: 'low' });
   try {
-    assert.ok(course.tiles.length > 0);
+    assert.ok(course.tiles.length > 0, 'глава обязана содержать осыпающиеся плитки');
     assertRecordsMatchMeshes(course, 'сразу после постройки главы');
 
     // Обычно таймер заводит касание игрока. Здесь он заводится напрямую: проверяется не механика

@@ -178,7 +178,9 @@ test('semantic obstacle effects различаются, переиспользу
     effects.clear();
     effects.spinner(at, 0xffd94b);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'spinner'));
-    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 0.3 && mesh.userData.velocity.y <= 1.2));
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 0.3 && mesh.userData.velocity.y <= 1.2)
+    );
 
     effects.clear();
     effects.puncher(at, 0xff5a9e);

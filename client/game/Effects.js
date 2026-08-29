@@ -98,11 +98,7 @@ export class Effects {
         mesh.userData.life = 0.5 + Math.random() * 0.26;
       } else {
         velocity
-          .set(
-            (Math.random() - 0.5) * 4.8,
-            1.2 + Math.random() * 3.7,
-            (Math.random() - 0.5) * 4.8
-          )
+          .set((Math.random() - 0.5) * 4.8, 1.2 + Math.random() * 3.7, (Math.random() - 0.5) * 4.8)
           .multiplyScalar(power);
         mesh.scale.setScalar(0.7 + Math.random() * 0.7);
         mesh.userData.life = 0.48 + Math.random() * 0.32;

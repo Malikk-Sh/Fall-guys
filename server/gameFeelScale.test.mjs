@@ -173,7 +173,10 @@ test('semantic obstacle effects различаются, переиспользу
     effects.bumper(at, 0xff5a9e);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'bumper'));
     assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 3.5));
-    assert.ok(effects.items.some(mesh => springMeshes.has(mesh)), 'bumper должен переиспользовать pool');
+    assert.ok(
+      effects.items.some(mesh => springMeshes.has(mesh)),
+      'bumper должен переиспользовать pool'
+    );
 
     effects.clear();
     effects.spinner(at, 0xffd94b);

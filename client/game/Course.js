@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CourseBuilder } from './CourseBuilder.js';
+import { buildCourseScenery, updateCourseScenery } from './CourseScenery.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
 import { buildRaceGeometry } from '/shared/raceCourseGeometry.js';
@@ -7,15 +8,6 @@ import { applyObstacleImpulses } from '/shared/courseImpulses.js';
 import { VISUAL_TOKENS } from '/shared/palette.js';
 import { COLORS, courseName, courseSpec, seededRandom } from '../core/Config.js';
 
-const palette = [
-  COLORS.purple,
-  COLORS.orange,
-  COLORS.cyan,
-  COLORS.pink,
-  COLORS.blue,
-  COLORS.mint,
-  COLORS.yellow
-];
 export class Course extends CourseBuilder {
   constructor(scene, spec, { quality = 'high' } = {}) {
     super(scene, { quality });
@@ -71,59 +63,10 @@ export class Course extends CourseBuilder {
       });
     }
   }
-  // Облака намеренно используют дешёвый Lambert вместо Standard: они далеко, физически корректное
-  // освещение на них не читается, а материал у всех клубов один на всю трассу.
-  cloudMaterial() {
-    const key = 'cloud';
-    let cached = this.materials.get(key);
-    if (!cached) {
-      cached = new THREE.MeshLambertMaterial({
-        color: VISUAL_TOKENS.cloud,
-        transparent: true,
-        opacity: 0.72
-      });
-      this.materials.set(key, cached);
-    }
-    return cached;
-  }
   addScenery() {
-    const count = this.quality === 'low' ? 14 : 28;
-    for (let i = 0; i < count; i++) {
-      const side = i % 2 ? -1 : 1,
-        x = side * (10 + this.rng() * 34),
-        z = 10 - this.rng() * (Math.abs(this.spec.finishZ) + 45),
-        y = -2 + this.rng() * 12;
-      if (i % 3 === 0) {
-        const cloud = new THREE.Group();
-        for (let j = 0; j < 3; j++) {
-          const puff = new THREE.Mesh(
-            new THREE.SphereGeometry(1.2 + this.rng() * 0.9, 8, 6),
-            this.cloudMaterial()
-          );
-          puff.position.set(j * 1.25, this.rng() * 0.6, this.rng() - 0.5);
-          cloud.add(puff);
-        }
-        cloud.position.set(x, y + 6, z);
-        cloud.scale.setScalar(1 + this.rng() * 1.5);
-        this.group.add(cloud);
-        this.scenery.push({ mesh: cloud, speed: (0.15 + this.rng() * 0.18) * side, baseX: x });
-      } else {
-        const piece = this.box({
-          x,
-          y,
-          z,
-          w: 0.8 + this.rng() * 2.5,
-          h: 1.5 + this.rng() * 5,
-          d: 0.8 + this.rng() * 2.5,
-          color: palette[i % palette.length],
-          collider: false
-        }).mesh;
-        piece.rotation.set(this.rng(), this.rng(), this.rng());
-        this.scenery.push({ mesh: piece, speed: (this.rng() - 0.5) * 0.28, baseY: y });
-      }
-    }
+    this.scenery.push(...buildCourseScenery(this));
   }
-  update(dt, elapsed) {
+  update(_dt, elapsed) {
     this.updateDynamic(elapsed);
     for (const obstacle of this.obstacles) {
       if (obstacle.type === 'spinner') {
@@ -142,11 +85,7 @@ export class Course extends CourseBuilder {
         obstacle.inner.scale.set(s, 1, s);
       }
     }
-    for (const item of this.scenery) {
-      if (item.baseX !== undefined)
-        item.mesh.position.x = item.baseX + Math.sin(elapsed * 0.08 + item.baseX) * 2;
-      item.mesh.rotation.y += item.speed * dt;
-    }
+    updateCourseScenery(this.scenery, elapsed);
   }
   // Реакция на препятствия. Вызывается из шага физики.
   //

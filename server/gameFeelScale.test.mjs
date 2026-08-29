@@ -157,11 +157,13 @@ test('semantic obstacle effects различаются, переиспользу
   const scene = new THREE.Scene();
   const effects = new Effects(scene, 'low');
   const at = new THREE.Vector3(2, 3, -4);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  const verticalSpeed = mesh => mesh.userData.velocity.y;
   try {
     effects.spring(at, 0xffd94b);
     assert.ok(effects.items.length > 0);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'spring'));
-    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 4.4));
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 4.4));
     const springMeshes = new Set(effects.items);
 
     effects.clear();
@@ -170,24 +172,18 @@ test('semantic obstacle effects различаются, переиспользу
 
     effects.bumper(at, 0xff5a9e);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'bumper'));
-    assert.ok(
-      effects.items.every(mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z) >= 3.5)
-    );
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 3.5));
     assert.ok(effects.items.some(mesh => springMeshes.has(mesh)), 'bumper должен переиспользовать pool');
 
     effects.clear();
     effects.spinner(at, 0xffd94b);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'spinner'));
-    assert.ok(
-      effects.items.every(mesh => mesh.userData.velocity.y >= 0.3 && mesh.userData.velocity.y <= 1.2)
-    );
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 0.3 && verticalSpeed(mesh) <= 1.2));
 
     effects.clear();
     effects.puncher(at, 0xff5a9e);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'puncher'));
-    assert.ok(
-      effects.items.every(mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z) >= 4.5)
-    );
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 4.5));
 
     effects.clear();
     effects.burst(at, 0xffffff, 100, 1);

@@ -206,7 +206,9 @@ test('race milestone effects читаются по-разному и остаю�
     effects.checkpoint(at, 0x78f0bc);
     assert.equal(effects.items.length, 16);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'checkpoint'));
-    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 5.2 && mesh.userData.velocity.y <= 8.2));
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 5.2 && mesh.userData.velocity.y <= 8.2)
+    );
     assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) <= 2.3));
     const checkpointMeshes = new Set(effects.items);
 
@@ -215,8 +217,13 @@ test('race milestone effects читаются по-разному и остаю�
     assert.equal(effects.items.length, 25);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'finish'));
     assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 2.6));
-    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 4.1 && mesh.userData.velocity.y <= 8.4));
-    assert.ok(effects.items.some(mesh => checkpointMeshes.has(mesh)), 'finish должен переиспользовать тот же pool');
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 4.1 && mesh.userData.velocity.y <= 8.4)
+    );
+    assert.ok(
+      effects.items.some(mesh => checkpointMeshes.has(mesh)),
+      'finish должен переиспользовать тот же pool'
+    );
     assert.ok(effects.items.length <= effects.max);
   } finally {
     effects.dispose();

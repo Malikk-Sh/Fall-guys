@@ -4,7 +4,8 @@ import * as THREE from 'three';
 import { Character } from '../client/game/Character.js';
 import { PLAYER_VISUAL_SCALE } from '../client/game/PlayerDimensions.js';
 
-const eyeHeight = character => character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
+const eyeHeight = character =>
+  character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
 
 function animateFrames(character, frames, state) {
   for (let i = 0; i < frames; i++) character.animate(1 / 60, state);
@@ -45,7 +46,10 @@ test('air и knockdown меняют только выражение глаз и 
   assert.ok(knockedEyes < 0.72, 'при knockdown нужен короткий читаемый squint');
 
   animateFrames(knocked, 36, { speed: 0, grounded: true, recovering: true });
-  assert.ok(eyeHeight(knocked) > knockedEyes + 0.18, 'после подъёма выражение должно вернуться к нейтрали');
+  assert.ok(
+    eyeHeight(knocked) > knockedEyes + 0.18,
+    'после подъёма выражение должно вернуться к нейтрали'
+  );
   assert.equal(knocked.group.scale.x, PLAYER_VISUAL_SCALE);
 
   airborne.dispose();

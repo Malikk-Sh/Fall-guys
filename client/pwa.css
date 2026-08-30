@@ -638,3 +638,307 @@ body.mobile-reduced-motion .rotate-phone {
     display: none !important;
   }
 }
+
+/* Race presentation ---------------------------------------------------------- */
+#countdown.countdown {
+  background:
+    radial-gradient(circle at 50% 47%, #ffdd4c24 0 17%, transparent 43%),
+    radial-gradient(circle at 50% 50%, #4ce0df18 0 33%, transparent 62%), #25165f24;
+  backdrop-filter: saturate(1.08);
+}
+#countdown.countdown span {
+  position: relative;
+  display: grid;
+  min-width: min(70vw, 420px);
+  min-height: min(46vw, 250px);
+  padding: 26px 34px 30px;
+  place-items: center;
+  border: 3px solid #ffffffc9;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(145deg, #6d50dcf2, #43239bdd);
+  box-shadow:
+    0 12px 0 #38207b,
+    0 26px 70px #2812657a,
+    inset 0 4px #ffffff4f;
+  font-size: clamp(48px, 14vw, 150px);
+  line-height: 0.86;
+  letter-spacing: -0.055em;
+  text-align: center;
+  text-shadow:
+    0 7px 0 #4d31af,
+    0 14px 30px #24125080;
+  animation: race-count-pop 0.48s cubic-bezier(0.17, 0.9, 0.35, 1.35);
+}
+#countdown.countdown span::before,
+#countdown.countdown span::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+#countdown.countdown span::before {
+  inset: -19px;
+  border: 4px solid #ffdd4c96;
+  border-radius: inherit;
+  box-shadow: 0 0 36px #ffdd4c5c;
+  animation: race-count-ring 0.48s ease-out both;
+}
+#countdown.countdown span::after {
+  width: 52%;
+  height: 10px;
+  bottom: 18px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #4ce0df, #ffdd4c, #ff4f92);
+  box-shadow: 0 0 24px #4ce0df6b;
+}
+
+.checkpoint-banner {
+  min-width: min(360px, calc(100vw - 32px));
+  padding: 13px 56px 13px 18px;
+  overflow: hidden;
+  border: 2px solid #ffffffc7;
+  border-radius: 18px;
+  background:
+    linear-gradient(90deg, #4ce0df22, transparent 45%), linear-gradient(145deg, #382182f2, #25145eea);
+  box-shadow:
+    0 11px 0 #21104f47,
+    0 22px 44px #26165d66,
+    inset 0 2px #ffffff30;
+  pointer-events: none;
+  text-align: left;
+  animation: race-checkpoint-pop 0.9s cubic-bezier(0.2, 0.85, 0.25, 1) both;
+}
+.checkpoint-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 7px;
+  background: linear-gradient(var(--world-accent, #4ce0df), var(--world-secondary, #ffdd4c));
+  box-shadow: 0 0 22px var(--world-glow, #4ce0df9a);
+}
+.checkpoint-banner::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  right: 17px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%) rotate(-5deg);
+  place-items: center;
+  border-radius: 50%;
+  color: #28165f;
+  background: var(--world-secondary, var(--yellow));
+  box-shadow: 0 4px 0 #c98623;
+  font-size: 18px;
+  font-weight: 950;
+}
+.checkpoint-banner small {
+  display: block;
+  margin-bottom: 2px;
+  color: #91fff0;
+  font-size: 9px;
+  letter-spacing: 0.19em;
+}
+.checkpoint-banner strong {
+  color: #fff;
+  font-size: 25px;
+  letter-spacing: 0.02em;
+  text-shadow: 0 3px #332078;
+}
+
+#hud .hud-progress {
+  border-color: #ffffff6b;
+  background:
+    linear-gradient(180deg, #ffffff0e, transparent 52%), linear-gradient(145deg, #352078e8, #221452e8);
+  box-shadow:
+    0 8px 22px #1e104752,
+    inset 0 1px #ffffff25;
+}
+#hud .hud-progress-label {
+  color: #d9d6f5;
+}
+#hud #stageName {
+  color: #fff;
+  text-shadow: 0 2px 9px #160c3d;
+}
+#hud .progress-track {
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid #ffffff24;
+  background: #160d43b8;
+  box-shadow: inset 0 2px 6px #0e092d8c;
+}
+#progressFill {
+  position: relative;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4ce0df 0 55%, #ffdd4c 78%, #ff9c4a 100%);
+  box-shadow:
+    0 0 12px #4ce0df8c,
+    inset 0 2px #ffffff75;
+}
+#progressFill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(105deg, transparent 25%, #ffffff70 48%, transparent 70%);
+  animation: race-progress-shine 2.7s ease-in-out infinite;
+}
+
+#finish .finish-card {
+  border-color: #fff1ad;
+  background:
+    radial-gradient(circle at 50% 0, #ffdd4c24 0 20%, transparent 48%),
+    linear-gradient(145deg, #4c2ca4f7, #241356f7);
+  box-shadow:
+    0 24px 80px #1d0d506e,
+    0 0 0 5px #ffffff0d,
+    inset 0 2px #ffffff42;
+}
+#finish .finish-card::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 9%;
+  width: 82%;
+  height: 7px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(90deg, #4ce0df, #ffdd4c 48%, #ff4f92);
+  box-shadow: 0 0 22px #ffdd4c5e;
+}
+#finish .finish-card > * {
+  position: relative;
+  z-index: 1;
+}
+#finish .finish-card .eyebrow,
+#finishEyebrow {
+  color: #a6fff1;
+}
+#finish .finish-card h2 {
+  letter-spacing: -0.035em;
+  text-shadow:
+    0 5px #3b2388,
+    0 12px 24px #1c0d4c69;
+}
+#finish .medal {
+  filter: drop-shadow(0 12px 18px #170a477a);
+  animation: race-medal-arrive 0.72s cubic-bezier(0.16, 0.9, 0.25, 1.25);
+}
+
+@keyframes race-count-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.72) rotate(-4deg);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.06) rotate(1deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+@keyframes race-count-ring {
+  from {
+    opacity: 0;
+    transform: scale(0.76);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+@keyframes race-checkpoint-pop {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -58%) scale(0.78) rotate(-2deg);
+  }
+  22% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.04) rotate(0.5deg);
+  }
+  76% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -44%) scale(0.98);
+  }
+}
+@keyframes race-progress-shine {
+  0%,
+  58% {
+    transform: translateX(-120%);
+  }
+  82%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+@keyframes race-medal-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.62) rotate(-10deg);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.08) rotate(2deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+
+@media (max-width: 600px) {
+  #countdown.countdown span {
+    min-width: min(82vw, 360px);
+    min-height: 150px;
+    padding: 20px 24px 24px;
+    font-size: clamp(44px, 13vw, 90px);
+  }
+  .checkpoint-banner {
+    top: 22%;
+    min-width: min(330px, calc(100vw - 24px));
+  }
+}
+
+@media (max-height: 600px) and (orientation: landscape) {
+  #countdown.countdown span {
+    min-width: min(46vw, 340px);
+    min-height: min(42vh, 180px);
+    padding: 15px 24px 19px;
+    font-size: clamp(42px, 12vh, 78px);
+  }
+  .checkpoint-banner {
+    top: 31%;
+    min-width: min(310px, 48vw);
+    padding-block: 9px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #countdown.countdown span,
+  #countdown.countdown span::before,
+  .checkpoint-banner,
+  #progressFill::after,
+  #finish .medal {
+    animation: none;
+  }
+}
+body.reduced-motion #countdown.countdown span,
+body.reduced-motion #countdown.countdown span::before,
+body.reduced-motion .checkpoint-banner,
+body.reduced-motion #progressFill::after,
+body.reduced-motion #finish .medal,
+body.mobile-reduced-motion #countdown.countdown span,
+body.mobile-reduced-motion #countdown.countdown span::before,
+body.mobile-reduced-motion .checkpoint-banner,
+body.mobile-reduced-motion #progressFill::after,
+body.mobile-reduced-motion #finish .medal {
+  animation: none;
+}

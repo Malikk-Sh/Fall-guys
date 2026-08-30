@@ -47,6 +47,15 @@ function playMilestoneEffect(effects, name, position, color, fallbackCount, fall
   effects?.burst?.(position, color, fallbackCount, fallbackPower);
 }
 
+function playMotionEffect(effects, name, position, color, fallbackCount, fallbackPower) {
+  const semantic = effects?.[name];
+  if (typeof semantic === 'function') {
+    semantic.call(effects, position, color, fallbackCount);
+    return;
+  }
+  effects?.burst?.(position, color, fallbackCount, fallbackPower);
+}
+
 export class Player {
   constructor(scene, course, effects, options = {}) {
     this.course = course;
@@ -187,7 +196,14 @@ export class Player {
         this.landingRetention = LANDING_RETENTION_TIME;
       }
       this.rollTimer = 0;
-      this.effects.burst(this._scratch.copy(this.physics).setY(this.physics.y - 0.3), COLORS.white, 8, 0.72);
+      playMotionEffect(
+        this.effects,
+        'jump',
+        this._scratch.copy(this.physics).setY(this.physics.y - 0.3),
+        COLORS.white,
+        8,
+        0.72
+      );
       this.sfx?.jump();
       this.haptics?.vibrate(0.32);
     }
@@ -325,11 +341,14 @@ export class Player {
     for (const event of contact.events) {
       if (event.name !== 'land') continue;
       const strength = Math.min(1, Math.abs(event.landingVelocity) / 12);
+      const particleCount = Math.min(12, 4 + Math.floor(Math.abs(event.landingVelocity)));
       this.character.landed(strength);
-      this.effects.burst(
+      playMotionEffect(
+        this.effects,
+        'landing',
         this._scratch.copy(this.physics).setY(this.physics.y - 0.4),
         COLORS.white,
-        Math.min(12, 4 + Math.floor(Math.abs(event.landingVelocity))),
+        particleCount,
         0.55
       );
       this.sfx?.land(strength);
@@ -506,7 +525,7 @@ export class Player {
 
   respawn(authoritativePosition = null, notify = true) {
     if (notify) this.respawns++;
-    this.effects.burst(this.physics, COLORS.cyan, 18, 1);
+    playMotionEffect(this.effects, 'respawn', this.physics, COLORS.cyan, 18, 1);
     this.physics.copy(authoritativePosition || this.spawn);
     // Сбрасываем и предыдущую позицию тоже: иначе кадр отрисовки проинтерполирует телепорт
     // и персонаж «пролетит» через полкарты.

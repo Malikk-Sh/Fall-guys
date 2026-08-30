@@ -96,6 +96,14 @@ export class Effects {
         radialVelocity(velocity, 4.5, 6.8, 1.4, 3.5, power);
         mesh.scale.setScalar(0.78 + Math.random() * 0.62);
         mesh.userData.life = 0.5 + Math.random() * 0.26;
+      } else if (profile === 'checkpoint') {
+        radialVelocity(velocity, 0.9, 2.3, 5.2, 8.2, power);
+        mesh.scale.setScalar(0.62 + Math.random() * 0.5);
+        mesh.userData.life = 0.62 + Math.random() * 0.28;
+      } else if (profile === 'finish') {
+        radialVelocity(velocity, 2.6, 5.4, 4.1, 8.4, power);
+        mesh.scale.setScalar(0.72 + Math.random() * 0.72);
+        mesh.userData.life = 0.72 + Math.random() * 0.34;
       } else {
         velocity
           .set((Math.random() - 0.5) * 4.8, 1.2 + Math.random() * 3.7, (Math.random() - 0.5) * 4.8)
@@ -128,6 +136,14 @@ export class Effects {
 
   puncher(position, color = 0xff5a9e) {
     this.emit(position, color, this.profileCount(12), 'puncher');
+  }
+
+  checkpoint(position, color = 0x78f0bc) {
+    this.emit(position, color, this.profileCount(22), 'checkpoint');
+  }
+
+  finish(position, color = 0xffd94b) {
+    this.emit(position, color, this.profileCount(34), 'finish');
   }
 
   trail(position, color = 0xffd94b) {

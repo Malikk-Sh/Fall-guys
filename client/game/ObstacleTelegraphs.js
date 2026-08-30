@@ -108,18 +108,52 @@ function spinnerTelegraph(course, obstacle, index) {
   return [cap, ring];
 }
 
+function puncherTelegraph(course, obstacle, index) {
+  const badge = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5, 0.5, 0.08, course.quality === 'low' ? 10 : 18),
+    course.material({
+      color: COLORS.yellow,
+      roughness: 0.34,
+      emissive: COLORS.yellow,
+      emissiveIntensity: 0.72
+    })
+  );
+  badge.rotation.x = Math.PI / 2;
+  badge.position.set(0, 0.08, 0.72);
+  badge.name = `telegraph-puncher-badge-${index}`;
+  obstacle.mesh.add(badge);
+
+  const visuals = [badge];
+  if (course.quality === 'low') return visuals;
+
+  const ink = course.material({ color: 0xffffff, roughness: 0.28 });
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.5, 0.07), ink);
+  bar.position.set(0, 0.14, 0.78);
+  bar.name = `telegraph-puncher-mark-${index}`;
+  obstacle.mesh.add(bar);
+
+  const dot = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.07), ink);
+  dot.position.set(0, -0.24, 0.78);
+  dot.name = `telegraph-puncher-dot-${index}`;
+  obstacle.mesh.add(dot);
+  visuals.push(bar, dot);
+  return visuals;
+}
+
 // Дальняя читаемость препятствий из gameplay capture: крупные верхние caps и контрастные метки
-// помогают распознать тип до контакта. Здесь нет коллайдеров, camera meshes или собственных
-// таймеров — это только дополнительные дети course.group поверх уже созданных obstacle records.
+// помогают распознать тип до контакта. Статичные детали живут в course.group; badge puncher — ребёнок
+// его obstacle.mesh и потому повторяет подтверждённое физикой движение без собственного update clock.
 export function buildObstacleTelegraphs(course) {
   const visuals = [];
   let bumperIndex = 0;
   let springIndex = 0;
   let spinnerIndex = 0;
+  let puncherIndex = 0;
   for (const obstacle of course.obstacles) {
     if (obstacle.type === 'bumper') visuals.push(...bumperTelegraph(course, obstacle, bumperIndex++));
     else if (obstacle.type === 'spring') visuals.push(...springTelegraph(course, obstacle, springIndex++));
     else if (obstacle.type === 'spinner') visuals.push(...spinnerTelegraph(course, obstacle, spinnerIndex++));
+    else if (obstacle.type === 'puncher') visuals.push(...puncherTelegraph(course, obstacle, puncherIndex++));
   }
   return visuals;
 }

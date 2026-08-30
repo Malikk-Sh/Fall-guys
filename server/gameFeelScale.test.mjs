@@ -239,10 +239,7 @@ test('air и knockdown меняют только выражение глаз и 
   assert.ok(knockedEyes < 0.72, 'при knockdown нужен короткий читаемый squint');
 
   animateFacialFrames(knocked, 36, { speed: 0, grounded: true, recovering: true });
-  assert.ok(
-    eyeHeight(knocked) > knockedEyes + 0.18,
-    'после подъёма выражение должно вернуться к нейтрали'
-  );
+  assert.ok(eyeHeight(knocked) > knockedEyes + 0.18, 'после подъёма выражение должно вернуться к нейтрали');
   assert.equal(knocked.group.scale.x, PLAYER_VISUAL_SCALE);
 
   airborne.dispose();

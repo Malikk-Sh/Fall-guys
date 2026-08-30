@@ -38,6 +38,15 @@ export { playerTuning };
 // и «кто именно бьёт» решают сами игроки, а не разметка уровня.
 const SLAM_SPEED = 26;
 
+function playMilestoneEffect(effects, name, position, color, fallbackCount, fallbackPower) {
+  const semantic = effects?.[name];
+  if (typeof semantic === 'function') {
+    semantic.call(effects, position, color);
+    return;
+  }
+  effects?.burst?.(position, color, fallbackCount, fallbackPower);
+}
+
 export class Player {
   constructor(scene, course, effects, options = {}) {
     this.course = course;
@@ -363,7 +372,7 @@ export class Player {
     if (next > this.checkpoint) {
       this.checkpoint = next;
       this.spawn.copy(this.course.spawnFor(next));
-      this.effects.burst(this.physics, COLORS.mint, 18, 1);
+      playMilestoneEffect(this.effects, 'checkpoint', this.physics, COLORS.mint, 18, 1);
       this.sfx?.checkpoint();
       this.haptics?.vibrate(0.7);
       this.onCheckpoint(next);
@@ -379,7 +388,7 @@ export class Player {
     ) {
       this.finished = true;
       this.velocity.set(0, 0, 0);
-      this.effects.burst(this.physics, COLORS.yellow, 30, 1.25);
+      playMilestoneEffect(this.effects, 'finish', this.physics, COLORS.yellow, 30, 1.25);
       this.sfx?.finish();
       this.haptics?.vibrate(1);
       this.onFinish();

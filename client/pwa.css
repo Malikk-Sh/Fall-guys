@@ -692,7 +692,7 @@ body.mobile-reduced-motion .rotate-phone {
   box-shadow: 0 0 24px #4ce0df6b;
 }
 
-#checkpointBanner.checkpoint-banner {
+.checkpoint-banner {
   min-width: min(360px, calc(100vw - 32px));
   padding: 13px 56px 13px 18px;
   overflow: hidden;
@@ -704,18 +704,19 @@ body.mobile-reduced-motion .rotate-phone {
     0 11px 0 #21104f47,
     0 22px 44px #26165d66,
     inset 0 2px #ffffff30;
+  pointer-events: none;
   text-align: left;
   animation: race-checkpoint-pop 0.9s cubic-bezier(0.2, 0.85, 0.25, 1) both;
 }
-#checkpointBanner.checkpoint-banner::before {
+.checkpoint-banner::before {
   content: '';
   position: absolute;
   inset: 0 auto 0 0;
   width: 7px;
-  background: linear-gradient(#4ce0df, #ffdd4c);
-  box-shadow: 0 0 22px #4ce0df9a;
+  background: linear-gradient(var(--world-accent, #4ce0df), var(--world-secondary, #ffdd4c));
+  box-shadow: 0 0 22px var(--world-glow, #4ce0df9a);
 }
-#checkpointBanner.checkpoint-banner::after {
+.checkpoint-banner::after {
   content: '✓';
   position: absolute;
   top: 50%;
@@ -727,19 +728,19 @@ body.mobile-reduced-motion .rotate-phone {
   place-items: center;
   border-radius: 50%;
   color: #28165f;
-  background: var(--yellow);
+  background: var(--world-secondary, var(--yellow));
   box-shadow: 0 4px 0 #c98623;
   font-size: 18px;
   font-weight: 950;
 }
-#checkpointBanner.checkpoint-banner small {
+.checkpoint-banner small {
   display: block;
   margin-bottom: 2px;
   color: #91fff0;
   font-size: 9px;
   letter-spacing: 0.19em;
 }
-#checkpointBanner.checkpoint-banner strong {
+.checkpoint-banner strong {
   color: #fff;
   font-size: 25px;
   letter-spacing: 0.02em;
@@ -900,7 +901,7 @@ body.mobile-reduced-motion .rotate-phone {
     padding: 20px 24px 24px;
     font-size: clamp(44px, 13vw, 90px);
   }
-  #checkpointBanner.checkpoint-banner {
+  .checkpoint-banner {
     top: 22%;
     min-width: min(330px, calc(100vw - 24px));
   }
@@ -913,7 +914,7 @@ body.mobile-reduced-motion .rotate-phone {
     padding: 15px 24px 19px;
     font-size: clamp(42px, 12vh, 78px);
   }
-  #checkpointBanner.checkpoint-banner {
+  .checkpoint-banner {
     top: 31%;
     min-width: min(310px, 48vw);
     padding-block: 9px;
@@ -923,7 +924,7 @@ body.mobile-reduced-motion .rotate-phone {
 @media (prefers-reduced-motion: reduce) {
   #countdown.countdown span,
   #countdown.countdown span::before,
-  #checkpointBanner.checkpoint-banner,
+  .checkpoint-banner,
   #progressFill::after,
   #finish .medal {
     animation: none;
@@ -931,12 +932,12 @@ body.mobile-reduced-motion .rotate-phone {
 }
 body.reduced-motion #countdown.countdown span,
 body.reduced-motion #countdown.countdown span::before,
-body.reduced-motion #checkpointBanner.checkpoint-banner,
+body.reduced-motion .checkpoint-banner,
 body.reduced-motion #progressFill::after,
 body.reduced-motion #finish .medal,
 body.mobile-reduced-motion #countdown.countdown span,
 body.mobile-reduced-motion #countdown.countdown span::before,
-body.mobile-reduced-motion #checkpointBanner.checkpoint-banner,
+body.mobile-reduced-motion .checkpoint-banner,
 body.mobile-reduced-motion #progressFill::after,
 body.mobile-reduced-motion #finish .medal {
   animation: none;

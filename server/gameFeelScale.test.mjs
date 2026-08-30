@@ -197,6 +197,32 @@ test('semantic obstacle effects различаются, переиспользу
   }
 });
 
+test('race milestone effects читаются по-разному и остаются в общем low-quality pool', () => {
+  const scene = new THREE.Scene();
+  const effects = new Effects(scene, 'low');
+  const at = new THREE.Vector3(0, 1, -18);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  try {
+    effects.checkpoint(at, 0x78f0bc);
+    assert.equal(effects.items.length, 16);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'checkpoint'));
+    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 5.2 && mesh.userData.velocity.y <= 8.2));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) <= 2.3));
+    const checkpointMeshes = new Set(effects.items);
+
+    effects.clear();
+    effects.finish(at, 0xffd94b);
+    assert.equal(effects.items.length, 25);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'finish'));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 2.6));
+    assert.ok(effects.items.every(mesh => mesh.userData.velocity.y >= 4.1 && mesh.userData.velocity.y <= 8.4));
+    assert.ok(effects.items.some(mesh => checkpointMeshes.has(mesh)), 'finish должен переиспользовать тот же pool');
+    assert.ok(effects.items.length <= effects.max);
+  } finally {
+    effects.dispose();
+  }
+});
+
 const eyeHeight = character =>
   character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
 

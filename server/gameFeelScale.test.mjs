@@ -235,14 +235,13 @@ test('player motion effects разделяют takeoff landing и respawn в т�
   const effects = new Effects(scene, 'low');
   const at = new THREE.Vector3(0, 1, 0);
   const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  const verticalSpeed = mesh => mesh.userData.velocity.y;
   try {
     effects.jump(at, 0xffffff);
     assert.equal(effects.items.length, 6);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'jump'));
     assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 0.8 && horizontalSpeed(mesh) <= 1.9));
-    assert.ok(
-      effects.items.every(mesh => mesh.userData.velocity.y >= 1.3 && mesh.userData.velocity.y <= 2.8)
-    );
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 1.3 && verticalSpeed(mesh) <= 2.8));
     const jumpMeshes = new Set(effects.items);
 
     effects.clear();
@@ -250,18 +249,14 @@ test('player motion effects разделяют takeoff landing и respawn в т�
     assert.equal(effects.items.length, 9);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'landing'));
     assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 1.9 && horizontalSpeed(mesh) <= 3.8));
-    assert.ok(
-      effects.items.every(mesh => mesh.userData.velocity.y >= 0.45 && mesh.userData.velocity.y <= 1.35)
-    );
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 0.45 && verticalSpeed(mesh) <= 1.35));
     assert.ok(effects.items.some(mesh => jumpMeshes.has(mesh)), 'landing должен переиспользовать pool');
 
     effects.clear();
     effects.respawn(at, 0x55e7ff);
     assert.equal(effects.items.length, 13);
     assert.ok(effects.items.every(mesh => mesh.userData.profile === 'respawn'));
-    assert.ok(
-      effects.items.every(mesh => mesh.userData.velocity.y >= 2.6 && mesh.userData.velocity.y <= 5.2)
-    );
+    assert.ok(effects.items.every(mesh => verticalSpeed(mesh) >= 2.6 && verticalSpeed(mesh) <= 5.2));
     assert.ok(effects.items.length <= effects.max);
   } finally {
     effects.dispose();

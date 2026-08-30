@@ -230,6 +230,44 @@ test('race milestone effects читаются по-разному и остаю�
   }
 });
 
+test('player motion effects разделяют takeoff landing и respawn в том же low-quality pool', () => {
+  const scene = new THREE.Scene();
+  const effects = new Effects(scene, 'low');
+  const at = new THREE.Vector3(0, 1, 0);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  try {
+    effects.jump(at, 0xffffff);
+    assert.equal(effects.items.length, 6);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'jump'));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 0.8 && horizontalSpeed(mesh) <= 1.9));
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 1.3 && mesh.userData.velocity.y <= 2.8)
+    );
+    const jumpMeshes = new Set(effects.items);
+
+    effects.clear();
+    effects.landing(at, 0xffffff, 12);
+    assert.equal(effects.items.length, 9);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'landing'));
+    assert.ok(effects.items.every(mesh => horizontalSpeed(mesh) >= 1.9 && horizontalSpeed(mesh) <= 3.8));
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 0.45 && mesh.userData.velocity.y <= 1.35)
+    );
+    assert.ok(effects.items.some(mesh => jumpMeshes.has(mesh)), 'landing должен переиспользовать pool');
+
+    effects.clear();
+    effects.respawn(at, 0x55e7ff);
+    assert.equal(effects.items.length, 13);
+    assert.ok(effects.items.every(mesh => mesh.userData.profile === 'respawn'));
+    assert.ok(
+      effects.items.every(mesh => mesh.userData.velocity.y >= 2.6 && mesh.userData.velocity.y <= 5.2)
+    );
+    assert.ok(effects.items.length <= effects.max);
+  } finally {
+    effects.dispose();
+  }
+});
+
 const eyeHeight = character =>
   character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
 

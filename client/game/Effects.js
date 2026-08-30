@@ -104,6 +104,18 @@ export class Effects {
         radialVelocity(velocity, 2.6, 5.4, 4.1, 8.4, power);
         mesh.scale.setScalar(0.72 + Math.random() * 0.72);
         mesh.userData.life = 0.72 + Math.random() * 0.34;
+      } else if (profile === 'jump') {
+        radialVelocity(velocity, 0.8, 1.9, 1.3, 2.8, power);
+        mesh.scale.setScalar(0.52 + Math.random() * 0.42);
+        mesh.userData.life = 0.34 + Math.random() * 0.18;
+      } else if (profile === 'landing') {
+        radialVelocity(velocity, 1.9, 3.8, 0.45, 1.35, power);
+        mesh.scale.setScalar(0.58 + Math.random() * 0.48);
+        mesh.userData.life = 0.38 + Math.random() * 0.2;
+      } else if (profile === 'respawn') {
+        radialVelocity(velocity, 1.4, 2.8, 2.6, 5.2, power);
+        mesh.scale.setScalar(0.62 + Math.random() * 0.54);
+        mesh.userData.life = 0.5 + Math.random() * 0.28;
       } else {
         velocity
           .set((Math.random() - 0.5) * 4.8, 1.2 + Math.random() * 3.7, (Math.random() - 0.5) * 4.8)
@@ -144,6 +156,18 @@ export class Effects {
 
   finish(position, color = 0xffd94b) {
     this.emit(position, color, this.profileCount(34), 'finish');
+  }
+
+  jump(position, color = 0xffffff) {
+    this.emit(position, color, this.profileCount(8), 'jump');
+  }
+
+  landing(position, color = 0xffffff, count = 8) {
+    this.emit(position, color, this.profileCount(count), 'landing');
+  }
+
+  respawn(position, color = 0x55e7ff) {
+    this.emit(position, color, this.profileCount(18), 'respawn');
   }
 
   trail(position, color = 0xffd94b) {

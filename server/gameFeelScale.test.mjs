@@ -230,6 +230,51 @@ test('race milestone effects читаются по-разному и остаю�
   }
 });
 
+test('player motion effects различаются и переиспользуют low-quality pool', () => {
+  const scene = new THREE.Scene();
+  const effects = new Effects(scene, 'low');
+  const at = new THREE.Vector3(0, 1, 0);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  const verticalSpeed = mesh => mesh.userData.velocity.y;
+  try {
+    effects.jump(at, 0xffffff);
+    assert.equal(effects.items.length, 6);
+    const jumpMeshes = new Set(effects.items);
+    for (const mesh of effects.items) {
+      assert.equal(mesh.userData.profile, 'jump');
+      assert.ok(horizontalSpeed(mesh) >= 0.8);
+      assert.ok(horizontalSpeed(mesh) <= 1.9);
+      assert.ok(verticalSpeed(mesh) >= 1.3);
+      assert.ok(verticalSpeed(mesh) <= 2.8);
+    }
+
+    effects.clear();
+    effects.landing(at, 0xffffff, 12);
+    assert.equal(effects.items.length, 9);
+    for (const mesh of effects.items) {
+      assert.equal(mesh.userData.profile, 'landing');
+      assert.ok(horizontalSpeed(mesh) >= 1.9);
+      assert.ok(horizontalSpeed(mesh) <= 3.8);
+      assert.ok(verticalSpeed(mesh) >= 0.45);
+      assert.ok(verticalSpeed(mesh) <= 1.35);
+    }
+    const reused = effects.items.some(mesh => jumpMeshes.has(mesh));
+    assert.equal(reused, true);
+
+    effects.clear();
+    effects.respawn(at, 0x55e7ff);
+    assert.equal(effects.items.length, 13);
+    for (const mesh of effects.items) {
+      assert.equal(mesh.userData.profile, 'respawn');
+      assert.ok(verticalSpeed(mesh) >= 2.6);
+      assert.ok(verticalSpeed(mesh) <= 5.2);
+    }
+    assert.ok(effects.items.length <= effects.max);
+  } finally {
+    effects.dispose();
+  }
+});
+
 const eyeHeight = character =>
   character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
 

@@ -57,6 +57,10 @@ export class Character {
     // Pulse и side принадлежат исключительно ригу: они не участвуют ни в скорости, ни в hitbox.
     this.wallBouncePulse = 0;
     this.wallBounceSide = 1;
+    // Отдельные часы лица намеренно не зависят от locomotion phase: бег может ускорять походку,
+    // но не должен превращать моргание в стробоскоп. Начальный offset берём из уже существующей
+    // phase, чтобы несколько персонажей не моргали синхронно без нового random-state.
+    this.faceTime = (this.phase / (Math.PI * 2)) * 4.2;
 
     const bodyColor = cosmetics?.body?.render?.primary ?? cosmetics?.body?.colors?.body ?? color;
     const accentColor = cosmetics?.body?.render?.accent ?? cosmetics?.body?.colors?.accent ?? accent;
@@ -278,6 +282,20 @@ export class Character {
     return Boolean(this.cosmetics?.playEmote(emoteId));
   }
 
+  // Глаза — часть уже существующей риги. Здесь меняется только их локальный scale.y: ни transform
+  // корневого игрока, ни collision dimensions, ни network state эта функция не видит. Blink живёт
+  // на собственных часах, а air/knockdown expression читают уже рассчитанное gameplay-состояние.
+  animateFace(dt, { grounded, vertical, knockedDown, recovering }) {
+    this.faceTime += dt;
+    const blinkPhase = this.faceTime % 4.2;
+    const blink = blinkPhase < 0.18 ? Math.sin((blinkPhase / 0.18) * Math.PI) : 0;
+    const rise = !grounded ? THREE.MathUtils.clamp(vertical / 8, 0, 1) : 0;
+    const expressionHeight = knockedDown ? 0.5 : 1 + rise * 0.12;
+    const targetHeight = Math.max(0.08, expressionHeight * (1 - blink * 0.92));
+    const damping = knockedDown ? 20 : recovering ? 12 : blink > 0 ? 32 : 16;
+    for (const eye of this.eyes) eye.scale.y = THREE.MathUtils.damp(eye.scale.y, targetHeight, damping, dt);
+  }
+
   animate(
     dt,
     { speed = 0, grounded = true, vertical = 0, diving = false, knockedDown = false, recovering = false } = {}
@@ -334,6 +352,8 @@ export class Character {
       this.cosmetics?.update(dt, { speed, grounded, vertical, diving, state: this.state });
       return;
     }
+
+    this.animateFace(dt, { grounded, vertical, knockedDown, recovering });
 
     // Пока играет эмоция, поза принадлежит ей целиком: два источника, пишущие в одни и те же
     // повороты, дали бы дрожь вместо движения.
@@ -469,6 +489,7 @@ export class Character {
     this.visual.position.set(0, 0, 0);
     this.wallBouncePulse = 0;
     this.wallBounceSide = 1;
+    for (const eye of this.eyes) eye.scale.y = 1;
   }
   dispose() {
     this.cosmetics?.dispose();

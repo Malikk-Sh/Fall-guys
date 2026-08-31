@@ -30,7 +30,12 @@ function mesh(course, geometry, color, name, emissiveIntensity = 0.16) {
 
 function addSweepersIcon(course, group, accent) {
   for (let arm = 0; arm < 2; arm++) {
-    const bar = mesh(course, new THREE.BoxGeometry(1.5, 0.16, 0.24), accent, `stage-icon-sweeper-${arm}`);
+    const bar = mesh(
+      course,
+      new THREE.BoxGeometry(1.5, 0.16, 0.24),
+      accent,
+      `stage-icon-sweeper-${arm}`
+    );
     bar.rotation.z = arm * Math.PI * 0.5;
     group.add(bar);
   }
@@ -55,7 +60,12 @@ function addBumpersIcon(course, group, accent) {
     [0, 0.38],
     [0.52, -0.1]
   ].entries()) {
-    const orb = mesh(course, new THREE.SphereGeometry(0.3, 10, 7), accent, `stage-icon-bumper-${index}`);
+    const orb = mesh(
+      course,
+      new THREE.SphereGeometry(0.3, 10, 7),
+      accent,
+      `stage-icon-bumper-${index}`
+    );
     orb.position.set(x, y, 0);
     group.add(orb);
   }
@@ -65,17 +75,32 @@ function addBridgeIcon(course, group, accent) {
   const deck = mesh(course, new THREE.BoxGeometry(1.5, 0.16, 0.42), accent, 'stage-icon-bridge-deck');
   group.add(deck);
   for (const side of [-1, 1]) {
-    const rail = mesh(course, new THREE.BoxGeometry(0.12, 0.68, 0.12), VISUAL_TOKENS.rail, `stage-icon-bridge-${side}`);
+    const rail = mesh(
+      course,
+      new THREE.BoxGeometry(0.12, 0.68, 0.12),
+      VISUAL_TOKENS.rail,
+      `stage-icon-bridge-${side}`
+    );
     rail.position.set(side * 0.62, 0.36, 0);
     group.add(rail);
   }
 }
 
 function addPuncherIcon(course, group, accent) {
-  const head = mesh(course, new THREE.BoxGeometry(1.05, 0.62, 0.52), accent, 'stage-icon-puncher-head');
+  const head = mesh(
+    course,
+    new THREE.BoxGeometry(1.05, 0.62, 0.52),
+    accent,
+    'stage-icon-puncher-head'
+  );
   head.position.y = 0.16;
   group.add(head);
-  const stem = mesh(course, new THREE.BoxGeometry(0.22, 0.78, 0.22), VISUAL_TOKENS.rail, 'stage-icon-puncher-stem');
+  const stem = mesh(
+    course,
+    new THREE.BoxGeometry(0.22, 0.78, 0.22),
+    VISUAL_TOKENS.rail,
+    'stage-icon-puncher-stem'
+  );
   stem.position.y = -0.45;
   group.add(stem);
 }
@@ -94,11 +119,21 @@ function addBounceIcon(course, group, accent) {
 
 function addCrosswindIcon(course, group, accent) {
   for (let arm = 0; arm < 3; arm++) {
-    const blade = mesh(course, new THREE.BoxGeometry(1.2, 0.14, 0.22), accent, `stage-icon-wind-${arm}`);
+    const blade = mesh(
+      course,
+      new THREE.BoxGeometry(1.2, 0.14, 0.22),
+      accent,
+      `stage-icon-wind-${arm}`
+    );
     blade.rotation.z = (Math.PI / 3) * arm;
     group.add(blade);
   }
-  const hub = mesh(course, new THREE.SphereGeometry(0.22, 9, 7), COLORS.yellow, 'stage-icon-wind-hub');
+  const hub = mesh(
+    course,
+    new THREE.SphereGeometry(0.22, 9, 7),
+    COLORS.yellow,
+    'stage-icon-wind-hub'
+  );
   group.add(hub);
 }
 
@@ -135,7 +170,11 @@ function stageLandmark(course, segment, index) {
 
   const beacon = mesh(
     course,
-    new THREE.SphereGeometry(0.4, course.quality === 'low' ? 8 : 12, course.quality === 'low' ? 6 : 8),
+    new THREE.SphereGeometry(
+      0.4,
+      course.quality === 'low' ? 8 : 12,
+      course.quality === 'low' ? 6 : 8
+    ),
     accent,
     `stage-landmark-beacon-${index}`,
     0.34

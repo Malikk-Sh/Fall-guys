@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CourseBuilder } from './CourseBuilder.js';
 import { buildCourseScenery, updateCourseScenery } from './CourseScenery.js';
+import { buildMovingPlatformTelegraphs } from './MovingPlatformTelegraphs.js';
 import { buildObstacleTelegraphs } from './ObstacleTelegraphs.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
@@ -24,6 +25,7 @@ export class Course extends CourseBuilder {
     this.spec = { ...courseSpec(spec.seed, spec.difficulty), ...spec };
     this.group.name = 'procedural-course';
     this.scenery = [];
+    this.movingPlatformTelegraphs = [];
     this.obstacleTelegraphs = [];
     this.rng = seededRandom(this.spec.seed);
     this.stageNames = [];
@@ -45,9 +47,13 @@ export class Course extends CourseBuilder {
   }
   build() {
     buildRaceGeometry(this, this.spec);
+    this.addMovingPlatformTelegraphs();
     this.obstacleTelegraphs.push(...buildObstacleTelegraphs(this));
     this.addCheckpointArches();
     this.addScenery();
+  }
+  addMovingPlatformTelegraphs() {
+    this.movingPlatformTelegraphs.push(...buildMovingPlatformTelegraphs(this));
   }
   // Названия этапов — часть подачи, но порядок им задаёт та же расстановка, поэтому они приходят
   // из общей геометрии, а не считаются заново.
@@ -168,6 +174,7 @@ export class Course extends CourseBuilder {
   dispose() {
     super.dispose();
     this.scenery.length = 0;
+    this.movingPlatformTelegraphs.length = 0;
     this.obstacleTelegraphs.length = 0;
     this.stageNames.length = 0;
   }

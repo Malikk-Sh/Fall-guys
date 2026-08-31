@@ -123,6 +123,27 @@ test('sky playground scenery остаётся presentation-only и сохран�
     assert.ok(high.group.getObjectByName('course-landmark-1'), 'трасса должна иметь промежуточный landmark');
     assert.ok(high.group.getObjectByName('finish-landmark'), 'финиш должен быть видимым издалека landmark');
     assert.ok(low.group.getObjectByName('finish-landmark'), 'финишный landmark не исчезает на low quality');
+
+    const highFinish = high.group.getObjectByName('finish-celebration-zone');
+    const lowFinish = low.group.getObjectByName('finish-celebration-zone');
+    assert.ok(highFinish, 'high quality должен иметь finish mini-scene');
+    assert.ok(lowFinish, 'low quality сохраняет finish mini-scene');
+    assert.equal(highFinish.userData.sceneryOnly, true);
+    assert.equal(lowFinish.userData.sceneryOnly, true);
+    assert.ok(high.group.getObjectByName('finish-side-podium-left'));
+    assert.ok(high.group.getObjectByName('finish-side-podium-right'));
+    assert.ok(low.group.getObjectByName('finish-side-podium-left'));
+    assert.ok(low.group.getObjectByName('finish-side-podium-right'));
+
+    const countNamed = (root, prefix) => {
+      let count = 0;
+      root.traverse(object => {
+        if (object.name.startsWith(prefix)) count++;
+      });
+      return count;
+    };
+    assert.ok(countNamed(highFinish, 'finish-banner-') > countNamed(lowFinish, 'finish-banner-'));
+    assert.ok(countNamed(highFinish, 'finish-balloon-') > countNamed(lowFinish, 'finish-balloon-'));
   } finally {
     bare.dispose();
     high.dispose();

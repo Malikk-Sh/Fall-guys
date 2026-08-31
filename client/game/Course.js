@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CourseBuilder } from './CourseBuilder.js';
 import { buildCourseScenery, updateCourseScenery } from './CourseScenery.js';
+import { buildFinishZoneScenery } from './FinishZoneScenery.js';
 import { buildMovingPlatformTelegraphs } from './MovingPlatformTelegraphs.js';
 import { buildObstacleTelegraphs } from './ObstacleTelegraphs.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
@@ -83,6 +84,7 @@ export class Course extends CourseBuilder {
   }
   addScenery() {
     this.scenery.push(...buildCourseScenery(this));
+    buildFinishZoneScenery(this);
   }
   update(_dt, elapsed) {
     this.updateDynamic(elapsed);

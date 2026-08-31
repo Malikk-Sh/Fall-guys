@@ -30,12 +30,7 @@ function mesh(course, geometry, color, name, emissiveIntensity = 0.16) {
 
 function addSweepersIcon(course, group, accent) {
   for (let arm = 0; arm < 2; arm++) {
-    const bar = mesh(
-      course,
-      new THREE.BoxGeometry(1.5, 0.16, 0.24),
-      accent,
-      `stage-icon-sweeper-${arm}`
-    );
+    const bar = mesh(course, new THREE.BoxGeometry(1.5, 0.16, 0.24), accent, `stage-icon-sweeper-${arm}`);
     bar.rotation.z = arm * Math.PI * 0.5;
     group.add(bar);
   }
@@ -43,12 +38,7 @@ function addSweepersIcon(course, group, accent) {
 
 function addMoversIcon(course, group, accent) {
   for (let step = 0; step < 3; step++) {
-    const block = mesh(
-      course,
-      new THREE.BoxGeometry(0.64, 0.18, 0.48),
-      accent,
-      `stage-icon-mover-${step}`
-    );
+    const block = mesh(course, new THREE.BoxGeometry(0.64, 0.18, 0.48), accent, `stage-icon-mover-${step}`);
     block.position.set((step - 1) * 0.52, step * 0.32 - 0.28, 0);
     group.add(block);
   }
@@ -60,12 +50,7 @@ function addBumpersIcon(course, group, accent) {
     [0, 0.38],
     [0.52, -0.1]
   ].entries()) {
-    const orb = mesh(
-      course,
-      new THREE.SphereGeometry(0.3, 10, 7),
-      accent,
-      `stage-icon-bumper-${index}`
-    );
+    const orb = mesh(course, new THREE.SphereGeometry(0.3, 10, 7), accent, `stage-icon-bumper-${index}`);
     orb.position.set(x, y, 0);
     group.add(orb);
   }
@@ -87,12 +72,7 @@ function addBridgeIcon(course, group, accent) {
 }
 
 function addPuncherIcon(course, group, accent) {
-  const head = mesh(
-    course,
-    new THREE.BoxGeometry(1.05, 0.62, 0.52),
-    accent,
-    'stage-icon-puncher-head'
-  );
+  const head = mesh(course, new THREE.BoxGeometry(1.05, 0.62, 0.52), accent, 'stage-icon-puncher-head');
   head.position.y = 0.16;
   group.add(head);
   const stem = mesh(
@@ -119,21 +99,11 @@ function addBounceIcon(course, group, accent) {
 
 function addCrosswindIcon(course, group, accent) {
   for (let arm = 0; arm < 3; arm++) {
-    const blade = mesh(
-      course,
-      new THREE.BoxGeometry(1.2, 0.14, 0.22),
-      accent,
-      `stage-icon-wind-${arm}`
-    );
+    const blade = mesh(course, new THREE.BoxGeometry(1.2, 0.14, 0.22), accent, `stage-icon-wind-${arm}`);
     blade.rotation.z = (Math.PI / 3) * arm;
     group.add(blade);
   }
-  const hub = mesh(
-    course,
-    new THREE.SphereGeometry(0.22, 9, 7),
-    COLORS.yellow,
-    'stage-icon-wind-hub'
-  );
+  const hub = mesh(course, new THREE.SphereGeometry(0.22, 9, 7), COLORS.yellow, 'stage-icon-wind-hub');
   group.add(hub);
 }
 
@@ -170,11 +140,7 @@ function stageLandmark(course, segment, index) {
 
   const beacon = mesh(
     course,
-    new THREE.SphereGeometry(
-      0.4,
-      course.quality === 'low' ? 8 : 12,
-      course.quality === 'low' ? 6 : 8
-    ),
+    new THREE.SphereGeometry(0.4, course.quality === 'low' ? 8 : 12, course.quality === 'low' ? 6 : 8),
     accent,
     `stage-landmark-beacon-${index}`,
     0.34

@@ -275,6 +275,42 @@ test('player motion effects различаются и переиспользую
   }
 });
 
+test('action motion effects различают dive и wall-bounce в общем low-quality pool', () => {
+  const scene = new THREE.Scene();
+  const effects = new Effects(scene, 'low');
+  const at = new THREE.Vector3(1, 2, -3);
+  const horizontalSpeed = mesh => Math.hypot(mesh.userData.velocity.x, mesh.userData.velocity.z);
+  const verticalSpeed = mesh => mesh.userData.velocity.y;
+  try {
+    effects.dive(at, 0xffd94b);
+    assert.equal(effects.items.length, 9);
+    const diveMeshes = new Set(effects.items);
+    for (const mesh of effects.items) {
+      assert.equal(mesh.userData.profile, 'dive');
+      assert.ok(horizontalSpeed(mesh) >= 3.2);
+      assert.ok(horizontalSpeed(mesh) <= 5.4);
+      assert.ok(verticalSpeed(mesh) >= 0.6);
+      assert.ok(verticalSpeed(mesh) <= 1.8);
+    }
+
+    effects.clear();
+    effects.wallBounce(at, 0x55e7ff);
+    assert.equal(effects.items.length, 8);
+    for (const mesh of effects.items) {
+      assert.equal(mesh.userData.profile, 'wall-bounce');
+      assert.ok(horizontalSpeed(mesh) >= 2.6);
+      assert.ok(horizontalSpeed(mesh) <= 4.8);
+      assert.ok(verticalSpeed(mesh) >= 2.3);
+      assert.ok(verticalSpeed(mesh) <= 4.8);
+    }
+    const reused = effects.items.some(mesh => diveMeshes.has(mesh));
+    assert.equal(reused, true);
+    assert.ok(effects.items.length <= effects.max);
+  } finally {
+    effects.dispose();
+  }
+});
+
 const eyeHeight = character =>
   character.eyes.reduce((sum, eye) => sum + eye.scale.y, 0) / character.eyes.length;
 

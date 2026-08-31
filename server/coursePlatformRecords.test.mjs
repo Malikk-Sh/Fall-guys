@@ -130,6 +130,46 @@ test('sky playground scenery остаётся presentation-only и сохран�
   }
 });
 
+test('moving-platform cues остаются presentation-only и имеют дешёвый low-quality вариант', () => {
+  class BareCourse extends Course {
+    addMovingPlatformTelegraphs() {}
+  }
+
+  const spec = courseSpec(777, 'chaos');
+  const bare = new BareCourse(new THREE.Scene(), spec, { quality: 'high' });
+  const high = new Course(new THREE.Scene(), spec, { quality: 'high' });
+  const low = new Course(new THREE.Scene(), spec, { quality: 'low' });
+  try {
+    assert.ok(high.dynamic.length > 0, 'seed должен содержать moving platforms');
+    assert.deepEqual(high.platforms.map(platformRecord), bare.platforms.map(platformRecord));
+    assert.deepEqual(high.obstacles.map(obstacleRecord), bare.obstacles.map(obstacleRecord));
+    assert.equal(high.dynamic.length, bare.dynamic.length);
+    assert.equal(high.cameraMeshes.length, bare.cameraMeshes.length);
+    assert.equal(high.movingPlatformTelegraphs.length, high.dynamic.length);
+    assert.equal(low.movingPlatformTelegraphs.length, low.dynamic.length);
+
+    for (let index = 0; index < high.dynamic.length; index++) {
+      const highCue = high.movingPlatformTelegraphs[index];
+      const lowCue = low.movingPlatformTelegraphs[index];
+      assert.equal(highCue.parent, high.dynamic[index].mesh);
+      assert.equal(lowCue.parent, low.dynamic[index].mesh);
+      assert.equal(highCue.userData.motionAxis, high.dynamic[index].motion.axis);
+      assert.equal(lowCue.userData.motionAxis, low.dynamic[index].motion.axis);
+      assert.ok(highCue.children.length > lowCue.children.length);
+    }
+
+    high.update(1 / 60, 2.4);
+    for (let index = 0; index < high.dynamic.length; index++) {
+      assert.equal(high.movingPlatformTelegraphs[index].parent, high.dynamic[index].mesh);
+    }
+    assertRecordsMatchMeshes(high, 'после движения с presentation cue');
+  } finally {
+    bare.dispose();
+    high.dispose();
+    low.dispose();
+  }
+});
+
 test('подвижные опоры сдвигают запись и меш вместе на всём ходе', () => {
   const course = new Course(new THREE.Scene(), courseSpec(4242, 'normal'), { quality: 'low' });
   try {

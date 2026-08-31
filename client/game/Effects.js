@@ -116,6 +116,14 @@ export class Effects {
         radialVelocity(velocity, 1.4, 2.8, 2.6, 5.2, power);
         mesh.scale.setScalar(0.62 + Math.random() * 0.54);
         mesh.userData.life = 0.5 + Math.random() * 0.28;
+      } else if (profile === 'dive') {
+        radialVelocity(velocity, 3.2, 5.4, 0.6, 1.8, power);
+        mesh.scale.setScalar(0.58 + Math.random() * 0.5);
+        mesh.userData.life = 0.3 + Math.random() * 0.18;
+      } else if (profile === 'wall-bounce') {
+        radialVelocity(velocity, 2.6, 4.8, 2.3, 4.8, power);
+        mesh.scale.setScalar(0.6 + Math.random() * 0.5);
+        mesh.userData.life = 0.38 + Math.random() * 0.2;
       } else {
         velocity
           .set((Math.random() - 0.5) * 4.8, 1.2 + Math.random() * 3.7, (Math.random() - 0.5) * 4.8)
@@ -168,6 +176,14 @@ export class Effects {
 
   respawn(position, color = 0x55e7ff) {
     this.emit(position, color, this.profileCount(18), 'respawn');
+  }
+
+  dive(position, color = 0xffd94b, count = 12) {
+    this.emit(position, color, this.profileCount(count), 'dive');
+  }
+
+  wallBounce(position, color = 0x55e7ff, count = 10) {
+    this.emit(position, color, this.profileCount(count), 'wall-bounce');
   }
 
   trail(position, color = 0xffd94b) {

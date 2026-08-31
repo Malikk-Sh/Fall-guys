@@ -227,7 +227,7 @@ export class Player {
       this.diveCooldown = 0.9 * this.tuning.dashCooldown;
       this.grounded = false;
       this.dashes++;
-      this.effects.burst(this.physics, COLORS.yellow, 12, 1);
+      playMotionEffect(this.effects, 'dive', this.physics, COLORS.yellow, 12, 1);
       this.sfx?.dive();
       this.haptics?.vibrate(0.5);
     }
@@ -303,7 +303,7 @@ export class Player {
       // что wall-bounce действительно состоялся. На gameplay-state этот сигнал не влияет.
       this.character.wallBounced?.(wallNormal);
       this.impact = Math.max(this.impact, 0.12);
-      this.effects.burst(this.physics, COLORS.cyan, 10, 0.8);
+      playMotionEffect(this.effects, 'wallBounce', this.physics, COLORS.cyan, 10, 0.8);
       this.sfx?.jump();
       this.haptics?.vibrate(0.42);
     }

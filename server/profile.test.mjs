@@ -61,6 +61,34 @@ test('ежедневная серия растёт один раз в сутки
   assert.equal(profile.daily.completedDays, 3);
 });
 
+test('daily objective snapshot хранит только валидный результат дня и не стирает достигнутый успех', () => {
+  const storage = memoryStorage();
+  const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
+  const objectiveId = spec.objectives[0].id;
+
+  let profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: false }] }, storage);
+  assert.deepEqual(profile.dailyObjective, { dayKey: spec.dayKey, id: objectiveId, complete: false });
+
+  profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: true }] }, storage);
+  assert.equal(profile.dailyObjective.complete, true);
+
+  profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: false }] }, storage);
+  assert.equal(profile.dailyObjective.complete, true, 'повторный провал не стирает уже выполненную цель');
+
+  const next = dailyCourseSpec('normal', new Date('2026-08-03T12:00:00Z'));
+  const nextId = next.objectives[0].id;
+  profile = recordSoloProfile(
+    next,
+    { objectives: [{ id: nextId, complete: true }], unranked: 'disconnect' },
+    storage
+  );
+  assert.deepEqual(
+    profile.dailyObjective,
+    { dayKey: spec.dayKey, id: objectiveId, complete: true },
+    'незачётный daily не становится источником presentation progress'
+  );
+});
+
 test('забег без зачёта не продлевает ежедневную серию', () => {
   const storage = memoryStorage();
   const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
@@ -82,6 +110,15 @@ test('повреждённое и недоступное хранилище не
   };
   assert.deepEqual(readProfile(blocked), emptyProfile());
   assert.equal(recordSoloProfile({}, {}, blocked).completedRuns, 1);
+});
+
+test('старый профиль без daily objective snapshot получает безопасное пустое состояние', () => {
+  const profile = readProfile(
+    memoryStorage(JSON.stringify({ version: 1, daily: { lastDay: '2026-08-01', streak: 2, bestStreak: 3 } }))
+  );
+  assert.deepEqual(profile.dailyObjective, { dayKey: null, id: null, complete: false });
+  assert.equal(profile.daily.streak, 2);
+  assert.equal(profile.daily.bestStreak, 3);
 });
 
 test('кооперативный профиль хранит лучшие главы и спасения без дубля после reconnect', () => {

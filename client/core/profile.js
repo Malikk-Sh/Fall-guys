@@ -10,7 +10,9 @@ export function emptyProfile() {
     daily: { lastDay: null, streak: 0, bestStreak: 0, completedDays: 0 },
     // Presentation-only снимок результата цели последнего валидного daily. Он не участвует ни в
     // streak, ни в entitlement: карточке нужно лишь честно помнить, выполнена ли сегодняшняя цель.
-    dailyObjective: { dayKey: null, id: null, complete: false },
+    // targetMs отличает materialized under-time на разных сложностях, не привязывая остальные цели
+    // к difficulty без причины.
+    dailyObjective: { dayKey: null, id: null, targetMs: null, complete: false },
     coop: {
       completedChapters: 0,
       totalRevives: 0,
@@ -42,6 +44,7 @@ export function readProfile(storage = globalThis.localStorage) {
       dailyObjective: {
         dayKey: typeof parsed.dailyObjective?.dayKey === 'string' ? parsed.dailyObjective.dayKey : null,
         id: typeof parsed.dailyObjective?.id === 'string' ? parsed.dailyObjective.id : null,
+        targetMs: safeOptionalPositiveNumber(parsed.dailyObjective?.targetMs),
         complete: parsed.dailyObjective?.complete === true
       },
       coop: {
@@ -107,15 +110,21 @@ export function recordSoloProfile(
   }
 
   if (spec?.challenge === 'daily' && spec.dayKey && !unranked) {
-    const expectedObjectiveId = spec.objectives?.[0]?.id;
+    const expectedObjective = spec.objectives?.[0];
+    const expectedObjectiveId = expectedObjective?.id;
+    const expectedTargetMs = safeOptionalPositiveNumber(expectedObjective?.targetMs);
     const objective = objectives.find(goal => goal?.id === expectedObjectiveId);
     if (expectedObjectiveId && objective) {
       const sameObjective =
-        profile.dailyObjective.dayKey === spec.dayKey && profile.dailyObjective.id === expectedObjectiveId;
+        profile.dailyObjective.dayKey === spec.dayKey &&
+        profile.dailyObjective.id === expectedObjectiveId &&
+        profile.dailyObjective.targetMs === expectedTargetMs;
       profile.dailyObjective = {
         dayKey: spec.dayKey,
         id: expectedObjectiveId,
-        // Успех за день липкий: повторный неудачный забег не должен стирать уже выполненную цель.
+        targetMs: expectedTargetMs,
+        // Успех за материализованную цель липкий: повторный неудачный забег не должен стирать уже
+        // выполненный результат, но другой time-target не наследует его.
         complete: Boolean(objective.complete || (sameObjective && profile.dailyObjective.complete))
       };
     }
@@ -133,7 +142,7 @@ export function recordSoloProfile(
 
 // Постоянный анонимный идентификатор. Заводится при первом обращении и дальше живёт в localStorage.
 //
-// Нужен ровно для одного: чтобы в таблице рекордов у игрока была одна строка на трассу, а не по
+// Нужен ровно для одного: чтобы в таблице рекордов у игрока была одна строка на трассу вместо строки на
 // строке на каждый забег. Раньше дедупликация шла по matchId, и человек, прошедший трассу пять раз,
 // занимал пять верхних мест — таблица показывала не самых быстрых, а самого настойчивого.
 //
@@ -162,6 +171,10 @@ function safePlayerId(value) {
 
 function safeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function safeOptionalPositiveNumber(value) {
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
 }
 
 function safeChapterBests(value) {

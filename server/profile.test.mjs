@@ -76,11 +76,7 @@ test('daily reward presentation не показывает протухшую т�
     profile: { daily: { lastDay: '2026-08-01', streak: 4, bestStreak: 4 } },
     catalog
   });
-  assert.equal(
-    model.reward.current,
-    0,
-    'после пропущенного UTC-дня серия визуально начинается заново'
-  );
+  assert.equal(model.reward.current, 0, 'после пропущенного UTC-дня серия визуально начинается заново');
 
   model = dailyPresentationModel({
     now,
@@ -140,19 +136,11 @@ test('time-objective snapshot не переносит успех между ра
   const chaos = dailyCourseSpec('chaos', day);
   assert.notEqual(easy.objectives[0].targetMs, chaos.objectives[0].targetMs);
 
-  let profile = recordSoloProfile(
-    easy,
-    { objectives: [{ id: 'under-time', complete: true }] },
-    storage
-  );
+  let profile = recordSoloProfile(easy, { objectives: [{ id: 'under-time', complete: true }] }, storage);
   assert.equal(profile.dailyObjective.complete, true);
   assert.equal(profile.dailyObjective.targetMs, easy.objectives[0].targetMs);
 
-  profile = recordSoloProfile(
-    chaos,
-    { objectives: [{ id: 'under-time', complete: false }] },
-    storage
-  );
+  profile = recordSoloProfile(chaos, { objectives: [{ id: 'under-time', complete: false }] }, storage);
   assert.equal(profile.dailyObjective.complete, false, 'другой time target не наследует прошлый успех');
   assert.equal(profile.dailyObjective.targetMs, chaos.objectives[0].targetMs);
 });

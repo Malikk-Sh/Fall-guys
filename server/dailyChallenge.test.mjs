@@ -101,7 +101,13 @@ test('daily objective presentation показывает только сохра�
     attempted: true,
     complete: true
   });
-  assert.equal(dailyObjectiveState(spec, { ...profile, dailyObjective: { ...profile.dailyObjective, dayKey: 'old' } }).current, 0);
+  assert.equal(
+    dailyObjectiveState(spec, {
+      ...profile,
+      dailyObjective: { ...profile.dailyObjective, dayKey: 'old' }
+    }).current,
+    0
+  );
 
   const model = dailyPresentationModel({ difficulty: 'normal', now, profile, catalog: [] });
   assert.equal(model.dayKey, spec.dayKey);

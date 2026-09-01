@@ -128,9 +128,12 @@ function stageLandmark(course, segment, index) {
   group.position.set(side * 7.15, 1.45, FIRST_SEGMENT_CENTER - index * SEGMENT_LENGTH);
   group.rotation.y = side < 0 ? 0.12 : -0.12;
 
+  // Mast/beacon define the shared readable silhouette and intentionally keep identical geometry on
+  // high and low. Quality only decides whether the type-specific icon exists, so LOD never changes
+  // the landmark's common shape or apparent scale.
   const mast = mesh(
     course,
-    new THREE.CylinderGeometry(0.12, 0.18, 2.4, course.quality === 'low' ? 7 : 10),
+    new THREE.CylinderGeometry(0.12, 0.18, 2.4, 10),
     VISUAL_TOKENS.rail,
     `stage-landmark-mast-${index}`,
     0
@@ -140,7 +143,7 @@ function stageLandmark(course, segment, index) {
 
   const beacon = mesh(
     course,
-    new THREE.SphereGeometry(0.4, course.quality === 'low' ? 8 : 12, course.quality === 'low' ? 6 : 8),
+    new THREE.SphereGeometry(0.4, 12, 8),
     accent,
     `stage-landmark-beacon-${index}`,
     0.34
@@ -152,7 +155,10 @@ function stageLandmark(course, segment, index) {
     const icon = new THREE.Group();
     icon.name = `stage-landmark-icon-${index}`;
     icon.position.set(-side * 0.72, 0.35, 0);
-    icon.rotation.y = Math.PI / 2;
+    // Icon primitives are authored in XY with their readable face toward ±Z. Keep that orientation
+    // so an approaching player sees the symbol head-on; the landmark parent's small yaw supplies
+    // only a gentle inward cant instead of turning the icon edge-on.
+    icon.rotation.y = 0;
     addHighDetailIcon(course, icon, type, accent);
     group.add(icon);
   }

@@ -139,6 +139,68 @@ const DAILY_CARD_CSS = `
     padding: 7px 8px;
   }
 }
+@media (max-height: 600px) and (orientation: landscape) {
+  body.mobile-landscape.menu-polish .challenge-rule.daily-challenge-card {
+    grid-template-columns: auto minmax(0, 0.8fr) minmax(0, 1.7fr);
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    margin: 0;
+    padding: 4px 7px;
+    border-radius: 10px;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-head {
+    display: block;
+    min-width: 0;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-head small,
+  body.mobile-landscape.menu-polish .daily-challenge-panel small,
+  body.mobile-landscape.menu-polish .daily-challenge-panel em,
+  body.mobile-landscape.menu-polish .daily-challenge-footer,
+  body.mobile-landscape.menu-polish .daily-challenge-copy > span {
+    display: none;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-head time {
+    display: block;
+    font-size: 6px;
+    letter-spacing: 0;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-copy {
+    min-width: 0;
+    padding: 0;
+    background: none;
+  }
+  body.mobile-landscape.menu-polish .challenge-rule.daily-challenge-card .daily-challenge-copy > strong {
+    display: block;
+    overflow: hidden;
+    font-size: 7px;
+    line-height: 1;
+    letter-spacing: 0.03em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-grid {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: 4px;
+    min-width: 0;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-panel {
+    gap: 2px;
+    min-width: 0;
+    padding: 2px 4px;
+    border-radius: 7px;
+  }
+  body.mobile-landscape.menu-polish .daily-challenge-panel b {
+    overflow: hidden;
+    font-size: 6px;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  body.mobile-landscape.menu-polish .daily-progress {
+    height: 3px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .daily-progress > i {
     transition: none;

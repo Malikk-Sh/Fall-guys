@@ -62,6 +62,18 @@ test('stage landmarks читают planner, не меняя gameplay records', (
       assert.ok(Math.abs(highLandmark.position.x) > 6, 'landmark должен оставаться вне игровой полосы');
       assert.ok(highLandmark.children.length > lowLandmark.children.length, 'low должен убирать type icon');
       assert.ok(high.group.getObjectByName(`stage-landmark-${index}-${type}`));
+
+      const highMast = highLandmark.getObjectByName(`stage-landmark-mast-${index}`);
+      const lowMast = lowLandmark.getObjectByName(`stage-landmark-mast-${index}`);
+      const highBeacon = highLandmark.getObjectByName(`stage-landmark-beacon-${index}`);
+      const lowBeacon = lowLandmark.getObjectByName(`stage-landmark-beacon-${index}`);
+      assert.deepEqual(highMast.geometry.parameters, lowMast.geometry.parameters);
+      assert.deepEqual(highBeacon.geometry.parameters, lowBeacon.geometry.parameters);
+
+      const icon = highLandmark.getObjectByName(`stage-landmark-icon-${index}`);
+      assert.ok(icon, 'high quality должен иметь type icon');
+      assert.equal(icon.rotation.y, 0, 'иконка должна смотреть вдоль направления подхода, а не ребром');
+      assert.equal(lowLandmark.getObjectByName(`stage-landmark-icon-${index}`), undefined);
     }
   } finally {
     bare.dispose();

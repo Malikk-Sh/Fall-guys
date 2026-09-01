@@ -5,6 +5,7 @@ import { buildFinishZoneScenery } from './FinishZoneScenery.js';
 import { buildMovingPlatformTelegraphs } from './MovingPlatformTelegraphs.js';
 import { buildObstacleTelegraphs } from './ObstacleTelegraphs.js';
 import { PLAYER_FOOT, PLAYER_OBSTACLE_RADIUS } from './PlayerDimensions.js';
+import { buildStageIdentityScenery } from './StageIdentityScenery.js';
 import { addBumper, addRail, addSpinner, addSpring } from '/shared/courseObstacles.js';
 import { buildRaceGeometry } from '/shared/raceCourseGeometry.js';
 import { applyObstacleImpulses } from '/shared/courseImpulses.js';
@@ -26,6 +27,7 @@ export class Course extends CourseBuilder {
     this.spec = { ...courseSpec(spec.seed, spec.difficulty), ...spec };
     this.group.name = 'procedural-course';
     this.scenery = [];
+    this.stageIdentity = [];
     this.movingPlatformTelegraphs = [];
     this.obstacleTelegraphs = [];
     this.rng = seededRandom(this.spec.seed);
@@ -48,10 +50,14 @@ export class Course extends CourseBuilder {
   }
   build() {
     buildRaceGeometry(this, this.spec);
+    this.addStageIdentity();
     this.addMovingPlatformTelegraphs();
     this.obstacleTelegraphs.push(...buildObstacleTelegraphs(this));
     this.addCheckpointArches();
     this.addScenery();
+  }
+  addStageIdentity() {
+    this.stageIdentity.push(...buildStageIdentityScenery(this));
   }
   addMovingPlatformTelegraphs() {
     this.movingPlatformTelegraphs.push(...buildMovingPlatformTelegraphs(this));
@@ -176,6 +182,7 @@ export class Course extends CourseBuilder {
   dispose() {
     super.dispose();
     this.scenery.length = 0;
+    this.stageIdentity.length = 0;
     this.movingPlatformTelegraphs.length = 0;
     this.obstacleTelegraphs.length = 0;
     this.stageNames.length = 0;

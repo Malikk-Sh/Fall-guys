@@ -12,6 +12,13 @@ import {
 } from '../client/core/Config.js';
 import { checkObjective, dayNumber } from '../client/core/dailyModifiers.js';
 import { playerTuning } from '../client/game/Player.js';
+import {
+  dailyObjectiveState,
+  dailyPresentationModel,
+  dailyResetRemaining,
+  formatDailyCountdown,
+  nextDailyReward
+} from '../client/ui/DailyChallengePresentation.js';
 
 const at = value => new Date(`${value}T12:00:00Z`);
 const days = (from, count) =>
@@ -40,6 +47,67 @@ test('испытание дня несёт один явный модифика�
   assert.ok(spec.modifier.label && spec.modifier.description, 'правило дня показывается игроку');
   assert.equal(spec.objectives.length, 1);
   assert.ok(spec.objectives[0].label, 'у цели есть подпись для экрана результатов');
+});
+
+test('daily presentation считает смену по той же UTC-границе, что и daily seed', () => {
+  const beforeReset = new Date('2026-08-02T23:59:58.500Z');
+  assert.equal(dailyResetRemaining(beforeReset), 1500);
+  assert.equal(formatDailyCountdown(dailyResetRemaining(beforeReset)), '00:00:02');
+
+  const atReset = new Date('2026-08-03T00:00:00.000Z');
+  assert.equal(dailyResetRemaining(atReset), 86_400_000);
+  assert.equal(formatDailyCountdown(dailyResetRemaining(atReset)), '24:00:00');
+  assert.notEqual(dailySeed(beforeReset), dailySeed(atReset));
+});
+
+test('daily reward presentation читает декларативный streak unlock и не меняет entitlement', () => {
+  const catalog = [
+    { id: 'default', name: 'DEFAULT', unlock: { type: 'default' } },
+    { id: 'daily-3', name: 'ТРИ ДНЯ', unlock: { type: 'daily', streak: 3 } },
+    { id: 'daily-5', name: 'ПЯТЬ ДНЕЙ', unlock: { type: 'daily', streak: 5 } }
+  ];
+
+  let reward = nextDailyReward(catalog, { daily: { streak: 2, bestStreak: 2 } });
+  assert.equal(reward.item.id, 'daily-3');
+  assert.equal(reward.current, 2);
+  assert.equal(reward.target, 3);
+
+  // После старого рекорда прогресс следующей серии показывает текущую последовательность, а не
+  // делает вид, будто best streak автоматически переносит два дня в новую серию.
+  reward = nextDailyReward(catalog, { daily: { streak: 1, bestStreak: 3 } });
+  assert.equal(reward.item.id, 'daily-5');
+  assert.equal(reward.current, 1);
+  assert.equal(reward.target, 5);
+
+  reward = nextDailyReward(catalog, { daily: { streak: 2, bestStreak: 5 } });
+  assert.equal(reward.complete, true);
+  assert.equal(reward.item, null);
+});
+
+test('daily objective presentation показывает только сохранённый результат этой цели и этого дня', () => {
+  const now = at('2026-08-02');
+  const spec = dailyCourseSpec('normal', now);
+  const objective = spec.objectives[0];
+  const profile = {
+    daily: { lastDay: spec.dayKey, streak: 4, bestStreak: 4 },
+    dailyObjective: { dayKey: spec.dayKey, id: objective.id, complete: true }
+  };
+
+  assert.deepEqual(dailyObjectiveState(spec, profile), {
+    id: objective.id,
+    label: objective.label,
+    current: 1,
+    target: 1,
+    attempted: true,
+    complete: true
+  });
+  assert.equal(dailyObjectiveState(spec, { ...profile, dailyObjective: { ...profile.dailyObjective, dayKey: 'old' } }).current, 0);
+
+  const model = dailyPresentationModel({ difficulty: 'normal', now, profile, catalog: [] });
+  assert.equal(model.dayKey, spec.dayKey);
+  assert.equal(model.modifier.id, spec.modifier.id);
+  assert.equal(model.objective.label, objective.label);
+  assert.equal(model.runComplete, true);
 });
 
 // Главное, ради чего заведён пул. Раньше менялся только сид: трасса выглядела новой, а играть её

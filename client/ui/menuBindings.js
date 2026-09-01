@@ -10,6 +10,7 @@ import { COOP_PING_LABELS } from '../game/CoopController.js';
 import { GAME_MODE, ROOM_STATE } from '/shared/protocol.js';
 import { courseSpec, dailyCourseSpec, randomSeed } from '../core/Config.js';
 import { shareInvite } from '../core/invite.js';
+import { DailyChallengePresentation } from './DailyChallengePresentation.js';
 import { EmoteControl } from './emoteControl.js';
 
 export function bindMenu(game) {
@@ -237,6 +238,18 @@ export function bindMenu(game) {
     refreshPreview();
   });
   $('#difficulty').addEventListener('change', refreshPreview);
+
+  // Daily presentation читает тот же dailyCourseSpec, локальный профиль и декларативный каталог.
+  // Смена UTC-дня обновляет и сам preview через уже существующий путь, поэтому карточка не может
+  // обещать новый daily поверх старой трассы. Никаких новых gameplay/network событий здесь нет.
+  game.ui.dailyChallengePresentation = new DailyChallengePresentation({
+    root: $('#challengeRule'),
+    runType: $('#runType'),
+    difficulty: $('#difficulty'),
+    profileStreak: $('#profileStreak'),
+    onDayChange: () => refreshPreview()
+  });
+  game.ui.dailyChallengePresentation.bind();
 
   click('#quality', () => {
     const next = game.quality.cycle();

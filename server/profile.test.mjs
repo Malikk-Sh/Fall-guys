@@ -19,6 +19,11 @@ function memoryStorage(initial = null) {
   };
 }
 
+function objectiveTargetMs(spec) {
+  const value = spec?.objectives?.[0]?.targetMs;
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
 test('профиль считает завершённые забеги и выполненные цели', () => {
   const storage = memoryStorage();
   const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
@@ -65,9 +70,15 @@ test('daily objective snapshot хранит только валидный рез
   const storage = memoryStorage();
   const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
   const objectiveId = spec.objectives[0].id;
+  const targetMs = objectiveTargetMs(spec);
 
   let profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: false }] }, storage);
-  assert.deepEqual(profile.dailyObjective, { dayKey: spec.dayKey, id: objectiveId, complete: false });
+  assert.deepEqual(profile.dailyObjective, {
+    dayKey: spec.dayKey,
+    id: objectiveId,
+    targetMs,
+    complete: false
+  });
 
   profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: true }] }, storage);
   assert.equal(profile.dailyObjective.complete, true);
@@ -84,9 +95,42 @@ test('daily objective snapshot хранит только валидный рез
   );
   assert.deepEqual(
     profile.dailyObjective,
-    { dayKey: spec.dayKey, id: objectiveId, complete: true },
+    { dayKey: spec.dayKey, id: objectiveId, targetMs, complete: true },
     'незачётный daily не становится источником presentation progress'
   );
+});
+
+test('time-objective snapshot не переносит успех между разными materialized target', () => {
+  let day = null;
+  for (let offset = 0; offset < 40; offset++) {
+    const date = new Date(Date.parse('2026-08-01T12:00:00Z') + offset * 86_400_000);
+    if (dailyCourseSpec('normal', date).objectives[0].id === 'under-time') {
+      day = date;
+      break;
+    }
+  }
+  assert.ok(day, 'подготовка: в пуле должна быть цель на время');
+
+  const storage = memoryStorage();
+  const easy = dailyCourseSpec('easy', day);
+  const chaos = dailyCourseSpec('chaos', day);
+  assert.notEqual(easy.objectives[0].targetMs, chaos.objectives[0].targetMs);
+
+  let profile = recordSoloProfile(
+    easy,
+    { objectives: [{ id: 'under-time', complete: true }] },
+    storage
+  );
+  assert.equal(profile.dailyObjective.complete, true);
+  assert.equal(profile.dailyObjective.targetMs, easy.objectives[0].targetMs);
+
+  profile = recordSoloProfile(
+    chaos,
+    { objectives: [{ id: 'under-time', complete: false }] },
+    storage
+  );
+  assert.equal(profile.dailyObjective.complete, false, 'другой time target не наследует прошлый успех');
+  assert.equal(profile.dailyObjective.targetMs, chaos.objectives[0].targetMs);
 });
 
 test('забег без зачёта не продлевает ежедневную серию', () => {
@@ -116,7 +160,7 @@ test('старый профиль без daily objective snapshot получае
   const profile = readProfile(
     memoryStorage(JSON.stringify({ version: 1, daily: { lastDay: '2026-08-01', streak: 2, bestStreak: 3 } }))
   );
-  assert.deepEqual(profile.dailyObjective, { dayKey: null, id: null, complete: false });
+  assert.deepEqual(profile.dailyObjective, { dayKey: null, id: null, targetMs: null, complete: false });
   assert.equal(profile.daily.streak, 2);
   assert.equal(profile.daily.bestStreak, 3);
 });

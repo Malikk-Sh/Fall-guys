@@ -214,6 +214,26 @@ body.mobile-reduced-motion .daily-progress > i {
 
 const safeCount = value => (Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : 0);
 
+function optionalPositiveNumber(value) {
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+function setText(element, value) {
+  const text = String(value ?? '');
+  if (element && element.textContent !== text) element.textContent = text;
+}
+
+function activeDailyStreak(profile, dayKey = null) {
+  const streak = safeCount(profile?.daily?.streak);
+  if (!dayKey) return streak;
+  const lastDay = profile?.daily?.lastDay;
+  if (lastDay === dayKey) return streak;
+  if (typeof lastDay !== 'string') return 0;
+  const lastTime = Date.parse(`${lastDay}T00:00:00Z`);
+  const dayTime = Date.parse(`${dayKey}T00:00:00Z`);
+  return Number.isFinite(lastTime) && Number.isFinite(dayTime) && dayTime - lastTime === DAY_MS ? streak : 0;
+}
+
 export function dailyResetRemaining(now = new Date()) {
   const date = now instanceof Date ? now : new Date(now);
   const time = date.getTime();
@@ -230,9 +250,9 @@ export function formatDailyCountdown(remaining) {
   return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
 }
 
-export function nextDailyReward(catalog = COSMETIC_CATALOG, profile = null) {
+export function nextDailyReward(catalog = COSMETIC_CATALOG, profile = null, dayKey = null) {
   const bestStreak = safeCount(profile?.daily?.bestStreak);
-  const streak = safeCount(profile?.daily?.streak);
+  const streak = activeDailyStreak(profile, dayKey);
   const rewards = (Array.isArray(catalog) ? catalog : [])
     .filter(item => item?.unlock?.type === 'daily' && safeCount(item.unlock.streak) > 0)
     .sort((a, b) => safeCount(a.unlock.streak) - safeCount(b.unlock.streak));
@@ -252,7 +272,11 @@ export function dailyObjectiveState(spec, profile = null) {
   const objective = spec?.objectives?.[0] || null;
   if (!objective) return null;
   const saved = profile?.dailyObjective;
-  const attempted = saved?.dayKey === spec.dayKey && saved?.id === objective.id;
+  const targetMs = optionalPositiveNumber(objective.targetMs);
+  const attempted =
+    saved?.dayKey === spec.dayKey &&
+    saved?.id === objective.id &&
+    optionalPositiveNumber(saved?.targetMs) === targetMs;
   const complete = attempted && saved?.complete === true;
   return {
     id: objective.id,
@@ -275,7 +299,7 @@ export function dailyPresentationModel({
     dayKey: spec.dayKey,
     modifier: spec.modifier,
     objective: dailyObjectiveState(spec, profile),
-    reward: nextDailyReward(catalog, profile),
+    reward: nextDailyReward(catalog, profile, spec.dayKey),
     runComplete: profile?.daily?.lastDay === spec.dayKey,
     countdown: formatDailyCountdown(dailyResetRemaining(now))
   };
@@ -315,6 +339,10 @@ export class DailyChallengePresentation {
     this.timer = null;
     this.observer = null;
     this.boundRender = () => this.render();
+    this.boundVisibility = () => {
+      if (this.root?.ownerDocument?.visibilityState === 'hidden') return;
+      this.render();
+    };
   }
 
   bind() {
@@ -322,6 +350,9 @@ export class DailyChallengePresentation {
     this.buildMarkup();
     this.runType?.addEventListener('change', this.boundRender);
     this.difficulty?.addEventListener('change', this.boundRender);
+    const document_ = this.root.ownerDocument;
+    document_?.addEventListener('visibilitychange', this.boundVisibility);
+    document_?.defaultView?.addEventListener('pageshow', this.boundVisibility);
     if (this.profileStreak && typeof MutationObserver !== 'undefined') {
       this.observer = new MutationObserver(this.boundRender);
       this.observer.observe(this.profileStreak, { childList: true, characterData: true, subtree: true });
@@ -347,6 +378,9 @@ export class DailyChallengePresentation {
     const kicker = document_.createElement('small');
     kicker.textContent = 'ИСПЫТАНИЕ ДНЯ';
     this.countdownElement = document_.createElement('time');
+    // #challengeRule остаётся role=status для осмысленных изменений карточки. Тикающая каждую
+    // секунду строка исключена из accessibility tree, иначе live-region перебивал бы навигацию.
+    this.countdownElement.setAttribute('aria-hidden', 'true');
     head.append(kicker, this.countdownElement);
 
     const copy = document_.createElement('div');
@@ -408,18 +442,21 @@ export class DailyChallengePresentation {
     if (this.dayKey && this.dayKey !== model.dayKey) this.onDayChange?.(model.dayKey);
     this.dayKey = model.dayKey;
 
-    this.countdownElement.textContent = `СМЕНА ЧЕРЕЗ ${model.countdown}`;
+    setText(this.countdownElement, `СМЕНА ЧЕРЕЗ ${model.countdown}`);
     this.countdownElement.dateTime = model.dayKey;
-    this.titleElement.textContent = model.modifier?.label || 'ИСПЫТАНИЕ ДНЯ';
-    this.detailElement.textContent = model.modifier?.description || '';
+    setText(this.titleElement, model.modifier?.label || 'ИСПЫТАНИЕ ДНЯ');
+    setText(this.detailElement, model.modifier?.description || '');
 
     if (model.objective) {
-      this.objectiveName.textContent = model.objective.label;
-      this.objectiveState.textContent = model.objective.complete
-        ? 'ВЫПОЛНЕНО · 1 / 1'
-        : model.objective.attempted
-          ? 'ПОКА НЕ ВЫПОЛНЕНО · 0 / 1'
-          : 'ПРОВЕРИТСЯ НА ФИНИШЕ · 0 / 1';
+      setText(this.objectiveName, model.objective.label);
+      setText(
+        this.objectiveState,
+        model.objective.complete
+          ? 'ВЫПОЛНЕНО · 1 / 1'
+          : model.objective.attempted
+            ? 'ПОКА НЕ ВЫПОЛНЕНО · 0 / 1'
+            : 'ПРОВЕРИТСЯ НА ФИНИШЕ · 0 / 1'
+      );
       this.objectiveProgress.style.setProperty(
         '--daily-progress',
         `${percentage(model.objective.current, model.objective.target)}%`
@@ -427,25 +464,28 @@ export class DailyChallengePresentation {
     }
 
     if (model.reward.complete) {
-      this.rewardName.textContent = 'ВСЕ DAILY-НАГРАДЫ ПОЛУЧЕНЫ';
-      this.rewardState.textContent = `ЛУЧШАЯ СЕРИЯ · ${model.reward.current}`;
+      setText(this.rewardName, 'ВСЕ DAILY-НАГРАДЫ ПОЛУЧЕНЫ');
+      setText(this.rewardState, `ЛУЧШАЯ СЕРИЯ · ${model.reward.current}`);
       this.rewardProgress.style.setProperty('--daily-progress', '100%');
     } else {
-      this.rewardName.textContent = model.reward.item?.name || 'СЛЕДУЮЩАЯ НАГРАДА';
-      this.rewardState.textContent = `СЕРИЯ ${model.reward.current} / ${model.reward.target}`;
+      setText(this.rewardName, model.reward.item?.name || 'СЛЕДУЮЩАЯ НАГРАДА');
+      setText(this.rewardState, `СЕРИЯ ${model.reward.current} / ${model.reward.target}`);
       this.rewardProgress.style.setProperty(
         '--daily-progress',
         `${percentage(model.reward.current, model.reward.target)}%`
       );
     }
 
-    this.runState.textContent = model.runComplete ? 'ЗАБЕГ ДНЯ ЗАВЕРШЁН ✓' : 'ЕЩЁ НЕ ЗАВЕРШЁН';
+    setText(this.runState, model.runComplete ? 'ЗАБЕГ ДНЯ ЗАВЕРШЁН ✓' : 'ЕЩЁ НЕ ЗАВЕРШЁН');
     this.root.classList.toggle('daily-complete', Boolean(model.objective?.complete));
   }
 
   dispose() {
     this.runType?.removeEventListener('change', this.boundRender);
     this.difficulty?.removeEventListener('change', this.boundRender);
+    const document_ = this.root?.ownerDocument;
+    document_?.removeEventListener('visibilitychange', this.boundVisibility);
+    document_?.defaultView?.removeEventListener('pageshow', this.boundVisibility);
     this.observer?.disconnect();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;

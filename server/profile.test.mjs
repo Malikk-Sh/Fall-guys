@@ -76,7 +76,11 @@ test('daily reward presentation не показывает протухшую т�
     profile: { daily: { lastDay: '2026-08-01', streak: 4, bestStreak: 4 } },
     catalog
   });
-  assert.equal(model.reward.current, 0, 'после пропущенного UTC-дня серия визуально начинается заново');
+  assert.equal(
+    model.reward.current,
+    0,
+    'после пропущенного UTC-дня серия визуально начинается заново'
+  );
 
   model = dailyPresentationModel({
     now,

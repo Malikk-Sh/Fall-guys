@@ -8,6 +8,7 @@ import {
   recordSoloProfile,
   playerId
 } from '../client/core/profile.js';
+import { dailyPresentationModel } from '../client/ui/DailyChallengePresentation.js';
 
 function memoryStorage(initial = null) {
   let value = initial;
@@ -64,6 +65,25 @@ test('ежедневная серия растёт один раз в сутки
   assert.equal(profile.daily.streak, 1);
   assert.equal(profile.daily.bestStreak, 2);
   assert.equal(profile.daily.completedDays, 3);
+});
+
+test('daily reward presentation не показывает протухшую текущую серию', () => {
+  const catalog = [{ id: 'daily-5', name: 'ПЯТЬ ДНЕЙ', unlock: { type: 'daily', streak: 5 } }];
+  const now = new Date('2026-08-03T12:00:00Z');
+
+  let model = dailyPresentationModel({
+    now,
+    profile: { daily: { lastDay: '2026-08-01', streak: 4, bestStreak: 4 } },
+    catalog
+  });
+  assert.equal(model.reward.current, 0, 'после пропущенного UTC-дня серия визуально начинается заново');
+
+  model = dailyPresentationModel({
+    now,
+    profile: { daily: { lastDay: '2026-08-02', streak: 4, bestStreak: 4 } },
+    catalog
+  });
+  assert.equal(model.reward.current, 4, 'вчерашняя серия ещё может быть продолжена сегодня');
 });
 
 test('daily objective snapshot хранит только валидный результат дня и не стирает достигнутый успех', () => {

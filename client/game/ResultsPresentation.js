@@ -104,7 +104,8 @@ export function validResultsRevealPlan(plan) {
 export function victoryCelebrationKind(finishId = null, randomValue = Math.random()) {
   if (typeof finishId === 'string' && finishId) {
     let hash = 0;
-    for (let index = 0; index < finishId.length; index++) hash = (hash * 31 + finishId.charCodeAt(index)) >>> 0;
+    for (let index = 0; index < finishId.length; index++)
+      hash = (hash * 31 + finishId.charCodeAt(index)) >>> 0;
     return VICTORY_CELEBRATIONS[hash % VICTORY_CELEBRATIONS.length];
   }
   const value = Number.isFinite(randomValue) ? Math.max(0, Math.min(0.999_999, randomValue)) : 0;

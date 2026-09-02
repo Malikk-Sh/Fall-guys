@@ -8,6 +8,7 @@ import {
   recordSoloProfile,
   playerId
 } from '../client/core/profile.js';
+import { dailyPresentationModel } from '../client/ui/DailyChallengePresentation.js';
 
 function memoryStorage(initial = null) {
   let value = initial;
@@ -17,6 +18,11 @@ function memoryStorage(initial = null) {
       value = next;
     }
   };
+}
+
+function objectiveTargetMs(spec) {
+  const value = spec?.objectives?.[0]?.targetMs;
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
 }
 
 test('профиль считает завершённые забеги и выполненные цели', () => {
@@ -61,6 +67,84 @@ test('ежедневная серия растёт один раз в сутки
   assert.equal(profile.daily.completedDays, 3);
 });
 
+test('daily reward presentation не показывает протухшую текущую серию', () => {
+  const catalog = [{ id: 'daily-5', name: 'ПЯТЬ ДНЕЙ', unlock: { type: 'daily', streak: 5 } }];
+  const now = new Date('2026-08-03T12:00:00Z');
+
+  let model = dailyPresentationModel({
+    now,
+    profile: { daily: { lastDay: '2026-08-01', streak: 4, bestStreak: 4 } },
+    catalog
+  });
+  assert.equal(model.reward.current, 0, 'после пропущенного UTC-дня серия визуально начинается заново');
+
+  model = dailyPresentationModel({
+    now,
+    profile: { daily: { lastDay: '2026-08-02', streak: 4, bestStreak: 4 } },
+    catalog
+  });
+  assert.equal(model.reward.current, 4, 'вчерашняя серия ещё может быть продолжена сегодня');
+});
+
+test('daily objective snapshot хранит только валидный результат дня и не стирает достигнутый успех', () => {
+  const storage = memoryStorage();
+  const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
+  const objectiveId = spec.objectives[0].id;
+  const targetMs = objectiveTargetMs(spec);
+
+  let profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: false }] }, storage);
+  assert.deepEqual(profile.dailyObjective, {
+    dayKey: spec.dayKey,
+    id: objectiveId,
+    targetMs,
+    complete: false
+  });
+
+  profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: true }] }, storage);
+  assert.equal(profile.dailyObjective.complete, true);
+
+  profile = recordSoloProfile(spec, { objectives: [{ id: objectiveId, complete: false }] }, storage);
+  assert.equal(profile.dailyObjective.complete, true, 'повторный провал не стирает уже выполненную цель');
+
+  const next = dailyCourseSpec('normal', new Date('2026-08-03T12:00:00Z'));
+  const nextId = next.objectives[0].id;
+  profile = recordSoloProfile(
+    next,
+    { objectives: [{ id: nextId, complete: true }], unranked: 'disconnect' },
+    storage
+  );
+  assert.deepEqual(
+    profile.dailyObjective,
+    { dayKey: spec.dayKey, id: objectiveId, targetMs, complete: true },
+    'незачётный daily не становится источником presentation progress'
+  );
+});
+
+test('time-objective snapshot не переносит успех между разными materialized target', () => {
+  let day = null;
+  for (let offset = 0; offset < 40; offset++) {
+    const date = new Date(Date.parse('2026-08-01T12:00:00Z') + offset * 86_400_000);
+    if (dailyCourseSpec('normal', date).objectives[0].id === 'under-time') {
+      day = date;
+      break;
+    }
+  }
+  assert.ok(day, 'подготовка: в пуле должна быть цель на время');
+
+  const storage = memoryStorage();
+  const easy = dailyCourseSpec('easy', day);
+  const chaos = dailyCourseSpec('chaos', day);
+  assert.notEqual(easy.objectives[0].targetMs, chaos.objectives[0].targetMs);
+
+  let profile = recordSoloProfile(easy, { objectives: [{ id: 'under-time', complete: true }] }, storage);
+  assert.equal(profile.dailyObjective.complete, true);
+  assert.equal(profile.dailyObjective.targetMs, easy.objectives[0].targetMs);
+
+  profile = recordSoloProfile(chaos, { objectives: [{ id: 'under-time', complete: false }] }, storage);
+  assert.equal(profile.dailyObjective.complete, false, 'другой time target не наследует прошлый успех');
+  assert.equal(profile.dailyObjective.targetMs, chaos.objectives[0].targetMs);
+});
+
 test('забег без зачёта не продлевает ежедневную серию', () => {
   const storage = memoryStorage();
   const spec = dailyCourseSpec('normal', new Date('2026-08-02T12:00:00Z'));
@@ -82,6 +166,15 @@ test('повреждённое и недоступное хранилище не
   };
   assert.deepEqual(readProfile(blocked), emptyProfile());
   assert.equal(recordSoloProfile({}, {}, blocked).completedRuns, 1);
+});
+
+test('старый профиль без daily objective snapshot получает безопасное пустое состояние', () => {
+  const profile = readProfile(
+    memoryStorage(JSON.stringify({ version: 1, daily: { lastDay: '2026-08-01', streak: 2, bestStreak: 3 } }))
+  );
+  assert.deepEqual(profile.dailyObjective, { dayKey: null, id: null, targetMs: null, complete: false });
+  assert.equal(profile.daily.streak, 2);
+  assert.equal(profile.daily.bestStreak, 3);
 });
 
 test('кооперативный профиль хранит лучшие главы и спасения без дубля после reconnect', () => {

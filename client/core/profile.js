@@ -8,6 +8,11 @@ export function emptyProfile() {
     completedObjectives: 0,
     flawlessRuns: 0,
     daily: { lastDay: null, streak: 0, bestStreak: 0, completedDays: 0 },
+    // Presentation-only снимок результата цели последнего валидного daily. Он не участвует ни в
+    // streak, ни в entitlement: карточке нужно лишь честно помнить, выполнена ли сегодняшняя цель.
+    // targetMs отличает materialized under-time на разных сложностях, не привязывая остальные цели
+    // к difficulty без причины.
+    dailyObjective: { dayKey: null, id: null, targetMs: null, complete: false },
     coop: {
       completedChapters: 0,
       totalRevives: 0,
@@ -35,6 +40,12 @@ export function readProfile(storage = globalThis.localStorage) {
         streak: safeCount(parsed.daily?.streak),
         bestStreak: safeCount(parsed.daily?.bestStreak),
         completedDays: safeCount(parsed.daily?.completedDays)
+      },
+      dailyObjective: {
+        dayKey: typeof parsed.dailyObjective?.dayKey === 'string' ? parsed.dailyObjective.dayKey : null,
+        id: typeof parsed.dailyObjective?.id === 'string' ? parsed.dailyObjective.id : null,
+        targetMs: safeOptionalPositiveNumber(parsed.dailyObjective?.targetMs),
+        complete: parsed.dailyObjective?.complete === true
       },
       coop: {
         completedChapters: safeCount(parsed.coop?.completedChapters),
@@ -98,11 +109,32 @@ export function recordSoloProfile(
     profile.flawlessRuns++;
   }
 
-  if (spec?.challenge === 'daily' && spec.dayKey && !unranked && profile.daily.lastDay !== spec.dayKey) {
-    profile.daily.streak = isPreviousDay(profile.daily.lastDay, spec.dayKey) ? profile.daily.streak + 1 : 1;
-    profile.daily.lastDay = spec.dayKey;
-    profile.daily.completedDays++;
-    profile.daily.bestStreak = Math.max(profile.daily.bestStreak, profile.daily.streak);
+  if (spec?.challenge === 'daily' && spec.dayKey && !unranked) {
+    const expectedObjective = spec.objectives?.[0];
+    const expectedObjectiveId = expectedObjective?.id;
+    const expectedTargetMs = safeOptionalPositiveNumber(expectedObjective?.targetMs);
+    const objective = objectives.find(goal => goal?.id === expectedObjectiveId);
+    if (expectedObjectiveId && objective) {
+      const sameObjective =
+        profile.dailyObjective.dayKey === spec.dayKey &&
+        profile.dailyObjective.id === expectedObjectiveId &&
+        profile.dailyObjective.targetMs === expectedTargetMs;
+      profile.dailyObjective = {
+        dayKey: spec.dayKey,
+        id: expectedObjectiveId,
+        targetMs: expectedTargetMs,
+        // Успех за материализованную цель липкий: повторный неудачный забег не должен стирать уже
+        // выполненный результат, но другой time-target не наследует его.
+        complete: Boolean(objective.complete || (sameObjective && profile.dailyObjective.complete))
+      };
+    }
+
+    if (profile.daily.lastDay !== spec.dayKey) {
+      profile.daily.streak = isPreviousDay(profile.daily.lastDay, spec.dayKey) ? profile.daily.streak + 1 : 1;
+      profile.daily.lastDay = spec.dayKey;
+      profile.daily.completedDays++;
+      profile.daily.bestStreak = Math.max(profile.daily.bestStreak, profile.daily.streak);
+    }
   }
   writeProfile(profile, storage);
   return profile;
@@ -139,6 +171,10 @@ function safePlayerId(value) {
 
 function safeCount(value) {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function safeOptionalPositiveNumber(value) {
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
 }
 
 function safeChapterBests(value) {

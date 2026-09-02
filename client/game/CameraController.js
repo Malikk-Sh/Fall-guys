@@ -188,7 +188,8 @@ export class CameraController {
     const spectatorFrame = Boolean(player.remote && !this.settings?.reducedMotion);
     let wantedDistance = this.mobile ? (portrait ? 8.9 : 8.2) : 8.2;
     if (spectatorFrame) wantedDistance += SPECTATOR_DISTANCE_BONUS;
-    const height = (portrait ? 5.25 : 4.65) + renderPitch * 4.6 + (spectatorFrame ? SPECTATOR_HEIGHT_BONUS : 0);
+    const height =
+      (portrait ? 5.25 : 4.65) + renderPitch * 4.6 + (spectatorFrame ? SPECTATOR_HEIGHT_BONUS : 0);
 
     // Камера следит за ПОЗИЦИЕЙ ОТРИСОВКИ, а не физики: физика идёт фиксированным шагом, и слежение
     // за ней вернуло бы в кадр то самое дрожание, ради устранения которого сделана интерполяция.

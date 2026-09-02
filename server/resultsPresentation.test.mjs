@@ -70,7 +70,11 @@ test('victory celebration pose bounded и меняет только presentation
     const start = victoryCelebrationPose(kind, 0, {});
     const middle = victoryCelebrationPose(kind, 0.5, {});
     const end = victoryCelebrationPose(kind, 1, {});
-    assert.deepEqual(Object.keys(middle).sort(), [...keys].sort(), `${kind}: только известные visual channels`);
+    assert.deepEqual(
+      Object.keys(middle).sort(),
+      [...keys].sort(),
+      `${kind}: только известные visual channels`
+    );
     assert.ok(Object.values(middle).every(Number.isFinite), `${kind}: все offsets конечны`);
     assert.ok(keys.some(key => Math.abs(middle[key]) > 0.04), `${kind}: жест читается в середине`);
     assert.ok(Math.abs(middle.visualY) <= 0.24, `${kind}: visual jump остаётся маленьким`);

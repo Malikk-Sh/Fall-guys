@@ -76,12 +76,22 @@ test('victory celebration pose bounded и меняет только presentation
       `${kind}: только известные visual channels`
     );
     assert.ok(Object.values(middle).every(Number.isFinite), `${kind}: все offsets конечны`);
-    assert.ok(keys.some(key => Math.abs(middle[key]) > 0.04), `${kind}: жест читается в середине`);
+    assert.ok(
+      keys.some(key => Math.abs(middle[key]) > 0.04),
+      `${kind}: жест читается в середине`
+    );
     assert.ok(Math.abs(middle.visualY) <= 0.24, `${kind}: visual jump остаётся маленьким`);
     assert.ok(Math.abs(middle.visualYaw) <= Math.PI * 2, `${kind}: поворот bounded`);
-    assert.ok(keys.every(key => start[key] === 0), `${kind}: старт из исходной позы`);
+    assert.ok(
+      keys.every(key => start[key] === 0),
+      `${kind}: старт из исходной позы`
+    );
     if (kind === 'spin') assert.ok(Math.abs(end.visualYaw - Math.PI * 2) < 1e-9);
-    else assert.ok(keys.every(key => Math.abs(end[key]) < 1e-9), `${kind}: конец возвращается к базе`);
+    else
+      assert.ok(
+        keys.every(key => Math.abs(end[key]) < 1e-9),
+        `${kind}: конец возвращается к базе`
+      );
   }
 });
 

@@ -225,35 +225,38 @@ test('reduced-motion preference кешируется и не вызывает ma
     }
   };
 
-  withMatchMedia(query => {
-    if (query === '(prefers-reduced-motion: reduce)') {
-      reduceQueries++;
-      return reducedQuery;
+  withMatchMedia(
+    query => {
+      if (query === '(prefers-reduced-motion: reduce)') {
+        reduceQueries++;
+        return reducedQuery;
+      }
+      return { matches: false };
+    },
+    () => {
+      const settings = {
+        values: { motion: 'auto' },
+        get(key) {
+          return this.values[key];
+        },
+        subscribe() {
+          return () => {};
+        },
+        shakeScale: 1
+      };
+      const controller = new CameraController(new THREE.PerspectiveCamera(), settings);
+      const remotePlayer = makePlayer(0);
+      remotePlayer.remote = true;
+      const afterConstruction = reduceQueries;
+
+      run(controller, remotePlayer, makeInput(), 2);
+      assert.equal(reduceQueries, afterConstruction, 'render loop не должен повторно спрашивать media query');
+
+      reducedQuery.matches = true;
+      reduceListener?.();
+      assert.equal(controller.reducedMotion, true, 'системная смена preference обновляет cached state');
     }
-    return { matches: false };
-  }, () => {
-    const settings = {
-      values: { motion: 'auto' },
-      get(key) {
-        return this.values[key];
-      },
-      subscribe() {
-        return () => {};
-      },
-      shakeScale: 1
-    };
-    const controller = new CameraController(new THREE.PerspectiveCamera(), settings);
-    const remotePlayer = makePlayer(0);
-    remotePlayer.remote = true;
-    const afterConstruction = reduceQueries;
-
-    run(controller, remotePlayer, makeInput(), 2);
-    assert.equal(reduceQueries, afterConstruction, 'render loop не должен повторно спрашивать media query');
-
-    reducedQuery.matches = true;
-    reduceListener?.();
-    assert.equal(controller.reducedMotion, true, 'системная смена preference обновляет cached state');
-  });
+  );
 });
 
 test('досмотр слегка расширяет кадр remote-игрока и reduced motion сохраняет обычное кадрирование', () => {

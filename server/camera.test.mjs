@@ -198,3 +198,31 @@ test('presentation impulse ограничен и полностью отключ
     assert.equal(reduced.shake, 0);
   });
 });
+
+test('досмотр слегка расширяет кадр remote-игрока и reduced motion сохраняет обычное кадрирование', () => {
+  withStorage(fakeStorage(), () => {
+    const normalSettings = { shakeScale: 1, reducedMotion: false };
+    const reducedSettings = { shakeScale: 0, reducedMotion: true };
+    const local = new CameraController(new THREE.PerspectiveCamera(), normalSettings);
+    const spectator = new CameraController(new THREE.PerspectiveCamera(), normalSettings);
+    const reduced = new CameraController(new THREE.PerspectiveCamera(), reducedSettings);
+    const localPlayer = makePlayer(0);
+    const remotePlayer = makePlayer(0);
+    remotePlayer.remote = true;
+
+    run(local, localPlayer, makeInput());
+    run(spectator, remotePlayer, makeInput());
+    run(reduced, remotePlayer, makeInput());
+
+    assert.ok(spectator.distance > local.distance + 0.7, 'remote focus должен немного отодвинуть камеру');
+    assert.ok(
+      spectator.camera.position.y > local.camera.position.y + 0.2,
+      'remote focus должен дать больше воздуха над трассой'
+    );
+    assert.ok(Math.abs(reduced.distance - local.distance) < 0.02, 'reduced motion не меняет дистанцию');
+    assert.ok(
+      Math.abs(reduced.camera.position.y - local.camera.position.y) < 0.02,
+      'reduced motion не добавляет вертикальный сдвиг'
+    );
+  });
+});

@@ -31,11 +31,8 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Show exact Prettier diff
-        run: |
-          npx prettier --write server/resultsPresentation.test.mjs
-          git diff -- server/resultsPresentation.test.mjs
-          exit 1
+      - name: Run preflight checks
+        run: npm run preflight
 
   tests:
     name: Node tests (${{ matrix.suite }})

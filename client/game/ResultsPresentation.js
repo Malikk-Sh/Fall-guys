@@ -13,7 +13,21 @@ const PHASE_CLASSES = Object.freeze([
   'results-show-highlights',
   'results-show-actions'
 ]);
-const VICTORY_POSE_MS = 680;
+const VICTORY_POSE_MS = 820;
+export const VICTORY_CELEBRATIONS = Object.freeze(['wave', 'jump', 'spin', 'tiny-dance']);
+const EMPTY_VICTORY_CHANNELS = Object.freeze({
+  leftArmX: 0,
+  leftArmZ: 0,
+  rightArmX: 0,
+  rightArmZ: 0,
+  leftLegX: 0,
+  rightLegX: 0,
+  visualY: 0,
+  visualYaw: 0,
+  visualTiltZ: 0,
+  headY: 0,
+  faceY: 0
+});
 
 export function resultsRevealPlan(reducedMotion = false) {
   return reducedMotion
@@ -82,6 +96,73 @@ export function validResultsRevealPlan(plan) {
   const finite = values.every(Number.isFinite);
   const ordered = values.every((value, index) => index === 0 || value >= values[index - 1]);
   return finite && ordered;
+}
+
+// Finish cosmetic задаёт стиль празднования стабильно, чтобы выбранный образ ощущался частью
+// результата. Без finish-предмета берётся один из четырёх базовых жестов — случайность происходит
+// ровно один раз при открытии results и не попадает ни в gameplay, ни в network state.
+export function victoryCelebrationKind(finishId = null, randomValue = Math.random()) {
+  if (typeof finishId === 'string' && finishId) {
+    let hash = 0;
+    for (let index = 0; index < finishId.length; index++)
+      hash = (hash * 31 + finishId.charCodeAt(index)) >>> 0;
+    return VICTORY_CELEBRATIONS[hash % VICTORY_CELEBRATIONS.length];
+  }
+  const value = Number.isFinite(randomValue) ? Math.max(0, Math.min(0.999_999, randomValue)) : 0;
+  return VICTORY_CELEBRATIONS[Math.floor(value * VICTORY_CELEBRATIONS.length)];
+}
+
+// Pure presentation pose. `out` переиспользуется RAF-циклом, поэтому новых объектов на кадр нет.
+// Все каналы относятся к `Character.visual` и его существующим anchors/limbs; root transform,
+// PlayerDimensions и физика здесь принципиально недоступны.
+export function victoryCelebrationPose(kind, progress, out = {}) {
+  Object.assign(out, EMPTY_VICTORY_CHANNELS);
+  const t = Math.max(0, Math.min(1, Number(progress) || 0));
+  const envelope = Math.sin(t * Math.PI);
+
+  switch (kind) {
+    case 'jump': {
+      out.visualY = Math.sin(t * Math.PI) * 0.24;
+      out.leftArmZ = 0.78 * envelope;
+      out.rightArmZ = -0.78 * envelope;
+      out.leftLegX = 0.22 * Math.sin(t * Math.PI * 2) * envelope;
+      out.rightLegX = -out.leftLegX;
+      out.headY = -0.08 * envelope;
+      out.faceY = -0.05 * envelope;
+      break;
+    }
+    case 'spin': {
+      const turn = t * t * (3 - 2 * t);
+      out.visualYaw = turn * Math.PI * 2;
+      out.leftArmZ = 0.7 * envelope;
+      out.rightArmZ = -0.7 * envelope;
+      out.visualY = Math.sin(t * Math.PI) * 0.06;
+      break;
+    }
+    case 'tiny-dance': {
+      const beat = Math.sin(t * Math.PI * 5);
+      out.leftArmX = (-0.72 + beat * 0.42) * envelope;
+      out.rightArmX = (-0.72 - beat * 0.42) * envelope;
+      out.leftLegX = beat * 0.26 * envelope;
+      out.rightLegX = -beat * 0.26 * envelope;
+      out.visualY = Math.abs(beat) * 0.08 * envelope;
+      out.visualTiltZ = beat * 0.16 * envelope;
+      out.headY = beat * 0.08 * envelope;
+      out.faceY = beat * 0.05 * envelope;
+      break;
+    }
+    case 'wave':
+    default: {
+      const wave = Math.sin(t * Math.PI * 6) * envelope;
+      out.leftArmZ = 0.52 * envelope;
+      out.rightArmZ = -1.06 * envelope;
+      out.rightArmX = wave * 0.24;
+      out.headY = -0.18 * envelope;
+      out.faceY = -0.12 * envelope;
+      break;
+    }
+  }
+  return out;
 }
 
 // Причина «без зачёта» на карточке гонки: СВОЯ, а не комнатная.
@@ -382,22 +463,39 @@ export class ResultsPresentation {
   startVictoryPose(actor) {
     const character = actor?.character;
     if (!character) return;
+    const finishId = character.cosmetics?.loadout?.finish?.id || null;
     this.pose = {
       actor,
+      kind: victoryCelebrationKind(finishId),
       startedAt: this.window.performance?.now?.() || 0,
+      channels: { ...EMPTY_VICTORY_CHANNELS },
+      leftArmX: character.leftArm.rotation.x,
       leftArmZ: character.leftArm.rotation.z,
+      rightArmX: character.rightArm.rotation.x,
       rightArmZ: character.rightArm.rotation.z,
+      leftLegX: character.leftLeg.rotation.x,
+      rightLegX: character.rightLeg.rotation.x,
+      visualY: character.visual.position.y,
+      visualYaw: character.visual.rotation.y,
+      visualTiltZ: character.visual.rotation.z,
       headY: character.headAnchor.rotation.y,
       faceY: character.faceAnchor.rotation.y
     };
     const tick = now => {
       if (!this.pose || !this.presenting) return;
       const progress = Math.max(0, Math.min(1, (now - this.pose.startedAt) / VICTORY_POSE_MS));
-      const weight = Math.sin(progress * Math.PI);
-      character.leftArm.rotation.z = this.pose.leftArmZ + 0.86 * weight;
-      character.rightArm.rotation.z = this.pose.rightArmZ - 1.06 * weight;
-      character.headAnchor.rotation.y = this.pose.headY - 0.18 * weight;
-      character.faceAnchor.rotation.y = this.pose.faceY - 0.12 * weight;
+      const channels = victoryCelebrationPose(this.pose.kind, progress, this.pose.channels);
+      character.leftArm.rotation.x = this.pose.leftArmX + channels.leftArmX;
+      character.leftArm.rotation.z = this.pose.leftArmZ + channels.leftArmZ;
+      character.rightArm.rotation.x = this.pose.rightArmX + channels.rightArmX;
+      character.rightArm.rotation.z = this.pose.rightArmZ + channels.rightArmZ;
+      character.leftLeg.rotation.x = this.pose.leftLegX + channels.leftLegX;
+      character.rightLeg.rotation.x = this.pose.rightLegX + channels.rightLegX;
+      character.visual.position.y = this.pose.visualY + channels.visualY;
+      character.visual.rotation.y = this.pose.visualYaw + channels.visualYaw;
+      character.visual.rotation.z = this.pose.visualTiltZ + channels.visualTiltZ;
+      character.headAnchor.rotation.y = this.pose.headY + channels.headY;
+      character.faceAnchor.rotation.y = this.pose.faceY + channels.faceY;
       if (progress >= 1) return this.stopVictoryPose();
       this.poseFrame = this.window.requestAnimationFrame?.(tick) || 0;
     };
@@ -409,8 +507,15 @@ export class ResultsPresentation {
     this.poseFrame = 0;
     const character = this.pose?.actor?.character;
     if (character) {
+      character.leftArm.rotation.x = this.pose.leftArmX;
       character.leftArm.rotation.z = this.pose.leftArmZ;
+      character.rightArm.rotation.x = this.pose.rightArmX;
       character.rightArm.rotation.z = this.pose.rightArmZ;
+      character.leftLeg.rotation.x = this.pose.leftLegX;
+      character.rightLeg.rotation.x = this.pose.rightLegX;
+      character.visual.position.y = this.pose.visualY;
+      character.visual.rotation.y = this.pose.visualYaw;
+      character.visual.rotation.z = this.pose.visualTiltZ;
       character.headAnchor.rotation.y = this.pose.headY;
       character.faceAnchor.rotation.y = this.pose.faceY;
     }

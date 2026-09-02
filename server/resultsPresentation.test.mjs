@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  VICTORY_CELEBRATIONS,
   isResultsSkipKey,
   raceUnrankedReason,
   primaryResultAction,
   racePodiumEntries,
   racePodiumSkin,
   resultsRevealPlan,
-  validResultsRevealPlan
+  validResultsRevealPlan,
+  victoryCelebrationKind,
+  victoryCelebrationPose
 } from '../client/game/ResultsPresentation.js';
 
 test('results reveal keeps a bounded finish window before the card enters', () => {
@@ -30,6 +33,66 @@ test('reduced motion reveals results almost immediately without changing stage o
   assert.ok(reduced.complete <= 120);
   assert.ok(reduced.complete < normal.card);
   assert.equal(reduced.actions, reduced.complete);
+});
+
+test('victory celebration выбирается из четырёх базовых жестов и привязывается к finish cosmetic', () => {
+  assert.deepEqual([...VICTORY_CELEBRATIONS], ['wave', 'jump', 'spin', 'tiny-dance']);
+  assert.equal(victoryCelebrationKind(null, 0), 'wave');
+  assert.equal(victoryCelebrationKind(null, 0.25), 'jump');
+  assert.equal(victoryCelebrationKind(null, 0.5), 'spin');
+  assert.equal(victoryCelebrationKind(null, 0.999), 'tiny-dance');
+
+  const cosmetic = victoryCelebrationKind('space-portal-finish', 0);
+  assert.ok(VICTORY_CELEBRATIONS.includes(cosmetic));
+  assert.equal(
+    victoryCelebrationKind('space-portal-finish', 0.999),
+    cosmetic,
+    'finish cosmetic задаёт стабильный стиль независимо от random fallback'
+  );
+});
+
+test('victory celebration pose bounded и меняет только presentation channels', () => {
+  const keys = [
+    'leftArmX',
+    'leftArmZ',
+    'rightArmX',
+    'rightArmZ',
+    'leftLegX',
+    'rightLegX',
+    'visualY',
+    'visualYaw',
+    'visualTiltZ',
+    'headY',
+    'faceY'
+  ];
+
+  for (const kind of VICTORY_CELEBRATIONS) {
+    const start = victoryCelebrationPose(kind, 0, {});
+    const middle = victoryCelebrationPose(kind, 0.5, {});
+    const end = victoryCelebrationPose(kind, 1, {});
+    assert.deepEqual(
+      Object.keys(middle).sort(),
+      [...keys].sort(),
+      `${kind}: только известные visual channels`
+    );
+    assert.ok(Object.values(middle).every(Number.isFinite), `${kind}: все offsets конечны`);
+    assert.ok(
+      keys.some(key => Math.abs(middle[key]) > 0.04),
+      `${kind}: жест читается в середине`
+    );
+    assert.ok(Math.abs(middle.visualY) <= 0.24, `${kind}: visual jump остаётся маленьким`);
+    assert.ok(Math.abs(middle.visualYaw) <= Math.PI * 2, `${kind}: поворот bounded`);
+    assert.ok(
+      keys.every(key => start[key] === 0),
+      `${kind}: старт из исходной позы`
+    );
+    if (kind === 'spin') assert.ok(Math.abs(end.visualYaw - Math.PI * 2) < 1e-9);
+    else
+      assert.ok(
+        keys.every(key => Math.abs(end[key]) < 1e-9),
+        `${kind}: конец возвращается к базе`
+      );
+  }
 });
 
 test('one primary result action is chosen from current mode and visible actions', () => {

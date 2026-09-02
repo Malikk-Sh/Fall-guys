@@ -31,8 +31,11 @@ jobs:
       - name: Install exact dependencies
         run: npm ci
 
-      - name: Run preflight checks
-        run: npm run preflight
+      - name: Show exact camera test Prettier diff
+        run: |
+          npx prettier --write server/camera.test.mjs
+          git diff -- server/camera.test.mjs
+          exit 1
 
   tests:
     name: Node tests (${{ matrix.suite }})

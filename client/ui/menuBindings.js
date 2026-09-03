@@ -13,6 +13,28 @@ import { shareInvite } from '../core/invite.js';
 import { DailyChallengePresentation } from './DailyChallengePresentation.js';
 import { EmoteControl } from './emoteControl.js';
 
+const MENU_CONFIRM_ACTIONS = new Set([
+  '#play',
+  '#again',
+  '#newCourse',
+  '#create',
+  '#join',
+  '#start',
+  '#rematch',
+  '#nextChapter',
+  '#raceFind',
+  '#coopFind',
+  '#coopCreate',
+  '#coopJoin'
+]);
+
+export function menuSoundForAction(selector, { searching = false } = {}) {
+  if (selector === '#returnLobby') return 'uiBack';
+  if (searching && (selector === '#raceFind' || selector === '#coopFind')) return 'uiBack';
+  if (MENU_CONFIRM_ACTIONS.has(selector)) return 'uiConfirm';
+  return 'uiClick';
+}
+
 export function bindMenu(game) {
   game.ui.onAccountAction = (action, value) => game.account.handleAction(action, value);
   game.ui.onRecentPartnerInvite = async partner => {
@@ -48,7 +70,10 @@ export function bindMenu(game) {
   game.ui.emoteControl.bind();
   const click = (selector, handler) =>
     $(selector).addEventListener('click', event => {
-      game.sfx.uiClick();
+      const method = menuSoundForAction(selector, {
+        searching: event.currentTarget?.dataset.searching === 'true'
+      });
+      game.sfx?.[method]?.();
       handler(event);
     });
 
@@ -216,10 +241,15 @@ export function bindMenu(game) {
   });
   document.querySelectorAll('.back').forEach(button =>
     button.addEventListener('click', () => {
-      game.sfx.uiClick();
+      game.sfx.uiBack();
       game.goHome();
     })
   );
+  // Модальные close-кнопки управляются своими контроллерами. Здесь только единая звуковая
+  // семантика: закрытие всегда звучит как возврат и не дублирует обработчики навигации `.back`.
+  document
+    .querySelectorAll('.close-button:not(.back)')
+    .forEach(button => button.addEventListener('click', () => game.sfx.uiBack()));
 
   game.bindLeaveMatch();
   game.bindSpectateSkip();

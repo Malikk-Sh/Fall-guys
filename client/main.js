@@ -775,7 +775,7 @@ class Game {
     const button = document.querySelector('#spectateSkip');
     if (!button) return;
     button.addEventListener('click', () => {
-      this.sfx.uiClick();
+      this.sfx.uiConfirm();
       // Гонка при этом продолжается, поэтому итоги открываются без кнопок выбора: до конца матча
       // сервер их всё равно не примет.
       if (this.spectating) this.showRaceResults({ pending: true });
@@ -795,9 +795,12 @@ class Game {
       button.classList.remove('armed');
     };
     button.addEventListener('click', () => {
-      this.sfx.uiClick();
-      if (Date.now() > armedUntil) {
-        armedUntil = Date.now() + CONFIRM_MS;
+      const now = Date.now();
+      const confirming = now <= armedUntil;
+      if (confirming) this.sfx.uiBack();
+      else this.sfx.uiClick();
+      if (!confirming) {
+        armedUntil = now + CONFIRM_MS;
         button.textContent = 'ТОЧНО?';
         button.classList.add('armed');
         clearTimeout(timer);

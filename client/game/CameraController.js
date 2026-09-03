@@ -9,6 +9,8 @@ import * as THREE from 'three';
 
 // Расстояние, ближе которого напарник начинает влиять на кадр.
 const COOP_FRAME_DISTANCE = 18;
+const SPECTATOR_DISTANCE_BONUS = 0.85;
+const SPECTATOR_HEIGHT_BONUS = 0.28;
 
 // Два режима камеры.
 //
@@ -44,6 +46,18 @@ export class CameraController {
       !!globalThis.matchMedia?.('(pointer:coarse)').matches ||
       (globalThis.navigator?.maxTouchPoints || 0) > 0;
 
+    // Системный reduced-motion кешируется один раз и обновляется событием. Читать
+    // Settings.reducedMotion в update нельзя: при `auto` его getter вызывает matchMedia каждый кадр.
+    this._reducedMotionQuery = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)') || null;
+    this.reducedMotion = false;
+    this._onReducedMotionChange = () => this.syncReducedMotion();
+    this._reducedMotionQuery?.addEventListener?.('change', this._onReducedMotionChange);
+    this._unsubscribeSettings =
+      this.settings?.subscribe?.((_values, key) => {
+        if (key == null || key === 'motion') this.syncReducedMotion();
+      }) || null;
+    this.syncReducedMotion();
+
     // Тряска экрана: сила затухает со временем, смещение накладывается на итоговую позицию камеры.
     this.shake = 0;
 
@@ -73,6 +87,15 @@ export class CameraController {
     }
   }
 
+  syncReducedMotion() {
+    const mode = this.settings?.get?.('motion') ?? this.settings?.values?.motion;
+    if (mode === 'reduced') this.reducedMotion = true;
+    else if (mode === 'full') this.reducedMotion = false;
+    else if (mode === 'auto') this.reducedMotion = Boolean(this._reducedMotionQuery?.matches);
+    else this.reducedMotion = Boolean(this.settings?.reducedMotion);
+    return this.reducedMotion;
+  }
+
   toggleMode() {
     this.mode = this.mode === 'follow' ? 'free' : 'follow';
     try {
@@ -86,6 +109,7 @@ export class CameraController {
   reset(player, instant = false) {
     this.yaw = player?.character.group.rotation.y || 0;
     this.pitch = 0.08;
+    this.distance = 8.2;
     this.manualTimer = 0;
     this.shake = 0;
     this.impulseYaw = 0;
@@ -93,6 +117,7 @@ export class CameraController {
     this.impulseFov = 0;
     this.impulseTime = 0;
     this.impulseDuration = 0;
+    this.syncReducedMotion();
     if (instant && player) {
       const p = player.visualPosition;
       this.camera.position.set(p.x, p.y + 4.7, p.z + 8.2);
@@ -121,7 +146,7 @@ export class CameraController {
   // а reduced motion отключает весь пространственный импульс. Компонент shake дополнительно проходит
   // через обычный пользовательский регулятор тряски в addShake().
   addImpulse({ yaw = 0, pitch = 0, fov = 0, shake = 0, duration = 0.15 } = {}) {
-    if (this.settings?.reducedMotion) return false;
+    if (this.reducedMotion) return false;
     const finite = value => (Number.isFinite(value) ? value : 0);
     const life = THREE.MathUtils.clamp(finite(duration) || 0.15, 0.05, 0.5);
     const nextYaw = THREE.MathUtils.clamp(this.impulseYaw + finite(yaw), -0.18, 0.18);
@@ -183,8 +208,11 @@ export class CameraController {
     const renderPitch = this.pitch + this.impulsePitch * impulseWeight;
 
     const portrait = (globalThis.innerHeight || 800) > (globalThis.innerWidth || 1280);
+    const spectatorFrame = Boolean(player.remote && !this.reducedMotion);
     let wantedDistance = this.mobile ? (portrait ? 8.9 : 8.2) : 8.2;
-    const height = (portrait ? 5.25 : 4.65) + renderPitch * 4.6;
+    if (spectatorFrame) wantedDistance += SPECTATOR_DISTANCE_BONUS;
+    const height =
+      (portrait ? 5.25 : 4.65) + renderPitch * 4.6 + (spectatorFrame ? SPECTATOR_HEIGHT_BONUS : 0);
 
     // Камера следит за ПОЗИЦИЕЙ ОТРИСОВКИ, а не физики: физика идёт фиксированным шагом, и слежение
     // за ней вернуло бы в кадр то самое дрожание, ради устранения которого сделана интерполяция.

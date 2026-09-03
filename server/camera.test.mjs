@@ -32,6 +32,22 @@ const withStorage = (storage, fn) => {
   }
 };
 
+const withMatchMedia = (matchMedia, fn) => {
+  const had = Object.prototype.hasOwnProperty.call(globalThis, 'matchMedia');
+  const previous = globalThis.matchMedia;
+  Object.defineProperty(globalThis, 'matchMedia', {
+    value: matchMedia,
+    configurable: true,
+    writable: true
+  });
+  try {
+    return fn();
+  } finally {
+    if (had) globalThis.matchMedia = previous;
+    else delete globalThis.matchMedia;
+  }
+};
+
 // Игрок бежит вперёд, но повёрнут в сторону: разница между поворотом персонажа и yaw камеры —
 // это ровно то, что съедает автодоворот.
 const makePlayer = (rotationY = 1.2) => ({
@@ -196,5 +212,81 @@ test('presentation impulse ограничен и полностью отключ
     assert.equal(reduced.addImpulse({ yaw: 0.1, pitch: 0.1, fov: 2, shake: 1 }), false);
     assert.equal(reduced.impulseTime, 0);
     assert.equal(reduced.shake, 0);
+  });
+});
+
+test('reduced-motion preference кешируется и не вызывает matchMedia в каждом spectator frame', () => {
+  let reduceQueries = 0;
+  let reduceListener = null;
+  const reducedQuery = {
+    matches: false,
+    addEventListener: (type, listener) => {
+      if (type === 'change') reduceListener = listener;
+    }
+  };
+
+  withMatchMedia(
+    query => {
+      if (query === '(prefers-reduced-motion: reduce)') {
+        reduceQueries++;
+        return reducedQuery;
+      }
+      return { matches: false };
+    },
+    () => {
+      const settings = {
+        values: { motion: 'auto' },
+        get(key) {
+          return this.values[key];
+        },
+        subscribe() {
+          return () => {};
+        },
+        shakeScale: 1
+      };
+      const controller = new CameraController(new THREE.PerspectiveCamera(), settings);
+      const remotePlayer = makePlayer(0);
+      remotePlayer.remote = true;
+      const afterConstruction = reduceQueries;
+
+      run(controller, remotePlayer, makeInput(), 2);
+      assert.equal(reduceQueries, afterConstruction, 'render loop не должен повторно спрашивать media query');
+
+      reducedQuery.matches = true;
+      reduceListener?.();
+      assert.equal(controller.reducedMotion, true, 'системная смена preference обновляет cached state');
+    }
+  );
+});
+
+test('досмотр слегка расширяет кадр remote-игрока и reduced motion сохраняет обычное кадрирование', () => {
+  withStorage(fakeStorage(), () => {
+    const normalSettings = { shakeScale: 1, reducedMotion: false };
+    const reducedSettings = { shakeScale: 0, reducedMotion: true };
+    const local = new CameraController(new THREE.PerspectiveCamera(), normalSettings);
+    const spectator = new CameraController(new THREE.PerspectiveCamera(), normalSettings);
+    const reduced = new CameraController(new THREE.PerspectiveCamera(), reducedSettings);
+    const localPlayer = makePlayer(0);
+    const remotePlayer = makePlayer(0);
+    remotePlayer.remote = true;
+
+    run(local, localPlayer, makeInput());
+    run(spectator, remotePlayer, makeInput());
+    run(reduced, remotePlayer, makeInput());
+
+    assert.ok(spectator.distance > local.distance + 0.7, 'remote focus должен немного отодвинуть камеру');
+    assert.ok(
+      spectator.camera.position.y > local.camera.position.y + 0.2,
+      'remote focus должен дать больше воздуха над трассой'
+    );
+    assert.ok(Math.abs(reduced.distance - local.distance) < 0.02, 'reduced motion не меняет дистанцию');
+    assert.ok(
+      Math.abs(reduced.camera.position.y - local.camera.position.y) < 0.02,
+      'reduced motion не добавляет вертикальный сдвиг'
+    );
+
+    spectator.reset(localPlayer, true);
+    assert.equal(spectator.distance, 8.2, 'новый забег сбрасывает spectator distance к baseline');
+    assert.equal(spectator.camera.position.z, 8.2, 'instant reset не начинает локальный забег с zoom-out');
   });
 });

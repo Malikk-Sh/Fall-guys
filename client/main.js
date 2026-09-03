@@ -3,7 +3,7 @@ import { COLORS, courseName, courseSpec, dailyCourseSpec, dailySeed, randomSeed 
 import { InputManager } from './core/InputManager.js';
 import { AudioEngine } from './audio/AudioEngine.js';
 import { Sfx } from './audio/sfx.js';
-import { Music } from './audio/Music.js';
+import { Music, MUSIC_MODE } from './audio/Music.js';
 import { Effects } from './game/Effects.js';
 import { Course } from './game/Course.js';
 import { CoopCourse } from './game/CoopCourse.js';
@@ -264,6 +264,13 @@ class Game {
   installAudioUnlock() {
     const unlock = () => {
       this.audio.unlock();
+      const racePresentation = [
+        APP_STATE.COUNTDOWN,
+        APP_STATE.RACE,
+        APP_STATE.SPECTATE,
+        APP_STATE.RESULTS
+      ].includes(this.state.name);
+      this.music.start(racePresentation ? MUSIC_MODE.RACE : MUSIC_MODE.MENU);
       removeEventListener('pointerdown', unlock);
       removeEventListener('keydown', unlock);
     };
@@ -340,6 +347,9 @@ class Game {
     this.camera.position.set(10, 7, 17);
     this.camera.lookAt(0, 1, -7);
     this.state.transition(APP_STATE.MENU);
+    // До первого жеста start только запоминает режим; после возврата из гонки контекст уже
+    // разблокирован, и та же строка сразу поднимает спокойную тему меню.
+    this.music.start(MUSIC_MODE.MENU);
   }
 
   async startRace(mode, spec, startAt = Date.now() + 1900, slots = null) {
@@ -404,7 +414,7 @@ class Game {
     // Момент старта приходит в СЕРВЕРНОМ времени. Сравнивать его с локальными часами нельзя —
     // именно из-за этого фаза препятствий раньше расходилась у разных игроков.
     this.audio.unlock();
-    this.music.start();
+    this.music.start(MUSIC_MODE.RACE);
     this.music.setIntensity(0);
 
     await this.ui.countdown(startAt, {

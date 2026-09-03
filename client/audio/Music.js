@@ -16,6 +16,32 @@ const STEP_SECONDS = 60 / BPM / 4; // Шаг — одна шестнадцата
 const LOOKAHEAD_MS = 25;
 const SCHEDULE_AHEAD = 0.12;
 
+export const MUSIC_MODE = Object.freeze({
+  MENU: 'menu',
+  RACE: 'race'
+});
+
+const normalizeMode = mode => (mode === MUSIC_MODE.MENU ? MUSIC_MODE.MENU : MUSIC_MODE.RACE);
+
+const MENU_LAYER_TARGETS = Object.freeze({ bass: 0.16, drums: 0.04, chords: 0.22, lead: 0.08 });
+const RACE_LAYER_TARGETS = Object.freeze([
+  Object.freeze({ bass: 0.5, drums: 0.12, chords: 0, lead: 0 }),
+  Object.freeze({ bass: 0.5, drums: 0.42, chords: 0, lead: 0 }),
+  Object.freeze({ bass: 0.5, drums: 0.42, chords: 0.3, lead: 0 }),
+  Object.freeze({ bass: 0.5, drums: 0.42, chords: 0.3, lead: 0.26 })
+]);
+
+// Режим меняет не общую громкость пользователя, а баланс уже существующих музыкальных слоёв.
+// В меню нет гоночного нарастания: тема остаётся спокойной при любом последнем race intensity.
+export function musicLayerTargets(mode, intensity = 0) {
+  if (normalizeMode(mode) === MUSIC_MODE.MENU) return MENU_LAYER_TARGETS;
+  const value = Math.max(0, Math.min(1, Number(intensity) || 0));
+  if (value > 0.62) return RACE_LAYER_TARGETS[3];
+  if (value > 0.35) return RACE_LAYER_TARGETS[2];
+  if (value > 0.12) return RACE_LAYER_TARGETS[1];
+  return RACE_LAYER_TARGETS[0];
+}
+
 // Прогрессия C — G — Am — F: светлая и «спортивная», хорошо ложится на аркадный раннер.
 // Числа — частоты корней в герцах.
 const PROGRESSION = [
@@ -38,6 +64,7 @@ export class Music {
     this.timer = null;
     this.intensity = 0;
     this.layers = null;
+    this.mode = MUSIC_MODE.RACE;
   }
 
   buildLayers() {
@@ -52,14 +79,34 @@ export class Music {
     this.layers = { bass: make(), drums: make(), chords: make(), lead: make() };
   }
 
-  start() {
-    if (this.playing || !this.engine.ready) return;
+  start(mode = MUSIC_MODE.RACE) {
+    const nextMode = normalizeMode(mode);
+    if (this.playing) {
+      this.setMode(nextMode);
+      return;
+    }
+    this.mode = nextMode;
+    if (!this.engine.ready) return;
     this.buildLayers();
     this.playing = true;
     this.step = 0;
     this.nextNoteTime = this.engine.ctx.currentTime + 0.06;
     this.timer = setInterval(() => this.scheduler(), LOOKAHEAD_MS);
     this.setIntensity(this.intensity);
+  }
+
+  setMode(mode) {
+    const next = normalizeMode(mode);
+    if (this.mode === next) return false;
+    this.mode = next;
+    if (this.playing && this.engine.ready) {
+      // Уже запланированные на ближайшие 120 мс ноты безопасно затихнут сами. Новый рисунок
+      // начинается с первой доли, не создавая второй setInterval и не накладывая два loop-а.
+      this.step = 0;
+      this.nextNoteTime = this.engine.ctx.currentTime + 0.06;
+      this.setIntensity(this.intensity);
+    }
+    return true;
   }
 
   stop() {
@@ -81,10 +128,11 @@ export class Music {
     if (!this.layers || !this.engine.ready) return;
     const t = this.engine.ctx.currentTime;
     const ramp = (node, target) => node.gain.setTargetAtTime(target, t, 0.6);
-    ramp(this.layers.bass, 0.5);
-    ramp(this.layers.drums, this.intensity > 0.12 ? 0.42 : 0.12);
-    ramp(this.layers.chords, this.intensity > 0.35 ? 0.3 : 0);
-    ramp(this.layers.lead, this.intensity > 0.62 ? 0.26 : 0);
+    const targets = musicLayerTargets(this.mode, this.intensity);
+    ramp(this.layers.bass, targets.bass);
+    ramp(this.layers.drums, targets.drums);
+    ramp(this.layers.chords, targets.chords);
+    ramp(this.layers.lead, targets.lead);
   }
 
   scheduler() {
@@ -98,6 +146,35 @@ export class Music {
   }
 
   scheduleStep(step, time) {
+    if (this.mode === MUSIC_MODE.MENU) {
+      this.scheduleMenuStep(step, time);
+      return;
+    }
+    this.scheduleRaceStep(step, time);
+  }
+
+  scheduleMenuStep(step, time) {
+    const bar = Math.floor(step / STEPS_PER_BAR);
+    const beat = step % STEPS_PER_BAR;
+    const chord = PROGRESSION[bar % PROGRESSION.length];
+
+    // Меню оставляет тот же светлый гармонический язык, но в нём нет гоночной бочки и плотного
+    // ритма. Редкие мягкие аккорды и фиксированные «конфетные» ноты не утомляют при долгом выборе.
+    if (beat === 0) {
+      for (const freq of [chord.root * 2, chord.third * 2, chord.fifth * 2]) {
+        this.note(this.layers.chords, freq, time, 1.35, 'sine', 0.12);
+      }
+      this.note(this.layers.bass, chord.root, time, 0.42, 'triangle', 0.22);
+    }
+    if (beat === 2 || beat === 10) {
+      const offset = beat === 10 ? 2 : 0;
+      const freq = PENTATONIC[(bar * 2 + offset) % PENTATONIC.length];
+      this.note(this.layers.lead, freq, time, 0.24, 'sine', 0.13);
+    }
+    if (beat === 0 || beat === 8) this.hat(time, 0.035);
+  }
+
+  scheduleRaceStep(step, time) {
     const bar = Math.floor(step / STEPS_PER_BAR);
     const beat = step % STEPS_PER_BAR;
     const chord = PROGRESSION[bar % PROGRESSION.length];

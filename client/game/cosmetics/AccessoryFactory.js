@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { buildSignatureCostume } from './SignatureCostumes.js';
 import {
   box,
   capsuleGeometry,
@@ -668,7 +669,7 @@ export const RENDER_KIND_BUILDERS = Object.freeze({
 export function buildAccessory(item) {
   const builder = RENDER_KIND_BUILDERS[item?.render?.kind];
   if (!builder) return new THREE.Group();
-  const group = builder(item.render);
+  const group = buildSignatureCostume(item.render) || builder(item.render);
   group.userData.cosmeticId = item.id;
   return group;
 }

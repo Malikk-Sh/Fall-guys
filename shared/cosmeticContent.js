@@ -25,6 +25,10 @@ const SPACE_TROUBLE = [
     tags: ['space', 'suit'],
     unlock: { type: 'stat', path: 'race.finishes', gte: 1 },
     render: {
+      signature: 'astronaut',
+      surface: 'fabric',
+      bootColor: 0x426ba0,
+      hideBaseAntenna: true,
       kind: 'body-suit',
       primary: 0xf2f6ff,
       accent: 0x4f8cff,
@@ -58,6 +62,9 @@ const SPACE_TROUBLE = [
     tags: ['space', 'robot'],
     unlock: { type: 'stat', path: 'race.finishes', gte: 20 },
     render: {
+      signature: 'robot',
+      surface: 'metal',
+      bootColor: 0x425167,
       kind: 'body-plated',
       primary: 0xb9c4d8,
       accent: 0xff8a3d,
@@ -74,6 +81,10 @@ const SPACE_TROUBLE = [
     tags: ['space', 'creature', 'cat'],
     unlock: { type: 'stat', path: 'coop.chapters', gte: 3 },
     render: {
+      signature: 'mooncat',
+      surface: 'plush',
+      bootColor: 0xb4afdf,
+      hideBaseAntenna: true,
       kind: 'body-creature',
       primary: 0x8a92c8,
       accent: 0xf7f2ff,
@@ -310,6 +321,10 @@ const FOOD_FIGHT = [
     tags: ['food', 'suit'],
     unlock: { type: 'stat', path: 'race.finishes', gte: 22 },
     render: {
+      signature: 'donut',
+      surface: 'pastry',
+      bootColor: 0x8a4c32,
+      hideBaseAntenna: true,
       kind: 'body-suit',
       primary: 0xf3c98b,
       accent: 0xff7fc4,

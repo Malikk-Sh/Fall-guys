@@ -65,7 +65,7 @@ export const capsuleGeometry = (r, len, seg = 8) =>
   cachedGeometry(`cap:${r}:${len}:${seg}`, () => new THREE.CapsuleGeometry(r, len, 4, seg));
 
 export const torus = (r, tube, seg = 10) =>
-  cachedGeometry(`tor:${r}:${tube}:${seg}`, () => new THREE.TorusGeometry(r, tube, 6, seg));
+  cachedGeometry(`tor:${r}:${tube}:${seg}`, () => new THREE.TorusGeometry(r, tube, 8, seg));
 
 // Плоская пятиконечная звезда. Строится из формы один раз и дальше переиспользуется всеми
 // звёздными предметами — а их в каталоге несколько.

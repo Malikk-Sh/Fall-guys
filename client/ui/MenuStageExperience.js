@@ -20,19 +20,19 @@ const DEFAULT_SCENE = Object.freeze({
 
 const MODE_COPY = Object.freeze({
   single: Object.freeze({
-    eyebrow: 'LIVE PREVIEW · SOLO',
+    eyebrow: 'ОДИН ИГРОК',
     title: 'ВАША ТРАССА',
-    detail: 'Один Wobbler, чистая трасса и выбранная сложность.'
+    detail: 'Ловите ритм, находите короткий путь и побейте свой рекорд.'
   }),
   multi: Object.freeze({
-    eyebrow: 'LIVE PREVIEW · RACE',
+    eyebrow: 'ОНЛАЙН-ГОНКА',
     title: 'СТАРТОВАЯ СЕТКА',
-    detail: 'Декоративные соперники показывают масштаб — сеть ещё не подключается.'
+    detail: 'До 16 участников. Один финиш. Каждый прыжок решает.'
   }),
   coop: Object.freeze({
-    eyebrow: 'LIVE PREVIEW · CO-OP',
+    eyebrow: 'ПРИКЛЮЧЕНИЕ ВДВОЁМ',
     title: 'ДВА WOBBLER',
-    detail: 'Выбранная глава меняет мир и сцену без запуска серверного матча.'
+    detail: 'Десять глав, общие открытия и напарник, которому можно доверять.'
   })
 });
 
@@ -73,9 +73,11 @@ export class MenuStageExperience {
       const button = event.target?.closest?.('.mode-tab');
       const mode = button?.dataset?.mode;
       if (!['single', 'multi', 'coop'].includes(mode)) return;
-      const sync = () => this.syncMode(mode);
-      if (typeof this.window?.requestAnimationFrame === 'function') this.window.requestAnimationFrame(sync);
-      else sync();
+      // The target button has already updated UI.mode before this delegated handler.
+      // Repair a stale course in the same event: keeping old caption data until another
+      // RAF made reselecting a mode briefly show the wrong track after an outfit change.
+      this.syncMode(mode);
+      this.renderPreview(mode);
     };
   }
 
@@ -402,7 +404,7 @@ export class MenuStageExperience {
     );
     const caption = $('#menuPreviewCaption');
     if (caption) {
-      caption.querySelector('small').textContent = `LIVE PREVIEW · ${theme.world}`;
+      caption.querySelector('small').textContent = `ПРИКЛЮЧЕНИЕ · ${theme.world}`;
       caption.querySelector('strong').textContent =
         COOP_CHAPTERS.find(item => item.id === chapterId)?.title || MODE_COPY.coop.title;
     }

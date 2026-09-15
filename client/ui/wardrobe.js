@@ -39,6 +39,8 @@ import { CosmeticPreview } from '../game/cosmetics/CosmeticPreview.js';
 
 const $ = selector => document.querySelector(selector);
 const OWNERSHIP_FILTERS = ['all', 'owned', 'locked'];
+const SIGNATURE_BODIES = ['classic', 'space-astronaut', 'space-retro-robot', 'space-moon-cat', 'food-donut'];
+const THUMBNAIL_SLOTS = new Set(['body', 'visor', 'antenna', 'back']);
 
 const cssColor = value =>
   `#${Number(value >>> 0)
@@ -52,7 +54,7 @@ export class Wardrobe {
     this.onEquipError = onEquipError;
     this.sfx = sfx;
     this.open = false;
-    this.category = 'all';
+    this.category = 'signature';
     this.ownership = 'all';
     this.rarity = 'all';
     this.collection = 'all';
@@ -65,6 +67,9 @@ export class Wardrobe {
     this.lastTime = 0;
     this.frame = 0;
     this.reducedMotion = false;
+    this.search = '';
+    this.thumbnailQueue = [];
+    this.autoRotate = false;
   }
 
   bind() {
@@ -92,6 +97,16 @@ export class Wardrobe {
       this.collection = event.target.value;
       this.render();
     });
+    $('#wardrobeSearch')?.addEventListener('input', event => {
+      this.search = event.target.value.trim().toLocaleLowerCase('ru');
+      this.render();
+    });
+    $('#wardrobeRotate')?.addEventListener('click', () => {
+      this.autoRotate = !this.autoRotate;
+      this.preview?.setAutoRotate(this.autoRotate);
+      $('#wardrobeRotate')?.setAttribute('aria-pressed', String(this.autoRotate));
+    });
+    $('#wardrobe')?.addEventListener('keydown', event => this.handleKeyDown(event));
     this.buildTabs();
     this.buildFilterOptions();
     this.buildPresetControls();
@@ -119,13 +134,19 @@ export class Wardrobe {
     const tabs = $('#wardrobeTabs');
     if (!tabs) return;
     tabs.replaceChildren();
-    const categories = [{ id: 'all', label: 'ВСЁ', icon: '✦' }, ...SLOT_ORDER.map(slot => SLOT_META[slot])];
+    const categories = [
+      { id: 'signature', label: 'ВЫБРАННЫЕ ОБРАЗЫ', icon: '✦' },
+      { id: 'all', label: 'ВЕСЬ КАТАЛОГ', icon: '▦' },
+      ...SLOT_ORDER.map(slot => SLOT_META[slot])
+    ];
     for (const category of categories) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'wardrobe-tab';
       button.dataset.category = category.id;
       button.setAttribute('role', 'tab');
+      button.id = `wardrobe-tab-${category.id}`;
+      button.setAttribute('aria-controls', 'wardrobeGrid');
       button.innerHTML = `<i aria-hidden="true">${category.icon}</i><span>${category.label}</span>`;
       button.addEventListener('click', () => {
         this.category = category.id;
@@ -197,7 +218,9 @@ export class Wardrobe {
       row.append(summary, apply, save);
       root.append(row);
     }
-    actions.after(root);
+    const mount = $('#wardrobePresetMount');
+    if (mount) mount.append(root);
+    else actions.after(root);
     this.renderPresetControls();
   }
 
@@ -224,12 +247,15 @@ export class Wardrobe {
     const screen = $('#wardrobe');
     if (!screen) return;
     screen.classList.remove('hidden');
+    this.returnFocus = document.activeElement;
+    $('#openWardrobeMenu')?.setAttribute('aria-expanded', 'true');
     this.open = true;
     this.previewLoadout = null;
     this.ensurePreview();
     this.renderPresetControls();
     this.render();
     this.startLoop();
+    $('#wardrobeClose')?.focus();
   }
 
   hide() {
@@ -239,16 +265,61 @@ export class Wardrobe {
     this.stopLoop();
     this.preview?.dispose();
     this.preview = null;
+    this.thumbnailQueue = [];
+    $('#openWardrobeMenu')?.setAttribute('aria-expanded', 'false');
+    if (this.returnFocus?.isConnected) this.returnFocus.focus();
+  }
+
+  handleKeyDown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.hide();
+      return;
+    }
+    const tab = event.target.closest?.('.wardrobe-tab');
+    if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      const tabs = [...document.querySelectorAll('.wardrobe-tab')];
+      const index = tabs.indexOf(tab);
+      const next =
+        event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : (index + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length;
+      event.preventDefault();
+      this.category = tabs[next].dataset.category;
+      this.render();
+      tabs[next].focus();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [
+      ...$('#wardrobe').querySelectorAll('button:not(:disabled), input, select, summary, [tabindex="0"]')
+    ].filter(node => node.getClientRects().length && node.tabIndex >= 0);
+    const first = controls[0],
+      last = controls[controls.length - 1];
+    if (event.shiftKey && event.target === first) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && event.target === last) {
+      event.preventDefault();
+      first?.focus();
+    }
   }
 
   ensurePreview() {
     const canvas = $('#wardrobePreview');
     if (!canvas || this.preview) return;
     try {
+      canvas.classList.remove('hidden');
       this.preview = new CosmeticPreview(canvas, { reducedMotion: this.reducedMotion });
+      this.preview.setAutoRotate(this.autoRotate);
+      $('#wardrobePreviewFallback')?.classList.add('hidden');
     } catch {
       this.preview = null;
       canvas.classList.add('hidden');
+      $('#wardrobePreviewFallback')?.classList.remove('hidden');
     }
   }
 
@@ -257,9 +328,12 @@ export class Wardrobe {
     this.lastTime = performance.now();
     const tick = now => {
       if (!this.open) return;
-      const dt = Math.min(0.05, (now - this.lastTime) / 1000);
+      const dt = Math.min(0.05, Math.max(0, (now - this.lastTime) / 1000));
       this.lastTime = now;
-      this.preview?.update(dt);
+      if (!document.hidden) {
+        this.renderNextThumbnail();
+        this.preview?.update(dt);
+      }
       this.frame = requestAnimationFrame(tick);
     };
     this.frame = requestAnimationFrame(tick);
@@ -283,7 +357,18 @@ export class Wardrobe {
   visible(entries) {
     const seen = readSeenCosmetics();
     return entries.filter(entry => {
-      if (this.category !== 'all' && entry.slot !== this.category) return false;
+      if (this.category === 'signature' && !SIGNATURE_BODIES.includes(entry.id)) return false;
+      if (this.category !== 'all' && this.category !== 'signature' && entry.slot !== this.category)
+        return false;
+      if (
+        this.search &&
+        ![entry.item.name, entry.item.description, entry.item.detail]
+          .filter(Boolean)
+          .join(' ')
+          .toLocaleLowerCase('ru')
+          .includes(this.search)
+      )
+        return false;
       if (this.ownership === 'owned' && !entry.owned) return false;
       if (this.ownership === 'locked' && entry.owned) return false;
       if (this.rarity !== 'all' && entry.item.rarity !== this.rarity) return false;
@@ -306,14 +391,19 @@ export class Wardrobe {
       const active = tab.dataset.category === this.category;
       tab.classList.toggle('active', active);
       tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
     }
     const favoritesButton = $('#wardrobeFavoritesFilter');
     favoritesButton?.classList.toggle('active', this.favoritesOnly);
     favoritesButton?.setAttribute('aria-pressed', String(this.favoritesOnly));
 
-    if (!this.selectedId || !entries.some(entry => entry.id === this.selectedId)) {
-      this.selectedId = visible[0]?.id || entries[0]?.id || null;
+    if (!visible.some(entry => entry.id === this.selectedId)) {
+      this.selectedId = visible.find(entry => entry.equipped)?.id || visible[0]?.id || null;
     }
+    const count = $('#wardrobeCount');
+    if (count)
+      count.textContent = `${visible.length} ПРЕДМЕТОВ · ${entries.filter(entry => entry.owned).length} ПОЛУЧЕНО`;
+    $('#wardrobeGrid')?.setAttribute('aria-labelledby', `wardrobe-tab-${this.category}`);
     this.renderGrid(visible);
     this.renderDetails(entries.find(entry => entry.id === this.selectedId) || null);
     this.renderCollections();
@@ -326,6 +416,7 @@ export class Wardrobe {
     const grid = $('#wardrobeGrid');
     if (!grid) return;
     grid.replaceChildren();
+    this.thumbnailQueue = [];
     if (!entries.length) {
       const empty = document.createElement('p');
       empty.className = 'wardrobe-empty';
@@ -346,6 +437,7 @@ export class Wardrobe {
     card.classList.toggle('is-locked', !entry.owned);
     card.classList.toggle('is-equipped', entry.equipped);
     card.classList.toggle('is-selected', entry.id === this.selectedId);
+    card.setAttribute('aria-pressed', String(entry.id === this.selectedId));
     card.style.setProperty('--rarity-color', cssColor(entry.rarity.color));
     card.setAttribute(
       'aria-label',
@@ -362,7 +454,9 @@ export class Wardrobe {
       '--secondary',
       cssColor(entry.item.render.secondary ?? entry.item.render.accent ?? 0xffde59)
     );
-    swatch.textContent = entry.owned ? SLOT_META[entry.slot].icon : '🔒';
+    swatch.setAttribute('aria-hidden', 'true');
+    swatch.textContent = SLOT_META[entry.slot].icon;
+    if (THUMBNAIL_SLOTS.has(entry.slot)) this.thumbnailQueue.push({ item: entry.item, swatch });
 
     const name = document.createElement('strong');
     name.textContent = entry.item.name;
@@ -397,14 +491,56 @@ export class Wardrobe {
   }
 
   select(id) {
+    const item = COSMETIC_BY_ID[id];
+    if (item && !this.visible(this.entries()).some(entry => entry.id === id)) {
+      this.category = item.slot;
+      this.ownership = this.rarity = this.collection = 'all';
+      this.favoritesOnly = false;
+      this.search = '';
+      for (const selector of ['#wardrobeOwnership', '#wardrobeRarity', '#wardrobeCollection'])
+        if ($(selector)) $(selector).value = 'all';
+      if ($('#wardrobeSearch')) $('#wardrobeSearch').value = '';
+    }
     this.selectedId = id;
     this.sfx?.uiTick?.();
     this.render();
+    document.querySelector(`.wardrobe-card[data-cosmetic-id="${id}"]`)?.focus({ preventScroll: true });
+  }
+
+  renderNextThumbnail() {
+    if (!this.preview || !this.thumbnailQueue.length) return;
+    const { item, swatch } = this.thumbnailQueue.shift();
+    if (!swatch.isConnected) return;
+    try {
+      const url = this.preview.thumbnail(item, COSMETIC_BY_ID.classic);
+      if (!url || !swatch.isConnected) return;
+      const picture = document.createElement('img');
+      picture.src = url;
+      picture.alt = '';
+      picture.width = picture.height = 192;
+      swatch.replaceChildren(picture);
+      swatch.classList.add('has-thumbnail');
+    } catch {
+      // Labelled colour cards remain usable when GPU readback is unavailable.
+    }
   }
 
   renderDetails(entry) {
     const panel = $('#wardrobeDetails');
-    if (!panel || !entry) return;
+    if (!panel) return;
+    panel.classList.toggle('hidden', !entry);
+    const name = $('#wardrobeStageName'),
+      caption = $('#wardrobeStageCaption');
+    if (name) name.textContent = entry?.item.name || 'ВАШ ОБРАЗ';
+    if (caption)
+      caption.textContent = entry
+        ? entry.equipped
+          ? 'НАДЕТО'
+          : entry.owned
+            ? 'ПРИМЕРКА · НАЖМИТЕ «НАДЕТЬ»'
+            : 'ПРИМЕРКА · ПРЕДМЕТ ЕЩЁ ЗАКРЫТ'
+        : 'ИЗМЕНИТЕ ФИЛЬТРЫ, ЧТОБЫ НАЙТИ ПРЕДМЕТ';
+    if (!entry) return;
     $('#wardrobeItemName').textContent = entry.item.name;
     $('#wardrobeItemRarity').textContent = `${entry.rarity.icon} ${entry.rarity.label}`;
     $('#wardrobeItemRarity').style.setProperty('--rarity-color', cssColor(entry.rarity.color));
@@ -489,6 +625,7 @@ export class Wardrobe {
       row.append(milestones);
 
       row.addEventListener('click', () => {
+        this.category = 'all';
         this.collection = this.collection === collection.id ? 'all' : collection.id;
         const select = $('#wardrobeCollection');
         if (select) select.value = this.collection;
@@ -637,8 +774,8 @@ export class Wardrobe {
       .join(' · ');
     $('#unlockTry').onclick = () => {
       card.classList.add('hidden');
-      this.selectedId = item.id;
       this.show();
+      this.select(item.id);
     };
     $('#unlockLater').onclick = () => card.classList.add('hidden');
     this.sfx?.unlock?.(item.rarity);

@@ -281,6 +281,9 @@ test('на площадке игра пишет только в localStorage и 
   await page.locator('#accountChip').click();
   await page.locator('#openWardrobe').click();
   await expect(page.locator('#wardrobe')).toBeVisible({ timeout: 15_000 });
+  const savedOutfits = page.locator('.wardrobe-drawer').filter({ has: page.locator('#wardrobeRandom') });
+  await savedOutfits.locator('summary').click();
+  await expect(page.locator('#wardrobeRandom')).toBeVisible();
   await page.locator('#wardrobeRandom').click();
   await page.waitForTimeout(500);
   await page.locator('#wardrobeClose').click();

@@ -107,7 +107,7 @@ test.describe('одиночная игра и меню', () => {
     await page.locator('#openWardrobe').click();
     await expect(page.locator('#wardrobe')).toBeVisible();
     await expect(page.locator('#wardrobePreview')).toBeVisible();
-    await expect(page.locator('.wardrobe-tab')).toHaveCount(8);
+    await expect(page.locator('.wardrobe-tab')).toHaveCount(9);
     await expect(page.locator('.wardrobe-collection')).toHaveCount(4);
     await expect(page.locator('.wardrobe-card').first()).toBeVisible();
 
@@ -120,6 +120,7 @@ test.describe('одиночная игра и меню', () => {
     expect(allBack).toBe(true);
 
     // Закрытый предмет: виден, показывает требование, доступен для примерки, но не для надевания.
+    await page.locator('.wardrobe-filter-drawer > summary').click();
     await page.locator('#wardrobeOwnership').selectOption('locked');
     const locked = page.locator('.wardrobe-card.is-locked').first();
     await expect(locked).toBeVisible();

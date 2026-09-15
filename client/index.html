@@ -23,6 +23,7 @@
     />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="pwa.css" />
+    <link rel="stylesheet" href="studio.css" />
     <!--
       Import map вместо сборщика. Дополнения Three.js (постобработка и её шейдеры) импортируют
       движок по голому имени 'three'. Без этой карты браузер не смог бы их разрешить, а если бы
@@ -53,7 +54,7 @@
     <link rel="modulepreload" href="/vendor/three.core.min.js" />
     <link rel="modulepreload" href="main.js" />
   </head>
-  <body>
+  <body class="studio-ui">
     <canvas id="game" aria-label="Игровая сцена Wobble Rush 3D"></canvas>
     <div id="vignette"></div>
     <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
@@ -84,6 +85,15 @@
           </button>
           <button id="profileOpen" class="profile-chip" aria-haspopup="dialog" aria-expanded="false">
             <b>ПРОФИЛЬ</b><small>статы · награды</small>
+          </button>
+          <button
+            id="openWardrobeMenu"
+            class="profile-chip"
+            aria-haspopup="dialog"
+            aria-controls="wardrobe"
+            aria-expanded="false"
+          >
+            <b>ГАРДЕРОБ</b><small>образы · эмоции</small>
           </button>
         </div>
 
@@ -309,67 +319,105 @@
       к нижнему краю. Отдельной мобильной разметки нет намеренно — две разметки расходятся.
     -->
     <section id="wardrobe" class="screen wardrobe-screen hidden">
-      <div class="wardrobe-shell glass" role="dialog" aria-label="Шкаф">
+      <div class="wardrobe-shell glass" role="dialog" aria-modal="true" aria-label="Шкаф">
         <header class="wardrobe-head">
           <div>
-            <small>КОЛЛЕКЦИЯ</small>
-            <h2>ШКАФ</h2>
+            <small>WOBBLE RUSH · ВАШ СТИЛЬ</small>
+            <h2>ГАРДЕРОБ</h2>
           </div>
           <button id="wardrobeClose" class="close-button" aria-label="Закрыть шкаф">&times;</button>
         </header>
-
         <div class="wardrobe-body">
           <div class="wardrobe-stage">
-            <canvas id="wardrobePreview" class="wardrobe-preview" aria-label="Превью образа"></canvas>
-            <div class="wardrobe-stage-actions">
-              <button id="wardrobeResetView" class="button button-secondary" type="button">СБРОС</button>
+            <div class="wardrobe-showcase">
+              <div class="wardrobe-stage-copy">
+                <small id="wardrobeStageCaption">ПРИМЕРКА</small
+                ><strong id="wardrobeStageName">ВАШ ОБРАЗ</strong>
+              </div>
+              <canvas
+                id="wardrobePreview"
+                class="wardrobe-preview"
+                tabindex="0"
+                aria-label="3D-примерка. Поворачивайте мышью, пальцем или стрелками."
+                aria-keyshortcuts="ArrowLeft ArrowRight Home"
+              ></canvas>
+              <p id="wardrobePreviewFallback" class="wardrobe-preview-fallback hidden" role="status">
+                3D-примерка недоступна. Выберите предмет в каталоге — его по-прежнему можно надеть.
+              </p>
+              <small class="wardrobe-rotate-hint">ПОВОРАЧИВАЙТЕ, ЧТОБЫ РАССМОТРЕТЬ</small>
+              <div class="wardrobe-stage-actions">
+                <button id="wardrobeResetView" class="button button-secondary" type="button">АНФАС</button>
+                <button
+                  id="wardrobeRotate"
+                  class="button button-secondary"
+                  type="button"
+                  aria-pressed="false"
+                >
+                  АВТОПОВОРОТ
+                </button>
+              </div>
+            </div>
+            <details class="wardrobe-drawer">
+              <summary>МОИ СОХРАНЁННЫЕ ОБРАЗЫ</summary>
+              <div id="wardrobePresetMount"></div>
               <button id="wardrobeRandom" class="button button-secondary" type="button">
                 СЛУЧАЙНЫЙ ОБРАЗ
               </button>
-            </div>
+            </details>
             <div id="wardrobeEmotes" class="wardrobe-emotes" aria-label="Ячейки эмоций"></div>
-            <div id="wardrobeCollections" class="wardrobe-collections" aria-label="Прогресс коллекций"></div>
+            <details class="wardrobe-drawer">
+              <summary>КОЛЛЕКЦИИ И НАГРАДЫ</summary>
+              <div
+                id="wardrobeCollections"
+                class="wardrobe-collections"
+                aria-label="Прогресс коллекций"
+              ></div>
+            </details>
           </div>
-
           <div class="wardrobe-main">
+            <div class="wardrobe-catalog-head">
+              <small>НАЙДИТЕ СВОЙ ХАРАКТЕР</small><strong>Детали решают всё.</strong>
+            </div>
             <div id="wardrobeTabs" class="wardrobe-tabs" role="tablist" aria-label="Категории"></div>
-
-            <div class="wardrobe-filters">
-              <select id="wardrobeOwnership" aria-label="Фильтр по владению">
-                <option value="all">ВСЁ</option>
-                <option value="owned">ПОЛУЧЕНО</option>
-                <option value="locked">НЕ ПОЛУЧЕНО</option>
-              </select>
-              <select id="wardrobeRarity" aria-label="Фильтр по редкости"></select>
-              <select id="wardrobeCollection" aria-label="Фильтр по коллекции"></select>
-              <button id="wardrobeFavoritesFilter" class="wardrobe-chip" type="button" aria-pressed="false">
-                ★ ИЗБРАННОЕ
-              </button>
-            </div>
-
-            <div id="wardrobeGrid" class="wardrobe-grid" aria-label="Предметы"></div>
-
-            <div id="wardrobeDetails" class="wardrobe-details">
-              <div class="wardrobe-details-copy">
-                <strong id="wardrobeItemName"></strong>
-                <span class="wardrobe-details-meta">
-                  <b id="wardrobeItemRarity"></b>
-                  <i id="wardrobeItemSlot"></i>
-                </span>
-                <small id="wardrobeItemCollection" class="wardrobe-details-collection"></small>
-                <p id="wardrobeItemDescription"></p>
-                <small id="wardrobeItemRequirement" class="wardrobe-details-requirement"></small>
-              </div>
-              <div class="wardrobe-details-actions">
-                <button id="wardrobeFavorite" class="button button-secondary" type="button">
-                  &#9734; В ИЗБРАННОЕ
+            <details class="wardrobe-filter-drawer">
+              <summary>ПОИСК И ФИЛЬТРЫ</summary>
+              <div class="wardrobe-filters">
+                <label class="wardrobe-search"
+                  ><span class="sr-only">Поиск предметов</span
+                  ><input id="wardrobeSearch" type="search" placeholder="Найти предмет…" maxlength="80"
+                /></label>
+                <select id="wardrobeOwnership" aria-label="Фильтр по владению">
+                  <option value="all">ВСЁ</option>
+                  <option value="owned">ПОЛУЧЕНО</option>
+                  <option value="locked">НЕ ПОЛУЧЕНО</option>
+                </select>
+                <select id="wardrobeRarity" aria-label="Фильтр по редкости"></select>
+                <select id="wardrobeCollection" aria-label="Фильтр по коллекции"></select>
+                <button id="wardrobeFavoritesFilter" class="wardrobe-chip" type="button" aria-pressed="false">
+                  ★ ИЗБРАННОЕ
                 </button>
-                <button id="wardrobeUnequip" class="button button-secondary hidden" type="button">
-                  СНЯТЬ
-                </button>
-                <button id="wardrobeEquip" class="button button-primary" type="button">НАДЕТЬ</button>
               </div>
-            </div>
+            </details>
+            <small id="wardrobeCount" class="wardrobe-count" role="status"></small>
+            <div id="wardrobeGrid" class="wardrobe-grid" role="tabpanel" aria-label="Предметы"></div>
+          </div>
+        </div>
+        <div id="wardrobeDetails" class="wardrobe-details">
+          <div class="wardrobe-details-copy">
+            <strong id="wardrobeItemName"></strong>
+            <span class="wardrobe-details-meta"
+              ><b id="wardrobeItemRarity"></b><i id="wardrobeItemSlot"></i
+            ></span>
+            <small id="wardrobeItemCollection" class="wardrobe-details-collection"></small>
+            <p id="wardrobeItemDescription"></p>
+            <small id="wardrobeItemRequirement" class="wardrobe-details-requirement"></small>
+          </div>
+          <div class="wardrobe-details-actions">
+            <button id="wardrobeFavorite" class="button button-secondary" type="button">
+              &#9734; В ИЗБРАННОЕ
+            </button>
+            <button id="wardrobeUnequip" class="button button-secondary hidden" type="button">СНЯТЬ</button>
+            <button id="wardrobeEquip" class="button button-primary" type="button">НАДЕТЬ</button>
           </div>
         </div>
       </div>

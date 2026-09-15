@@ -206,7 +206,7 @@ class Game {
     this.scene.fog = new THREE.Fog(0x93e5ef, 42, 145);
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.1, 190);
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x6a4bb2, 2.45);
+    const hemi = new THREE.HemisphereLight(0xe8f4ff, 0x48536b, 1.75);
     this.scene.add(hemi);
 
     this.sun = new THREE.DirectionalLight(0xfff7dc, 2.85);
@@ -226,7 +226,7 @@ class Game {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
-    const fill = new THREE.DirectionalLight(0x7feeff, 1.1);
+    const fill = new THREE.DirectionalLight(0x9ae6ff, 0.8);
     fill.position.set(-12, 8, -18);
     this.scene.add(fill);
 
@@ -1031,7 +1031,10 @@ class Game {
       });
     }
 
-    this.postFX.render();
+    // The wardrobe has its own lit scene. Keep the covered menu backdrop still instead
+    // of rendering two full 3D scenes per frame; the main view resumes immediately on close.
+    const wardrobeCoversMenu = this.state.name === 'menu' && this.ui.wardrobe?.open;
+    if (!wardrobeCoversMenu) this.postFX.render();
     this.state.render(alpha);
     this.updateAdaptiveQuality(time);
     this.perf.paint(time, this.renderer, {

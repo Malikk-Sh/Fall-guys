@@ -1,3 +1,4 @@
+import { CosmeticPreview } from './cosmetics/CosmeticPreview.js';
 import { formatTime } from '../core/Config.js';
 import { cosmeticLoadoutFromIds } from '../core/cosmetics.js';
 
@@ -226,6 +227,8 @@ export class ResultsPresentation {
     this.presenting = false;
     this.poseFrame = 0;
     this.pose = null;
+    this.showcase = null;
+    this.showcaseFrame = 0;
     this.onClick = event => this.handleClick(event);
     this.onKeyDown = event => this.handleKeyDown(event);
   }
@@ -255,6 +258,7 @@ export class ResultsPresentation {
   }
 
   destroy() {
+    this.stopShowcase();
     this.cancelTimers();
     this.stopVictoryPose();
     this.observer?.disconnect?.();
@@ -273,6 +277,15 @@ export class ResultsPresentation {
   ensureLayout() {
     const card = this.finish?.querySelector?.('.finish-card');
     if (!card) return;
+    if (!this.root.getElementById('resultsShowcase')) {
+      const hero = this.root.createElement('aside');
+      hero.id = 'resultsShowcase';
+      hero.className = 'results-showcase';
+      hero.setAttribute('aria-hidden', 'true');
+      hero.innerHTML =
+        '<small>WOBBLE RUSH</small><canvas id="resultsCharacter"></canvas><strong>ЕЩЁ ОДНА ИСТОРИЯ.<br>ЕЩЁ ОДИН ЗАБЕГ.</strong>';
+      this.finish.insertBefore(hero, card);
+    }
 
     let scroll = this.root.getElementById('resultsScroll');
     if (!scroll) {
@@ -324,6 +337,7 @@ export class ResultsPresentation {
     this.cancelTimers();
     this.stopVictoryPose();
     this.ensureLayout();
+    this.startShowcase();
     this.renderPodium();
     this.refreshActionHierarchy();
     this.presenting = true;
@@ -379,6 +393,23 @@ export class ResultsPresentation {
       avatar.dataset.cosmeticVisor = skin.visorId;
       avatar.dataset.cosmeticAntenna = skin.antennaId;
       avatar.setAttribute('aria-hidden', 'true');
+      if (this.showcase) {
+        try {
+          const url = this.showcase.snapshot(
+            cosmeticLoadoutFromIds(entry.loadout),
+            JSON.stringify(entry.loadout || {})
+          );
+          if (url) {
+            const image = this.root.createElement('img');
+            image.src = url;
+            image.alt = '';
+            avatar.append(image);
+            avatar.classList.add('has-portrait');
+          }
+        } catch {
+          // Keep the colour silhouette when GPU readback is unavailable.
+        }
+      }
 
       const name = this.root.createElement('span');
       name.className = 'results-podium-name';
@@ -400,6 +431,39 @@ export class ResultsPresentation {
     }
 
     podium.append(label, stage);
+  }
+
+  startShowcase() {
+    this.stopShowcase();
+    const canvas = this.root.getElementById('resultsCharacter');
+    if (!canvas || !canvas.clientWidth) return;
+    const game = this.getGame?.();
+    try {
+      this.showcase = new CosmeticPreview(canvas, {
+        reducedMotion: Boolean(game?.settings?.reducedMotion),
+        quality: game?.detectQuality?.() || 'high'
+      });
+      this.showcase.setLoadout(game?.player?.character?.cosmetics?.loadout || {});
+      this.showcase.update(0);
+      let previous = this.window.performance?.now?.() || 0;
+      const tick = now => {
+        if (!this.showcase) return;
+        const dt = Math.min(0.05, Math.max(0, (now - previous) / 1000));
+        previous = now;
+        if (!this.root.hidden && canvas.clientWidth) this.showcase.update(dt);
+        this.showcaseFrame = this.window.requestAnimationFrame?.(tick) || 0;
+      };
+      this.showcaseFrame = this.window.requestAnimationFrame?.(tick) || 0;
+    } catch {
+      this.stopShowcase();
+    }
+  }
+
+  stopShowcase() {
+    if (this.showcaseFrame) this.window?.cancelAnimationFrame?.(this.showcaseFrame);
+    this.showcaseFrame = 0;
+    this.showcase?.dispose();
+    this.showcase = null;
   }
 
   presentFinishMoment(game, reducedMotion) {
@@ -523,6 +587,7 @@ export class ResultsPresentation {
   }
 
   reset() {
+    this.stopShowcase();
     this.cancelTimers();
     this.stopVictoryPose();
     this.presenting = false;

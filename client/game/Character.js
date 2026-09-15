@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { COLORS } from '../core/Config.js';
 import { PLAYER_VISUAL_SCALE } from './PlayerDimensions.js';
 import { CosmeticRenderer } from './cosmetics/CosmeticRenderer.js';
+import { applySurface } from './cosmetics/CharacterSurface.js';
 
 const standard = (color, roughness = 0.28, metalness = 0.02) =>
-  new THREE.MeshStandardMaterial({ color, roughness, metalness });
-function capsule(radius, length, color, segments = 10) {
-  const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 6, segments), standard(color));
+  new THREE.MeshPhysicalMaterial({ color, roughness, metalness, clearcoat: 0.3, clearcoatRoughness: 0.3 });
+function capsule(radius, length, color, segments = 20) {
+  const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 10, segments), standard(color));
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
@@ -64,12 +65,12 @@ export class Character {
 
     const bodyColor = cosmetics?.body?.render?.primary ?? cosmetics?.body?.colors?.body ?? color;
     const accentColor = cosmetics?.body?.render?.accent ?? cosmetics?.body?.colors?.accent ?? accent;
-    const body = capsule(0.48, 0.58, bodyColor, 14);
+    const body = capsule(0.48, 0.58, bodyColor, 28);
     body.scale.set(1.06, 1, 0.93);
     body.position.y = 0.82;
     this.visual.add(body);
     this.bodyMesh = body;
-    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.38, 14, 10), standard(accentColor, 0.24));
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(0.38, 24, 16), standard(accentColor, 0.24));
     belly.scale.set(1, 0.68, 0.18);
     belly.position.set(0, 0.78, -0.43);
     belly.castShadow = true;
@@ -77,7 +78,7 @@ export class Character {
     this.bellyMesh = belly;
 
     const visor = new THREE.Mesh(
-      new THREE.SphereGeometry(0.31, 16, 10),
+      new THREE.SphereGeometry(0.31, 28, 18),
       standard(cosmetics?.visor?.render?.primary ?? cosmetics?.visor?.color ?? 0xdffcff, 0.12, 0.1)
     );
     visor.scale.set(1, 0.58, 0.2);
@@ -89,7 +90,7 @@ export class Character {
     const eyeMat = standard(COLORS.ink, 0.22);
     const eyes = [];
     for (const x of [-0.105, 0.105]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), eyeMat);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), eyeMat);
       eye.position.set(x, 1.2, -0.525);
       eye.scale.z = 0.35;
       this.visual.add(eye);
@@ -99,12 +100,12 @@ export class Character {
 
     const antenna = new THREE.Group(),
       stem = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.035, 0.045, 0.22, 7),
+        new THREE.CylinderGeometry(0.035, 0.045, 0.22, 12),
         standard(cosmetics?.antenna?.render?.primary ?? cosmetics?.antenna?.color ?? accentColor)
       );
     stem.position.y = 0.11;
     const tip = new THREE.Mesh(
-      new THREE.SphereGeometry(0.09, 8, 6),
+      new THREE.SphereGeometry(0.09, 16, 10),
       standard(cosmetics?.antenna?.render?.primary ?? cosmetics?.antenna?.color ?? accentColor, 0.2)
     );
     tip.position.y = 0.25;
@@ -120,13 +121,36 @@ export class Character {
     this.leftLeg = this.limb(-0.25, 0.28, bodyColor, false);
     this.rightLeg = this.limb(0.25, 0.28, bodyColor, false);
     this.visual.add(this.leftArm, this.rightArm, this.leftLeg, this.rightLeg);
+    this.boots = [];
     for (const leg of [this.leftLeg, this.rightLeg]) {
-      const boot = new THREE.Mesh(new THREE.SphereGeometry(0.19, 10, 7), standard(COLORS.purpleDark, 0.3));
+      const boot = new THREE.Mesh(new THREE.SphereGeometry(0.19, 20, 12), standard(COLORS.purpleDark, 0.3));
       boot.scale.set(1.05, 0.65, 1.3);
       boot.position.set(0, -0.42, -0.08);
       boot.castShadow = true;
       leg.add(boot);
+      this.boots.push(boot);
     }
+
+    this.modelDetails = new THREE.Group();
+    const seamMaterial = standard(accentColor, 0.55);
+    const faceRim = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.019, 8, 36), seamMaterial);
+    faceRim.scale.set(1, 0.59, 1);
+    faceRim.position.set(0, 1.18, -0.471);
+    this.modelDetails.add(faceRim);
+    this.faceRim = faceRim;
+    for (const eye of eyes) {
+      const glint = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 6), standard(0xffffff));
+      glint.position.set(-0.011, 0.015, -0.04);
+      glint.scale.z = 2;
+      eye.add(glint);
+    }
+    for (const leg of [this.leftLeg, this.rightLeg]) {
+      const sole = new THREE.Mesh(new THREE.SphereGeometry(0.19, 16, 10), standard(0x18243a, 0.8));
+      sole.scale.set(1.07, 0.2, 1.34);
+      sole.position.set(0, -0.51, -0.08);
+      leg.add(sole);
+    }
+    this.visual.add(this.modelDetails);
 
     // Якоря добавляются последними и намеренно пусты: их наполняет косметический слой.
     for (const [name_, [x, y, z]] of Object.entries(ANCHOR_POSITIONS)) {
@@ -138,12 +162,23 @@ export class Character {
 
     // Мелочи, которые с десяти метров уже не различить. Держим их списком, чтобы уровень
     // детализации мог убрать их одним движением, не разбирая иерархию заново каждый кадр.
-    this.trinkets = [belly, visor, antenna, ...eyes];
+    this.trinkets = [belly, visor, antenna, this.modelDetails, ...eyes];
     this.limbs = [this.leftArm, this.rightArm, this.leftLeg, this.rightLeg];
     this.shadowCasters = [body, belly, visor];
     this.detail = 'full';
 
+    this.surfaceMaterials = [this.bodyMesh.material, ...this.limbs.map(limb => limb.children[0].material)];
+    this.setBodySurface('fabric');
     if (name) this.addNameplate(name);
+    // Capture only constructor-owned resources, before shared accessories are attached.
+    this.ownedGeometries = new Set();
+    this.ownedMaterials = new Set();
+    this.ownedTextures = new Set();
+    this.group.traverse(object => {
+      if (object.geometry) this.ownedGeometries.add(object.geometry);
+      if (object.material) this.ownedMaterials.add(object.material);
+      if (object.material?.map) this.ownedTextures.add(object.material.map);
+    });
     this.group.position.set(0, 1.15, 7);
     scene.add(this.group);
     this.scene = scene;
@@ -159,14 +194,20 @@ export class Character {
 
   // Перекраска корпуса под body-предмет. Отдельный метод, потому что цвет задают двое: конструктор
   // при создании и косметический слой при смене образа, и обоим нужен один и тот же путь.
-  setBodyMaterials({ primary, accent, belly }) {
+  setBodyMaterials({ primary, accent, belly, boot = COLORS.purpleDark }) {
     this.bodyMesh.material.color.setHex(primary);
     this.bellyMesh.material.color.setHex(belly ?? accent);
+    this.faceRim.material.color.setHex(accent);
+    for (const shoe of this.boots) shoe.material.color.setHex(boot);
     for (const limb of this.limbs) {
       for (const part of limb.children) {
         if (part.isMesh && part.geometry.type === 'CapsuleGeometry') part.material.color.setHex(primary);
       }
     }
+  }
+
+  setBodySurface(kind) {
+    for (const material of this.surfaceMaterials) applySurface(material, kind);
   }
 
   setAntennaColor(color) {
@@ -205,10 +246,20 @@ export class Character {
   limb(x, y, color, arm) {
     const pivot = new THREE.Group();
     pivot.position.set(x, y, 0);
-    const part = capsule(arm ? 0.105 : 0.14, arm ? 0.32 : 0.3, color, 8);
+    const part = capsule(arm ? 0.105 : 0.14, arm ? 0.32 : 0.3, color, 16);
     part.position.y = arm ? -0.2 : -0.22;
     part.rotation.z = arm ? (x < 0 ? -0.1 : 0.1) : 0;
     pivot.add(part);
+    if (arm) {
+      const glove = new THREE.Mesh(new THREE.SphereGeometry(0.115, 16, 12), part.material);
+      glove.scale.set(1, 1.12, 0.9);
+      glove.position.set(x < 0 ? -0.02 : 0.02, -0.4, -0.01);
+      glove.castShadow = true;
+      pivot.add(glove);
+      const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.054, 12, 8), part.material);
+      thumb.position.set(x < 0 ? 0.072 : -0.072, -0.365, -0.05);
+      pivot.add(thumb);
+    }
     return pivot;
   }
   addNameplate(name) {
@@ -492,7 +543,15 @@ export class Character {
     for (const eye of this.eyes) eye.scale.y = 1;
   }
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     this.cosmetics?.dispose();
     this.scene.remove(this.group);
+    for (const texture of this.ownedTextures) texture.dispose();
+    for (const geometry of this.ownedGeometries) geometry.dispose();
+    for (const material of this.ownedMaterials) material.dispose();
+    this.ownedTextures.clear();
+    this.ownedGeometries.clear();
+    this.ownedMaterials.clear();
   }
 }

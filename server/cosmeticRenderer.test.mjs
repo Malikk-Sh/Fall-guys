@@ -20,6 +20,12 @@ import { GhostTrail, TrailSystem, createTrail } from '../client/game/cosmetics/T
 import { FinishEffectSystem } from '../client/game/cosmetics/FinishEffectSystem.js';
 import { EmoteSystem } from '../client/game/cosmetics/EmoteSystem.js';
 import { cosmeticResourceStats } from '../client/game/cosmetics/CosmeticResources.js';
+import { Character } from '../client/game/Character.js';
+import {
+  surfaceHeight,
+  surfaceNormalMap,
+  SURFACE_PROFILES
+} from '../client/game/cosmetics/CharacterSurface.js';
 
 // Минимальный canvas: процедурные текстуры рисуются на нём, а Node про DOM ничего не знает.
 // Подменяется только document.createElement, и только для canvas — остального тесту не нужно.
@@ -291,4 +297,82 @@ test('общие геометрии и материалы переиспольз
   assert.deepEqual(second, first, 'повторная сборка берёт всё из кэша');
   // Ресурсов заметно меньше, чем предметов: формы общие, различаются параметры.
   assert.ok(first.geometries < COSMETIC_CATALOG.length * 3, `геометрий ${first.geometries}`);
+});
+
+test('surface normal maps are shared, periodic, finite and bounded to 128px', () => {
+  for (const kind of Object.keys(SURFACE_PROFILES)) {
+    const texture = surfaceNormalMap(kind);
+    assert.equal(texture, surfaceNormalMap(kind));
+    assert.equal(texture.image.data.length, 128 * 128 * 4);
+    assert.equal(texture.colorSpace, THREE.NoColorSpace);
+    for (const [u, v] of [
+      [0, 0],
+      [0.2, 0.4],
+      [0.76, 0.13]
+    ]) {
+      assert.ok(Math.abs(surfaceHeight(kind, u, v) - surfaceHeight(kind, u + 1, v)) < 1e-10);
+      assert.ok(Math.abs(surfaceHeight(kind, u, v) - surfaceHeight(kind, u, v + 1)) < 1e-10);
+    }
+    const data = texture.image.data;
+    for (let offset = 0; offset < data.length; offset += 4) {
+      const length = Math.hypot(...[0, 1, 2].map(channel => data[offset + channel] / 127.5 - 1));
+      assert.ok(Math.abs(length - 1) < 0.015);
+      assert.equal(data[offset + 3], 255);
+    }
+  }
+});
+
+test('signature costumes keep finite geometry, bounded triangles and reduced shadow cost', () => {
+  const character = new Character(new THREE.Scene());
+  try {
+    for (const id of ['space-astronaut', 'space-retro-robot', 'space-moon-cat', 'food-donut']) {
+      character.setDetail('full');
+      character.setCosmetics({ body: COSMETIC_BY_ID[id] });
+      let triangles = 0;
+      character.group.traverse(object => {
+        if (!object.geometry) return;
+        const position = object.geometry.attributes.position;
+        assert.ok(Array.from(position.array).every(Number.isFinite), id);
+        triangles += (object.geometry.index?.count || position.count) / 3;
+      });
+      assert.ok(triangles < 20000, `${id}: ${triangles} triangles`);
+      character.setDetail('simple');
+      character.cosmetics.attachments.get('body').traverse(object => {
+        if (object.isMesh) assert.equal(object.castShadow, false);
+        if (object.userData.cosmeticRole === 'micro') assert.equal(object.visible, false);
+      });
+    }
+  } finally {
+    character.dispose();
+  }
+});
+
+test('repeated outfit changes release detached materials and dispose only owned character resources', () => {
+  const scene = new THREE.Scene();
+  const character = new Character(scene);
+  const gradient = COSMETIC_CATALOG.find(item => item.render.gradient);
+  assert.ok(gradient);
+  for (let index = 0; index < 30; index++) {
+    character.setCosmetics({ body: gradient });
+    assert.ok(character.cosmetics.ownMaterials.length > 0);
+    character.setCosmetics({ body: COSMETIC_BY_ID.classic });
+    assert.equal(character.cosmetics.ownMaterials.length, 0);
+  }
+  const geometries = [...character.ownedGeometries],
+    materials = [...character.ownedMaterials];
+  let disposedGeometries = 0,
+    disposedMaterials = 0,
+    disposedShared = 0;
+  for (const geometry of geometries) geometry.addEventListener('dispose', () => disposedGeometries++);
+  for (const material of materials) material.addEventListener('dispose', () => disposedMaterials++);
+  const texture = surfaceNormalMap('fabric');
+  const onSharedDispose = () => disposedShared++;
+  texture.addEventListener('dispose', onSharedDispose);
+  character.dispose();
+  character.dispose();
+  texture.removeEventListener('dispose', onSharedDispose);
+  assert.equal(disposedGeometries, geometries.length);
+  assert.equal(disposedMaterials, materials.length);
+  assert.equal(disposedShared, 0);
+  assert.equal(scene.children.includes(character.group), false);
 });

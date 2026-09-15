@@ -55,12 +55,13 @@ export function bindMenu(game) {
   };
   const $ = s => document.querySelector(s);
 
-  // Шкаф. Кнопка живёт в панели аккаунта, но экран у него свой: превью и решётка на шестьдесят с
-  // лишним предметов в боковую панель не помещаются.
-  $('#openWardrobe')?.addEventListener('click', () => {
-    game.sfx.uiClick();
-    game.ui.openWardrobe();
-  });
+  // Один и тот же шкаф доступен сразу из меню и из панели аккаунта.
+  for (const selector of ['#openWardrobe', '#openWardrobeMenu']) {
+    $(selector)?.addEventListener('click', () => {
+      game.sfx.uiClick();
+      game.ui.openWardrobe();
+    });
+  }
   // Эмоции. Локальный показ идёт сразу, в сеть уходит только то, что проигралось.
   game.ui.emoteControl = new EmoteControl({
     onPlay: id => game.playEmote(id),

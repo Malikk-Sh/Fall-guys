@@ -5,7 +5,6 @@ import { AccessoryAnimator } from './AccessoryAnimator.js';
 import { createTrail } from './TrailSystem.js';
 import { FinishEffectSystem } from './FinishEffectSystem.js';
 import { EmoteSystem } from './EmoteSystem.js';
-import { standardMaterial } from './CosmeticResources.js';
 
 // Оркестратор косметики одного персонажа.
 //
@@ -111,6 +110,13 @@ export class CosmeticRenderer {
     if (!group) return;
     group.parent?.remove(group);
     this.attachments.delete(slot);
+    group.traverse(object => {
+      if (!object.userData?.ownMaterial) return;
+      const index = this.ownMaterials.indexOf(object.material);
+      if (index < 0) return;
+      object.material.dispose();
+      this.ownMaterials.splice(index, 1);
+    });
     const animator = group.userData.animator;
     if (animator) {
       const index = this.animators.indexOf(animator);
@@ -125,7 +131,8 @@ export class CosmeticRenderer {
     const primary = render.primary ?? item?.colors?.body ?? this.character.baseColor;
     const accent = render.accent ?? item?.colors?.accent ?? this.character.baseAccent;
     const belly = render.belly ?? accent;
-    this.character.setBodyMaterials({ primary, accent, belly });
+    this.character.setBodyMaterials({ primary, accent, belly, boot: render.bootColor });
+    this.character.setBodySurface?.(render.surface || 'fabric');
   }
 
   applyFaceBase(item) {
@@ -135,10 +142,10 @@ export class CosmeticRenderer {
     // Без предмета и с унаследованной пластиной базовый визор виден и перекрашивается.
     if (!item || kind === 'face-plate') {
       base.visible = true;
-      base.material = standardMaterial(item?.render?.primary ?? item?.color ?? 0xdffcff, {
-        roughness: 0.12,
-        metalness: 0.1
-      });
+      base.material.color.setHex(item?.render?.primary ?? item?.color ?? 0xdffcff);
+      base.material.roughness = 0.12;
+      base.material.metalness = 0.1;
+      base.material.clearcoat = 0.65;
       return;
     }
     // Новые лицевые предметы ставят собственную геометрию: оставленный под ними базовый визор
@@ -152,8 +159,12 @@ export class CosmeticRenderer {
     const kind = item?.render?.kind;
     if (!item || kind === 'head-antenna') {
       // Базовая антенна и есть унаследованный предмет: её геометрию дублировать незачем.
-      base.visible = true;
-      const color = item?.render?.primary ?? item?.color ?? this.character.baseAccent;
+      base.visible = Boolean(item) || !this.loadout.body?.render?.hideBaseAntenna;
+      const color =
+        item?.render?.primary ??
+        item?.color ??
+        this.loadout.body?.render?.accent ??
+        this.character.baseAccent;
       this.character.setAntennaColor(color);
       return;
     }
@@ -258,8 +269,10 @@ export class CosmeticRenderer {
       // `reduced` прячет только помеченные «дорогими» части: свечение, частицы, полупрозрачность.
       // Силуэт предмета остаётся — иначе на среднем качестве игрок терял бы образ целиком.
       group.traverse(object => {
+        if (object.isMesh) object.castShadow = this.detail === 'full';
         if (object.userData?.cosmeticRole && REDUCIBLE_ROLES.has(object.userData.cosmeticRole)) {
-          object.visible = mode === 'full';
+          object.visible =
+            mode === 'full' && (object.userData.cosmeticRole !== 'micro' || this.detail === 'full');
         }
       });
       group.castShadow = this.detail === 'full';
@@ -271,6 +284,8 @@ export class CosmeticRenderer {
       this.applyFaceBase(this.loadout.visor || null);
       this.applyHeadBase(this.loadout.antenna || null);
     }
+    if (this.character.faceRim)
+      this.character.faceRim.visible = this.detail !== 'minimal' && this.character.baseVisor.visible;
     const faceItem = this.loadout.visor;
     if (this.character.baseVisor && faceItem && cosmeticDetailMode(faceItem, this.detail) === 'hidden') {
       this.character.baseVisor.visible = true;
@@ -292,4 +307,4 @@ export class CosmeticRenderer {
 }
 
 // Части, которые исчезают на `reduced`: всё, что стоит заметно дороже статичной геометрии.
-const REDUCIBLE_ROLES = new Set(['orbit', 'glitch', 'ripple', 'swirl', 'pulse']);
+const REDUCIBLE_ROLES = new Set(['orbit', 'glitch', 'ripple', 'swirl', 'pulse', 'micro']);

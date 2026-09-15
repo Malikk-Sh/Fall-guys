@@ -98,6 +98,8 @@ export class CosmeticRenderer {
     anchor.add(group);
     this.attachments.set(slot, group);
     group.traverse(object => {
+      if (object.isMesh && object.userData.cosmeticCastShadow === undefined)
+        object.userData.cosmeticCastShadow = object.castShadow;
       if (object.userData?.ownMaterial) this.ownMaterials.push(object.material);
     });
     const animator = new AccessoryAnimator(group, item.render?.motion || {}, this.seed + anchor.position.y);
@@ -269,7 +271,8 @@ export class CosmeticRenderer {
       // `reduced` прячет только помеченные «дорогими» части: свечение, частицы, полупрозрачность.
       // Силуэт предмета остаётся — иначе на среднем качестве игрок терял бы образ целиком.
       group.traverse(object => {
-        if (object.isMesh) object.castShadow = this.detail === 'full';
+        if (object.isMesh)
+          object.castShadow = this.detail === 'full' && object.userData.cosmeticCastShadow !== false;
         if (object.userData?.cosmeticRole && REDUCIBLE_ROLES.has(object.userData.cosmeticRole)) {
           object.visible =
             mode === 'full' && (object.userData.cosmeticRole !== 'micro' || this.detail === 'full');
